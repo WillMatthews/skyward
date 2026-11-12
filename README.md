@@ -33,25 +33,52 @@ anywhere on Earth, for as long as you like. wgpu (Vulkan), winit, egui.
   approach → landing cycles, wind-aware (see below).
 * **Cameras** — chase, cockpit, tower, fly-by and an auto-cycling cinematic
   camera; headless capture / soak-test modes for testing without a window.
+* **Instruments per class** — airliners: glass PFD (speed / altitude tapes,
+  VLS and stall bands, speed trend, flight-director bars, FMA), navigation
+  display (track-up map arc, wind, route) and engine / warning display; fast
+  jet: a conformal head-up display in the cockpit (flight-path marker, pitch
+  ladder on the real horizon) and a HUD repeater outside; light aircraft,
+  warbird and glider: analogue panels (six-pack + tach; Spitfire-style dials
+  in mph with boost; glider ASI in km/h, TE vario with MacCready ring).
+  `U` cycles full / minimal / off.
+* **Vector moving map** — drawn from the tiles' vector data (water, land use,
+  roads by class, rail, buildings when zoomed in, runways, places) with 4×
+  MSAA, day / night / navigation-display styles, north- or track-up, range
+  rings, trend vector, wind, auto-flight route and airports with collision-free
+  labels. `M` cycles corner / large / off; mouse wheel zooms, drag pans.
+* **Airports** — ~49 000 airfields and their runways from
+  [OurAirports](https://ourairports.com/data/): exact runway ends, headings,
+  widths, displaced thresholds, surface and lighting drive the runways in the
+  world, spawns and the auto-flight bot (tile runways fill gaps).
+* **Menus** — main menu → aircraft (rendered thumbnails, specs) → departure
+  (world map, fuzzy search by name / city / ICAO / IATA, suitability filter,
+  airport diagram with clickable runway ends, live METAR with head / crosswind
+  per runway end, local time and daylight, recents / favourites, random) →
+  conditions (live, or time / season / weather preset / METAR) → fly. Settings
+  (display, units, sound, controls), pause menu, loading screen. Settings, the
+  last flight and favourites persist in `~/.config/skyward/settings.json`.
 
-Default start: London City Airport (EGLC). Any lat/lon or airport code works.
+Default start: the last flight (first run: London City, EGLC).
 
 ## Run
 
 ```sh
 cargo run --release
 cargo run --release -- --lat 51.3308 --lon 0.0325
-cargo run --release -- --airport EGKB        # resolved via Nominatim, cached
+cargo run --release -- --airport EGKB        # OurAirports ident / ICAO / IATA / name (Nominatim fallback)
+cargo run --release -- --airport EGKK --aircraft meridian320 --start-at final:26L:5 --no-menu
 cargo run --release -- --watch --aircraft aerolink   # sit back: auto flight + cinematic camera
 ```
 
-You spawn on the runway nearest the start point. On hybrid-graphics laptops it
+With `--no-menu` (or after Fly) you spawn at the chosen start: a runway end,
+a 3 / 5 / 10 NM final, the apron, a thermal (gliders) or anywhere in the air. On hybrid-graphics laptops it
 asks wgpu for the high-performance adapter (e.g. the discrete NVIDIA GPU).
 
 ### Aircraft
-Pick from the Tab menu (grouped by class). Types that need a long runway are
-moved to the nearest suitable airfield (e.g. the Meridians start at Heathrow
-when London City is too short) — the HUD says why.
+Pick in the aircraft screen. The departure screen filters airports by the
+runway length / surface the type needs ("All" shows every field). Without a
+chosen runway end, types that need a long runway are moved to the nearest
+suitable airfield.
 
 | id | | |
 |---|---|---|
@@ -84,14 +111,17 @@ the city (fast jets: 3,000 m), glider thermal release.
 | J | **auto flight**: the bot flies; any stick / throttle / lever input takes back |
 | C | camera: chase → cockpit → tower → fly-by → cinematic |
 | Right-drag, wheel | orbit / zoom chase camera |
-| M, `,` / `.` | moving map on / off, zoom out / in |
+| M, `,` / `.` | moving map: corner / large / off, range out / in |
+| U | instruments: full / minimal / off |
+| I | weather panel: expand / collapse |
+| N | mute sound |
 | X | time warp 1 / 2 / 4 / 8× |
 | P | pause |
 | R | restart (back at the start point) |
-| Tab | menu: aircraft, start, auto flight (watch), time of day, weather, live |
+| Esc / Tab | pause menu: resume, restart, change aircraft / airport, settings |
 | H / F1 | help |
 | F12 | screenshot |
-| Esc | quit |
+| | quit from the pause or main menu |
 
 Stick inputs disconnect the autopilot (flashing AP DISCONNECT); throttle keys
 only drop the autothrottle.
@@ -129,7 +159,11 @@ The cinematic camera cycles chase angles, fly-bys, tower, nose and wingtip shots
 | Flag | Meaning |
 |---|---|
 | `--lat L --lon L` | start point (default EGLC 51.5045, 0.0300) |
-| `--airport CODE` | start at an airport (ICAO / name, resolved via Nominatim, cached) |
+| `--airport CODE` | start at an airport (OurAirports ident / ICAO / IATA / name; Nominatim fallback) |
+| `--start-at SPEC` | `runway:27L`, `final:27L:5` (NM), `apron`, `air:LAT:LON:ALT_M:HDG`, `thermal` |
+| `--no-menu` | fly straight away (skip the main menu) |
+| `--vsync on\|off` | present with vsync (default on: smooth); off = mailbox / immediate |
+| `--hud full\|minimal\|off`, `--map corner\|large\|off` | instrument / map mode |
 | `--aircraft ID` | `kestrel` `swift` `peregrine` `lancer` `aerolink` `meridian190` `meridian320` |
 | `--start S` | `runway` `approach` `city` `thermal` |
 | `--bot` | hand the aircraft to the auto-flight bot |
@@ -141,7 +175,7 @@ The cinematic camera cycles chase angles, fly-bys, tower, nose and wingtip shots
 | `--date MM-DD` | date (season, sun) |
 | `--radius-km R` | detailed-tile load radius |
 | `--map-zoom N` | moving-map zoom step 0–5 |
-| `--mute` | *(audio — Track K, in progress: engine / wind sound; flags and keys to be documented here)* |
+| `--mute` | start muted (N toggles; volumes in Settings › Sound) |
 
 Headless (no window) — renders offscreen and writes a PNG:
 
@@ -155,7 +189,8 @@ Headless (no window) — renders offscreen and writes a PNG:
 | `--throttle T`, `--heading DEG`, `--ap` | throttle, initial heading, engage the autopilot |
 | `--gear up\|down`, `--flaps N`, `--spoilers F`, `--reverse`, `--fail BITS` | aircraft setup |
 | `--eye x,y,z --look x,y,z` | fixed camera |
-| `--menu`, `--no-hud`, `--stats` | show the menu, hide the HUD, print the final state |
+| `--menu-screen S` | capture a menu: `main` `aircraft` `airport` `conditions` `settings` `pause` `loading` `credits` |
+| `--menu`, `--no-hud`, `--stats` | show the aircraft menu, hide the HUD, print the final state |
 | `--realtime [--fps HZ]` | stream + render in real time flying straight and level; reports frame times, streaming gaps, camera smoothness and origin shifts (`--fps`: fixed sim step) |
 | `--then-reset` | after `--realtime`: press R and time the scenery catch-up at the start |
 | `--soak [--shot-every S]` | fly the bot for `--seconds` of sim time as fast as streaming allows; minute log, events, PNGs |
@@ -172,7 +207,18 @@ skyward --shot m.png --aircraft meridian320 --bot --soak --seconds 4200 --warp 8
 ```
 `BOT_TRACE=Final,Flare` prints the controls every frame in those bot phases;
 `SKYWARD_REBASE_LOG=1` logs every origin shift; `SKYWARD_GPU_TIMING=1` prints
-a per-pass GPU timing breakdown.
+a per-pass GPU timing breakdown; `SKYWARD_UI_TIMING=1` the interface's CPU
+cost and map vertex counts; `SKYWARD_FRAME_LOG=file` (windowed) logs each
+frame's raw time and the smoothed simulation step; `SKYWARD_UI_SCRIPT=
+"4:aircraft,7:departure,10:airport=EGKK,11:start=final:26L:5,12:fly"` drives
+the menus for tests.
+
+### Frame pacing
+The window presents with vsync (FIFO) by default and the simulation advances
+by the median of recent frame times (hitches pass through; a slow correction
+keeps sim time on wall time), with the physics pose interpolated between
+120 Hz steps — even motion at any refresh rate. `--vsync off` or Settings ›
+Display switches to mailbox / immediate for the lowest latency.
 
 ## Floating origin
 
@@ -221,7 +267,9 @@ A shift costs well under 0.1 ms.
 | `src/sim.rs` | session, controls, autopilot glue, runway choice, cameras (incl. cinematic) |
 | `src/bot.rs` | auto-flight bot: glider soaring + powered take-off / tour / landing |
 | `src/autopilot.rs` | heading / altitude / V/S / speed autopilot |
-| `src/hud.rs` | instruments, moving map, menus (egui) |
+| `src/ui/` | interface: design system (`mod.rs`), instruments (`gauges.rs`, `glass.rs`, `hudsym.rs`), moving map (`mapdata.rs` worker side, `map.rs`, MSAA `canvas.rs`), menus (`menus.rs`, `overview.rs` world map), in-flight UI (`flight.rs`), settings, toasts |
+| `src/airports.rs` | OurAirports download / cache / search, runways in the world frame, METAR lookup |
+| `src/startpos.rs` | departure-screen starts (runway end, final, apron, air) |
 
 See `ROADMAP.md` for what's next.
 
@@ -232,4 +280,10 @@ Map data © [OpenMapTiles](https://openmaptiles.org/) ©
 vector tiles served by [OpenFreeMap](https://openfreemap.org/). Weather:
 METARs from the [aviationweather.gov](https://aviationweather.gov/) data API
 (NOAA), forecasts from [Open-Meteo](https://open-meteo.com/) (CC BY 4.0).
-Airport lookup via [Nominatim](https://nominatim.org/).
+Airports and runways: [OurAirports](https://ourairports.com/data/) (public
+domain; cached in `cache/ourairports.tsv.gz`); fallback lookup via
+[Nominatim](https://nominatim.org/). Fonts (SIL Open Font License 1.1, see
+`assets/fonts/`): [Inter](https://github.com/rsms/inter),
+[JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) and
+[B612](https://github.com/polarsys/b612) (Airbus / Intactile / ENAC, designed
+for cockpit displays).

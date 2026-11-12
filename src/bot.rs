@@ -606,6 +606,18 @@ impl Bot {
         }
     }
 
+    /// The remaining sightseeing route (next waypoint first), for the map.
+    pub fn route(&self) -> Vec<(String, Vec2)> {
+        let (tour, wp) = match &self.kind {
+            Kind::Glider(g) => (&g.tour, g.wp),
+            Kind::Powered(p) => match p.phase {
+                PPhase::Enroute => (&p.tour, p.wp),
+                _ => return Vec::new(),
+            },
+        };
+        tour.iter().skip(wp).map(|l| (l.name.clone(), l.pos)).collect()
+    }
+
     /// Something the cinematic camera may want to frame (runway threshold when landing).
     pub fn focus_runway(&self) -> Option<RunwayEnd> {
         match &self.kind {
@@ -2526,7 +2538,7 @@ mod tests {
         assert_eq!(rwy_number(0.0), "36");
         assert_eq!(rwy_number(90f32.to_radians()), "09");
         assert_eq!(rwy_number(-93f32.to_radians()), "27");
-        let rw = Runway { a: vec2(0.0, 0.0), b: vec2(1000.0, 0.0), width: 30.0, name: String::new() };
+        let rw = Runway { a: vec2(0.0, 0.0), b: vec2(1000.0, 0.0), width: 30.0, name: String::new(), paved: true, ..Default::default() };
         let e = RunwayEnd::of(&rw, false);
         assert_eq!(e.name, "09");
         assert!((e.along(vec2(250.0, 0.0)) - 250.0).abs() < 1e-3);

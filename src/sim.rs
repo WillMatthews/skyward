@@ -320,6 +320,9 @@ pub struct Sim {
     pub note: Option<(String, f32)>,
     /// Engine-failure practice step (0 = all running).
     pub fail_step: u8,
+    /// A start picked in the departure screen (runway end, final, apron,
+    /// air); restarts return here. None = the generic `start`.
+    pub custom_start: Option<crate::startpos::CustomStart>,
     cine: Cine,
     real_time: f32,
     /// Physics state one fixed step back, for render interpolation.
@@ -421,6 +424,7 @@ impl Sim {
             watch: false,
             note: None,
             fail_step: 0,
+            custom_start: None,
             cine: Cine::default(),
             real_time: 0.0,
             prev_pos: Vec3::ZERO,
@@ -487,14 +491,25 @@ impl Sim {
                     advice = Some(note);
                     self.needs_respawn = true;
                     // Provisional: parked at the airfield until its scenery has loaded.
-                    Some(Runway { a: p - vec2(0.0, 900.0), b: p + vec2(0.0, 900.0), width: 45.0, name: String::new() })
+                    Some(Runway { a: p - vec2(0.0, 900.0), b: p + vec2(0.0, 900.0), width: 45.0, name: String::new(), paved: true, ..Default::default() })
                 } else {
                     world.spawn_runway(world.home_pos()).cloned()
                 }
             }
             None => None,
         };
-        let (ac, ctl, flap_idx) = Self::spawn(&def, world, self.runway.as_ref(), self.start);
+        let custom = self.custom_start.as_ref().and_then(|c| crate::startpos::spawn(&def, world, c));
+        let (ac, ctl, flap_idx) = match custom {
+            Some((ac, ctl, flap, rw)) => {
+                if rw.is_some() {
+                    self.runway = rw;
+                }
+                self.needs_respawn = false;
+                advice = None;
+                (ac, ctl, flap)
+            }
+            None => Self::spawn(&def, world, self.runway.as_ref(), self.start),
+        };
         self.ac = ac;
         self.ctl = ctl;
         self.flap_idx = flap_idx;
@@ -1001,13 +1016,19 @@ impl Sim {
         let ac = &self.ac;
         let pos = self.rpos;
         let vel = if ac.vel.length() > 3.0 { ac.vel.normalize() } else { self.rrot * Vec3::Z };
+        // Placed ~6 s ahead (capped so fast jets stay framed); re-placed once
+        // passed, or if it ends up much farther away than it was placed —
+        // both limits scale with the placement distance, so a supersonic jet
+        // still gets its pass instead of a re-place every frame.
+        let speed = ac.vel.length();
+        let lead = (speed * 6.0).min(1800.0) + 120.0 + self.size * 4.0;
         let need_new = match self.flyby_pos {
             None => true,
-            Some(p) => (pos - p).dot(vel) > 250.0 + self.size * 4.0 || p.distance(pos) > 1500.0 + self.size * 20.0,
+            Some(p) => (pos - p).dot(vel) > 250.0 + self.size * 4.0 + speed * 1.5 || p.distance(pos) > lead * 1.5 + 400.0 + self.size * 20.0,
         };
         if need_new {
             let side = vel.cross(Vec3::Y).normalize_or_zero();
-            let mut p = pos + vel * (ac.vel.length() * 6.0 + 120.0 + self.size * 4.0) + side * (30.0 + self.size * 1.6);
+            let mut p = pos + vel * lead + side * (30.0 + self.size * 1.6 + speed * 0.08);
             p.y = (p.y - 6.0 - self.size * 0.3).max(2.0);
             self.flyby_pos = Some(p);
         }

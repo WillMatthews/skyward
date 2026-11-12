@@ -1147,12 +1147,44 @@ fn building(m: &mut MeshData, a: &Area, height: f32, min_h: f32, colour: Option<
 
 // ---------------------------------------------------------------- runways
 
-#[derive(Clone, Debug)]
+/// A runway in the current frame. `a` / `b` are the physical ends (start of
+/// the pavement) of the low / high-numbered end. Fields after `name` come from
+/// OurAirports (airports.rs); tile-merged runways leave them at their defaults.
+#[derive(Clone, Debug, Default)]
 pub struct Runway {
     pub a: Vec2,
     pub b: Vec2,
     pub width: f32,
+    /// "09/27" (OurAirports) or the tile's `ref`.
     pub name: String,
+    /// End identifiers ("09L", "27R"); empty for tile runways.
+    pub ident_a: String,
+    pub ident_b: String,
+    /// Displaced threshold distance (m) from `a` / `b` along the runway.
+    pub displaced_a: f32,
+    pub displaced_b: f32,
+    /// Hard surface (asphalt / concrete). Tile runways count as paved.
+    pub paved: bool,
+    /// Surface name ("Asphalt", "Grass", ...); empty when unknown.
+    pub surface: String,
+    /// Runway lighting reported.
+    pub lighted: bool,
+    /// Owning airport ident (OurAirports), empty for tile runways.
+    pub airport: String,
+    pub source: RunwaySource,
+}
+
+/// Where a runway's geometry came from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RunwaySource {
+    /// Merged from map-tile centreline pieces (width estimated).
+    #[default]
+    Tiles,
+    /// Surveyed OurAirports runway ends.
+    OurAirports,
+    /// OurAirports runway without surveyed ends: placed through the airport
+    /// reference point along its heading.
+    Estimated,
 }
 
 impl Runway {

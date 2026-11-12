@@ -8,6 +8,8 @@ use crate::weather::{self, Live, Season, WindField, Wx, WxRender};
 use crate::flight::Environment;
 use crate::osm::{Airport, Proj, RunwayPiece, TileId, Xform2, FAR_ZOOM, ZOOM};
 use crate::scene::{self, Rgba, Runway, TileCollision, TreeInst};
+use crate::ui::mapdata::MapVectors;
+use std::sync::Arc;
 use crate::tiles::Pool;
 use glam::{vec2, vec3, Vec2, Vec3};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -112,9 +114,20 @@ pub struct World {
     minimaps: Vec<(TileId, Rgba)>,
     /// Runway pieces per tile, in the tile's frame.
     pieces: HashMap<TileId, Vec<RunwayPiece>>,
+    /// All runways in the current frame: OurAirports runways (exact ends,
+    /// widths, thresholds) around the focus, plus tile-merged runways where
+    /// OurAirports has none. Longest first.
     pub runways: Vec<Runway>,
+    /// Airport / runway database (airports.rs), once loaded.
+    pub airport_db: Option<Arc<crate::airports::Db>>,
+    /// Where (lat, lon) the database runways were last gathered around.
+    db_centre: Option<(f64, f64)>,
+    /// Vector moving-map data per tile (tile frame), new ones for the HUD.
+    map_vectors: Vec<(TileId, Arc<MapVectors>)>,
     /// Bumped whenever `runways` changes (the GPU runway mesh is rebuilt).
     pub runway_version: u64,
+    /// Database runways around `db_centre`, in the current frame.
+    db_runways: Vec<Runway>,
     pub airports: Vec<Airport>,
     pub radius: f32,
     radius_eff: f32,
@@ -172,7 +185,11 @@ impl World {
             minimaps: Vec::new(),
             pieces: HashMap::new(),
             runways: Vec::new(),
+            airport_db: None,
+            db_centre: None,
+            map_vectors: Vec::new(),
             runway_version: 0,
+            db_runways: Vec::new(),
             airports: Vec::new(),
             radius: LOAD_RADIUS,
             radius_eff: LOAD_RADIUS,
@@ -342,6 +359,10 @@ impl World {
         for a in &mut self.airports {
             a.pos = map.apply(a.pos);
         }
+        for r in &mut self.db_runways {
+            r.a = map.apply(r.a);
+            r.b = map.apply(r.b);
+        }
         self.merge_runways();
         self.runway_version += 1;
         self.focus = map.apply(self.focus);
@@ -378,8 +399,12 @@ impl World {
 
     /// Integrate finished tiles, evict far ones, reschedule work. Cheap; call every frame.
     pub fn update(&mut self) {
+        self.update_db_area(false);
         while let Some(r) = self.pool.try_recv() {
             self.dirty = true;
+            if let Some(m) = r.map {
+                self.map_vectors.push((r.id, m));
+            }
             match r.build {
                 Ok(b) => {
                     self.failed.remove(&r.id);
@@ -588,8 +613,17 @@ impl World {
             if len < 250.0 {
                 continue;
             }
-            runways.push(Runway { a: p0 + d * tmin, b: p0 + d * tmax, width: Runway::width_for(len), name });
+            runways.push(Runway { a: p0 + d * tmin, b: p0 + d * tmax, width: Runway::width_for(len), name, paved: true, ..Default::default() });
         }
+        // OurAirports first; tile runways only where the database has nothing.
+        // (Estimated database runways give way to a tile runway at the same field.)
+        let db = &self.db_runways;
+        let covered = |r: &Runway| db.iter().any(|o| o.source == scene::RunwaySource::OurAirports && same_strip(o, r));
+        runways.retain(|r| !covered(r));
+        let tile_has = |o: &Runway| runways.iter().any(|r| same_strip(o, r) || (r.a + r.b).distance(o.a + o.b) < 2.0 * 1500.0 && o.source == scene::RunwaySource::Estimated && angle_close(o, r));
+        let mut all: Vec<Runway> = db.iter().filter(|o| o.source == scene::RunwaySource::OurAirports || !tile_has(o)).cloned().collect();
+        all.extend(runways);
+        let mut runways = all;
         runways.sort_by(|a, b| b.length().total_cmp(&a.length()));
         let changed = runways.len() != self.runways.len()
             || runways.iter().zip(&self.runways).any(|(a, b)| a.a.distance(b.a) > 0.5 || a.b.distance(b.b) > 0.5);
@@ -677,6 +711,46 @@ impl World {
         std::mem::take(&mut self.minimaps)
     }
 
+    /// New vector moving-map tiles (tile frame).
+    pub fn take_map_vectors(&mut self) -> Vec<(TileId, Arc<MapVectors>)> {
+        std::mem::take(&mut self.map_vectors)
+    }
+
+    /// Every resident tile (e.g. to clear the renderer when the world is replaced).
+    pub fn tile_ids(&self) -> Vec<TileId> {
+        self.tiles.keys().copied().collect()
+    }
+
+    // ------------------------------------------------------------ runway source
+
+    /// Use the OurAirports database for runways (and airport names).
+    pub fn set_airport_db(&mut self, db: Arc<crate::airports::Db>) {
+        self.airport_db = Some(db);
+        self.db_centre = None;
+        self.update_db_area(true);
+    }
+
+    /// Gather the database's runways / airports around the focus (again
+    /// after the frame moved, or once the focus is 40 km from the last area).
+    fn update_db_area(&mut self, force: bool) {
+        let Some(db) = self.airport_db.clone() else { return };
+        let (lat, lon) = self.proj.to_latlon(self.focus);
+        if !force && self.db_centre.is_some_and(|c| crate::airports::distance_km(c, (lat, lon)) < DB_REFRESH_KM) {
+            return;
+        }
+        self.db_centre = Some((lat, lon));
+        self.db_runways = db.runways_near(&self.proj, lat, lon, DB_RADIUS_KM);
+        for (i, _) in db.near(lat, lon, DB_RADIUS_KM) {
+            let a = &db.airports[i];
+            let code = a.code().to_string();
+            if self.airports.iter().any(|o| o.icao == code || (!a.icao.is_empty() && o.icao == a.icao)) {
+                continue;
+            }
+            self.airports.push(Airport { pos: self.proj.to_world(a.lat, a.lon), icao: code, iata: a.iata.clone(), name: a.name.clone() });
+        }
+        self.merge_runways();
+    }
+
     /// Detailed (z14) tiles resident.
     pub fn tile_count(&self) -> usize {
         self.tiles.values().filter(|t| !t.far).count()
@@ -706,6 +780,33 @@ impl World {
     fn tile_at(&self, p: Vec2) -> Option<&Loaded> {
         self.tiles.get(&TileId::at_world(&self.proj, p))
     }
+}
+
+/// Runways gathered from the database within this radius of the focus (km)...
+const DB_RADIUS_KM: f64 = 90.0;
+/// ... again once the focus has moved this far (km).
+const DB_REFRESH_KM: f64 = 40.0;
+
+/// Two runways (any source) describing the same strip: parallel within 6°,
+/// centrelines within 60 m, overlapping.
+fn same_strip(p: &Runway, q: &Runway) -> bool {
+    let dp = (p.b - p.a).normalize_or_zero();
+    let dq = (q.b - q.a).normalize_or_zero();
+    if dp.perp_dot(dq).abs() > 6f32.to_radians().sin() {
+        return false;
+    }
+    let nrm = vec2(-dp.y, dp.x);
+    if (q.a - p.a).dot(nrm).abs() > 60.0 || (q.b - p.a).dot(nrm).abs() > 60.0 {
+        return false;
+    }
+    let (ta, tb) = ((q.a - p.a).dot(dp), (q.b - p.a).dot(dp));
+    ta.min(tb) <= p.length() && ta.max(tb) >= 0.0
+}
+
+fn angle_close(p: &Runway, q: &Runway) -> bool {
+    let dp = (p.b - p.a).normalize_or_zero();
+    let dq = (q.b - q.a).normalize_or_zero();
+    dp.perp_dot(dq).abs() < 12f32.to_radians().sin()
 }
 
 fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f32 {

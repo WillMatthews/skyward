@@ -145,6 +145,8 @@ fn prune_cache() {
 pub struct TileResult {
     pub id: TileId,
     pub build: Result<TileBuild, String>,
+    /// Vector moving-map geometry (tile frame), built alongside.
+    pub map: Option<std::sync::Arc<crate::ui::mapdata::MapVectors>>,
     pub fetch_ms: f32,
     pub build_ms: f32,
     pub from_cache: bool,
@@ -265,6 +267,7 @@ fn worker(shared: Arc<Shared>, tx: mpsc::Sender<TileResult>) {
         };
         let fetched = fetch(&agent, template.as_deref(), id);
         let t1 = Instant::now();
+        let mut map = None;
         let (build, from_cache, bytes) = match fetched {
             Ok((bytes, src)) => {
                 if matches!(src, Source::Network) {
@@ -276,6 +279,7 @@ fn worker(shared: Arc<Shared>, tx: mpsc::Sender<TileResult>) {
                     // world places it with an exact transform (osm::Xform2).
                     let proj = Proj::tile_frame(id);
                     let feats = crate::osm::extract(&layers, id, &proj);
+                    map = Some(std::sync::Arc::new(crate::ui::mapdata::build(id, &proj, &feats, &layers)));
                     if id.is_far() {
                         scene::build_far_tile(id, &proj, feats)
                     } else {
@@ -289,6 +293,7 @@ fn worker(shared: Arc<Shared>, tx: mpsc::Sender<TileResult>) {
         let r = TileResult {
             id,
             build,
+            map,
             fetch_ms: (t1 - t0).as_secs_f32() * 1000.0,
             build_ms: t1.elapsed().as_secs_f32() * 1000.0,
             from_cache,
@@ -299,6 +304,27 @@ fn worker(shared: Arc<Shared>, tx: mpsc::Sender<TileResult>) {
             return;
         }
     }
+}
+
+// ---------------------------------------------------------------- any zoom
+
+static TEMPLATE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// One tile at any zoom (disk cache, then network), decompressed — for the
+/// overview map in the menus. Blocking: call from a worker thread.
+pub fn fetch_any(id: TileId) -> Result<Vec<u8>, String> {
+    let ag = agent();
+    if tile_path(id).exists() {
+        return fetch(&ag, None, id).map(|r| r.0);
+    }
+    let t = {
+        let mut g = TEMPLATE.lock().unwrap();
+        if g.is_none() {
+            *g = Some(tile_template(&ag)?);
+        }
+        g.clone()
+    };
+    fetch(&ag, t.as_deref(), id).map(|r| r.0)
 }
 
 // ---------------------------------------------------------------- airport lookup
