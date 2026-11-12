@@ -4,10 +4,12 @@
 //! output limiter. `Synth::render` is deterministic for a given sequence of
 //! frames/events, so the offline renderer hears exactly what the app plays.
 
+use super::crash::{self, Wreck};
 use super::dsp::*;
 use super::engines::{EngCtl, EngineVoice};
 use super::fx::{Kind, Pool, Route, Shot};
 use super::params::*;
+use super::samples::Looper;
 use super::voice::Speaker;
 use glam::Vec3;
 
@@ -50,8 +52,8 @@ struct Tune {
 
 fn tune(f: Family) -> Tune {
     match f {
-        Family::LightPiston => Tune { ext: 1.0, int_eng: 0.8, int_lp: 2600.0, int_mix: [0.9, 1.0, 0.6], wind: 0.9, wind_lp: 4000.0, whistle: 0.6 },
-        Family::Warbird => Tune { ext: 1.0, int_eng: 1.0, int_lp: 2400.0, int_mix: [0.9, 1.1, 0.9], wind: 0.9, wind_lp: 4200.0, whistle: 0.5 },
+        Family::LightPiston => Tune { ext: 1.0, int_eng: 1.35, int_lp: 2600.0, int_mix: [0.9, 1.0, 0.6], wind: 0.9, wind_lp: 4000.0, whistle: 0.6 },
+        Family::Warbird => Tune { ext: 1.0, int_eng: 1.45, int_lp: 2400.0, int_mix: [0.9, 1.1, 0.9], wind: 0.9, wind_lp: 4200.0, whistle: 0.5 },
         Family::Turboprop => Tune { ext: 1.0, int_eng: 0.8, int_lp: 1300.0, int_mix: [1.4, 0.35, 0.3], wind: 0.55, wind_lp: 2200.0, whistle: 0.0 },
         Family::Fighter => Tune { ext: 1.0, int_eng: 0.7, int_lp: 1100.0, int_mix: [0.35, 0.9, 0.7], wind: 0.8, wind_lp: 3200.0, whistle: 0.4 },
         Family::Airliner => Tune { ext: 1.0, int_eng: 0.5, int_lp: 650.0, int_mix: [0.6, 0.5, 0.5], wind: 0.65, wind_lp: 1500.0, whistle: 0.0 },
@@ -79,6 +81,12 @@ struct Emitter {
     int_r: Ramp,
     int_lp: Svf,
     int_lp2: OnePole,
+    /// Interior gain of the filtered (exterior-derived) path.
+    int_g: f32,
+    /// Can sound from the source reach the ear now (outside a supersonic
+    /// source's Mach cone it cannot)? Ramped gain of that.
+    heard: bool,
+    vis: Ramp,
 }
 
 impl Emitter {
@@ -99,6 +107,9 @@ impl Emitter {
             int_r: Ramp::new(0.0),
             int_lp: Svf::new(1000.0, 0.7, sr),
             int_lp2: OnePole::new(1500.0, sr),
+            int_g: 1.0,
+            heard: true,
+            vis: Ramp::new(1.0),
         }
     }
 }
@@ -138,6 +149,12 @@ struct Airframe {
     scrub_amp: Ramp,
     vib_ph: Phasor,
     isr: f32,
+    // Recorded tyre / gear rumble (exterior; heavies also a cockpit one).
+    roll_rec: Looper,
+    roll_rec_int: Looper,
+    gravel_rec: Looper,
+    /// Glider air-brake (ASK21 recording).
+    brake_rec: Looper,
 }
 
 /// Interior-only sounds: cockpit wind, rain on the canopy, systems.
@@ -196,6 +213,11 @@ struct Cockpit {
     pack_amp: Ramp,
     fan_ph: Phasor,
     isr: f32,
+    // Recorded: cockpit wind, the C172 stall horn, flap / gear motors.
+    wind_rec: Looper,
+    horn_rec: Looper,
+    flap_rec: Looper,
+    gear_rec: Looper,
 }
 
 /// Around the listener: city, birds, wind, rain, thunder.
@@ -246,8 +268,19 @@ pub struct Synth {
     cock: Cockpit,
     amb: Ambience,
     pool: Pool,
+    wreck: Wreck,
+    /// Everything but the UI bus (cut to silence after a fatal impact in the cockpit).
+    blackout: Ramp,
+    blackout_wait: i64,
+    was_crashed: bool,
+    /// Mach number last block (shock passing over the canopy at M 1).
+    prev_mach: f32,
+    /// Engine voices' share of exterior mix in the interior path.
+    ife: [f32; MAX_ENG],
     speaker: Speaker,
     fdn: Fdn,
+    world_lp: OnePole,
+    world_lp2: OnePole,
     lim: Limiter,
     settings: Settings,
     g_eng: Ramp,
@@ -258,6 +291,9 @@ pub struct Synth {
     g_master: Ramp,
     ext_sys: Ramp,
     // stats
+    pub booms: u32,
+    /// (N-wave length s, overpressure Pa) of the last boom.
+    pub last_boom: (f32, f32),
     pub samples: u64,
     pub peak: f32,
     pub nan_count: u64,
@@ -291,8 +327,16 @@ impl Synth {
             cock: Cockpit::new(sr),
             amb: Ambience::new(sr),
             pool: Pool::default(),
+            wreck: Wreck::new(sr),
+            blackout: Ramp::new(1.0),
+            blackout_wait: 0,
+            was_crashed: false,
+            prev_mach: 0.0,
+            ife: [1.0; MAX_ENG],
             speaker: Speaker::new(sr),
             fdn: Fdn::new(sr),
+            world_lp: OnePole::new(700.0, sr),
+            world_lp2: OnePole::new(1100.0, sr),
             lim: Limiter::new(sr, -1.0),
             settings: Settings::default(),
             g_eng: Ramp::new(1.0),
@@ -302,6 +346,8 @@ impl Synth {
             g_ui: Ramp::new(1.0),
             g_master: Ramp::new(0.0),
             ext_sys: Ramp::new(1.0),
+            booms: 0,
+            last_boom: (0.0, 0.0),
             samples: 0,
             peak: 0.0,
             nan_count: 0,
@@ -332,6 +378,13 @@ impl Synth {
                 self.voices[i] = if i < f.profile.engines { EngineVoice::new(&f.profile, i, self.sr) } else { None };
             }
         }
+        if self.was_crashed && !f.crashed {
+            // Respawn: the wreck and the ringing go away.
+            self.wreck.clear();
+            self.blackout.to(1.0, (0.3 * self.sr) as u32);
+            self.blackout_wait = 0;
+        }
+        self.was_crashed = f.crashed;
         let cut = f.cut || !self.have_frame;
         if f.shift != Vec3::ZERO && !cut {
             self.ear += f.shift;
@@ -353,6 +406,47 @@ impl Synth {
 
     pub fn event(&mut self, e: &Event) {
         let sr = self.sr;
+        // Crashes, impacts, wreckage (crash.rs): positional, by energy.
+        {
+            let ear = self.ear;
+            let cockpit = self.frame.interior > 0.5;
+            let fam = self.profile.family;
+            let mut cx = crash::Ctx { pool: &mut self.pool, rng: &mut self.rng, sr, ear };
+            match *e {
+                Event::Crash { speed, vel, mass, surface, in_air } => {
+                    let vel = if vel.length_squared() > 0.01 { vel } else { Vec3::new(0.0, -speed, 0.0) };
+                    let pos = self.frame.ac_pos;
+                    let _ = fam;
+                    if crash::crash(&mut cx, &mut self.wreck, pos, vel, mass.max(100.0), surface, in_air, cockpit) {
+                        // Fatal, seen from the cockpit: the world cuts out
+                        // just after the impact (ringing ears stay, UI bus).
+                        self.blackout_wait = (0.2 * sr) as i64;
+                    }
+                    return;
+                }
+                Event::Impact { pos, speed, mass, surface } => {
+                    crash::impact(&mut cx, pos, speed, mass, surface);
+                    return;
+                }
+                Event::Separation { pos, mass } => {
+                    crash::separation(&mut cx, pos, mass);
+                    return;
+                }
+                Event::Explosion { pos, energy } => {
+                    crash::explosion(&mut cx, pos, energy);
+                    return;
+                }
+                Event::Scrape { id, pos, speed, mass, surface } => {
+                    self.wreck.scrape(id, pos, speed, mass, surface, ear);
+                    return;
+                }
+                Event::Fire { id, pos, size } => {
+                    self.wreck.fire(id.min(7), pos, size, false, ear);
+                    return;
+                }
+                _ => {}
+            }
+        }
         let rng = &mut self.rng;
         let pool = &mut self.pool;
         let speaker = &mut self.speaker;
@@ -368,6 +462,10 @@ impl Synth {
                 if down {
                     add(Shot::new(Kind::Rumble { attack: 0.3, crackle: 0.0 }, Route::Airframe, 0.12, 1.4), rng);
                 }
+                // Airliners: the recorded A320 gear sequence (doors, motors, thumps).
+                if heavy && let Some(s) = Shot::sample("gear_heavy", 1.0, Route::Airframe, 0.35, 0.0, sr) {
+                    add(s, rng);
+                }
             }
             Event::GearLock { down } => {
                 let a = if down { 0.6 } else { 0.4 };
@@ -377,6 +475,16 @@ impl Synth {
             Event::Touchdown { sink, speed } => {
                 let k = (sink / 2.5).clamp(0.08, 1.5);
                 add(Shot::new(Kind::Thud { f0: 110.0, f1: 45.0, ph: 0.0, decay: 0.12 + 0.1 * k, noise: 1.2 }, Route::Airframe, 0.25 + 0.5 * k, 0.8), rng);
+                let rec = match fam {
+                    Family::Airliner | Family::Turboprop => Some(("heavy_touch", 0.55)),
+                    Family::Fighter => Some(("fighter_touch", 0.45)),
+                    _ => None,
+                };
+                if let Some((name, g)) = rec
+                    && let Some(s) = Shot::sample(name, 0.95 + 0.1 * rng.uni(), Route::Airframe, g * (0.4 + 0.6 * k.min(1.2)), 0.0, sr)
+                {
+                    add(s, rng);
+                }
                 if speed > 8.0 && fam != Family::Glider {
                     let sq = (speed / 70.0).clamp(0.2, 1.0) * (0.4 + 0.6 * k.min(1.0));
                     let f0 = 1500.0 + 500.0 * rng.uni();
@@ -393,26 +501,7 @@ impl Synth {
                     add(Shot::new(Kind::Clank { kicked: false }, Route::Cockpit, 0.04 * a, 0.2), rng);
                 }
             }
-            Event::Crash { speed } => {
-                let k = (speed / 60.0).clamp(0.3, 1.0);
-                // Impact, then tearing / scraping metal and debris.
-                add(Shot::new(Kind::Thud { f0: 120.0, f1: 38.0, ph: 0.0, decay: 0.25, noise: 6.0 }, Route::Airframe, 0.55 * k, 1.2), rng);
-                add(Shot::new(Kind::Rumble { attack: 0.005, crackle: 1.0 }, Route::Airframe, 0.9 * k, 3.5), rng);
-                for i in 0..4 {
-                    let f0 = 900.0 + 1800.0 * rng.uni();
-                    add(Shot::new(Kind::Squeal { f0, f1: f0 * 0.5, ph: 0.0 }, Route::Airframe, 0.25 * k, 0.5 + 0.9 * rng.uni()).delayed(0.05 + 0.35 * i as f32 * rng.uni(), sr), rng);
-                }
-                for i in 0..7 {
-                    let t = 0.05 + i as f32 * 0.18 + 0.2 * rng.uni();
-                    add(Shot::new(Kind::Clank { kicked: false }, Route::Airframe, 0.2 + 0.25 * rng.uni(), 0.9).delayed(t, sr), rng);
-                }
-                for i in 0..3 {
-                    add(
-                        Shot::new(Kind::Thud { f0: 140.0, f1: 50.0, ph: 0.0, decay: 0.15, noise: 2.5 }, Route::Airframe, 0.45 * k, 0.6).delayed(0.3 + i as f32 * 0.45 + 0.2 * rng.uni(), sr),
-                        rng,
-                    );
-                }
-            }
+            Event::Crash { .. } | Event::Impact { .. } | Event::Separation { .. } | Event::Explosion { .. } | Event::Scrape { .. } | Event::Fire { .. } => {}
             Event::Speak(c) => speaker.play(c),
             Event::ApDisconnect => {
                 // Original three-note bugle figure, played twice.
@@ -429,17 +518,26 @@ impl Synth {
                 add(Shot::new(Kind::Rumble { attack: 0.02, crackle: 0.6 }, Route::Airframe, 0.4, 0.8), rng);
             }
             Event::Boom(k) => {
-                // N-wave: two sharp pressure jumps ~0.12 s apart, then rumble.
-                add(Shot::new(Kind::Thud { f0: 140.0, f1: 35.0, ph: 0.25, decay: 0.12, noise: 2.5 }, Route::Listener, 0.9 * k, 0.8), rng);
-                add(Shot::new(Kind::Thud { f0: 140.0, f1: 35.0, ph: 0.75, decay: 0.12, noise: 2.5 }, Route::Listener, 0.8 * k, 0.8).delayed(0.12, sr), rng);
-                add(Shot::new(Kind::Rumble { attack: 0.05, crackle: 0.3 }, Route::Listener, 0.4 * k, 2.5), rng);
+                // An externally signalled boom (strength 0..1): a generic
+                // N-wave; the synth makes its own from the geometry.
+                let len = 0.12;
+                add(Shot::new(Kind::NWave { len, rise: 0.002 }, Route::Listener, 0.6 * k, len + 0.1), rng);
+                add(Shot::new(Kind::NWave { len, rise: 0.002 }, Route::Listener, 0.45 * k, len + 0.1).delayed(0.006, sr), rng);
+                add(Shot::new(Kind::Rumble { attack: 0.03, crackle: 0.2 }, Route::Listener, 0.25 * k, 2.0), rng);
             }
             Event::Thunder(km) => {
                 let k = (2.0 / km.max(0.5)).clamp(0.15, 1.0);
                 let pan = rng.bi() * 0.7;
                 let delay = km * 1000.0 / SPEED_OF_SOUND;
+                let names = ["thunder_1", "thunder_2", "thunder_3"];
+                let name = names[(rng.next_u32() % 3) as usize];
+                // Recorded thunder (fgdata), duller and softer with distance,
+                // over a procedural low grumble.
+                if let Some(s) = Shot::sample(name, 0.85 + 0.25 * rng.uni(), Route::Listener, 0.55 * k.powf(0.8), 0.0, sr) {
+                    add(s.muffled(900.0 + 5000.0 * k, sr).delayed(delay.min(8.0), sr).panned(pan), rng);
+                }
                 add(
-                    Shot::new(Kind::Rumble { attack: 0.08 + 0.3 * (1.0 - k), crackle: k }, Route::Listener, 0.9 * k.powf(0.7), 3.5 + 4.0 * rng.uni()).delayed(delay.min(8.0), sr).panned(pan),
+                    Shot::new(Kind::Rumble { attack: 0.08 + 0.3 * (1.0 - k), crackle: 0.3 * k }, Route::Listener, 0.4 * k.powf(0.7), 3.5 + 4.0 * rng.uni()).delayed(delay.min(8.0) + 0.1, sr).panned(pan),
                     rng,
                 );
             }
@@ -449,6 +547,7 @@ impl Synth {
 
     /// Render interleaved stereo into `out` (len = 2 × frames).
     pub fn render(&mut self, out: &mut [f32]) {
+        no_denormals();
         let frames = out.len() / 2;
         let mut done = 0;
         while done < frames {
@@ -461,6 +560,38 @@ impl Synth {
             }
             done += n;
         }
+    }
+
+    /// The listener crossed into the Mach cone: an N-wave whose length and
+    /// strength follow the far-field (Whitham / Carlson) scaling with Mach
+    /// number, airframe length and miss distance —
+    ///   Δp ∝ (M²−1)^⅛ · l^¾ · r^−¾,   T ≈ 3.42/a · M/(M²−1)^⅜ · r^¼ · l^¾ · K
+    /// (K ≈ 0.08: an F-16 at 10 km gives ~0.1 s / ~50 Pa, at 300 m ~40 ms
+    /// and several hundred Pa) — a ground reflection a few ms behind it
+    /// (doubling for a listener near the ground), and a rolling tail.
+    fn sonic_boom(&mut self, miss: f32, from: Vec3, mach: f32, ear_agl: f32) {
+        let sr = self.sr;
+        let m = mach.max(1.005);
+        let mm = m * m - 1.0;
+        let l = self.profile.size.clamp(5.0, 70.0);
+        let r = miss.max(20.0);
+        let dp = 50.0 * (mm / 0.96).powf(0.125) * (l / 15.0).powf(0.75) * (10_000.0 / r).powf(0.75);
+        let len = (3.42 / 340.0 * m / mm.powf(0.375) * r.powf(0.25) * l.powf(0.75) * 0.08).clamp(0.012, 0.45);
+        // Shock rise time: ~1 ms close, several ms after kilometres of turbulence.
+        let rise = 0.0007 + 0.004 * (r / 10_000.0).min(1.0);
+        let amp = 0.9 * dp / (dp + 180.0);
+        let d = from.length().max(1.0);
+        let x = from.dot(self.frame.ear_right) / d;
+        let elev = (from.y / d).clamp(0.15, 1.0);
+        let refl = 2.0 * ear_agl.clamp(0.0, 60.0) * elev / SPEED_OF_SOUND;
+        let p = (x * 0.7).clamp(-0.8, 0.8);
+        let rng = &mut self.rng;
+        let mut add = |s: Shot| self.pool.add(s.init(sr, rng));
+        add(Shot::new(Kind::NWave { len, rise }, Route::Listener, amp, len + 0.05).panned(p));
+        add(Shot::new(Kind::NWave { len, rise: rise * 1.6 }, Route::Listener, amp * 0.8, len + 0.05).panned(-0.3 * p).delayed(refl + 0.0015, sr));
+        add(Shot::new(Kind::Rumble { attack: 0.02, crackle: 0.15 }, Route::Listener, amp * 0.3, 1.2 + (r / 3000.0).min(2.5)).panned(0.5 * p).delayed(0.01, sr));
+        self.booms += 1;
+        self.last_boom = (len, dp);
     }
 
     fn control(&mut self, n: u32) {
@@ -493,6 +624,13 @@ impl Synth {
         self.inside_r.to(ins, n);
         self.ext_sys.to(0.22 + 0.78 * ins, n);
 
+        if self.blackout_wait > 0 {
+            self.blackout_wait -= n as i64;
+            if self.blackout_wait <= 0 {
+                self.blackout.to(0.0, (0.09 * sr) as u32);
+            }
+        }
+
         // ---- listener / emitter kinematics (dead-reckoned between frames)
         let snap = if self.cut_wait > 0 {
             self.cut_wait -= n as i64;
@@ -517,7 +655,13 @@ impl Synth {
         let ear = self.ear;
         let (er, eu, ef) = (f.ear_right, f.ear_up, f.ear_fwd);
         let axis = f.ac_rot * Vec3::Z;
-        let max_slew = if f.warp > 1.5 { 0.02 } else { 0.6 };
+        // Supersonic source: exact retarded-time solution with the full
+        // speed (silence ahead of the Mach cone, boom on entering it). At
+        // time-warp the velocity is scaled, so stay with the subsonic model.
+        let sup = f.mach >= 1.0 && f.warp <= 1.01 && !f.paused && !f.crashed;
+        let max_slew = if f.warp > 1.5 { 0.02 } else if sup { 5.0 } else { 0.6 };
+        let static_ear = f.ear_vel.length() < 0.3 * f.ac_vel.length().max(1.0);
+        let mut boom: Option<(f32, Vec3)> = None;
         let refd = self.profile.size * 2.6 + 6.0; // = the chase-camera distance
         let dmin = self.profile.size * 0.45;
         let n_eng = self.profile.engines;
@@ -541,23 +685,51 @@ impl Synth {
             // Retarded time: the sound heard now left the source when it was
             // at src − v·D, so solve |a − v·D| = c·D (constant velocity):
             // the exact moving-source Doppler, not just the distance rate.
+            // Rationalised root τ = d² / (a·v + √((a·v)² − (v² − c²)d²)),
+            // valid at any speed: no real root, or a non-positive
+            // denominator (supersonic source not yet past), means nothing
+            // emitted can have reached the ear yet.
             let c = SPEED_OF_SOUND;
             let v = f.ac_vel;
-            let v2 = v.length_squared().min((0.8 * c) * (0.8 * c));
+            let v2 = if sup { v.length_squared() } else { v.length_squared().min((0.8 * c) * (0.8 * c)) };
             let av = dv.dot(v) * if v.length_squared() > 1e-6 { (v2 / v.length_squared()).sqrt() } else { 0.0 };
-            let delay_s = (-av + (av * av + (c * c - v2) * d * d).max(0.0).sqrt()) / (c * c - v2);
+            let disc = av * av - (v2 - c * c) * d * d;
+            let den = av + disc.max(0.0).sqrt();
+            let heard = !sup || (disc >= 0.0 && den > 1e-3);
+            let delay_s = if heard { d * d / den.max(1e-3) } else { em.delay / sr };
             let target = (delay_s * sr).clamp(1.0, em.line.max_delay() - BLOCK as f32);
-            if snap || first {
+            let entering = heard && !em.heard;
+            if snap || first || entering {
                 em.delay = target;
                 em.d_step = 0.0;
-            } else {
+            } else if heard {
                 em.d_step = ((target - em.delay) / n as f32).clamp(-max_slew, max_slew);
+            } else {
+                em.d_step = 0.0;
             }
+            if entering && !snap && !first && e == AIRFRAME && sup && f.interior < 0.5 && static_ear {
+                // The listener just crossed into the Mach cone. Miss
+                // distance (normal to the track) and where the sound came from.
+                let vh = v.normalize_or_zero();
+                let miss = dv.cross(vh).length();
+                let from = dv - v * delay_s;
+                boom = Some((miss, from));
+            }
+            em.heard = heard;
+            em.vis.to(if heard { 1.0 } else { 0.0 }, if entering { (0.04 * sr) as u32 } else { n.min((0.006 * sr) as u32).max(1) });
             // Exterior: distance law, air absorption, pan, reverb send.
-            let g = (refd / d.max(dmin)).powf(0.92).min(1.4) * tn.ext;
+            // Spherical spreading (a touch under 1/r: ground reflection),
+            // eased beyond ~400 m so distant aircraft stay audible over the
+            // listener's own ambience (the mix can't hold 90 dB of range).
+            let dd = d.max(dmin);
+            let g = if dd < 400.0 { (refd / dd).powf(0.92) } else { (refd / 400.0).powf(0.92) * (400.0 / dd).powf(0.75) };
+            let g = g.min(1.4) * tn.ext;
             em.gain.to(g, n);
             let fc = 19_000.0 * (160.0 / (d + 160.0)).powf(1.05);
-            em.air.set(fc.max(300.0), 0.6, sr);
+            // Reading the delay line fast (steep Doppler at supersonic
+            // speed) would alias: lower the absorption filter with the rate.
+            let rate = (1.0 - em.d_step).max(1.0);
+            em.air.set((fc / rate).max(300.0), 0.6, sr);
             let x = dir.dot(er);
             let front = dir.dot(ef);
             // Sources behind are slightly narrower.
@@ -580,23 +752,51 @@ impl Synth {
             // where it sits relative to the head.
             let ip = (x * 0.8).clamp(-0.85, 0.85);
             let (il, ir) = pan(ip);
-            let ig = if e == AIRFRAME { 1.0 } else { tn.int_eng };
-            em.int_l.to(il * ig, n);
-            em.int_r.to(ir * ig, n);
-            let lp = if e == AIRFRAME { 900.0 } else { tn.int_lp };
+            em.int_g = if e == AIRFRAME { 1.0 } else { tn.int_eng };
+            em.int_l.to(il, n);
+            em.int_r.to(ir, n);
+            // Past Mach 1 nothing radiates forward from the engines to the
+            // cockpit through the air: only the structure-borne low end.
+            let supc = smoothstep(0.95, 1.25, f.mach);
+            let lp = if e == AIRFRAME { 900.0 } else { tn.int_lp * (1.0 - 0.5 * supc) };
             em.int_lp.set(lp, 0.65, sr);
             em.int_lp2.set(lp * 1.8, sr);
+        }
+        if let Some((miss, from)) = boom {
+            self.sonic_boom(miss.max(20.0), from, f.mach, f.ear_agl);
+        }
+        // Through Mach 1 the shock system sweeps over the canopy: a soft
+        // jolt and a flutter of the airframe (felt more than heard).
+        let pm = self.prev_mach;
+        self.prev_mach = f.mach;
+        if !first && !f.crashed && !f.on_ground && f.warp <= 1.01 && ((pm < 1.0 && f.mach >= 1.0) || (pm >= 1.0 && f.mach < 1.0)) {
+            let up = f.mach >= pm;
+            let s = Shot::new(Kind::Thud { f0: 70.0, f1: 30.0, ph: 0.0, decay: 0.18, noise: 3.0 }, Route::Airframe, if up { 0.45 } else { 0.3 }, 0.9);
+            self.pool.add(s.init(sr, &mut self.rng));
+            let s = Shot::new(Kind::Rumble { attack: 0.05, crackle: 0.0 }, Route::Airframe, 0.25, 1.2);
+            self.pool.add(s.init(sr, &mut self.rng));
         }
 
         // ---- engines
         let eng_warp = if f.paused || f.menu { 0.0 } else { 1.0 };
         for i in 0..n_eng {
             if let Some(v) = &mut self.voices[i] {
-                let c = EngCtl { e: f.eng[i], tas: f.tas, reverser: f.reverser, warp: eng_warp };
+                let c = EngCtl { e: f.eng[i], tas: f.tas, reverser: f.reverser, warp: eng_warp, dist: self.emit[i].dist, crashed: f.crashed };
                 v.control(&c, &self.profile, n);
+                self.ife[i] = v.int_from_ext();
             }
         }
 
+        // World-placed one-shots and the wreck follow the listener.
+        for s in self.pool.shots.iter_mut().flatten() {
+            if s.route == Route::World {
+                let (g, (l, r), fc) = crash::place(s.wpos, ear, er);
+                s.wl.to(g * l, n);
+                s.wr.to(g * r, n);
+                s.air.set(fc, sr);
+            }
+        }
+        self.wreck.control(ear, er, n, dt);
         self.air.control(&f, fam, sr, n);
         self.cock.control(&f, fam, &tn, sr, n, dt);
         self.amb.control(&f, sr, n, dt);
@@ -631,12 +831,14 @@ impl Synth {
             let ext = o.front * em.dir[0].tick() + o.rear * em.dir[1].tick() + o.case * em.dir[2].tick();
             em.line.push(ext);
             let im = self.tune.int_mix;
-            let int = o.front * im[0] + o.rear * im[1] + o.case * im[2];
-            let int = em.int_lp2.lp(em.int_lp.lp(int));
+            // Interior: the exterior components through the airframe
+            // (filtered), plus any recorded cockpit layers as they are.
+            let int = (o.front * im[0] + o.rear * im[1] + o.case * im[2]) * self.ife[i] * em.int_g;
+            let int = em.int_lp2.lp(em.int_lp.lp(int)) + o.int;
             int_eng.0 += int * em.int_l.tick();
             int_eng.1 += int * em.int_r.tick();
             em.delay = (em.delay + em.d_step).max(1.0);
-            let s = em.air.lp(em.line.read(em.delay)) * em.gain.tick() * cut;
+            let s = em.air.lp(em.line.read(em.delay)) * em.gain.tick() * cut * em.vis.tick();
             ext_eng.0 += s * em.gl.tick();
             ext_eng.1 += s * em.gr.tick();
             send += s * em.send.tick();
@@ -647,6 +849,7 @@ impl Synth {
         let mut lis = (0.0f32, 0.0f32);
         let lis_g = 1.0 - 0.45 * ins;
         let mut ui = 0.0f32;
+        let mut wext = (0.0f32, 0.0f32);
         for slot in self.pool.shots.iter_mut() {
             if let Some(s) = slot {
                 match s.tick(sr, &mut self.rng) {
@@ -662,6 +865,11 @@ impl Synth {
                             lis.1 += y * r * lis_g;
                         }
                         Route::Ui => ui += y,
+                        Route::World => {
+                            let y = s.air.lp(y);
+                            wext.0 += y * s.wl.tick();
+                            wext.1 += y * s.wr.tick();
+                        }
                     },
                     None => *slot = None,
                 }
@@ -673,7 +881,7 @@ impl Synth {
             let em = &mut self.emit[AIRFRAME];
             em.line.push(a_ext);
             em.delay = (em.delay + em.d_step).max(1.0);
-            let s = em.air.lp(em.line.read(em.delay)) * em.gain.tick() * cut;
+            let s = em.air.lp(em.line.read(em.delay)) * em.gain.tick() * cut * em.vis.tick();
             ext_env.0 += s * em.gl.tick();
             ext_env.1 += s * em.gr.tick();
             send += s * em.send.tick();
@@ -681,6 +889,13 @@ impl Synth {
             int_env.0 += ai * 0.7;
             int_env.1 += ai * 0.7;
         }
+        // Wreckage loops (fires, scrapes) join the world-placed one-shots.
+        let (fl, fr) = self.wreck.tick(&mut self.rng);
+        wext.0 += fl;
+        wext.1 += fr;
+        send += (wext.0 + wext.1) * 0.15;
+        // Heard from the cockpit: through the airframe, muffled.
+        let wi = self.world_lp.lp(self.world_lp2.lp((wext.0 + wext.1) * 0.5)) * 0.35;
         let (rl, rr) = self.fdn.tick(send * 0.5);
         // Cockpit.
         let (c_env, c_sys) = self.cock.tick(&mut self.rng);
@@ -700,8 +915,11 @@ impl Synth {
         let gs = self.g_sys.tick() * w * duck * self.ext_sys.tick();
         let gvo = self.g_voice.tick() * w * (0.5 + 0.5 * ins);
         let gu = self.g_ui.tick();
-        let mut l = (ext_eng.0 * outs + int_eng.0 * ins) * ge + (ext_env.0 * outs + int_env.0 * ins + lis.0 + rl * outs) * gv + c_sys.0 * gs + voice * gvo;
-        let mut r = (ext_eng.1 * outs + int_eng.1 * ins) * ge + (ext_env.1 * outs + int_env.1 * ins + lis.1 + rr * outs) * gv + c_sys.1 * gs + voice * gvo;
+        let bo = self.blackout.tick();
+        let wl = wext.0 * outs + wi * ins;
+        let wr = wext.1 * outs + wi * ins;
+        let mut l = ((ext_eng.0 * outs + int_eng.0 * ins) * ge + (ext_env.0 * outs + int_env.0 * ins + lis.0 + rl * outs + wl) * gv + c_sys.0 * gs + voice * gvo) * bo;
+        let mut r = ((ext_eng.1 * outs + int_eng.1 * ins) * ge + (ext_env.1 * outs + int_env.1 * ins + lis.1 + rr * outs + wr) * gv + c_sys.1 * gs + voice * gvo) * bo;
         if self.muffle_fc < 19_000.0 {
             l = self.muffle_l.lp(l);
             r = self.muffle_r.lp(r);
@@ -759,6 +977,10 @@ impl Airframe {
             scrub_amp: Ramp::new(0.0),
             vib_ph: Phasor::default(),
             isr: 1.0 / sr,
+            roll_rec: Looper::new("tyre_roll", 0.3),
+            roll_rec_int: Looper::new("heavy_roll_int", 0.6),
+            gravel_rec: Looper::new("tyre_gravel", 0.1),
+            brake_rec: Looper::new("glider_brake", 0.2),
         }
     }
 
@@ -774,7 +996,11 @@ impl Airframe {
         self.gear_amp.to(if live { gear_k * f.gear * q.min(4.0) } else { 0.0 }, n);
         self.flap_amp.to(if live { 0.05 * f.flaps * q.min(4.0) } else { 0.0 }, n);
         self.spoil_amp.to(if live { 0.22 * f.spoilers * q.min(4.0) } else { 0.0 }, n);
-        self.buff_amp.to(if live { 0.75 * f.buffet + 0.25 * f.overspeed } else { 0.0 }, n);
+        // Transonic: shocks dancing on the wing (M ≈ 0.88..1.1) shake the
+        // airframe — a low, irregular rumble that dies away once supersonic.
+        let trans = smoothstep(0.86, 0.97, f.mach) * (1.0 - smoothstep(1.03, 1.15, f.mach));
+        let trans = if f.on_ground { 0.0 } else { trans * if fam == Family::Fighter { 0.45 } else { 0.25 } };
+        self.buff_amp.to(if live { 0.75 * f.buffet + 0.25 * f.overspeed + trans } else { 0.0 }, n);
         let gs = f.ground_speed;
         let on = f.on_ground && live;
         let roll = if on { (gs / 40.0).powf(0.8).min(1.6) } else { 0.0 };
@@ -792,6 +1018,25 @@ impl Airframe {
         self.squeal_amp.to(0.03 * sq * if light { 0.6 } else { 1.0 }, n);
         self.squeal_f.to(if light { 3400.0 } else { 2600.0 } / sr, n);
         self.scrub_amp.to(0.05 * br * smoothstep(1.0, 30.0, gs), n);
+        // Recorded rolling (c172p tyres on asphalt / gravel; A320 SASA gear
+        // rumble for the heavies), level ~ log of ground speed like FG,
+        // pitch rising gently with speed.
+        let heavy_ac = matches!(fam, Family::Airliner | Family::Turboprop);
+        self.roll_rec.set_sample(match fam {
+            Family::Airliner | Family::Turboprop => "heavy_roll",
+            Family::Glider => "glider_roll",
+            _ => "tyre_roll",
+        });
+        // Glider air-brakes: the paddles' buffeting roar grows with speed.
+        let bg = if live && fam == Family::Glider { 0.12 * f.spoilers * (v / 30.0).powi(2).min(3.0) } else { 0.0 };
+        self.brake_rec.control(bg, (0.8 + v / 120.0).min(1.3), sr, n);
+        let kspd = smoothstep(0.5, 6.0, gs) * (1.0 + (gs / 10.0).max(1.0).ln() * 0.6);
+        let rg = if on && f.paved { kspd * if heavy_ac { 0.16 } else { 0.22 } } else { 0.0 };
+        let rp = if heavy_ac { 0.8 + gs / 120.0 } else { 0.75 + gs / 70.0 };
+        self.roll_rec.control(rg, rp.min(1.4), sr, n);
+        let gg = if on && !f.paved { kspd * 0.3 } else { 0.0 };
+        self.gravel_rec.control(gg, (0.8 + gs / 60.0).min(1.5), sr, n);
+        self.roll_rec_int.control(if on && heavy_ac { kspd * 0.18 } else { 0.0 }, (0.85 + gs / 100.0).min(1.3), sr, n);
     }
 
     /// (exterior mono, interior mono)
@@ -827,8 +1072,10 @@ impl Airframe {
         let p1 = self.squeal_ph[1].tick(fi * 2.01);
         let squeal = (sin_turns(p0) + 0.3 * sin_turns(p1)) * self.squeal_amp.tick() * (0.7 + 0.3 * w);
         let scrub = self.scrub_bp.bpn(w) * self.scrub_amp.tick();
-        let ext = aero + gear + flap + spoil + buff * 0.4 + roll + grass + hum + thumps + squeal + scrub;
-        let int = gear * 0.7 + flap * 0.3 + spoil * 1.0 + buff * 1.3 + roll * 1.4 + grass * 1.2 + hum * 0.4 + thumps * 1.5 + squeal * 0.4 + scrub * 0.4;
+        let rr = self.roll_rec.tick() + self.gravel_rec.tick() + self.brake_rec.tick();
+        let ri = self.roll_rec_int.tick();
+        let ext = aero + gear + flap + spoil + buff * 0.4 + roll * 0.7 + grass * 0.7 + hum + thumps + squeal + scrub + rr;
+        let int = gear * 0.7 + flap * 0.3 + spoil * 1.0 + buff * 1.3 + roll * 1.2 + grass * 1.0 + hum * 0.4 + thumps * 1.5 + squeal * 0.4 + scrub * 0.4 + rr * 0.5 + ri;
         (ext, int)
     }
 }
@@ -887,6 +1134,10 @@ impl Cockpit {
             pack_amp: Ramp::new(0.0),
             fan_ph: Phasor::default(),
             isr: 1.0 / sr,
+            wind_rec: Looper::new("wind_light", 0.0),
+            horn_rec: Looper::new("c172_stall", 0.0),
+            flap_rec: Looper::new("flap_motor_light", 0.0),
+            gear_rec: Looper::new("gear_fighter", 0.0),
         }
     }
 
@@ -905,10 +1156,14 @@ impl Cockpit {
         };
         let wa = 0.05 * tn.wind * (v / vref).powf(1.7).min(5.0) * slip;
         self.wind_amp.to(wa, n);
-        self.wind_lp.set((150.0 + 20.0 * v).min(tn.wind_lp), 0.6, sr);
+        // Supersonic: the canopy sits in a hissing, turbulent boundary
+        // layer behind the bow shock — broader and brighter, no cavity
+        // whistle (the airflow tones need subsonic flow over the gaps).
+        let sup = smoothstep(0.98, 1.25, f.mach);
+        self.wind_lp.set((150.0 + 20.0 * v).min(tn.wind_lp * (1.0 + 0.7 * sup)), 0.6, sr);
         self.whistle_f = 900.0 + 9.0 * v + 3000.0 * f.overspeed;
-        self.whistle.set(self.whistle_f, 10.0, sr);
-        self.whistle_amp.to(tn.whistle * 0.02 * (v / vref).powi(2).min(4.0) * (1.0 + 4.0 * f.overspeed), n);
+        self.whistle.set(self.whistle_f.min(9000.0), 10.0, sr);
+        self.whistle_amp.to(tn.whistle * 0.02 * (v / vref).powi(2).min(4.0) * (1.0 + 4.0 * f.overspeed) * (1.0 - 0.85 * sup), n);
         // Airliner flight deck: air-conditioning packs and avionics fans.
         let pack = match fam {
             Family::Airliner => 0.02,
@@ -930,7 +1185,7 @@ impl Cockpit {
             Family::Airliner | Family::Turboprop => 3,
             _ => 0,
         };
-        let horn_on = sw && matches!(self.horn_kind, 1 | 2);
+        let horn_on = sw && self.horn_kind == 2;
         self.horn_amp.to(if horn_on { 0.09 } else { 0.0 }, n);
         self.shaker_amp.to(if sw && self.horn_kind == 3 { 0.32 } else { 0.0 }, n);
         self.gwarn_amp.to(if f.gear_warn && live { 0.07 } else { 0.0 }, n);
@@ -972,6 +1227,39 @@ impl Cockpit {
         };
         self.flap_m_amp.to(fm * fa, n);
         self.flap_m_f.to(ff / sr, n);
+
+        // ---- recorded layers
+        // Wind: fgdata wind1 (light / warbird), A320 SASA cockpit wind
+        // (airliners, turboprop, fighter), ASK21 whoosh (glider); level
+        // follows the procedural model, pitch rises with airspeed.
+        let wname = match fam {
+            Family::Glider => "glider_wind",
+            Family::LightPiston | Family::Warbird => "wind_light",
+            _ => "wind_airliner",
+        };
+        self.wind_rec.set_sample(wname);
+        let wpitch = match fam {
+            Family::Glider => 0.55 + v / 45.0,
+            Family::LightPiston | Family::Warbird => 0.6 + v / 110.0,
+            _ => 0.55 + v / 260.0,
+        };
+        let wk = match fam {
+            Family::Glider => 1.5,
+            Family::LightPiston | Family::Warbird => 2.2,
+            _ => 1.6,
+        };
+        self.wind_rec.control(wa * wk * (1.0 - 0.3 * sup), wpitch.clamp(0.4, 2.0), sr, n);
+        // C172 stall horn (recorded reed horn) for the light single.
+        let hr = if sw && fam == Family::LightPiston { 0.22 } else { 0.0 };
+        self.horn_rec.control(hr, 1.0, sr, n);
+        // Motors: recorded loops while moving (the synth tones stay, quieter).
+        let (fname, fgain) = match fam {
+            Family::Airliner | Family::Turboprop => ("flap_motor_heavy", 0.09),
+            _ => ("flap_motor_light", 0.1),
+        };
+        self.flap_rec.set_sample(fname);
+        self.flap_rec.control(fm * fgain, 1.0, sr, n);
+        self.gear_rec.control(if fam == Family::Fighter { gm * 0.12 } else { 0.0 }, 1.0, sr, n);
     }
 
     /// ((env stereo), (systems stereo))
@@ -1004,8 +1292,11 @@ impl Cockpit {
         let shake = self.shake_lp.bpn(pk) * sh * 1.5 + self.rattle_bp.bpn(w) * sh * 0.05 * (w2 > 0.6) as u8 as f32;
         let pa = self.pack_amp.tick();
         let pack = if pa > 1e-6 { (self.pack_bp.bpn(pk) + 0.12 * sin_turns(self.fan_ph.tick(398.0 * sr_k))) * pa } else { 0.0 };
-        let env_l = wind * 0.9 + whistle * 0.7 + rain * 0.8 + shake + pack;
-        let env_r = wind * 0.9 + whistle * 0.5 + rain * 0.6 + shake + pack * 0.9;
+        // Recorded wind under the modelled one (decorrelated a little by the
+        // modelled part, which differs left / right).
+        let wr = self.wind_rec.tick();
+        let env_l = wind * 0.55 + wr * 0.8 + whistle * 0.7 + rain * 0.8 + shake + pack;
+        let env_r = wind * 0.55 + wr * 0.8 + whistle * 0.5 + rain * 0.6 + shake + pack * 0.9;
 
         // ---- systems
         let mut sys = 0.0f32;
@@ -1086,6 +1377,7 @@ impl Cockpit {
             let b = self.flap_m_ph[1].tick(fmf * 4.0);
             sys += (self.flap_lp.lp(2.0 * a - 1.0) * 0.6 + sin_turns(b) * 0.3) * fma;
         }
+        sys += self.horn_rec.tick() + self.flap_rec.tick() + self.gear_rec.tick();
         ((env_l, env_r), (sys, sys))
     }
 }

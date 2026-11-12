@@ -26,6 +26,9 @@ pub fn profile_for(def: &AircraftDef, size: f32) -> Profile {
         thrust_max: (def.static_thrust / n.max(1) as f32).max(1.0),
         size: size.max(4.0),
         retract_gear: def.retractable_gear,
+        set: SoundSet::None,
+        n1_idle: def.n1_idle,
+        mass: def.mass,
     };
     p.family = match def.engine_kind {
         EngineKind::None => Family::Glider,
@@ -43,6 +46,34 @@ pub fn profile_for(def: &AircraftDef, size: f32) -> Profile {
             } else {
                 Family::Airliner
             }
+        }
+    };
+    // Recorded engine set: by type (current ids and the FlightGear-derived
+    // ones), else by family.
+    let id = def.id.to_ascii_lowercase();
+    let has = |k: &[&str]| k.iter().any(|s| id.contains(s));
+    p.set = if p.engines == 0 {
+        SoundSet::None
+    } else if id == "kestrel" || has(&["c172", "cessna"]) {
+        SoundSet::C172
+    } else if id == "peregrine" || has(&["spitfire", "spit"]) {
+        SoundSet::Merlin
+    } else if id == "lancer" || has(&["f16", "f-16"]) {
+        SoundSet::F16
+    } else if id == "aerolink" || has(&["atr"]) {
+        SoundSet::Atr
+    } else if id == "meridian190" || has(&["e190", "ejet", "e-jet", "embraer"]) {
+        SoundSet::V2500
+    } else if id == "meridian320" || has(&["a320", "a32"]) {
+        SoundSet::Cfm56
+    } else {
+        match p.family {
+            Family::LightPiston => SoundSet::C172,
+            Family::Warbird => SoundSet::Merlin,
+            Family::Fighter => SoundSet::F16,
+            Family::Turboprop => SoundSet::Atr,
+            Family::Airliner => SoundSet::Cfm56,
+            Family::Glider => SoundSet::None,
         }
     };
     match def.id {
@@ -106,6 +137,7 @@ pub struct Director {
     air_time: f32,
     prev_vs: f32,
     prev_speed: f32,
+    prev_vel: Vec3,
     prev_gear: f32,
     prev_flaps: f32,
     gear_moving: bool,
@@ -127,8 +159,6 @@ pub struct Director {
     // glider vario
     te_prev: Option<(f32, f32)>,
     vario: f32,
-    // sonic boom
-    in_cone: bool,
     // thunder
     next_thunder: f64,
     rng: u32,
@@ -148,6 +178,7 @@ impl Default for Director {
             air_time: 0.0,
             prev_vs: 0.0,
             prev_speed: 0.0,
+            prev_vel: Vec3::ZERO,
             prev_gear: 1.0,
             prev_flaps: 0.0,
             gear_moving: false,
@@ -167,7 +198,6 @@ impl Default for Director {
             last_warn: [-100.0; 8],
             te_prev: None,
             vario: 0.0,
-            in_cone: false,
             next_thunder: 20.0,
             rng: 0x1234_5678,
         }
@@ -244,6 +274,12 @@ impl Director {
         let ear_agl = eye.y - world.ground_height(ear_xz);
 
         if new_type {
+            // Decode this aircraft's recorded engine set (and the shared
+            // airframe / impact samples) off the audio thread.
+            if let Some(set) = super::soundsets::set(profile.set) {
+                super::samples::prepare(set.samples);
+            }
+            super::samples::prepare(super::soundsets::COMMON);
             // New aircraft / respawn of another type: reset all edge detectors.
             *self = Director { now: self.now, prev_eye: eye, prev_ac: pos, prev_cam: Some(sim.cam), next_thunder: self.now + 15.0, ..Default::default() };
             self.type_id = profile.type_id;
@@ -335,7 +371,20 @@ impl Director {
                 self.gear_moving = moving;
             }
             if crashed && !self.prev_crashed {
-                events.push(Event::Crash { speed: self.prev_speed });
+                let reason = ac.crashed.as_deref().unwrap_or("");
+                let r = reason.to_ascii_lowercase();
+                let xz = Vec2::new(ac.pos.x, ac.pos.z);
+                let in_air = r.contains("structural") || r.contains("overstress");
+                let surface = if r.contains("water") || r.contains("ditch") || world.is_water(xz) {
+                    Surface::Water
+                } else if r.contains("building") {
+                    Surface::Building
+                } else if world.runways.iter().any(|w| seg_dist(xz, w.a, w.b) < w.width * 0.5 + 4.0) {
+                    Surface::Paved
+                } else {
+                    Surface::Ground
+                };
+                events.push(Event::Crash { speed: self.prev_speed, vel: self.prev_vel, mass: def.mass, surface, in_air });
             }
             for i in 0..n {
                 let r = eng[i].running;
@@ -364,6 +413,7 @@ impl Director {
         self.prev_on_ground = ac.on_ground;
         self.prev_vs = vs;
         self.prev_speed = ac.vel.length();
+        self.prev_vel = ac.vel;
         self.prev_gear = gear;
         self.prev_flaps = surf.flaps;
         self.prev_crashed = crashed;
@@ -465,23 +515,10 @@ impl Director {
             }
         }
 
-        // ---- sonic boom (outside views): the listener enters the Mach cone.
+        // (Sonic booms: the synth derives them from the source / listener
+        // geometry — see Synth::sonic_boom.)
         let interior = if sim.cam == CamMode::Cockpit { 1.0 } else { 0.0 };
         let m = ac.mach();
-        let to_ear = eye - ac.pos;
-        let d = to_ear.length();
-        let static_ear = self.ear_vel.length() < 0.3 * ac.vel.length();
-        let inside = if m > 1.02 && interior < 0.5 && static_ear && d < 25_000.0 && d > 1.0 {
-            let back = -ac.vel.normalize_or_zero();
-            let cos_t = back.dot(to_ear / d);
-            cos_t > (1.0 - 1.0 / (m * m)).sqrt()
-        } else {
-            false
-        };
-        if inside && !self.in_cone && !frozen && !cut {
-            events.push(Event::Boom((300.0 / d.max(300.0)).powf(0.6)));
-        }
-        self.in_cone = inside;
 
         // ---- weather
         let wr = world.render_weather();

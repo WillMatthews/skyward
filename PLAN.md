@@ -62,8 +62,9 @@ item lands; keep entries one line.
 
 ## 4. Audio
 - [x] Procedural engine/airframe/systems audio, 3D positional + Doppler, callouts (K)
-- [~] **P0** Sample-based engines from real recordings, supersonic Mach cone + N-wave boom (K2)
-- [~] **P0** Crash/impact sound redesign, event API for debris/fire (K2)
+- [x] Sample-based engines from real FlightGear recordings, supersonic Mach cone + N-wave boom (K2)
+- [x] Crash/impact sound redesign, event API for debris/fire (K2)
+- [ ] **P1** Audio follow-ups: CF34-class recording for E190, engine start sequences once starters exist, remove unused menu_window, human listening pass on levels
 - [ ] **P1** ATC radio (tower/approach phraseology, AI voice) and ATIS from live METAR
 - [ ] **P1** Environment: airport ambience, rain on fuselage by surface, wind howl in gear wells
 - [ ] **P2** Cockpit switch/knob foley, seat rattles, headset/no-headset mix
@@ -109,7 +110,7 @@ item lands; keep entries one line.
 | J | Night & lighting | ✅ |
 | M | UI/HUD, maps, airport picker, menus, frame pacing | ✅ |
 | N | Real FlightGear aircraft + JSBSim FDM | 🟡 running |
-| K2 | Sample-based audio, supersonic, crash sounds | 🟡 running |
+| K2 | Sample-based audio, supersonic, crash sounds | ✅ |
 | L | Structure/flex/crashes + supersonic/atmospheric VFX | ⏳ after N |
 | G | WASM + GitHub Pages workflow (repo stays private until owner flips it) | ⏳ last of current batch |
 | next | Terrain elevation, landmarks, airports detail, 3D cockpits, input devices, CI | ⏳ to schedule |

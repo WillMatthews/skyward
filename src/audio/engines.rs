@@ -18,12 +18,16 @@
 
 use super::dsp::*;
 use super::params::{EngineFrame, Family, Profile};
+use super::sampled::{Drivers, SampleEngine as SampledEngine, n2_from_n1};
+use super::soundsets::{self, Set};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct EngOut {
     pub front: f32,
     pub rear: f32,
     pub case: f32,
+    /// Recorded cockpit sound (already "inside": not filtered again).
+    pub int: f32,
 }
 
 /// Per-block control inputs for one engine.
@@ -34,6 +38,10 @@ pub struct EngCtl {
     pub reverser: f32,
     /// World sounds frozen (pause): hold.
     pub warp: f32,
+    /// Listener distance (m) — picks close / distant recordings.
+    pub dist: f32,
+    /// The aircraft was destroyed: engines stop dead (no shutdown sequence).
+    pub crashed: bool,
 }
 
 fn prop_tables(blades: u32, max_rev_hz: f32, seed: u32) -> (Table, Table) {
@@ -395,7 +403,7 @@ impl Piston {
         };
         let tick = self.tick_hp.hp(self.rng.bi() * self.crack_env) * 0.05;
         let front = self.prop.tick();
-        EngOut { front, rear, case: whine + tick + starter }
+        EngOut { front, rear, case: whine + tick + starter, int: 0.0 }
     }
 }
 
@@ -481,7 +489,7 @@ impl Turboprop {
         let roar = (self.roar.lp(pk) * 1.3 + self.rumble.lp(pk) * 1.4) * self.roar_amp.tick();
         let beta = self.beta.lp(pk) * self.beta_amp.tick() * 1.5;
         let prop = self.prop.tick();
-        EngOut { front: prop + beta + hiss * 0.5, rear: roar, case: gg + hiss * 0.5 }
+        EngOut { front: prop + beta + hiss * 0.5, rear: roar, case: gg + hiss * 0.5, int: 0.0 }
     }
 }
 
@@ -630,38 +638,115 @@ impl Jet {
         }
         self.crackle_env *= 0.93;
         let crackle = self.crackle_hp.hp(self.crackle_env * self.crackle_amp * (1.0 + 0.5 * w)) * 1.4;
-        EngOut { front: tones + fan_bb + rev, rear: roar + ab + crackle, case: n2 }
+        EngOut { front: tones + fan_bb + rev, rear: roar + ab + crackle, case: n2, int: 0.0 }
     }
 }
 
-pub enum EngineVoice {
+enum Proc {
     Piston(Box<Piston>),
     Turboprop(Box<Turboprop>),
     Jet(Box<Jet>),
 }
 
+/// One engine's sound: the recorded set (when the aircraft has one and its
+/// samples are decoded) with the procedural voice underneath as detail
+/// (blade-pass tones, crackle, buzz-saw...), or the procedural voice alone.
+pub struct EngineVoice {
+    proc_: Proc,
+    samp: Option<Box<SampledEngine>>,
+    set: Option<&'static Set>,
+    seed: u32,
+    sr: f32,
+    /// Procedural component gains (ramped when the samples arrive).
+    pg: [Ramp; 3],
+    /// Sample-bank fade-in.
+    sg: Ramp,
+    n1_idle: f32,
+}
+
 impl EngineVoice {
     pub fn new(p: &Profile, idx: usize, sr: f32) -> Option<EngineVoice> {
-        Some(match p.family {
+        let proc_ = match p.family {
             Family::Glider => return None,
-            Family::LightPiston | Family::Warbird => EngineVoice::Piston(Box::new(Piston::new(p, idx, sr))),
-            Family::Turboprop => EngineVoice::Turboprop(Box::new(Turboprop::new(p, idx, sr))),
-            Family::Fighter | Family::Airliner => EngineVoice::Jet(Box::new(Jet::new(p, idx, sr))),
-        })
+            Family::LightPiston | Family::Warbird => Proc::Piston(Box::new(Piston::new(p, idx, sr))),
+            Family::Turboprop => Proc::Turboprop(Box::new(Turboprop::new(p, idx, sr))),
+            Family::Fighter | Family::Airliner => Proc::Jet(Box::new(Jet::new(p, idx, sr))),
+        };
+        let seed = p.type_id ^ (idx as u32).wrapping_mul(0x9e37_79b9);
+        let mut v = EngineVoice { proc_, samp: None, set: soundsets::set(p.set), seed, sr, pg: [Ramp::new(1.0); 3], sg: Ramp::new(0.0), n1_idle: p.n1_idle };
+        v.try_samples(0);
+        Some(v)
     }
-    pub fn control(&mut self, c: &EngCtl, p: &Profile, n: u32) {
-        match self {
-            EngineVoice::Piston(v) => v.control(c, p, n),
-            EngineVoice::Turboprop(v) => v.control(c, p, n),
-            EngineVoice::Jet(v) => v.control(c, p, n),
+
+    fn try_samples(&mut self, n: u32) {
+        if self.samp.is_some() {
+            return;
+        }
+        if let Some(set) = self.set
+            && let Some(s) = SampledEngine::new(set, self.seed, self.sr)
+        {
+            self.samp = Some(Box::new(s));
+            let d = set.detail;
+            // At aircraft load (n = 0) switch at once; later, cross-fade.
+            let m = if n == 0 { 0 } else { (0.4 * self.sr) as u32 };
+            self.pg[0].to(d.front, m);
+            self.pg[1].to(d.rear, m);
+            self.pg[2].to(d.case, m);
+            self.sg.to(1.0, m);
         }
     }
+
+    /// Share of the exterior mix that still feeds the filtered interior path.
+    pub fn int_from_ext(&self) -> f32 {
+        match (&self.samp, self.set) {
+            (Some(_), Some(s)) => s.int_from_ext,
+            _ => 1.0,
+        }
+    }
+
+    pub fn control(&mut self, c: &EngCtl, p: &Profile, n: u32) {
+        self.try_samples(n);
+        match &mut self.proc_ {
+            Proc::Piston(v) => v.control(c, p, n),
+            Proc::Turboprop(v) => v.control(c, p, n),
+            Proc::Jet(v) => v.control(c, p, n),
+        }
+        if let Some(s) = &mut self.samp {
+            let e = &c.e;
+            let n1 = if p.n1_rpm > 0.0 { e.rpm / p.n1_rpm } else { e.spool };
+            let d = match p.family {
+                Family::Turboprop => {
+                    // Gas generator: ~62 % at ground idle, follows the power lever.
+                    let pw = e.spool.clamp(0.0, 1.1);
+                    let ng = if e.running { 0.62 + 0.38 * pw } else { 0.62 * pw.min(1.0) * 1.6 }.min(1.05);
+                    Drivers { n1: ng * 100.0, n2: ng * 100.0, rpm: e.rpm, pow: pw, ab: 0.0, rev: c.reverser }
+                }
+                Family::Fighter | Family::Airliner => Drivers { n1: n1 * 100.0, n2: n2_from_n1(n1, self.n1_idle), rpm: e.rpm, pow: e.spool, ab: e.ab, rev: c.reverser },
+                _ => Drivers { n1: e.spool * 100.0, n2: e.spool * 100.0, rpm: e.rpm, pow: e.spool.clamp(0.0, 1.1), ab: 0.0, rev: 0.0 },
+            };
+            s.control(e, &d, c.dist, c.crashed, n);
+        }
+    }
+
     #[inline]
     pub fn tick(&mut self) -> EngOut {
-        match self {
-            EngineVoice::Piston(v) => v.tick(),
-            EngineVoice::Turboprop(v) => v.tick(),
-            EngineVoice::Jet(v) => v.tick(),
+        let mut o = match &mut self.proc_ {
+            Proc::Piston(v) => v.tick(),
+            Proc::Turboprop(v) => v.tick(),
+            Proc::Jet(v) => v.tick(),
+        };
+        let (a, b, c) = (self.pg[0].tick(), self.pg[1].tick(), self.pg[2].tick());
+        o.front *= a;
+        o.rear *= b;
+        o.case *= c;
+        if let Some(s) = &mut self.samp {
+            let g = self.sg.tick();
+            let so = s.tick();
+            o.front += so.front * g;
+            o.rear += so.rear * g;
+            o.case += so.case * g;
+            o.int += so.int * g;
         }
+        o
     }
 }

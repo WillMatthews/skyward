@@ -1,6 +1,8 @@
 //! One-shot sound effects (touchdowns, thunks, chimes, crash, thunder...).
 
 use super::dsp::*;
+use super::samples::{self, Pcm, Voice};
+use glam::Vec3;
 
 /// Where a one-shot is heard from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -12,6 +14,9 @@ pub enum Route {
     /// Around the listener (ambience), with a pan.
     Listener,
     Ui,
+    /// At a fixed world position (`Shot::wpos`): propagation delay at the
+    /// start, distance / air absorption / pan updated every block.
+    World,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -30,6 +35,13 @@ pub enum Kind {
     Click,
     /// A songbird phrase: FM chirps.
     Bird { f: f32, ph: f32, syll: f32, n: u32 },
+    /// A recorded sample (one-shot, or a loop held for `dur`).
+    Sample { v: Voice, p: &'static Pcm },
+    /// Sonic-boom N-wave: pressure jumps up, falls linearly to the
+    /// negative peak over `len` s, jumps back; shocks rise in `rise` s.
+    NWave { len: f32, rise: f32 },
+    /// Ringing ears after a violent impact: a high whistle fading out.
+    Ring { f: f32, ph: f32 },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -46,11 +58,62 @@ pub struct Shot {
     pub f: [Svf; 3],
     pub lp: OnePole,
     pub env: f32,
+    /// World position (Route::World) and its block-ramped stereo gains.
+    pub wpos: Vec3,
+    pub wl: Ramp,
+    pub wr: Ramp,
+    pub air: OnePole,
+    /// Low-pass the output (muffled / cockpit versions), 0 = off.
+    pub muffle: f32,
+    pub mlp: [OnePole; 2],
+    /// Crackle burst envelope.
+    pub cenv: f32,
 }
 
 impl Shot {
     pub fn new(kind: Kind, route: Route, amp: f32, dur: f32) -> Shot {
-        Shot { kind, route, amp, pan: 0.0, delay: 0, t: 0.0, dur, f: [Svf::default(); 3], lp: OnePole::default(), env: 0.0 }
+        Shot {
+            kind,
+            route,
+            amp,
+            pan: 0.0,
+            delay: 0,
+            t: 0.0,
+            dur,
+            f: [Svf::default(); 3],
+            lp: OnePole::default(),
+            env: 0.0,
+            wpos: Vec3::ZERO,
+            wl: Ramp::new(0.0),
+            wr: Ramp::new(0.0),
+            air: OnePole::default(),
+            muffle: 0.0,
+            mlp: [OnePole::default(); 2],
+            cenv: 0.0,
+        }
+    }
+    /// A recorded sample at `pitch` (None if not decoded yet). `dur` 0 =
+    /// the whole sample (one-shots); for loops, how long to hold it.
+    pub fn sample(name: &str, pitch: f32, route: Route, amp: f32, dur: f32, sr: f32) -> Option<Shot> {
+        let id = samples::id(name);
+        let p = samples::pcm(id)?;
+        let mut v = Voice::new(id, 0.0);
+        v.inc = Ramp::new(p.rate / sr * pitch.max(0.05));
+        v.gain = Ramp::new(1.0);
+        let d = if dur > 0.0 { dur } else { p.len as f32 / (p.rate * pitch.max(0.05)) + 0.01 };
+        Some(Shot::new(Kind::Sample { v, p }, route, amp, d))
+    }
+    /// Place at a world position (Route::World).
+    pub fn at(mut self, pos: Vec3) -> Shot {
+        self.route = Route::World;
+        self.wpos = pos;
+        self
+    }
+    /// Low-pass the shot at `fc` Hz (2 poles).
+    pub fn muffled(mut self, fc: f32, sr: f32) -> Shot {
+        self.muffle = fc;
+        self.mlp = [OnePole::new(fc, sr); 2];
+        self
     }
     pub fn delayed(mut self, secs: f32, sr: f32) -> Shot {
         self.delay = (secs.max(0.0) * sr) as u32;
@@ -79,6 +142,7 @@ impl Shot {
             Kind::Rumble { .. } => {
                 self.f[0] = Svf::new(90.0, 0.7, sr);
                 self.f[1] = Svf::new(400.0, 0.7, sr);
+                self.f[2] = Svf::new(1400.0 + 1200.0 * rng.uni(), 0.8, sr);
                 self.lp = OnePole::new(25.0, sr);
             }
             Kind::Chime { .. } => {
@@ -87,7 +151,11 @@ impl Shot {
             Kind::Click => {
                 self.f[0] = Svf::new(2600.0, 3.0, sr);
             }
-            Kind::Bird { .. } => {}
+            Kind::Bird { .. } | Kind::Sample { .. } | Kind::Ring { .. } => {}
+            Kind::NWave { .. } => {
+                // DC guard (the N-wave is zero-mean, but keep the woofer safe).
+                self.lp = OnePole::new(12.0, sr);
+            }
         }
         self
     }
@@ -144,8 +212,13 @@ impl Shot {
                 let m = 0.6 + 0.8 * self.lp.lp(rng.bi() * 4.0).abs().min(1.0);
                 let w = rng.bi();
                 let mut y = self.f[0].lp(w) * 2.2 + self.f[1].bp(w) * 0.6;
+                // Crackle: short (~2 ms) noise bursts, not single-sample spikes.
                 if *crackle > 0.0 && rng.uni() < *crackle * (1.0 - u) * 0.002 {
-                    y += rng.bi() * 3.0;
+                    self.cenv = 0.5 + rng.uni();
+                }
+                if self.cenv > 1e-3 {
+                    self.cenv *= 1.0 - 500.0 * dt;
+                    y += self.f[2].bp(rng.bi() * self.cenv * 6.0);
                 }
                 y * env * m * a
             }
@@ -183,6 +256,34 @@ impl Shot {
                     sin_turns(*ph) * env * env * a
                 }
             }
+            Kind::Sample { v, p } => {
+                // Loops held for `dur` fade over their last 150 ms.
+                let fade = if p.looped { ((self.dur - t) / 0.15).clamp(0.0, 1.0) } else { 1.0 };
+                if v.done {
+                    return None;
+                }
+                v.tick(p, samples::kern()) * a * fade
+            }
+            Kind::NWave { len, rise } => {
+                let (len, rise) = (*len, (*rise).max(1e-4));
+                // Front shock up, linear expansion, rear shock back to 0.
+                let up = smoothstep(0.0, rise, t);
+                let back = smoothstep(len, len + rise, t);
+                let ramp = 1.0 - 2.0 * ((t - 0.5 * rise) / len).clamp(0.0, 1.0);
+                let p = up * ramp * (1.0 - back);
+                (p - self.lp.lp(p)) * a
+            }
+            Kind::Ring { f, ph } => {
+                *ph += *f * (1.0 + 0.002 * sin_turns(t * 5.3)) * dt;
+                let env = smoothstep(0.0, 0.08, t) * (1.0 - u).powf(2.2);
+                (sin_turns(*ph) + 0.08 * sin_turns(*ph * 2.003)) * env * a
+            }
+        };
+        let y = if self.muffle > 0.0 {
+            let z = self.mlp[0].lp(y);
+            self.mlp[1].lp(z)
+        } else {
+            y
         };
         self.env = y;
         Some(y)

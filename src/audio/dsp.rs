@@ -484,3 +484,29 @@ pub fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
 pub fn sat(x: f32) -> f32 {
     x / (1.0 + x.abs())
 }
+
+/// Flush denormals to zero on this thread (x86-64 FTZ+DAZ, AArch64 FZ).
+/// Decaying filters otherwise wander into subnormal floats when the world
+/// goes quiet (e.g. after a crash), which costs 10-100× per operation.
+/// Cheap; called at the top of every render.
+#[inline]
+pub fn no_denormals() {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        let mut csr: u32 = 0;
+        core::arch::asm!("stmxcsr [{}]", in(reg) &mut csr, options(nostack));
+        if csr & 0x8040 != 0x8040 {
+            csr |= 0x8040;
+            core::arch::asm!("ldmxcsr [{}]", in(reg) &csr, options(nostack));
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        let mut fpcr: u64;
+        core::arch::asm!("mrs {}, fpcr", out(reg) fpcr, options(nomem, nostack));
+        if fpcr & (1 << 24) == 0 {
+            fpcr |= 1 << 24;
+            core::arch::asm!("msr fpcr, {}", in(reg) fpcr, options(nomem, nostack));
+        }
+    }
+}

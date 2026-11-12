@@ -200,6 +200,13 @@ impl Recorder {
     pub fn step(&mut self, sim: &Sim, world: &World, dt: f32, menu: bool) {
         self.events.clear();
         let f = self.director.capture(sim, world, dt, menu, &mut self.events);
+        if f.profile.type_id != self.last_frame.profile.type_id {
+            // Offline: decode now so the render is deterministic.
+            if let Some(set) = super::soundsets::set(f.profile.set) {
+                super::samples::prepare_blocking(set.samples);
+            }
+            super::samples::prepare_blocking(super::soundsets::COMMON);
+        }
         let t0 = Instant::now();
         self.synth.push_frame(&f);
         for e in &self.events {
@@ -210,8 +217,13 @@ impl Recorder {
         self.carry -= n as f64;
         let start = self.buf.len();
         self.buf.resize(start + n * 2, 0.0);
+        let booms = self.synth.booms;
         self.synth.render(&mut self.buf[start..]);
         self.cpu += t0.elapsed();
+        if self.synth.booms != booms {
+            let (len, dp) = self.synth.last_boom;
+            self.marks.push((self.t, format!("sonic boom: N-wave {:.0} ms, {:.0} Pa", len * 1000.0, dp)));
+        }
         for e in &self.events {
             let label = match e {
                 Event::Speak(c) => format!("say {c:?}"),

@@ -1,11 +1,74 @@
 # Audio assets
 
-Almost everything Skyward plays is synthesised at run time (`src/audio/`):
-engines, propellers, jets, wind, rain, thunder, birds, ground roll, tyres,
-gear / flap motors, horns, chimes, the vario, crash and sonic boom. There are
-no recorded samples of those.
+Skyward's sound is a mix of **recorded samples** from the FlightGear
+project (engines, start-ups, shutdowns, rolling, wind, thunder, impacts) and
+**our own synthesis** (`src/audio/`): propeller blade-pass and buzz-saw
+tones, piston firing detail, afterburner crackle, the positional /
+Doppler / Mach-cone mixing, sonic-boom N-waves, buffet, rain, birds, chimes,
+warnings, fires, scrapes and everything else. The cockpit voice callouts are
+our own (Kokoro TTS, below).
 
-The only recorded assets are the cockpit voice callouts:
+## Licence summary
+
+All recorded engine / effect samples come from FlightGear aircraft and data
+released under the **GNU GPL**:
+
+| Source | Licence | Notes |
+|---|---|---|
+| FGAddon `Aircraft/f16` | GPL-2.0-or-later (`copyright.txt`: "version 2 of the License, or (at your option) any later version", applies to all files in the package) | Sounds by Carsten Brueggmann (GEED), Timi "MrChillStorm", FGUK — credited in the package `authors.txt` |
+| FGAddon `Aircraft/spitfireIX` | GPL-2.0 (`README`: "released under the terms of the GPLv2", package `COPYING` = GPL-2) | Detlef Faber |
+| FGAddon `Aircraft/DHC-8` | GPL-2.0-or-later (`README.md` licence section) | `out.wav`, `intern.wav`, `reverse.wav` recorded by Andreas Spiekermann (README "SOUNDS SOURCES") |
+| FGAddon `Aircraft/A320-family` | **GPL-2.0 only** (`README.copyright.md`: "version 2 of the GNU General Public License") | SASA CFM56-5B / IAE V2500 / airframe recordings |
+| FGAddon `Aircraft/ASK21` | GPL-2.0-or-later (`README.md`) | |
+| c172p-team/c172p (GitHub) | GPL-2.0 (repository `LICENSE`) | Sounds by Gilberto Agostinho and the c172p team |
+| fgdata (`Sounds/`, GitLab `flightgear/fgdata`) | GPL-2.0 (`LICENSE.md`) | FlightGear base package |
+
+**Compatibility note:** the A320-family files are GPL-2.0 *only* (and the
+Spitfire IX package is stated as GPLv2). Shipping them is fine for a project
+licensed GPL-2.0 or GPL-2.0-or-later; if Skyward were to be released under
+GPL-3.0-only, the `cfm_*`, `v25_*`, `heavy_*`, `gear_heavy`,
+`flap_motor_heavy`, `wind_airliner` (A320-family) and `merlin_*`
+(Spitfire IX) samples would have to be replaced or dropped (the engines then
+fall back to the procedural voices automatically: remove the set in
+`src/audio/soundsets.rs`). Excluded on purpose: the E-jet package's
+`cabin-chime.wav` (CC-BY-3.0) and anything without a clear licence.
+
+Fetched 2026-11-12: FGAddon SVN trunk r21799, c172p `master` 63ba85273b7f,
+fgdata `next` 94c38602.
+
+## Files (`samples/*.ogg`)
+
+Built by `tools/build_samples.py` (mono mix-down, trim, polyphase resample,
+correlation-matched seamless loops, Ogg Vorbis q4; `samples/index.tsv` holds
+rate / length / loop flag / build attenuation). 95 files, ~4.1 MB.
+
+| Sample(s) | Source file(s) | Package |
+|---|---|---|
+| `c172_idle`, `c172_run`, `c172_crank`, `c172_start`, `c172_cut` | `Sounds/engine-idle.wav`, `engine.wav`, `engine-crank.wav`, `engine-start.wav`, `engine-cut.wav` | c172p |
+| `c172_stall` | `Sounds/stall2.wav` | c172p |
+| `tyre_roll`, `tyre_gravel`, `flap_motor_light` | `Sounds/tires-rolling-asphalt.wav`, `tires-rolling-gravel.wav`, `flaps-motor.wav` | c172p |
+| `crash_c172`, `crash_heavy`, `crash_light`, `crash_scrape` | `Sounds/crash.wav`, `damage-heavy.wav`, `damage.wav`, `scratch.wav` | c172p |
+| `merlin_1`, `merlin_2`, `merlin_3` | `Sounds/merlin_rpm1.wav`, `spita.wav`, `merlin_rpm4.wav` | spitfireIX |
+| `merlin_start`, `merlin_stop` | `Sounds/merlin_starter.wav`, `merlin_shutdown.wav` | spitfireIX |
+| `f16_x_idle_f`, `f16_x_idle_a`, `f16_x_mil_f`, `f16_x_mil_a`, `f16_x_ab` | `Sounds/GEED/exterior_ground_idle_loop_mono.wav`, `exterior_ground_idle_aft_loop_mono.wav`, `mil_exterior.wav`, `full_mil_aft_mono.wav`, `afterburner_exterior.wav` | f16 (GEED) |
+| `f16_x_abx`, `f16_x_roar` | `Sounds/exhaust_loop.wav`, `Sounds/engine/roar-medium.wav` | f16 |
+| `f16_x_whine` | `Sounds/FGUK/f16-whine.wav` | f16 (FGUK) |
+| `f16_i_idle_lo/hi`, `f16_i_88_lo/hi`, `f16_i_100_lo/hi`, `f16_i_ab` | `Sounds/Timi/F-16_In_Idle_Low/High`, `_N2_88_Low/High`, `_N100_Low/High`, `_Afterburner` (`-left` + `-right` summed) | f16 (Timi) |
+| `fighter_touch`, `gear_fighter` | `Sounds/touchdown.wav`, `gear-transit.wav` | f16 |
+| `crash_f16`, `crash_explode`, `crash_water` | `Sounds/Effects/aircraft-crash.wav`, `aircraft-explode.wav`, `aircraft-water-crash.wav` | f16 |
+| `atr_out`, `atr_int`, `atr_rev` | `Sounds/out.wav`, `intern.wav`, `reverse.wav` | DHC-8 (A. Spiekermann) |
+| `atr_prop`, `atr_start`, `atr_stop` | `Sounds/turboprop1.wav`, `turbine_start.wav`, `turbine_shutdown.wav` | fgdata |
+| `cfm_x_*` (idle, idle_r, idle_c, idle_d, spool, lowspool, spool_c, spool_cr, rumble, rumble_d, buzz, buzz_d, rev, start, stop) | `Sounds/SASA/CFM56B/external/cfm-idle`, `-idleRear`, `-idleClose`, `-idleDist`, `-spool`, `-lowspool`, `-spoolClose`, `-spoolCloseRear`, `-rumble`, `-rumbleDist`, `-buzz`, `-buzzDist`, `-reverse`, `-startup`, `-shutdown` | A320-family (SASA) |
+| `cfm_c_*` (idle, idle2, spool, hum, comb, comb2, buzz, rev, start, stop) | `Sounds/SASA/CFM56B/cockpit/cfm-idle`, `-idle2`, `-lowspool`, `-hum`, `-comb`, `-comb-full`, `-buzz`, `-reverse`; `.../start/A320_cockpit_startup`, `A320_cockpit_shutdown` | A320-family (SASA) |
+| `v25_x_*`, `v25_c_*` | `Sounds/SASA/V2500/external/v2500-idle`, `-idleRear`, `-spool`, `-lowspool`, `-buzz`, `-buzzDist`, `-startup`; `.../cockpit/v2500-idle`, `-lowspool`, `-comb`, `-buzz`, `-reverse`; `.../start/v2500-start2` | A320-family (SASA) |
+| `heavy_roll`, `heavy_roll_int`, `heavy_touch`, `gear_heavy`, `flap_motor_heavy`, `wind_airliner` | `Sounds/SASA/Roll.wav`, `Cockpit_Roll.wav`, `Touch-Main.wav`, `A320_gear.wav`, `A320_flapmotor.wav`, `wind_cockpit.wav` | A320-family (SASA) |
+| `glider_wind`, `glider_brake`, `glider_roll` | `Sounds/whoosh-loop.wav`, `airbrakesL.wav`, `ground_roll3.wav` | ASK21 |
+| `wind_light`, `thunder_1..3` | `Sounds/wind1.wav`, `thunder1.wav`, `thunder2.wav`, `thunder3.wav` | fgdata |
+
+How they are played (which FlightGear `*-sound.xml` tables were translated,
+reference RPMs, cross-fades) is documented in `src/audio/soundsets.rs`.
+
+## Cockpit voice callouts
 
 | Files | What | Source | Licence |
 |---|---|---|---|
@@ -14,14 +77,17 @@ The only recorded assets are the cockpit voice callouts:
 The voice is heard through a simulated cockpit loudspeaker (band-pass,
 presence peak, light drive) in `src/audio/voice.rs`.
 
-## Regenerating the callouts
+## Regenerating
 
-Scripts: `tools/gen_callouts.py` (Kokoro → 24 kHz WAVs) and `tools/to16k.py` (→ 16 kHz).
-
-With a local Kokoro ONNX setup (`engine.py` exposing
-`Engine().synthesise(text, voice, speed, lang)`), run a script that, for each
-phrase, synthesises at speed 1.1–1.4, trims leading/trailing silence
-(threshold 1 % of peak, keep 10 ms before / 50 ms after), normalises to
--1 dBFS, applies 5 ms fades and writes 24 kHz PCM-16; then resample to
-16 kHz with a gentle roll-off above 6.5 kHz. File names must match
-`src/audio/voice.rs` (e.g. `2500.wav`, `app_minimums.wav`, `too_low_gear.wav`).
+* Samples: fetch the source files listed above (only the `Sounds/` folders)
+  into one directory with the layout `c172/…`, `svn/<Aircraft>/…`, `fg/…`,
+  then `python3 tools/build_samples.py <dir> samples` (needs numpy, scipy,
+  soundfile, ffmpeg with libvorbis).
+* Callouts: `tools/gen_callouts.py` (Kokoro → 24 kHz WAVs) and
+  `tools/to16k.py` (→ 16 kHz). With a local Kokoro ONNX setup (`engine.py`
+  exposing `Engine().synthesise(text, voice, speed, lang)`), synthesise each
+  phrase at speed 1.1–1.4, trim leading/trailing silence (threshold 1 % of
+  peak, keep 10 ms before / 50 ms after), normalise to -1 dBFS, apply 5 ms
+  fades and write 24 kHz PCM-16; then resample to 16 kHz with a gentle
+  roll-off above 6.5 kHz. File names must match `src/audio/voice.rs` (e.g.
+  `2500.wav`, `app_minimums.wav`, `too_low_gear.wav`).

@@ -1,6 +1,17 @@
-//! Sound: procedural, physically-informed synthesis driven continuously by
-//! the simulation, mixed positionally for the camera, played through `cpal`.
+//! Sound: recorded FlightGear engine / airframe / impact samples (see
+//! `assets/audio/CREDITS.md`) layered with procedural, physically-informed
+//! synthesis, driven continuously by the simulation, mixed positionally for
+//! the camera (propagation delay, Doppler, Mach cone, sonic booms), played
+//! through `cpal`.
 //!
+//! * [`samples`] decodes the embedded Ogg Vorbis samples off the audio
+//!   thread; `soundsets` / `sampled` turn them into per-engine layered loop
+//!   banks (FlightGear sound-config tables, equal-power cross-fades,
+//!   close / distant variants, start-up / shutdown one-shots) with the
+//!   procedural voices of `engines` underneath as detail.
+//! * `crash` layers impacts, tearing, sliding, debris, fire and explosions
+//!   by energy and surface — also an event API (`Event::Impact`, `Scrape`,
+//!   `Separation`, `Fire`, `Explosion`) for debris physics.
 //! * [`capture::Director`] (game thread) turns the sim into a [`params::Frame`]
 //!   of continuous state plus one-shot [`params::Event`]s (gear locks,
 //!   touchdowns, callouts, GPWS, chimes...).
@@ -13,13 +24,19 @@
 //! game runs silently and retries the device every few seconds.
 
 pub mod capture;
+mod crash;
 pub mod dsp;
 mod engines;
 mod fx;
 mod output;
 pub mod params;
 pub mod render;
+mod sampled;
+pub mod samples;
+mod soundsets;
 pub mod synth;
+#[cfg(test)]
+mod scenarios;
 #[cfg(test)]
 mod tests;
 mod voice;

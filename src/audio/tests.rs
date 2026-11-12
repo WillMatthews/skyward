@@ -88,6 +88,9 @@ fn doppler_matches_moving_source_formula() {
     // A Meridian 320 at 90 m/s passes 60 m from the listener. Its fan tone
     // must be shifted by 1/(1 − v/c) on approach and 1/(1 + v/c) going away.
     let mut f = frame_for("meridian320");
+    // The procedural voice (its fan tone is exact); the recorded set has its
+    // own Doppler test below.
+    f.profile.set = SoundSet::None;
     let p = f.profile;
     for i in 0..p.engines {
         f.eng[i].rpm = p.n1_rpm * 0.6; // subsonic tips: clean blade-pass tone
@@ -133,7 +136,7 @@ fn every_family_is_finite_and_limited() {
             f.cut = k % 60 == 0;
             s.push_frame(&f);
             if k == 30 {
-                for e in [Event::Crash { speed: 80.0 }, Event::Boom(1.0), Event::Thunder(1.0), Event::AbLight(0), Event::Touchdown { sink: 4.0, speed: 70.0 }] {
+                for e in [Event::Crash { speed: 80.0, vel: Vec3::new(70.0, -30.0, 0.0), mass: 20_000.0, surface: Surface::Ground, in_air: false }, Event::Boom(1.0), Event::Thunder(1.0), Event::AbLight(0), Event::Touchdown { sink: 4.0, speed: 70.0 }] {
                     s.event(&e);
                 }
             }
@@ -224,4 +227,306 @@ fn switching_aircraft_is_cheap_on_the_audio_thread() {
         eprintln!("{id}: voice set-up + first block {ms:.2} ms");
         assert!(ms < if cfg!(debug_assertions) { 80.0 } else { 8.0 }, "{id}: {ms} ms");
     }
+}
+
+// ------------------------------------------------------------ recorded sets
+
+fn prepare_all() {
+    let all: Vec<&'static str> = super::samples::NAMES.to_vec();
+    super::samples::prepare_blocking(&all);
+}
+
+/// Isolated-spike count (second difference vs its local RMS), as in render.rs.
+fn spikes(x: &[f32]) -> usize {
+    let n = x.len();
+    if n < 3000 {
+        return 0;
+    }
+    let d2: Vec<f32> = (2..n).map(|i| x[i] - 2.0 * x[i - 1] + x[i - 2]).collect();
+    let w = (0.02 * SR) as usize;
+    let mut acc = 0.0f64;
+    let mut hits = 0;
+    for i in 0..d2.len() {
+        acc += (d2[i] * d2[i]) as f64;
+        if i >= w {
+            acc -= (d2[i - w] * d2[i - w]) as f64;
+            let rms = (acc.max(0.0) / w as f64).sqrt() as f32;
+            if d2[i].abs() > 0.03 && d2[i].abs() > 14.0 * rms.max(1e-6) {
+                hits += 1;
+            }
+        }
+    }
+    hits
+}
+
+#[test]
+fn every_sample_decodes_with_seamless_loops() {
+    let t = std::time::Instant::now();
+    prepare_all();
+    let mb: usize = (0..super::samples::NAMES.len()).filter_map(super::samples::pcm).map(|p| p.data.len() * 2).sum();
+    eprintln!("decoded all samples in {:.0} ms, {:.1} MB", t.elapsed().as_secs_f64() * 1000.0, mb as f64 / 1e6);
+    for (i, name) in super::samples::NAMES.iter().enumerate() {
+        let p = super::samples::pcm(i).unwrap_or_else(|| panic!("{name} not decoded"));
+        assert!(p.len > 1000, "{name}: {} frames", p.len);
+        let d: Vec<f32> = p.data[super::samples::PAD..super::samples::PAD + p.len].iter().map(|v| *v as f32 * p.scale).collect();
+        assert!(d.iter().all(|v| v.is_finite() && v.abs() < 1.5), "{name}: bad samples");
+        let rms = (d.iter().map(|v| v * v).sum::<f32>() / d.len() as f32).sqrt();
+        assert!(rms > 1e-3, "{name}: silent");
+        if p.looped {
+            // The wrap (last → first) must look like any other step.
+            let step = (d[0] - d[p.len - 1]).abs();
+            let typical = d.windows(2).map(|w| (w[1] - w[0]).abs()).sum::<f32>() / p.len as f32;
+            assert!(step < 8.0 * typical + 0.02, "{name}: loop seam step {step} vs typical {typical}");
+        }
+    }
+}
+
+/// Run one engine type through idle → max → idle (exterior, then cockpit);
+/// returns mono output.
+fn runup(id: &str, interior: f32) -> Vec<f32> {
+    prepare_all();
+    let mut f = frame_for(id);
+    f.on_ground = true;
+    f.day = 0.0;
+    f.ear_agl = 300.0; // no ambience birds / city
+    f.interior = interior;
+    let def = crate::flight::find(id).unwrap();
+    let mut s = Synth::new(SR);
+    let mut buf = vec![0.0f32; 1600];
+    let mut out = Vec::new();
+    for k in 0..(14.0 * 60.0) as usize {
+        let t = k as f32 / 60.0;
+        let pw = if t < 2.0 { 0.0 } else if t < 7.0 { (t - 2.0) / 5.0 } else if t < 9.0 { 1.0 } else if t < 12.0 { 1.0 - (t - 9.0) / 3.0 } else { 0.0 };
+        let p = f.profile;
+        for i in 0..p.engines {
+            let e = &mut f.eng[i];
+            match p.family {
+                Family::Airliner | Family::Fighter => {
+                    let n1 = def.n1_idle + (1.0 - def.n1_idle) * pw;
+                    e.spool = n1;
+                    e.rpm = n1 * p.n1_rpm;
+                }
+                _ => {
+                    e.spool = pw;
+                    e.rpm = 800.0 + 1900.0 * pw;
+                }
+            }
+            e.pos = Vec3::new(0.0, 2.0, -20.0);
+        }
+        f.ac_pos = Vec3::new(0.0, 2.0, -20.0);
+        f.cut = k == 0;
+        s.push_frame(&f);
+        s.render(&mut buf);
+        out.extend(buf.chunks(2).map(|c| 0.5 * (c[0] + c[1])));
+    }
+    out
+}
+
+#[test]
+fn recorded_sets_have_no_clicks_through_the_power_range() {
+    for id in ["kestrel", "peregrine", "lancer", "aerolink", "meridian190", "meridian320"] {
+        for interior in [0.0, 1.0] {
+            let x = runup(id, interior);
+            save(&format!("runup_{id}_{interior}.wav"), &x);
+            let peak = x.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+            assert!(peak < 0.9 && peak > 0.01, "{id}/{interior}: peak {peak}");
+            // Skip the first 0.3 s (fade-in).
+            let n = spikes(&x[(0.3 * SR) as usize..]);
+            assert!(n == 0, "{id}/{interior}: {n} isolated spikes");
+        }
+    }
+}
+
+#[test]
+fn recorded_piston_pitch_tracks_rpm() {
+    // C172 run loop: firing fundamental 81.1 Hz at 2433 rpm. At 2000 and
+    // 2600 rpm the dominant line in 50..120 Hz must sit at rpm / 30.
+    prepare_all();
+    for rpm in [2100.0f32, 2600.0] {
+        let mut f = frame_for("kestrel");
+        f.day = 0.0;
+        f.ear_agl = 300.0;
+        f.eng[0] = EngineFrame { rpm, spool: 0.9, thrust: 0.8, running: true, throttle: 0.9, pos: Vec3::new(0.0, 2.0, -20.0), ..Default::default() };
+        f.ac_pos = Vec3::new(0.0, 2.0, -20.0);
+        // Procedural detail off: the samples alone must carry the pitch.
+        let mut s = Synth::new(SR);
+        let mut buf = vec![0.0f32; 1600];
+        let mut out = Vec::new();
+        for k in 0..180 {
+            f.cut = k == 0;
+            s.push_frame(&f);
+            s.render(&mut buf);
+            out.extend(buf.chunks(2).map(|c| 0.5 * (c[0] + c[1])));
+        }
+        let seg = &out[(1.0 * SR) as usize..(2.9 * SR) as usize];
+        let want = rpm / 30.0;
+        let got = peak_freq(seg, want * 0.8, want * 1.2);
+        assert!((got / want - 1.0).abs() < 0.03, "{rpm} rpm: {got} Hz vs {want}");
+    }
+}
+
+/// F-16 passes over a static listener at Mach `m`, height `h`; returns
+/// (mono output, synth).
+fn supersonic_pass(m: f32, h: f32, interior: f32) -> (Vec<f32>, Synth) {
+    prepare_all();
+    let mut f = frame_for("lancer");
+    f.day = 0.0;
+    f.ear_agl = 1.7;
+    f.on_ground = false;
+    f.interior = interior;
+    let v = m * 340.0;
+    let secs = 13.0;
+    let mut s = Synth::new(SR);
+    let mut buf = vec![0.0f32; 1600];
+    let mut out = Vec::new();
+    for k in 0..(secs * 60.0) as usize {
+        let t = k as f32 / 60.0;
+        let pos = Vec3::new(v * (t - 5.0), h, 0.0);
+        f.ac_pos = pos;
+        f.ac_vel = Vec3::new(v, 0.0, 0.0);
+        f.ac_rot = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        f.tas = v;
+        f.mach = m;
+        for e in f.eng.iter_mut() {
+            e.pos = pos;
+            e.ab = 1.0;
+        }
+        f.ear_pos = if interior > 0.5 { pos } else { Vec3::new(0.0, 1.7, 0.0) };
+        f.ear_vel = if interior > 0.5 { f.ac_vel } else { Vec3::ZERO };
+        f.cut = k == 0;
+        s.push_frame(&f);
+        s.render(&mut buf);
+        out.extend(buf.chunks(2).map(|c| 0.5 * (c[0] + c[1])));
+    }
+    (out, s)
+}
+
+#[test]
+fn sonic_boom_arrives_with_the_mach_cone() {
+    for (m, h) in [(1.3f32, 300.0f32), (1.6, 2000.0)] {
+        let (x, s) = supersonic_pass(m, h, 0.0);
+        save(&format!("boom_{m}_{h}.wav"), &x);
+        assert_eq!(s.booms, 1, "M{m} {h} m: {} booms", s.booms);
+        // Cone geometry: overhead at t = 5 s; the cone reaches the ground
+        // h / tan(μ) later, μ = asin(1/M).
+        // (The synth's speed of sound is 343 m/s; the pass is at m·340.)
+        let mu = (343.0 / (m * 340.0)).asin();
+        let t_cone = 5.0 + (h - 1.7) / mu.tan() / (m * 340.0);
+        let i_cone = (t_cone * SR) as usize;
+        // Silence before (only the pre-boom block may hold the fade).
+        let pre = &x[(1.0 * SR) as usize..i_cone - (0.15 * SR) as usize];
+        let pre_rms = (pre.iter().map(|v| v * v).sum::<f32>() / pre.len() as f32).sqrt();
+        // (Only the listener's own ambience, ~2e-3, before the cone.)
+        assert!(pre_rms < 3.5e-3, "M{m}: heard {pre_rms} before the cone");
+        // The first shock within ~2 blocks + 1 frame of the geometric time.
+        let first = x.iter().position(|v| v.abs() > 0.02).unwrap();
+        let dt = first as f32 / SR - t_cone;
+        eprintln!("M{m} {h} m: boom at {:.3} s, cone {t_cone:.3} s, N-wave {:.3} s, {:.0} Pa", first as f32 / SR, s.last_boom.0, s.last_boom.1);
+        assert!(dt.abs() < 0.012, "M{m} {h} m: boom at {:.3} s, cone at {t_cone:.3} s", first as f32 / SR);
+        // N-wave length as modelled, and the engine roar afterwards.
+        let (len, dp) = s.last_boom;
+        assert!(len > 0.012 && len < 0.45 && dp > 1.0, "len {len} dp {dp}");
+        let post = &x[i_cone + (0.6 * SR) as usize..i_cone + (1.6 * SR) as usize];
+        let post_rms = (post.iter().map(|v| v * v).sum::<f32>() / post.len() as f32).sqrt();
+        let k = if h < 1000.0 { 5.0 } else { 1.3 };
+        assert!(post_rms > k * pre_rms.max(1e-4), "M{m}: no roar after the boom ({post_rms} vs {pre_rms})");
+        assert!(s.limiter_clamped() < 50);
+    }
+}
+
+#[test]
+fn no_boom_in_the_cockpit_or_subsonic() {
+    let (_, s) = supersonic_pass(1.4, 500.0, 1.0);
+    assert_eq!(s.booms, 0, "cockpit");
+    let (_, s) = supersonic_pass(0.95, 300.0, 0.0);
+    assert_eq!(s.booms, 0, "subsonic");
+}
+
+#[test]
+fn crashes_and_debris_events_are_finite_and_scaled() {
+    prepare_all();
+    let mut levels = Vec::new();
+    for (id, speed) in [("kestrel", 35.0f32), ("lancer", 150.0), ("meridian320", 75.0)] {
+        for surface in [Surface::Ground, Surface::Paved, Surface::Water, Surface::Building] {
+            for interior in [0.0, 1.0] {
+                let mut f = frame_for(id);
+                f.day = 0.0;
+                f.ear_agl = 300.0;
+                f.interior = interior;
+                f.ac_pos = Vec3::new(0.0, 0.0, -40.0);
+                f.ear_pos = if interior > 0.5 { f.ac_pos } else { Vec3::ZERO };
+                let mut s = Synth::new(SR);
+                let mut buf = vec![0.0f32; 1600];
+                let mut x = Vec::new();
+                let def = crate::flight::find(id).unwrap();
+                for k in 0..(6.0 * 60.0) as usize {
+                    f.crashed = k >= 30;
+                    for e in f.eng.iter_mut() {
+                        e.running = !f.crashed;
+                    }
+                    f.cut = k == 0;
+                    s.push_frame(&f);
+                    if k == 30 {
+                        s.event(&Event::Crash { speed, vel: Vec3::new(speed * 0.95, -speed * 0.3, 0.0), mass: def.mass, surface, in_air: false });
+                    }
+                    s.render(&mut buf);
+                    x.extend(buf.chunks(2).map(|c| 0.5 * (c[0] + c[1])));
+                }
+                assert!(x.iter().all(|v| v.is_finite()), "{id} {surface:?}");
+                let peak = x.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+                assert!(peak <= 0.892, "{id}: peak {peak}");
+                let seg = &x[(0.5 * SR) as usize..(2.5 * SR) as usize];
+                let rms = (seg.iter().map(|v| v * v).sum::<f32>() / seg.len() as f32).sqrt();
+                if interior > 0.5 {
+                    // Fatal impacts cut to (ringing) near-silence.
+                    let tail = &x[(4.0 * SR) as usize..];
+                    let tr = (tail.iter().map(|v| v * v).sum::<f32>() / tail.len() as f32).sqrt();
+                    assert!(tr < 0.05 * rms + 0.02, "{id} cockpit tail {tr} vs impact {rms}");
+                } else if surface == Surface::Ground {
+                    levels.push((id, rms));
+                }
+            }
+        }
+    }
+    // Bigger, faster aircraft crash louder.
+    assert!(levels[0].1 < levels[2].1, "{levels:?}");
+}
+
+#[test]
+fn debris_event_api_is_positional() {
+    prepare_all();
+    let level = |dist: f32| {
+        let mut f = frame_for("kestrel");
+        f.day = 0.0;
+        f.ear_agl = 300.0;
+        f.eng = [EngineFrame::default(); MAX_ENG];
+        let mut s = Synth::new(SR);
+        let mut buf = vec![0.0f32; 1600];
+        let mut x = Vec::new();
+        let p = Vec3::new(dist, 0.0, 0.0);
+        for k in 0..(4.0 * 60.0) as usize {
+            f.cut = k == 0;
+            s.push_frame(&f);
+            if k == 10 {
+                s.event(&Event::Impact { pos: p, speed: 20.0, mass: 300.0, surface: Surface::Ground });
+                s.event(&Event::Separation { pos: p, mass: 200.0 });
+                s.event(&Event::Explosion { pos: p, energy: 0.5 });
+                s.event(&Event::Fire { id: 1, pos: p, size: 0.6 });
+            }
+            if (10..120).contains(&k) {
+                s.event(&Event::Scrape { id: 2, pos: p, speed: 15.0, mass: 500.0, surface: Surface::Paved });
+            }
+            s.render(&mut buf);
+            x.extend(buf.chunks(2).map(|c| 0.5 * (c[0] + c[1])));
+        }
+        assert!(x.iter().all(|v| v.is_finite()));
+        // Sound arrives after the propagation delay.
+        let first = x.iter().position(|v| v.abs() > 1e-3).unwrap_or(0) as f32 / SR;
+        let rms = (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt();
+        (first, rms)
+    };
+    let (t_near, near) = level(20.0);
+    let (t_far, far) = level(600.0);
+    assert!(near > 3.0 * far, "near {near} far {far}");
+    assert!(t_far - t_near > 1.5, "delay near {t_near} far {t_far}");
 }

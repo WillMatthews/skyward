@@ -23,6 +23,25 @@ pub enum Family {
     Airliner,
 }
 
+/// Recorded engine sound set (see `soundsets.rs`); `None` = procedural only.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SoundSet {
+    #[default]
+    None,
+    /// Lycoming flat-four (Cessna 172P recordings).
+    C172,
+    /// Rolls-Royce Merlin V12 (Spitfire IX recordings).
+    Merlin,
+    /// Afterburning F110 / F100 (F-16 recordings).
+    F16,
+    /// PW100-series turboprop (DHC-8 recordings).
+    Atr,
+    /// CFM56-5B (A320 SASA recordings).
+    Cfm56,
+    /// IAE V2500 (A320 SASA recordings).
+    V2500,
+}
+
 /// Static per-type sound parameters (sent with every frame; tiny).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Profile {
@@ -44,6 +63,12 @@ pub struct Profile {
     /// Size of the airframe (m): reference distance for the exterior mix.
     pub size: f32,
     pub retract_gear: bool,
+    /// Recorded engine sound set.
+    pub set: SoundSet,
+    /// Ground-idle N1 fraction (jets) — to derive N2.
+    pub n1_idle: f32,
+    /// Gross mass, kg (impact energy).
+    pub mass: f32,
 }
 
 /// Live state of one engine.
@@ -207,7 +232,21 @@ impl Clip {
     }
 }
 
-/// One-shot sounds.
+/// What something hit or slides on (impact / scrape timbre).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Surface {
+    #[default]
+    Ground,
+    Paved,
+    Water,
+    Building,
+    Metal,
+}
+
+/// One-shot sounds. (`Impact` / `Scrape` / `Separation` / `Fire` /
+/// `Explosion` / `Boom` are for debris physics and external effects; the
+/// sim does not raise them yet.)
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Event {
     /// Gear began moving (door / uplock release).
@@ -218,8 +257,23 @@ pub enum Event {
     Touchdown { sink: f32, speed: f32 },
     /// Airframe jolt from turbulence / a gust (0..1).
     Thump(f32),
-    /// The aircraft was destroyed at this speed (m/s).
-    Crash { speed: f32 },
+    /// The aircraft was destroyed: layered impact by type and energy
+    /// (see `crash.rs`). `vel` = velocity just before (m/s, world),
+    /// `mass` kg, `in_air` = broke up in flight (overstress / overspeed).
+    Crash { speed: f32, vel: Vec3, mass: f32, surface: Surface, in_air: bool },
+    /// Positional impact of the airframe or a piece of it (for debris
+    /// physics): world position, closing speed (m/s), mass (kg).
+    Impact { pos: Vec3, speed: f32, mass: f32, surface: Surface },
+    /// A body sliding / grinding on a surface. Send every frame while it
+    /// slides (same `id`); the sound fades when updates stop. `id` < 16.
+    Scrape { id: u8, pos: Vec3, speed: f32, mass: f32, surface: Surface },
+    /// A part tore off (wing, gear leg, engine...): metal tearing + bang.
+    Separation { pos: Vec3, mass: f32 },
+    /// A fire at `pos`: `size` 0..1 (0 = out). Re-send to move / resize;
+    /// `id` < 8 (fires are few and long-lived).
+    Fire { id: u8, pos: Vec3, size: f32 },
+    /// Fuel / ordnance explosion, `energy` 0..1.
+    Explosion { pos: Vec3, energy: f32 },
     Speak(Clip),
     /// Autopilot disconnect warning.
     ApDisconnect,

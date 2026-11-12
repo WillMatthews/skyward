@@ -7,9 +7,12 @@ edition = "2024"
 bytemuck = { version = "1.25.2", features = ["derive"] }
 # Sound (src/audio): cpal for device output (ALSA/Pulse/PipeWire, CoreAudio,
 # WASAPI, WebAudio on wasm32), hound for the embedded speech clips and the
-# offline WAV renderer. All synthesis is our own DSP.
+# offline WAV renderer. Synthesis / resampling / mixing is our own DSP.
 cpal = "0.18.2"
 hound = "3.5.1"
+# Recorded engine / effect samples (FlightGear sound sets, assets/audio/samples):
+# pure-Rust Ogg Vorbis decoder, also fine on wasm32.
+lewton = "0.10.2"
 earcutr = "0.5.0"
 flate2 = "1"
 egui = { version = "0.37", features = ["default_fonts"] }
