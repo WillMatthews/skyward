@@ -1,0 +1,38 @@
+[package]
+name = "skyward"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bytemuck = { version = "1.25.2", features = ["derive"] }
+# Sound (src/audio): cpal for device output (ALSA/Pulse/PipeWire, CoreAudio,
+# WASAPI, WebAudio on wasm32), hound for the embedded speech clips and the
+# offline WAV renderer. All synthesis is our own DSP.
+cpal = "0.18.2"
+hound = "3.5.1"
+earcutr = "0.5.0"
+flate2 = "1"
+egui = { version = "0.37", features = ["default_fonts"] }
+egui-wgpu = "0.37"
+egui-winit = "0.37"
+glam = "0.34.3"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+pollster = "1.0.1"
+serde_json = "1.0.154"
+ureq = "2"
+wgpu = "30"
+winit = "0.30"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+cpal = { version = "0.18.2", features = ["wasm-bindgen"] }
+
+[profile.dev]
+debug = 0
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+debug = 0
+strip = true

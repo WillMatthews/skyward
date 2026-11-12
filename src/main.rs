@@ -1,0 +1,1844 @@
+//! Skyward — native Rust flight simulator over real OpenStreetMap scenery,
+//! streamed endlessly from vector tiles around the aircraft.
+//!
+//! Windowed:   skyward [--lat L --lon L | --airport ICAO] [--aircraft ID] [--start runway|approach|city|thermal]
+//! Headless:   skyward --shot out.png [--width W --height H] [--cam chase|cockpit|tower|flyby]
+//!                     [--seconds S --throttle T] [--heading DEG] [--eye x,y,z --look x,y,z] [--menu] [--stats]
+//!                     [--realtime [--warp N]]   (stream + render in real time, straight & level, report timings)
+//!                     [--gear up|down] [--flaps N] [--spoilers F] [--reverse] [--fail BITS] [--ap] [--fps HZ]   (setup / test knobs)
+//! Auto flight: skyward [--bot | --watch] ...        (hand the aircraft to the AI pilot; --watch adds the cinematic camera)
+//! Soak test:  skyward --shot out.png --bot --soak --seconds 1800 [--warp 8] [--shot-every 300] [--weather scattered]
+//!                     (fly the bot as fast as the streaming allows, log every minute, PNGs along the way)
+//! Weather:    live METAR + real local time by default; --no-live, --metar "EGLC 121450Z 22012KT 3000 RA BKN008 09/08 Q1002", --time HH.MM, --date MM-DD, --weather clear|few|scattered|broken|overcast
+//! Sound:      --mute (N toggles in flight, sliders next to the Tab menu); offline: --audio-render out.wav --seconds S [--audio-script "2:cam=cockpit,9:gear"] [--audio-until Final] (WAV + spectrogram PNG + report, no device)
+
+mod atmosphere;
+mod audio;
+mod autopilot;
+mod bot;
+mod clouds;
+mod flight;
+mod gfx;
+mod hud;
+mod models;
+mod mvt;
+mod osm;
+mod scene;
+mod sim;
+mod tiles;
+mod weather;
+mod world;
+
+use gfx::{FrameView, Gpu, Renderer};
+use glam::{vec2, vec3, Vec2, Vec3};
+use sim::{CamMode, Input, Key, Sim, Start};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use winit::application::ApplicationHandler;
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::window::{Window, WindowId};
+use world::World;
+
+/// Tile workers (fetch + decode + mesh build).
+const WORKERS: usize = 4;
+/// Radius around the spawn that must be loaded before flying (m).
+const SPAWN_RADIUS: f32 = 3200.0;
+/// Per-frame GPU upload budget while flying (bytes) — keeps frames hitch-free.
+const UPLOAD_BUDGET: u64 = 4 << 20;
+
+#[derive(Clone)]
+struct Args {
+    lat: f64,
+    lon: f64,
+    airport: Option<String>,
+    aircraft: usize,
+    start: Start,
+    shot: Option<String>,
+    width: u32,
+    height: u32,
+    cam: CamMode,
+    seconds: f32,
+    throttle: Option<f32>,
+    heading: Option<f32>,
+    eye: Option<Vec3>,
+    look: Option<Vec3>,
+    menu: bool,
+    no_menu: bool,
+    stats: bool,
+    realtime: bool,
+    warp: u32,
+    radius: Option<f32>,
+    map_zoom: Option<usize>,
+    then_reset: bool,
+    bot: bool,
+    watch: bool,
+    soak: bool,
+    shot_every: f32,
+    gear: Option<bool>,
+    flaps: Option<usize>,
+    spoilers: Option<f32>,
+    reverse: bool,
+    fail: u8,
+    frame_dt: Option<f32>,
+    ap: bool,
+    no_hud: bool,
+    hours: Option<f32>,
+    day_of_year: Option<u32>,
+    weather: Option<clouds::Weather>,
+    /// Real weather & time (weather.rs); --no-live turns it off, --metar fixes the weather.
+    live: bool,
+    metar: Option<String>,
+    /// Test: render, move the floating origin 20 km away, render again, compare.
+    rebase_check: bool,
+    /// Sound (audio/): start muted; offline render to a WAV (+ PNG, report) and its cue script.
+    mute: bool,
+    audio_render: Option<String>,
+    audio_script: String,
+    /// Fast-forward (silently, 8x) until the bot reaches this phase, then record.
+    audio_until: Option<String>,
+}
+
+fn parse_vec3(s: &str) -> Option<Vec3> {
+    let v: Vec<f32> = s.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+    (v.len() == 3).then(|| vec3(v[0], v[1], v[2]))
+}
+
+/// "HH.MM" or "HH:MM" -> hours.
+fn parse_time(s: &str) -> Option<f32> {
+    let mut it = s.split(|c| c == '.' || c == ':');
+    let h: f32 = it.next()?.parse().ok()?;
+    let m: f32 = it.next().map(|m| m.parse().unwrap_or(0.0)).unwrap_or(0.0);
+    Some(h + m / 60.0)
+}
+
+fn parse_args() -> Args {
+    let mut a = Args {
+        lat: 51.5045,
+        lon: 0.0300,
+        airport: None,
+        aircraft: 0,
+        start: Start::Runway,
+        shot: None,
+        width: 1920,
+        height: 1080,
+        cam: CamMode::Chase,
+        seconds: 0.0,
+        throttle: None,
+        heading: None,
+        eye: None,
+        look: None,
+        menu: false,
+        no_menu: false,
+        stats: false,
+        realtime: false,
+        warp: 1,
+        radius: None,
+        map_zoom: None,
+        then_reset: false,
+        bot: false,
+        watch: false,
+        soak: false,
+        shot_every: 0.0,
+        gear: None,
+        flaps: None,
+        spoilers: None,
+        reverse: false,
+        fail: 0,
+        frame_dt: None,
+        ap: false,
+        no_hud: false,
+        hours: None,
+        day_of_year: None,
+        weather: None,
+        live: true,
+        metar: None,
+        rebase_check: false,
+        mute: false,
+        audio_render: None,
+        audio_script: String::new(),
+        audio_until: None,
+    };
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    let mut i = 0;
+    let next = |i: &mut usize| -> String {
+        *i += 1;
+        argv.get(*i).cloned().unwrap_or_default()
+    };
+    while i < argv.len() {
+        match argv[i].as_str() {
+            "--lat" => a.lat = next(&mut i).parse().unwrap_or(a.lat),
+            "--lon" => a.lon = next(&mut i).parse().unwrap_or(a.lon),
+            "--airport" => a.airport = Some(next(&mut i)),
+            "--aircraft" => {
+                let v = next(&mut i);
+                a.aircraft = flight::catalogue().iter().position(|d| d.id == v).unwrap_or(0);
+            }
+            "--start" => a.start = Start::parse(&next(&mut i)).unwrap_or(Start::Runway),
+            "--shot" => a.shot = Some(next(&mut i)),
+            "--width" => a.width = next(&mut i).parse().unwrap_or(1920),
+            "--height" => a.height = next(&mut i).parse().unwrap_or(1080),
+            "--cam" => a.cam = CamMode::parse(&next(&mut i)).unwrap_or(CamMode::Chase),
+            "--bot" => a.bot = true,
+            "--watch" => {
+                a.bot = true;
+                a.watch = true;
+            }
+            "--soak" => a.soak = true,
+            "--ap" => a.ap = true,
+            "--shot-every" => a.shot_every = next(&mut i).parse().unwrap_or(0.0),
+            "--gear" => a.gear = Some(next(&mut i) != "up"),
+            "--flaps" => a.flaps = next(&mut i).parse().ok(),
+            "--spoilers" => a.spoilers = next(&mut i).parse().ok(),
+            "--reverse" => a.reverse = true,
+            "--fail" => a.fail = next(&mut i).parse().unwrap_or(0),
+            // Realtime test at a fixed display rate (e.g. 144): steps the sim by 1/fps per frame.
+            "--fps" => a.frame_dt = next(&mut i).parse::<f32>().ok().filter(|f| *f > 1.0).map(|f| 1.0 / f),
+            "--seconds" => a.seconds = next(&mut i).parse().unwrap_or(0.0),
+            "--throttle" => a.throttle = next(&mut i).parse().ok(),
+            "--heading" => a.heading = next(&mut i).parse().ok(),
+            "--eye" => a.eye = parse_vec3(&next(&mut i)),
+            "--look" => a.look = parse_vec3(&next(&mut i)),
+            "--menu" => a.menu = true,
+            "--no-menu" => a.no_menu = true,
+            "--stats" => a.stats = true,
+            "--realtime" => a.realtime = true,
+            "--warp" => a.warp = next(&mut i).parse().unwrap_or(1).clamp(1, 64),
+            "--then-reset" => a.then_reset = true,
+            "--rebase-check" => a.rebase_check = true,
+            "--mute" => a.mute = true,
+            "--audio-render" => a.audio_render = Some(next(&mut i)),
+            "--audio-script" => a.audio_script = next(&mut i),
+            "--audio-until" => a.audio_until = Some(next(&mut i)),
+            "--no-hud" => a.no_hud = true,
+            // --time HH.MM (local clock), --date MM-DD, --weather clear|few|scattered|broken|overcast
+            "--time" => a.hours = parse_time(&next(&mut i)),
+            "--date" => {
+                let d = next(&mut i);
+                let mut it = d.split('-').filter_map(|x| x.parse::<u32>().ok());
+                if let (Some(m), Some(dd)) = (it.next(), it.next()) {
+                    a.day_of_year = Some(atmosphere::day_of_year(m, dd));
+                }
+            }
+            "--weather" => {
+                let w = next(&mut i).to_lowercase();
+                a.weather = clouds::Weather::ALL.into_iter().find(|x| x.name().to_lowercase() == w);
+            }
+            "--live" => a.live = true,
+            "--no-live" => a.live = false,
+            "--metar" => a.metar = Some(next(&mut i)),
+            "--map-zoom" => a.map_zoom = next(&mut i).parse().ok(),
+            "--radius-km" => a.radius = next(&mut i).parse::<f32>().ok().map(|k| k * 1000.0),
+            "-h" | "--help" => {
+                println!("{}", include_str!("main.rs").lines().take(13).collect::<Vec<_>>().join("\n"));
+                std::process::exit(0);
+            }
+            other => eprintln!("ignoring unknown argument {other}"),
+        }
+        i += 1;
+    }
+    if let Some(code) = &a.airport {
+        match tiles::resolve_airport(code) {
+            Ok((lat, lon, name)) => {
+                eprintln!("airport {code}: {name} ({lat:.4}, {lon:.4})");
+                a.lat = lat;
+                a.lon = lon;
+            }
+            Err(e) => eprintln!("could not resolve airport {code}: {e}; using {:.4}, {:.4}", a.lat, a.lon),
+        }
+    }
+    a
+}
+
+// ---------------------------------------------------------------- session
+
+/// Loading stages before the aircraft exists.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Stage {
+    /// Loading tiles around the start location (finds the runways).
+    Area,
+    /// Loading tiles around the chosen spawn point.
+    Spawn(Vec2),
+    Flying,
+}
+
+struct Session {
+    world: World,
+    sim: Option<Sim>,
+    stage: Stage,
+    started: Instant,
+    runway_version: u64,
+    /// The last origin shift (consumed by the soak / realtime loggers).
+    last_rebase: Option<world::Rebase>,
+    /// Set after a restart/teleport far away: the sim waits until the
+    /// scenery around this point has streamed in.
+    catch_up: Option<Vec2>,
+}
+
+impl Session {
+    fn new(args: &Args) -> Session {
+        let mut world = World::new(args.lat, args.lon, WORKERS);
+        if let Some(r) = args.radius {
+            world.radius = r;
+        }
+        // Real weather & time (weather.rs): on unless switched off; --time / --date
+        // switch live time off, --weather / --metar fix the weather.
+        world.set_live(args.live);
+        if args.hours.is_some() || args.day_of_year.is_some() {
+            world.live_time = false;
+        }
+        if args.day_of_year.is_some() {
+            world.live_date = false;
+        }
+        if let Some(w) = args.weather {
+            world.set_weather_preset(w);
+        }
+        if let Some(m) = &args.metar {
+            match weather::Wx::from_metar_str(m) {
+                Some(wx) => world.set_wx(wx),
+                None => eprintln!("could not decode --metar {m}"),
+            }
+        }
+        world.set_focus(Vec2::ZERO, Vec2::ZERO);
+        Session { world, sim: None, stage: Stage::Area, started: Instant::now(), runway_version: 0, last_rebase: None, catch_up: None }
+    }
+
+    /// Advance loading; returns a status line while still loading.
+    fn advance_loading(&mut self, args: &Args) -> Option<String> {
+        let w = &mut self.world;
+        match self.stage {
+            Stage::Area => {
+                w.set_focus(Vec2::ZERO, Vec2::ZERO);
+                let (ready, total) = w.progress(Vec2::ZERO, SPAWN_RADIUS);
+                if ready >= total && w.uploads.is_empty() && w.gpu_pending.is_empty() {
+                    let p = Sim::spawn_point(w, args.start, args.aircraft);
+                    eprintln!(
+                        "area ready in {:.1}s: {} tiles, {} runways{}",
+                        self.started.elapsed().as_secs_f32(),
+                        w.tile_count(),
+                        w.runways.len(),
+                        w.runways.first().map(|r| format!(" (longest {} {:.0} m)", r.name, r.length())).unwrap_or_default()
+                    );
+                    self.stage = Stage::Spawn(p);
+                    return self.advance_loading(args);
+                }
+                Some(format!("Loading map around the start\n{ready} / {total} tiles"))
+            }
+            Stage::Spawn(p) => {
+                w.set_focus(p, Vec2::ZERO);
+                let (ready, total) = w.progress(p, SPAWN_RADIUS);
+                if ready >= total && w.uploads.is_empty() && w.gpu_pending.is_empty() {
+                    let mut sim = Sim::new(w, args.aircraft, args.start);
+                    if let Some(h) = args.heading {
+                        sim.set_heading(h.to_radians());
+                    }
+                    sim.hours = args.hours.unwrap_or(sim.hours);
+                    sim.day_of_year = args.day_of_year.unwrap_or(sim.day_of_year);
+                    if args.bot {
+                        sim.watch = args.watch;
+                        sim.enable_bot(w);
+                        if args.watch {
+                            sim.cam = CamMode::Cinematic;
+                        }
+                    }
+                    if let Some((msg, _)) = &sim.note {
+                        eprintln!("note: {msg}");
+                    }
+                    eprintln!(
+                        "spawn ready in {:.1}s: {} tiles (+{} far), {} buildings, {} trees; runway {:?}",
+                        self.started.elapsed().as_secs_f32(),
+                        w.tile_count(),
+                        w.far_count(),
+                        w.building_count(),
+                        w.tree_count(),
+                        sim.runway.as_ref().map(|r| (r.name.clone(), r.length().round(), r.width))
+                    );
+                    // Air starts far from the loaded spawn area (e.g. a 10 nm final) catch up first.
+                    let ap = sim.ac.pos;
+                    if vec2(ap.x, ap.z).distance(p) > 2000.0 {
+                        self.catch_up = Some(vec2(ap.x, ap.z));
+                    }
+                    self.sim = Some(sim);
+                    self.stage = Stage::Flying;
+                    return None;
+                }
+                Some(format!("Loading scenery at the start position\n{ready} / {total} tiles"))
+            }
+            Stage::Flying => None,
+        }
+    }
+
+    /// After a jump of the aircraft (restart, new start position), hold the
+    /// sim until nearby tiles are loaded. Returns a status line while waiting.
+    fn check_catch_up(&mut self, before: Option<Vec3>) -> Option<String> {
+        let now = self.sim.as_ref().map(|s| s.ac.pos)?;
+        if before.is_some_and(|b| vec2(b.x - now.x, b.z - now.z).length() > 2000.0)
+            || (self.catch_up.is_none() && self.sim.as_ref().is_some_and(|s| s.needs_respawn))
+        {
+            self.catch_up = Some(vec2(now.x, now.z));
+        }
+        let p = self.catch_up?;
+        let (ready, total) = self.world.progress(p, SPAWN_RADIUS);
+        if ready >= total && self.world.uploads.is_empty() && self.world.gpu_pending.is_empty() {
+            self.catch_up = None;
+            // The chosen airfield has loaded: put the aircraft on its runway now.
+            if let Some(sim) = self.sim.as_mut() {
+                if sim.needs_respawn {
+                    sim.reset(&self.world);
+                    let n = sim.ac.pos;
+                    if vec2(n.x, n.z).distance(p) > 2000.0 {
+                        self.catch_up = Some(vec2(n.x, n.z));
+                        return Some("Loading scenery".into());
+                    }
+                }
+            }
+            return None;
+        }
+        Some(format!("Loading scenery\n{ready} / {total} tiles"))
+    }
+
+    /// Floating origin: once the aircraft is far from the origin, re-centre
+    /// the frame on it and shift everything (world, sim, renderer) together.
+    fn maybe_rebase(&mut self, renderer: &mut Renderer) {
+        let Some(sim) = self.sim.as_mut() else { return };
+        let p = vec2(sim.ac.pos.x, sim.ac.pos.z);
+        if !self.world.wants_rebase(p) || std::env::var_os("SKYWARD_NO_REBASE").is_some() {
+            return;
+        }
+        let t0 = Instant::now();
+        let r = self.world.rebase(p);
+        sim.rebase(&r);
+        if let Some(c) = &mut self.catch_up {
+            *c = r.ground(*c);
+        }
+        renderer.rebase(r.delta);
+        renderer.set_frame(self.world.proj, self.world.pattern_frame(), self.world.home);
+        if std::env::var_os("SKYWARD_REBASE_LOG").is_some() || self.world.rebases <= 1 {
+            eprintln!(
+                "origin shift #{} to {:.4},{:.4}: delta ({:.0}, {:.0}) m, x scale {:+.4}%, {:.2} ms",
+                self.world.rebases,
+                self.world.proj.lat0,
+                self.world.proj.lon0,
+                r.delta.x,
+                r.delta.z,
+                (r.map.sx - 1.0) * 100.0,
+                t0.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+        self.last_rebase = Some(r);
+    }
+
+    /// Point streaming at the aircraft (called every frame while flying).
+    fn follow(&mut self) {
+        if let Some(sim) = &mut self.sim {
+            let p = sim.ac.pos;
+            let v = sim.ac.vel;
+            sim.lat_lon = self.world.proj.to_latlon(vec2(p.x, p.z));
+            self.world.set_focus(vec2(p.x, p.z), vec2(v.x, v.z));
+        }
+    }
+}
+
+/// Move finished tiles / runways / clouds to the GPU and HUD. `budget` limits
+/// the bytes uploaded this frame (None = everything pending).
+fn sync_gpu(s: &mut Session, renderer: &mut Renderer, ui: &mut Ui, gpu: &Gpu, budget: Option<u64>) -> u64 {
+    let (device, queue) = (&gpu.device, &gpu.queue);
+    s.maybe_rebase(renderer);
+    let w = &mut s.world;
+    renderer.set_frame(w.proj, w.pattern_frame(), w.home);
+    w.update();
+    for id in w.take_evicted() {
+        renderer.remove_tile(id);
+        ui.map_tiles.remove(&id);
+    }
+    for (id, img) in w.take_minimaps() {
+        let ci = egui::ColorImage::from_rgba_unmultiplied([img.w as usize, img.h as usize], &img.px);
+        let tex = ui.ctx.load_texture(format!("map{}_{}", id.x, id.y), ci, egui::TextureOptions::LINEAR);
+        ui.map_tiles.insert(id, tex);
+    }
+    // Buffers are created at once (cheap); data is copied in budgeted chunks.
+    while let Some(t) = w.uploads.pop_front() {
+        renderer.queue_tile(device, t);
+    }
+    let spent = renderer.pump_uploads(queue, budget);
+    w.gpu_pending = renderer.pending_tiles().collect();
+    w.gpu_bytes = renderer.gpu_bytes();
+    if w.runway_version != s.runway_version {
+        s.runway_version = w.runway_version;
+        renderer.set_runways(device, &scene::runway_mesh(&w.runways));
+    }
+    // Weather (weather.rs / world.rs): live data + real time, wind drift, season.
+    match s.sim.as_mut() {
+        Some(sim) => {
+            if let Some((h, d)) = w.tick_weather(sim.time, (sim.hours, sim.day_of_year)) {
+                sim.hours = h;
+                sim.day_of_year = d;
+            }
+        }
+        None => {
+            w.tick_weather(0.0, (sim::DEFAULT_HOURS, sim::DEFAULT_DAY));
+        }
+    }
+    renderer.set_weather(&w.render_weather(), &w.clouds);
+    spent
+}
+
+// ---------------------------------------------------------------- shared frame
+
+struct Ui {
+    ctx: egui::Context,
+    renderer: egui_wgpu::Renderer,
+    map_tiles: hud::MapTiles,
+    menu_open: bool,
+    menu_choice: (usize, Start),
+    /// "Auto flight (watch)" ticked in the menu.
+    menu_watch: bool,
+    hide_hud: bool,
+    /// Sound sliders (audio/), the device status line, and pointer clicks seen in the menu.
+    audio: audio::Settings,
+    audio_status: String,
+    audio_clicks: u32,
+}
+
+impl Ui {
+    fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Ui {
+        let ctx = egui::Context::default();
+        ctx.set_visuals(egui::Visuals::dark());
+        Ui {
+            ctx,
+            renderer: egui_wgpu::Renderer::new(device, format, egui_wgpu::RendererOptions::default()),
+            map_tiles: Default::default(),
+            menu_open: false,
+            menu_choice: (0, Start::Runway),
+            menu_watch: false,
+            hide_hud: false,
+            audio: audio::Settings::default(),
+            audio_status: String::new(),
+            audio_clicks: 0,
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_frame(
+    gpu: &Gpu,
+    renderer: &mut Renderer,
+    ui: &mut Ui,
+    session: Option<&mut Session>,
+    target: &wgpu::TextureView,
+    w: u32,
+    h: u32,
+    raw: egui::RawInput,
+    ppp: f32,
+    fps: f32,
+    loading: Option<&str>,
+    view_override: Option<(Vec3, Vec3)>,
+) -> Option<(usize, Start, bool)> {
+    let device = &gpu.device;
+    let queue = &gpu.queue;
+    let mut enc = device.create_command_encoder(&Default::default());
+    let mut menu_result = None;
+    let gpu_name = gpu.adapter_name();
+    let flying = session.as_ref().is_some_and(|s| s.sim.is_some());
+    let full = match session {
+        Some(s) if flying => {
+            let sim = s.sim.as_mut().unwrap();
+            let (mut fv, dynm) = sim.frame(w as f32 / h as f32);
+            if let Some((eye, look)) = view_override {
+                fv = FrameView { eye, view: glam::camera::rh::view::look_at_mat4(eye, look, Vec3::Y), ..fv };
+            }
+            renderer.render(device, queue, &mut enc, target, w, h, &fv, &dynm);
+            let menu_open = ui.menu_open;
+            let hide_hud = ui.hide_hud;
+            let mut choice = ui.menu_choice;
+            let mut watch = ui.menu_watch;
+            let live0 = s.world.live_weather || s.world.live_time;
+            let mut env = hud::EnvChoice { hours: sim.hours, weather: s.world.clouds.weather(), live: live0 };
+            let world = &s.world;
+            let map_tiles = &ui.map_tiles;
+            let rs = renderer.stats;
+            let (mut snd, snd_status, mut snd_clicks) = (ui.audio, &ui.audio_status, 0u32);
+            let out = ui.ctx.run_ui(raw, |u| {
+                let ctx = u.ctx().clone();
+                if !hide_hud {
+                    hud::draw(&ctx, sim, world, map_tiles, fps, &gpu_name, &rs);
+                    weather::hud(&ctx, sim, world);
+                    if !menu_open {
+                        hud::ap_panel(&ctx, sim);
+                    }
+                }
+                if let Some(msg) = loading {
+                    hud::notice(&ctx, msg);
+                }
+                if menu_open {
+                    menu_result = hud::menu(&ctx, sim, &mut choice, &mut watch, &mut env);
+                    snd_clicks += audio::menu_window(&ctx, &mut snd, snd_status) as u32;
+                }
+            });
+            ui.audio = snd;
+            ui.audio_clicks += snd_clicks;
+            ui.menu_choice = choice;
+            ui.menu_watch = watch;
+            // Time of day / weather from the menu apply immediately.
+            // (Moving the time slider / picking a weather switches that part of live off.)
+            if let Some(sim) = s.sim.as_mut() {
+                if env.hours != sim.hours {
+                    s.world.live_time = false;
+                    sim.hours = env.hours;
+                }
+            }
+            if env.weather != s.world.clouds.weather() {
+                s.world.set_weather_preset(env.weather);
+            }
+            if env.live != live0 {
+                s.world.set_live(env.live);
+            }
+            out
+        }
+        _ => {
+            // Loading screen: clear + text.
+            {
+                let _ = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("clear"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: target,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.05, g: 0.08, b: 0.14, a: 1.0 }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+            }
+            let msg = loading.unwrap_or("Loading").to_string();
+            // "a / b tiles" on the last line drives the progress bar.
+            let frac = msg
+                .lines()
+                .last()
+                .and_then(|l| {
+                    let mut it = l.split_whitespace();
+                    let a: f32 = it.next()?.parse().ok()?;
+                    it.next()?;
+                    let b: f32 = it.next()?.parse().ok()?;
+                    Some(a / b.max(1.0))
+                });
+            ui.ctx.run_ui(raw, |u| {
+                let ctx = u.ctx().clone();
+                egui::CentralPanel::default().frame(egui::Frame::NONE).show(u, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(ctx.content_rect().height() * 0.35);
+                        ui.label(egui::RichText::new("SKYWARD").size(48.0).strong().color(egui::Color32::WHITE));
+                        ui.add_space(16.0);
+                        match frac {
+                            Some(f) => {
+                                ui.add(egui::ProgressBar::new(f).desired_width(360.0));
+                            }
+                            None => {
+                                ui.spinner();
+                            }
+                        }
+                        ui.add_space(8.0);
+                        ui.label(egui::RichText::new(&msg).size(16.0).color(egui::Color32::LIGHT_GRAY));
+                        ui.add_space(30.0);
+                        ui.label(egui::RichText::new(hud::ATTRIBUTION).size(12.0).color(egui::Color32::GRAY));
+                    });
+                });
+            })
+        }
+    };
+
+    let mut full = full;
+    let prims = ui.ctx.tessellate(std::mem::take(&mut full.shapes), full.pixels_per_point);
+    for (id, deltas) in &full.textures_delta.set {
+        for delta in deltas.iter() {
+            ui.renderer.update_texture(device, queue, *id, delta);
+        }
+    }
+    let sd = egui_wgpu::ScreenDescriptor { size_in_pixels: [w, h], pixels_per_point: ppp };
+    let extra = ui.renderer.update_buffers(device, queue, &mut enc, &prims, &sd);
+    {
+        let mut pass = enc
+            .begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("egui"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            })
+            .forget_lifetime();
+        ui.renderer.render(&mut pass, &prims, &sd);
+    }
+    queue.submit(extra.into_iter().chain([enc.finish()]));
+    for id in &full.textures_delta.free {
+        ui.renderer.free_texture(id);
+    }
+    full.textures_delta.clear();
+    menu_result
+}
+
+// ---------------------------------------------------------------- headless
+
+fn headless(args: Args) -> Result<(), String> {
+    let path = args.shot.clone().unwrap();
+    let gpu = Gpu::new(None, Gpu::instance())?;
+    eprintln!("GPU: {}", gpu.adapter_name());
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let mut renderer = Renderer::new(&gpu.device, &gpu.queue, format);
+    let mut ui = Ui::new(&gpu.device, format);
+    ui.menu_open = args.menu;
+    ui.hide_hud = args.no_hud;
+    ui.menu_choice = (args.aircraft, args.start);
+
+    // Load the start area + spawn.
+    let mut s = Session::new(&args);
+    let t0 = Instant::now();
+    let mut last_msg = String::new();
+    while s.sim.is_none() {
+        sync_gpu(&mut s, &mut renderer, &mut ui, &gpu, None);
+        if let Some(m) = s.advance_loading(&args) {
+            if m != last_msg && t0.elapsed() > Duration::from_millis(500) {
+                last_msg = m.clone();
+            }
+        }
+        if t0.elapsed() > Duration::from_secs(180) {
+            return Err(format!("timed out loading map ({last_msg})"));
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // Air starts away from the spawn area (or a re-spawn at another airfield) wait for their scenery.
+    while s.check_catch_up(None).is_some() {
+        s.follow();
+        sync_gpu(&mut s, &mut renderer, &mut ui, &gpu, None);
+        if t0.elapsed() > Duration::from_secs(240) {
+            return Err("timed out loading the start position".into());
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    eprintln!("loaded in {:.2}s ({} tiles: {} network, {} cache)", t0.elapsed().as_secs_f32(), s.world.tile_count(), s.world.stats.from_network, s.world.stats.from_cache);
+
+    // Live weather: wait for the first fetch, save what was used next to the shot.
+    if s.world.live_weather || s.world.live_time {
+        s.world.live.wait(Duration::from_secs(12));
+        sync_gpu(&mut s, &mut renderer, &mut ui, &gpu, None);
+    }
+    weather::save_report(&path, &s.world);
+    let (w, h) = (args.width, args.height);
+    let tex = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("shot"),
+        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = tex.create_view(&Default::default());
+    let raw = || egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w as f32, h as f32))),
+        ..Default::default()
+    };
+    let ov = match (args.eye, args.look) {
+        (Some(e), Some(l)) => Some((e, l)),
+        _ => None,
+    };
+    {
+        let sim = s.sim.as_mut().unwrap();
+        if !args.watch || std::env::args().any(|a| a == "--cam") {
+            sim.cam = args.cam;
+        }
+        if let Some(z) = args.map_zoom {
+            sim.map_zoom = z.min(sim::MAP_RANGES.len() - 1);
+        }
+        if let Some(t) = args.throttle {
+            sim.ctl.throttle = t;
+        }
+        if let Some(g) = args.gear {
+            sim.ctl.gear_down = g;
+        }
+        if let Some(f) = args.flaps {
+            sim.set_flap_detent(f);
+        }
+        if let Some(sp) = args.spoilers {
+            sim.set_spoilers(sp);
+        }
+        if args.reverse {
+            sim.ctl.reverse = true;
+        }
+        if args.fail > 0 {
+            sim.ctl.failed_engines = args.fail;
+        }
+        if args.ap && !sim.ac.on_ground {
+            sim.ap.engage_hold_current(&sim.ac);
+        }
+        if args.realtime && sim.bot.is_none() {
+            let alt = sim.ac.pos.y.max(300.0);
+            sim.level_hold = Some((sim.ac.heading(), alt));
+        }
+        // Time warp: soak / realtime tests, and fast-forwarded shots (long flights).
+        sim.warp = args.warp;
+    }
+    let mut input = Input::default();
+
+    if args.soak {
+        return soak_flight(&args, &gpu, &mut renderer, &mut ui, &mut s, &tex, &view, w, h, &raw, &mut input);
+    } else if args.realtime {
+        realtime_flight(&args, &gpu, &mut renderer, &mut ui, &mut s, &view, w, h, &raw, &mut input)?;
+    } else {
+        // Fast-forward the simulation; streaming keeps up in the background.
+        let steps = (args.seconds * 60.0) as usize;
+        for i in 0..steps.max(1) {
+            let sim = s.sim.as_mut().unwrap();
+            sim.update(&s.world, &mut input, if steps == 0 { 0.0 } else { 1.0 / 60.0 });
+            if let (Some(t), None) = (args.throttle, &sim.bot) {
+                sim.ctl.throttle = t;
+            }
+            if i % 30 == 0 {
+                s.follow();
+                sync_gpu(&mut s, &mut renderer, &mut ui, &gpu, None);
+            }
+        }
+    }
+
+    // Wait for the scenery around the final camera to finish streaming.
+    s.follow();
+    let focus = match ov {
+        Some((e, _)) => vec2(e.x, e.z),
+        None => s.world.focus(),
+    };
+    if ov.is_some() {
+        s.world.set_focus(focus, Vec2::ZERO);
+    }
+    let tw = Instant::now();
+    loop {
+        sync_gpu(&mut s, &mut renderer, &mut ui, &gpu, None);
+        // (The floating origin may have moved: follow the world's focus.)
+        let focus = if ov.is_some() { focus } else { s.world.focus() };
+        let (ready, total) = s.world.progress(focus, s.world.effective_radius() - 300.0);
+        if ready >= total && s.world.uploads.is_empty() && s.world.gpu_pending.is_empty() && s.world.far_ready() {
+            break;
+        }
+        if tw.elapsed() > Duration::from_secs(120) {
+            eprintln!("warning: rendering with {ready}/{total} tiles");
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    eprintln!("scenery around camera ready after {:.2}s more", tw.elapsed().as_secs_f32());
+
+    if args.stats {
+        let ac = &s.sim.as_ref().unwrap().ac;
+        eprintln!(
+            "state: pos {:.1?} ias {:.1} kt alt {:.0} ft hdg {:.0} pitch {:.1} roll {:.1} ground {} crashed {:?}",
+            ac.pos,
+            ac.airspeed() * 1.9438,
+            ac.pos.y * 3.2808,
+            ac.heading().to_degrees(),
+            ac.pitch().to_degrees(),
+            ac.roll().to_degrees(),
+            ac.on_ground,
+            ac.crashed
+        );
+    }
+    if args.rebase_check {
+        rebase_check(&gpu, &mut renderer, &mut ui, &mut s, &tex, &view, w, h, &raw, &path, ov)?;
+    }
+    // Two frames: the first lets egui load fonts + map textures.
+    let t0 = Instant::now();
+    for _ in 0..2 {
+        render_frame(&gpu, &mut renderer, &mut ui, Some(&mut s), &view, w, h, raw(), 1.0, 0.0, None, ov);
+    }
+    let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    let t1 = Instant::now();
+    let n = 10;
+    for _ in 0..n {
+        render_frame(&gpu, &mut renderer, &mut ui, Some(&mut s), &view, w, h, raw(), 1.0, 0.0, None, ov);
+    }
+    let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    let rs = renderer.stats;
+    eprintln!(
+        "render: warmup {:.0} ms, steady {:.2} ms/frame at {w}x{h}; tiles {} (drawn {}), trees drawn {}, GPU {:.0} MB",
+        (t1 - t0).as_secs_f32() * 1000.0,
+        (t1.elapsed().as_secs_f32() * 1000.0) / n as f32,
+        rs.tiles,
+        rs.tiles_drawn,
+        rs.tree_instances,
+        rs.gpu_bytes as f64 / (1 << 20) as f64,
+    );
+    let st = &s.world.stats;
+    eprintln!(
+        "tiles: built {} (net {}, cache {}, failed {}), avg fetch {:.0} ms, avg build {:.0} ms (max {:.0}), {:.1} MB pbf, {} buildings, {} trees",
+        st.tiles_built,
+        st.from_network,
+        st.from_cache,
+        st.failures,
+        st.fetch_ms / st.tiles_built.max(1) as f32,
+        st.build_ms / st.tiles_built.max(1) as f32,
+        st.max_build_ms,
+        st.tile_bytes as f64 / 1e6,
+        s.world.building_count(),
+        s.world.tree_count()
+    );
+    let px = gfx::read_texture(&gpu, &tex, w, h);
+    image::save_buffer(&path, &px, w, h, image::ColorType::Rgba8).map_err(|e| e.to_string())?;
+    eprintln!("wrote {path}");
+    Ok(())
+}
+
+/// Floating-origin invariance test: render the frozen scene, switch to a frame
+/// whose origin is 20 km away (exact map + rigid shift, like a real rebase),
+/// render again and compare with the frame-to-frame baseline.
+#[allow(clippy::too_many_arguments)]
+fn rebase_check(
+    gpu: &Gpu,
+    renderer: &mut Renderer,
+    ui: &mut Ui,
+    s: &mut Session,
+    tex: &wgpu::Texture,
+    view: &wgpu::TextureView,
+    w: u32,
+    h: u32,
+    raw: &dyn Fn() -> egui::RawInput,
+    path: &str,
+    ov: Option<(Vec3, Vec3)>,
+) -> Result<(), String> {
+    let stem = path.trim_end_matches(".png").to_string();
+    let grab = |s: &mut Session, renderer: &mut Renderer, ui: &mut Ui, n: usize, ov: Option<(Vec3, Vec3)>| {
+        for _ in 0..n {
+            render_frame(gpu, renderer, ui, Some(&mut *s), view, w, h, raw(), 1.0, 0.0, None, ov);
+        }
+        let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+        gfx::read_texture(gpu, tex, w, h)
+    };
+    let diff = |a: &[u8], b: &[u8]| {
+        let (mut sum, mut big) = (0u64, 0u64);
+        for (pa, pb) in a.chunks(4).zip(b.chunks(4)) {
+            let d = (0..3).map(|k| (pa[k] as i32 - pb[k] as i32).unsigned_abs()).max().unwrap();
+            sum += d as u64;
+            if d > 12 {
+                big += 1;
+            }
+        }
+        let n = (a.len() / 4) as f64;
+        (sum as f64 / n, 100.0 * big as f64 / n)
+    };
+    let mut ov = ov;
+    let mut a = grab(s, renderer, ui, 12, ov);
+    // Two shifts: 20 km east (pure translation: the frames share a latitude)
+    // and the worst case of a real rebase, REBASE_NS m north (also rescales x).
+    let offs = if std::env::var_os("REBASE_CHECK_ZERO").is_some() { [Vec2::ZERO, Vec2::ZERO] } else { [vec2(20_000.0, 0.0), vec2(0.0, -world::REBASE_NS)] };
+    for (k, off) in offs.into_iter().enumerate() {
+        let a2 = grab(s, renderer, ui, 1, ov);
+        let (eye0, _) = s.sim.as_ref().unwrap().pose();
+        let p = {
+            let ac = s.sim.as_ref().unwrap().ac.pos;
+            vec2(ac.x, ac.z)
+        };
+        let (lat, lon) = s.world.proj.to_latlon(p + off);
+        let t0 = Instant::now();
+        let r = s.world.rebase_to(osm::Proj::new(lat, lon), p);
+        s.sim.as_mut().unwrap().rebase(&r);
+        renderer.rebase(r.delta);
+        renderer.set_frame(s.world.proj, s.world.pattern_frame(), s.world.home);
+        let ms = t0.elapsed().as_secs_f64() * 1000.0;
+        ov = ov.map(|(e, l)| (r.shift(e), r.shift(l)));
+        // Keep the streaming state in step (no new tiles should be needed).
+        sync_gpu(s, renderer, ui, gpu, None);
+        let b = grab(s, renderer, ui, 1, ov);
+        let b12 = grab(s, renderer, ui, 11, ov);
+        let (eye1, _) = s.sim.as_ref().unwrap().pose();
+        let (base_mean, base_big) = diff(&a, &a2);
+        let (d1_mean, d1_big) = diff(&a2, &b);
+        let (d12_mean, d12_big) = diff(&a, &b12);
+        eprintln!(
+            "rebase check {}: shift ({:.1}, {:.1}) m, x scale {:+.4}% in {:.2} ms; aircraft pose error {:.4} m",
+            k + 1,
+            r.delta.x,
+            r.delta.z,
+            (r.map.sx - 1.0) * 100.0,
+            ms,
+            (eye1 - r.shift(eye0)).length()
+        );
+        eprintln!(
+            "  image change (mean abs / % px > 12 levels): baseline next frame {base_mean:.3} / {base_big:.3}%; first frame after the shift {d1_mean:.3} / {d1_big:.3}%; 12 frames on {d12_mean:.3} / {d12_big:.3}%"
+        );
+        if k == 0 {
+            image::save_buffer(format!("{stem}_before.png"), &a, w, h, image::ColorType::Rgba8).map_err(|e| e.to_string())?;
+            image::save_buffer(format!("{stem}_after.png"), &b, w, h, image::ColorType::Rgba8).map_err(|e| e.to_string())?;
+        }
+        a = b12;
+    }
+    Ok(())
+}
+
+/// Real-time streaming test: fly straight and level for `--seconds`, rendering
+/// every frame offscreen, and report frame times, upload costs and coverage.
+#[allow(clippy::too_many_arguments)]
+fn realtime_flight(
+    args: &Args,
+    gpu: &Gpu,
+    renderer: &mut Renderer,
+    ui: &mut Ui,
+    s: &mut Session,
+    view: &wgpu::TextureView,
+    w: u32,
+    h: u32,
+    raw: &dyn Fn() -> egui::RawInput,
+    input: &mut Input,
+) -> Result<(), String> {
+    let start = Instant::now();
+    let p0 = s.sim.as_ref().unwrap().ac.pos;
+    let geo0 = s.world.proj.to_latlon(vec2(p0.x, p0.z));
+    // Origin shifts: (count, worst eye-step deviation from the previous frame's step (m), worst frame ms).
+    let (mut shifts, mut shift_dev, mut shift_ms) = (0u32, 0.0f32, 0.0f32);
+    let mut last_step = 0.0f32;
+    // Aircraft shake: screen position of the nose (px) through the f32 world
+    // path the GPU used before (view_proj · world) and the eye-relative path,
+    // and its attitude (deg); judged by the frame-to-frame second difference.
+    let mut shake: Vec<(Vec2, Vec2, Vec3)> = Vec::new();
+    let mut last = Instant::now();
+    let mut next_report = 1.0;
+    let (mut frames, mut sum_ms, mut max_ms, mut max_sync_ms, mut max_up) = (0u32, 0.0f32, 0.0f32, 0.0f32, 0u64);
+    let (mut all_frames, mut all_sum, mut all_max, mut hitches) = (0u32, 0.0f32, 0.0f32, 0u32);
+    let mut worst_gap = 0usize;
+    let mut gap_frames = 0u32;
+    let mut cam_prev: Option<(Vec3, Vec3)> = None;
+    let (mut cam_steps, mut cam_yaw, mut cam_pitch) = (Vec::<f32>::new(), Vec::<f32>::new(), Vec::<f32>::new());
+    while start.elapsed().as_secs_f32() < args.seconds {
+        let now = Instant::now();
+        let dt = args.frame_dt.unwrap_or((now - last).as_secs_f32());
+        last = now;
+        let tf = Instant::now();
+        {
+            let sim = s.sim.as_mut().unwrap();
+            sim.update(&s.world, input, dt);
+            if let (Some(t), None) = (args.throttle, &sim.bot) {
+                sim.ctl.throttle = t;
+            }
+        }
+        s.follow();
+        let ts = Instant::now();
+        let up = sync_gpu(s, renderer, ui, gpu, Some(UPLOAD_BUDGET));
+        let sync_ms = ts.elapsed().as_secs_f32() * 1000.0;
+        render_frame(gpu, renderer, ui, Some(&mut *s), view, w, h, raw(), 1.0, 0.0, None, None);
+        let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+        // An origin shift this frame: express the previous camera in the new frame.
+        let shifted = s.last_rebase.take();
+        if let (Some(r), Some((pe, _))) = (&shifted, &mut cam_prev) {
+            *pe = r.shift(*pe);
+        }
+        // Camera smoothness: per-frame eye step and view-direction yaw/pitch change.
+        if let Some(v) = s.sim.as_ref().and_then(|x| x.last_view.as_ref()) {
+            let fwd = -glam::Vec3::new(v.view.x_axis.z, v.view.y_axis.z, v.view.z_axis.z);
+            if let Some((pe, pf)) = cam_prev {
+                let step: f32 = v.eye.distance(pe);
+                if shifted.is_some() {
+                    shifts += 1;
+                    shift_dev = shift_dev.max((step - last_step).abs());
+                    shift_ms = shift_ms.max(tf.elapsed().as_secs_f32() * 1000.0);
+                }
+                last_step = step;
+                let yaw = (fwd.x.atan2(-fwd.z) - pf.x.atan2(-pf.z)).abs().to_degrees();
+                let pit = (fwd.y.clamp(-1.0, 1.0).asin() - pf.y.clamp(-1.0, 1.0).asin()).abs().to_degrees();
+                if start.elapsed().as_secs_f32() > 2.0 {
+                    cam_steps.push(step);
+                    cam_yaw.push(yaw.min(360.0 - yaw));
+                    cam_pitch.push(pit);
+                }
+            }
+            cam_prev = Some((v.eye, fwd));
+        }
+        if let Some(sim) = s.sim.as_ref()
+            && let (Some(v), true) = (sim.last_view.as_ref(), start.elapsed().as_secs_f32() > 2.0)
+        {
+            let (rp, rr) = sim.render_pose();
+            let nose = rp + rr * Vec3::Z * sim.size * 0.5;
+            let proj = glam::camera::rh::proj::directx::perspective_infinite_reverse(v.fov_y, w as f32 / h as f32, 0.25);
+            let px = |c: glam::Vec4| Vec2::new((c.x / c.w * 0.5 + 0.5) * w as f32, (0.5 - c.y / c.w * 0.5) * h as f32);
+            let world = px((proj * v.view) * nose.extend(1.0));
+            let rot = glam::Mat4::from_cols(v.view.x_axis, v.view.y_axis, v.view.z_axis, glam::Vec4::W);
+            let rel = px((proj * rot) * (nose - v.eye).extend(1.0));
+            let (yaw, pitch, roll) = rr.to_euler(glam::EulerRot::YXZ);
+            if shifted.is_some() {
+                shake.clear(); // a different frame: restart the differences
+            }
+            shake.push((world, rel, Vec3::new(yaw, pitch, roll) * (180.0 / std::f32::consts::PI)));
+        }
+        let ms = tf.elapsed().as_secs_f32() * 1000.0;
+        renderer.collect_timings(&gpu.device);
+        frames += 1;
+        sum_ms += ms;
+        max_ms = max_ms.max(ms);
+        max_sync_ms = max_sync_ms.max(sync_ms);
+        max_up = max_up.max(up);
+        if start.elapsed().as_secs_f32() > 2.0 {
+            all_frames += 1;
+            all_sum += ms;
+            all_max = all_max.max(ms);
+            if ms > 33.0 {
+                hitches += 1;
+            }
+        }
+        // Coverage: tiles within 3 km of the aircraft that are not on the GPU yet.
+        let ac = s.sim.as_ref().unwrap().ac.pos;
+        let (ready, total) = s.world.progress(vec2(ac.x, ac.z), 3000.0);
+        if ready < total {
+            gap_frames += 1;
+            worst_gap = worst_gap.max(total - ready);
+        }
+        let t = start.elapsed().as_secs_f32();
+        if t >= next_report {
+            next_report += 5.0;
+            let (r7, t7) = s.world.progress(vec2(ac.x, ac.z), s.world.effective_radius() - 500.0);
+            let sim = s.sim.as_ref().unwrap();
+            eprintln!(
+                "t {:5.1}s dist {:6.0} m (origin #{}) alt {:4.0} ias {:3.0} kt | tiles {:3} gpu {:3} queued {:3} up-pending {:2} | near {}/{} far {}/{} | frame avg {:5.2} max {:5.2} ms, sync max {:5.2} ms, up max {:.1} MB | {:.0} MB GPU, {:.1} MB dl{}",
+                t,
+                s.world.distance_to_geo(vec2(ac.x, ac.z), geo0.0, geo0.1),
+                s.world.rebases,
+                ac.y,
+                sim.ac.airspeed() * 1.9438,
+                s.world.tile_count(),
+                renderer.stats.tiles,
+                s.world.queued(),
+                s.world.uploads.len() + s.world.gpu_pending.len(),
+                ready,
+                total,
+                r7,
+                t7,
+                sum_ms / frames.max(1) as f32,
+                max_ms,
+                max_sync_ms,
+                max_up as f64 / (1 << 20) as f64,
+                renderer.gpu_bytes() as f64 / (1 << 20) as f64,
+                s.world.downloaded_bytes() as f64 / 1e6,
+                sim.ac.crashed.as_ref().map(|c| format!(" CRASHED {c}")).unwrap_or_default(),
+            );
+            frames = 0;
+            sum_ms = 0.0;
+            max_ms = 0.0;
+            max_sync_ms = 0.0;
+            max_up = 0;
+        }
+    }
+    if args.then_reset {
+        // Exercise the restart path: R teleports back to the start; the sim
+        // must hold until the scenery there has streamed back in.
+        let before = s.sim.as_ref().map(|x| x.ac.pos);
+        input.pressed.push(Key::Reset);
+        s.sim.as_mut().unwrap().update(&s.world, input, 0.0);
+        s.sim.as_mut().unwrap().level_hold = None;
+        s.follow();
+        let t = Instant::now();
+        let mut first = before;
+        let mut frames = 0;
+        while s.check_catch_up(first.take()).is_some() {
+            sync_gpu(s, renderer, ui, gpu, None);
+            render_frame(gpu, renderer, ui, Some(&mut *s), view, w, h, raw(), 1.0, 0.0, Some("Loading scenery"), None);
+            frames += 1;
+        }
+        eprintln!("reset: scenery at the start ready after {:.2}s ({frames} catch-up frames)", t.elapsed().as_secs_f32());
+    }
+    let stat = |v: &[f32]| {
+        let n = v.len().max(1) as f32;
+        let m = v.iter().sum::<f32>() / n;
+        let sd = (v.iter().map(|x| (x - m) * (x - m)).sum::<f32>() / n).sqrt();
+        // Frame-to-frame change of the step: the judder signal.
+        let jit = v.windows(2).map(|w| (w[1] - w[0]).abs()).sum::<f32>() / n;
+        (m, sd, jit, v.iter().cloned().fold(0.0, f32::max))
+    };
+    let (sm, ssd, sj, smax) = stat(&cam_steps);
+    let (ym, _, yj, ymax) = stat(&cam_yaw);
+    let (pm, _, pj, pmax) = stat(&cam_pitch);
+    eprintln!(
+        "camera smoothness ({} frames{}): eye step {:.3} m ± {:.3} (frame-to-frame jitter {:.3} m = {:.1}%, max {:.3}); yaw {:.4}°/frame (jitter {:.4}°, max {:.3}); pitch {:.4}°/frame (jitter {:.4}°, max {:.3})",
+        cam_steps.len(),
+        args.frame_dt.map(|d| format!(" at {:.0} Hz", 1.0 / d)).unwrap_or_default(),
+        sm,
+        ssd,
+        sj,
+        100.0 * sj / sm.max(1e-6),
+        smax,
+        ym,
+        yj,
+        ymax,
+        pm,
+        pj,
+        pmax
+    );
+    if shake.len() > 3 {
+        let n = (shake.len() - 2) as f32;
+        let d2 = |f: &dyn Fn(&(Vec2, Vec2, Vec3)) -> Vec3| {
+            let (mut sum, mut max) = (0.0f32, 0.0f32);
+            for k in 2..shake.len() {
+                let e = (f(&shake[k]) - 2.0 * f(&shake[k - 1]) + f(&shake[k - 2])).abs();
+                let m = e.max_element();
+                sum += m;
+                max = max.max(m);
+            }
+            (sum / n, max)
+        };
+        let (wm, wx) = d2(&|x| x.0.extend(0.0));
+        let (rm, rx) = d2(&|x| x.1.extend(0.0));
+        let (am, ax) = d2(&|x| x.2);
+        // Attitude rate noise: per-frame rate minus its ~0.25 s running mean (deg/frame), rms.
+        let rates: Vec<Vec3> = shake.windows(2).map(|w| {
+            let mut d = w[1].2 - w[0].2;
+            d.x = (d.x + 180.0).rem_euclid(360.0) - 180.0;
+            d
+        }).collect();
+        let k = 18usize.min(rates.len());
+        let mut acc = 0.0f32;
+        let mut cnt = 0;
+        for i in k..rates.len() {
+            let mean = rates[i - k..i].iter().copied().sum::<Vec3>() / k as f32;
+            acc += (rates[i] - mean).length_squared();
+            cnt += 1;
+        }
+        let rate_noise = (acc / cnt.max(1) as f32).sqrt();
+        eprintln!(
+            "aircraft shake (2nd difference per frame): nose on screen via world f32 {wm:.3} px (max {wx:.2}), eye-relative {rm:.3} px (max {rx:.2}); attitude {am:.4}° (max {ax:.3}°); attitude-rate noise {rate_noise:.4}°/frame rms"
+        );
+    }
+    let ac = s.sim.as_ref().unwrap().ac.pos;
+    let (lat, lon) = s.world.proj.to_latlon(vec2(ac.x, ac.z));
+    eprintln!(
+        "origin shifts: {shifts} (worst eye-step change across a shift {shift_dev:.4} m, worst shift frame {shift_ms:.2} ms); now at {lat:.4}, {lon:.4}, {:.1} km from the start",
+        s.world.distance_to_geo(vec2(ac.x, ac.z), geo0.0, geo0.1) / 1000.0
+    );
+    eprintln!(
+        "realtime summary: {} frames, avg {:.2} ms, max {:.2} ms, {} frames > 33 ms; frames with gaps within 3 km: {} (worst {} tiles)",
+        all_frames,
+        all_sum / all_frames.max(1) as f32,
+        all_max,
+        hitches,
+        gap_frames,
+        worst_gap
+    );
+    Ok(())
+}
+
+/// Render the current state (two frames, so egui has its fonts) and write a PNG.
+#[allow(clippy::too_many_arguments)]
+fn save_png(
+    gpu: &Gpu,
+    renderer: &mut Renderer,
+    ui: &mut Ui,
+    s: &mut Session,
+    tex: &wgpu::Texture,
+    view: &wgpu::TextureView,
+    w: u32,
+    h: u32,
+    raw: &dyn Fn() -> egui::RawInput,
+    path: &str,
+) -> Result<(), String> {
+    for _ in 0..2 {
+        render_frame(gpu, renderer, ui, Some(&mut *s), view, w, h, raw(), 1.0, 0.0, None, None);
+    }
+    let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    let px = gfx::read_texture(gpu, tex, w, h);
+    image::save_buffer(path, &px, w, h, image::ColorType::Rgba8).map_err(|e| e.to_string())?;
+    eprintln!("wrote {path}");
+    Ok(())
+}
+
+/// Bot soak test: fly the auto-flight bot for `--seconds` of simulated time as
+/// fast as the tile streaming allows (never ahead of the scenery within 2.5 km
+/// of the aircraft), log every minute and write PNGs every `--shot-every` s.
+#[allow(clippy::too_many_arguments)]
+fn soak_flight(
+    args: &Args,
+    gpu: &Gpu,
+    renderer: &mut Renderer,
+    ui: &mut Ui,
+    s: &mut Session,
+    tex: &wgpu::Texture,
+    view: &wgpu::TextureView,
+    w: u32,
+    h: u32,
+    raw: &dyn Fn() -> egui::RawInput,
+    input: &mut Input,
+) -> Result<(), String> {
+    let path = args.shot.clone().unwrap();
+    let stem = path.trim_end_matches(".png").to_string();
+    let wall = Instant::now();
+    {
+        let sim = s.sim.as_mut().unwrap();
+        if sim.bot.is_none() {
+            sim.enable_bot(&s.world);
+        }
+        eprintln!(
+            "soak: {} from {:?}, weather {}, {:.0} s sim time at warp {}",
+            sim.def().name,
+            sim.start,
+            s.world.clouds.weather().name(),
+            args.seconds,
+            sim.warp
+        );
+    }
+    let frame_dt = 1.0 / 30.0;
+    let mut next_log = 0.0;
+    let mut next_shot = if args.shot_every > 0.0 { args.shot_every } else { f32::MAX };
+    let mut seen = 0;
+    let mut waited = 0.0f32;
+    let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+    let mut crashed = None;
+    let start_pos = s.sim.as_ref().unwrap().ac.pos;
+    let start_geo = s.world.proj.to_latlon(vec2(start_pos.x, start_pos.z));
+    loop {
+        let sim = s.sim.as_mut().unwrap();
+        let t = sim.time;
+        if t >= args.seconds {
+            break;
+        }
+        sim.update(&s.world, input, frame_dt);
+        let ac = &sim.ac;
+        if !ac.on_ground {
+            lo = lo.min(ac.pos.y);
+            hi = hi.max(ac.pos.y);
+        }
+        if let Some(b) = &sim.bot {
+            for (te, e) in &b.events[seen..] {
+                eprintln!("  [{:6.0} s] {e}", te);
+            }
+            seen = b.events.len();
+        }
+        if let Some(c) = &ac.crashed {
+            crashed = Some(c.clone());
+            eprintln!("  [{:6.0} s] CRASHED: {c}", sim.time);
+            break;
+        }
+        let p = vec2(ac.pos.x, ac.pos.z);
+        // BOT_TRACE=Flare,Rollout prints every frame in those phases.
+        if let (Ok(tr), Some(b)) = (std::env::var("BOT_TRACE"), &sim.bot) {
+            let ph = b.phase();
+            if tr.split(',').any(|x| x == ph || x == "all") {
+                eprintln!(
+                    "    {:7.2} {:<11} h {:6.1} ias {:5.1} vs {:+5.2} pitch {:+5.1} roll {:+5.1} hdg {:5.1} el {:+.2} ai {:+.2} ru {:+.2} thr {:.2} fl {:.2} br {:.2} gnd {}",
+                    t,
+                    ph,
+                    ac.pos.y,
+                    ac.airspeed() / flight::KT,
+                    ac.vertical_speed(),
+                    ac.pitch().to_degrees(),
+                    ac.roll().to_degrees(),
+                    ac.heading().to_degrees(),
+                    sim.ctl.elevator,
+                    sim.ctl.aileron,
+                    sim.ctl.rudder,
+                    sim.ctl.throttle,
+                    sim.ctl.flaps,
+                    sim.ctl.brakes,
+                    ac.on_ground
+                );
+            }
+        }
+        if t >= next_log {
+            next_log += 60.0;
+            let b = sim.bot.as_ref();
+            eprintln!(
+                "t {:5.0}s  alt {:5.0} m  ias {:4.0} kt  vs {:+5.1} m/s  dist {:5.1} km  {:<12} | {}",
+                t,
+                ac.pos.y,
+                ac.airspeed() / flight::KT,
+                ac.vertical_speed(),
+                s.world.distance_to_geo(vec2(ac.pos.x, ac.pos.z), start_geo.0, start_geo.1) / 1000.0,
+                b.map(|b| b.phase()).unwrap_or_default(),
+                b.map(|b| b.status.clone()).unwrap_or_default()
+            );
+        }
+        s.follow();
+        sync_gpu(s, renderer, ui, gpu, None);
+        // Nothing is rendered between snapshots: submit so the upload staging memory is recycled.
+        gpu.queue.submit(std::iter::empty());
+        let _ = gpu.device.poll(wgpu::PollType::Poll);
+        // Don't outrun the scenery (buildings are obstacles; runways must exist).
+        let tw = Instant::now();
+        loop {
+            // (Recomputed: sync_gpu may just have moved the floating origin.)
+            let p = s.sim.as_ref().map(|x| vec2(x.ac.pos.x, x.ac.pos.z)).unwrap_or(p);
+            let (r, tot) = s.world.progress(p, 2500.0);
+            if r >= tot && s.world.uploads.is_empty() {
+                break;
+            }
+            if tw.elapsed() > Duration::from_secs(60) {
+                eprintln!("warning: scenery not ready after 60 s ({r}/{tot}), continuing: {:?}", s.world.missing(p, 2500.0));
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+            sync_gpu(s, renderer, ui, gpu, None);
+        }
+        waited += tw.elapsed().as_secs_f32();
+        if t >= next_shot {
+            next_shot += args.shot_every;
+            save_png(gpu, renderer, ui, s, tex, view, w, h, raw, &format!("{stem}_t{:05.0}.png", t))?;
+        }
+    }
+    let sim = s.sim.as_ref().unwrap();
+    let ac = &sim.ac;
+    eprintln!("---- soak summary: {} ({:.0} s sim in {:.0} s wall, {:.0} s waiting for scenery)", sim.def().name, sim.time, wall.elapsed().as_secs_f32(), waited);
+    if let Some(b) = &sim.bot {
+        let st = &b.stats;
+        eprintln!(
+            "airborne {:.0} s ({:.1} min) | alt range {:.0}..{:.0} m | max {:.0} m | take-offs {} landings {} go-arounds {} cycles {} | worst touchdown {:.2} m/s",
+            st.airborne_time,
+            st.airborne_time / 60.0,
+            if lo < f32::MAX { lo } else { 0.0 },
+            if hi > f32::MIN { hi } else { 0.0 },
+            st.max_alt,
+            st.takeoffs,
+            st.landings,
+            st.go_arounds,
+            st.cycles,
+            st.worst_touchdown
+        );
+        if st.thermals > 0 {
+            eprintln!(
+                "thermals {} | {:.0} s circling, {:+.0} m gained, avg climb {:+.2} m/s",
+                st.thermals,
+                st.thermal_time,
+                st.thermal_gain,
+                st.thermal_gain / st.thermal_time.max(1.0)
+            );
+        }
+        eprintln!("final: {} | {}", b.phase(), b.status);
+    }
+    eprintln!(
+        "end state: alt {:.0} m, ias {:.0} kt, on ground {}, crashed {:?}",
+        ac.pos.y,
+        ac.airspeed() / flight::KT,
+        ac.on_ground,
+        crashed
+    );
+    let mut s2 = s;
+    save_png(gpu, renderer, ui, &mut s2, tex, view, w, h, raw, &path)?;
+    if crashed.is_some() {
+        return Err("crashed".into());
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------- windowed
+
+struct Running {
+    window: Arc<Window>,
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
+    gpu: Gpu,
+    renderer: Renderer,
+    ui: Ui,
+    egui_state: egui_winit::State,
+    session: Session,
+    status: String,
+    input: Input,
+    last: Instant,
+    fps: f32,
+    right_drag: bool,
+    last_cursor: Option<(f64, f64)>,
+    /// Sound output (audio/); silent if there is no device.
+    audio: audio::Audio,
+}
+
+struct App {
+    args: Args,
+    run: Option<Running>,
+}
+
+fn key_map(code: KeyCode) -> Option<Key> {
+    Some(match code {
+        KeyCode::ArrowUp | KeyCode::KeyW => Key::PitchDown,
+        KeyCode::ArrowDown | KeyCode::KeyS => Key::PitchUp,
+        KeyCode::ArrowLeft | KeyCode::KeyA => Key::RollLeft,
+        KeyCode::ArrowRight | KeyCode::KeyD => Key::RollRight,
+        KeyCode::KeyQ => Key::YawLeft,
+        KeyCode::KeyE => Key::YawRight,
+        KeyCode::ShiftLeft | KeyCode::ShiftRight | KeyCode::Equal | KeyCode::NumpadAdd | KeyCode::PageUp => Key::ThrottleUp,
+        KeyCode::ControlLeft | KeyCode::ControlRight | KeyCode::Minus | KeyCode::NumpadSubtract | KeyCode::PageDown => Key::ThrottleDown,
+        KeyCode::KeyF => Key::FlapsDown,
+        KeyCode::KeyV => Key::FlapsUp,
+        KeyCode::KeyB | KeyCode::Space => Key::Brakes,
+        KeyCode::BracketLeft => Key::TrimDown,
+        KeyCode::BracketRight => Key::TrimUp,
+        KeyCode::KeyC => Key::Camera,
+        KeyCode::KeyR => Key::Reset,
+        KeyCode::KeyP => Key::Pause,
+        KeyCode::KeyM => Key::Map,
+        KeyCode::Comma => Key::MapZoomOut,
+        KeyCode::Period => Key::MapZoomIn,
+        KeyCode::KeyH | KeyCode::F1 => Key::Help,
+        KeyCode::Tab => Key::Menu,
+        KeyCode::F12 => Key::Screenshot,
+        KeyCode::KeyX => Key::TimeWarp,
+        KeyCode::KeyG => Key::Gear,
+        KeyCode::Slash => Key::SpoilerOut,
+        KeyCode::Backslash | KeyCode::Quote => Key::SpoilerIn,
+        KeyCode::KeyT => Key::Reverse,
+        KeyCode::KeyZ => Key::ApToggle,
+        KeyCode::Insert => Key::ApHdgLeft,
+        KeyCode::Delete => Key::ApHdgRight,
+        KeyCode::Home => Key::ApAltUp,
+        KeyCode::End => Key::ApAltDown,
+        KeyCode::Digit9 => Key::ApSpdDown,
+        KeyCode::Digit0 => Key::ApSpdUp,
+        KeyCode::KeyK => Key::EngineFail,
+        KeyCode::KeyJ => Key::AutoFlight,
+        _ => return None,
+    })
+}
+
+impl ApplicationHandler for App {
+    fn resumed(&mut self, el: &ActiveEventLoop) {
+        if self.run.is_some() {
+            return;
+        }
+        let attrs = Window::default_attributes()
+            .with_title("Skyward")
+            .with_inner_size(winit::dpi::LogicalSize::new(1600.0, 900.0));
+        let window = Arc::new(el.create_window(attrs).expect("create window"));
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
+            ..wgpu::InstanceDescriptor::new_with_display_handle(Box::new(el.owned_display_handle()))
+        });
+        let surface = instance.create_surface(window.clone()).expect("create surface");
+        let gpu = Gpu::new(Some(&surface), instance).expect("GPU init");
+        eprintln!("GPU: {}", gpu.adapter_name());
+        let size = window.inner_size();
+        let caps = surface.get_capabilities(&gpu.adapter);
+        let format = caps.formats.iter().copied().find(|f| f.is_srgb()).unwrap_or(caps.formats[0]);
+        let present_mode = if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
+            wgpu::PresentMode::Mailbox
+        } else {
+            wgpu::PresentMode::Fifo
+        };
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width: size.width.max(1),
+            height: size.height.max(1),
+            present_mode,
+            desired_maximum_frame_latency: 2,
+            alpha_mode: caps.alpha_modes[0],
+            view_formats: vec![],
+            ..surface.get_default_config(&gpu.adapter, size.width.max(1), size.height.max(1)).unwrap()
+        };
+        surface.configure(&gpu.device, &config);
+        let renderer = Renderer::new(&gpu.device, &gpu.queue, format);
+        let mut ui = Ui::new(&gpu.device, format);
+        let egui_state = egui_winit::State::new(ui.ctx.clone(), egui::ViewportId::ROOT, &window, Some(window.scale_factor() as f32), None, None);
+        ui.menu_open = !self.args.no_menu;
+        ui.menu_choice = (self.args.aircraft, self.args.start);
+        ui.menu_watch = self.args.watch;
+        ui.audio.muted = self.args.mute;
+        let audio = audio::Audio::new(self.args.mute);
+        ui.audio_status = audio.status().to_string();
+        self.run = Some(Running {
+            window,
+            surface,
+            config,
+            gpu,
+            renderer,
+            ui,
+            egui_state,
+            session: Session::new(&self.args),
+            status: "Starting".into(),
+            input: Input::default(),
+            last: Instant::now(),
+            fps: 0.0,
+            right_drag: false,
+            last_cursor: None,
+            audio,
+        });
+    }
+
+    fn window_event(&mut self, el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        let Some(r) = self.run.as_mut() else { return };
+        let resp = r.egui_state.on_window_event(&r.window, &event);
+        let flying = r.session.sim.is_some();
+        match &event {
+            WindowEvent::CloseRequested => el.exit(),
+            WindowEvent::Resized(s) => {
+                r.config.width = s.width.max(1);
+                r.config.height = s.height.max(1);
+                r.surface.configure(&r.gpu.device, &r.config);
+            }
+            WindowEvent::KeyboardInput { event: ke, .. } => {
+                if let PhysicalKey::Code(code) = ke.physical_key {
+                    if code == KeyCode::Escape && ke.state == ElementState::Pressed {
+                        if r.ui.menu_open && flying {
+                            r.ui.menu_open = false;
+                        } else {
+                            el.exit();
+                        }
+                    }
+                    // Sound: N toggles mute.
+                    if code == KeyCode::KeyN && ke.state == ElementState::Pressed && !ke.repeat {
+                        r.ui.audio.muted = !r.ui.audio.muted;
+                    }
+                    if let Some(k) = key_map(code) {
+                        match ke.state {
+                            ElementState::Pressed => {
+                                if !ke.repeat || k.repeats() {
+                                    if k == Key::Menu {
+                                        r.ui.menu_open = !r.ui.menu_open;
+                                        r.ui.audio_clicks += 1;
+                                    } else if k == Key::Screenshot || !r.ui.menu_open {
+                                        r.input.pressed.push(k);
+                                    }
+                                }
+                                if !r.ui.menu_open {
+                                    r.input.held.insert(k);
+                                }
+                            }
+                            ElementState::Released => {
+                                r.input.held.remove(&k);
+                            }
+                        }
+                    }
+                }
+            }
+            WindowEvent::MouseInput { state, button: MouseButton::Right, .. } => {
+                r.right_drag = *state == ElementState::Pressed && !resp.consumed;
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                if let (true, Some((lx, ly))) = (r.right_drag, r.last_cursor) {
+                    r.input.orbit_delta += glam::vec2((position.x - lx) as f32, (position.y - ly) as f32);
+                }
+                r.last_cursor = Some((position.x, position.y));
+            }
+            WindowEvent::MouseWheel { delta, .. } if !resp.consumed => {
+                r.input.zoom_delta += match delta {
+                    MouseScrollDelta::LineDelta(_, y) => *y,
+                    MouseScrollDelta::PixelDelta(p) => p.y as f32 / 40.0,
+                };
+            }
+            WindowEvent::RedrawRequested => self.frame(),
+            _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, _el: &ActiveEventLoop) {
+        if let Some(r) = &self.run {
+            r.window.request_redraw();
+        }
+    }
+}
+
+impl App {
+    fn frame(&mut self) {
+        let Some(r) = self.run.as_mut() else { return };
+        let now = Instant::now();
+        let dt = (now - r.last).as_secs_f32();
+        r.last = now;
+        r.fps = r.fps * 0.95 + (1.0 / dt.max(1e-4)) * 0.05;
+
+        let mut want_shot = false;
+        let notice: Option<String>;
+        if r.session.sim.is_some() {
+            want_shot = r.input.pressed.contains(&Key::Screenshot);
+            r.input.pressed.retain(|k| *k != Key::Screenshot);
+            let before = r.session.sim.as_ref().map(|s| s.ac.pos);
+            if !r.ui.menu_open && r.session.catch_up.is_none() {
+                let s = &mut r.session;
+                s.sim.as_mut().unwrap().update(&s.world, &mut r.input, dt);
+            }
+            r.session.follow();
+            notice = r.session.check_catch_up(before);
+            let budget = if notice.is_some() { None } else { Some(UPLOAD_BUDGET) };
+            sync_gpu(&mut r.session, &mut r.renderer, &mut r.ui, &r.gpu, budget);
+        } else {
+            sync_gpu(&mut r.session, &mut r.renderer, &mut r.ui, &r.gpu, None);
+            if let Some(m) = r.session.advance_loading(&self.args) {
+                r.status = m;
+            }
+            notice = Some(r.status.clone());
+        }
+
+        let frame = match r.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                r.surface.configure(&r.gpu.device, &r.config);
+                return;
+            }
+            _ => return,
+        };
+        let view = frame.texture.create_view(&Default::default());
+        let raw = r.egui_state.take_egui_input(&r.window);
+        let ppp = r.window.scale_factor() as f32;
+        let (w, h) = (r.config.width, r.config.height);
+        let result = render_frame(&r.gpu, &mut r.renderer, &mut r.ui, Some(&mut r.session), &view, w, h, raw, ppp, r.fps, notice.as_deref(), None);
+        if let (Some((sel, start, watch)), Some(sim)) = (result, r.session.sim.as_mut()) {
+            let before = Some(sim.ac.pos);
+            sim.select(&r.session.world, sel, start, watch);
+            r.session.check_catch_up(before);
+            r.ui.menu_open = false;
+            r.input.held.clear();
+        }
+        // Sound (audio/): menu settings + clicks, then this frame's sim state (camera set by render_frame).
+        if r.ui.audio_clicks > 0 {
+            r.audio.click();
+            r.ui.audio_clicks = 0;
+        }
+        r.audio.set_settings(r.ui.audio);
+        r.audio.update(r.session.sim.as_ref(), &r.session.world, dt, r.ui.menu_open);
+        if r.ui.audio_status != r.audio.status() {
+            r.ui.audio_status = r.audio.status().to_string();
+        }
+        if want_shot {
+            eprintln!("F12: use `skyward --shot file.png` for offscreen captures");
+        }
+        r.window.pre_present_notify();
+        r.gpu.queue.present(frame);
+    }
+}
+
+// ---------------------------------------------------------------- offline sound
+
+/// `--audio-render out.wav --seconds S`: fly the sim headlessly (no GPU, no
+/// audio device) and record what the player would hear — WAV, spectrogram
+/// PNG and a report of objective checks (audio/render.rs).
+fn audio_render(args: Args) -> Result<(), String> {
+    let path = args.audio_render.clone().unwrap();
+    let mut s = Session::new(&args);
+    let t0 = Instant::now();
+    fn pump(s: &mut Session) {
+        s.world.update();
+        s.world.uploads.clear();
+        s.world.gpu_pending.clear();
+        let _ = s.world.take_evicted();
+        let _ = s.world.take_minimaps();
+        if let Some(sim) = s.sim.as_mut() {
+            if let Some((h, d)) = s.world.tick_weather(sim.time, (sim.hours, sim.day_of_year)) {
+                sim.hours = h;
+                sim.day_of_year = d;
+            }
+        }
+    }
+    while s.sim.is_none() {
+        pump(&mut s);
+        s.advance_loading(&args);
+        if t0.elapsed() > Duration::from_secs(180) {
+            return Err("timed out loading the map".into());
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    while s.check_catch_up(None).is_some() {
+        s.follow();
+        pump(&mut s);
+        if t0.elapsed() > Duration::from_secs(240) {
+            return Err("timed out loading the start position".into());
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    if s.world.live_weather || s.world.live_time {
+        s.world.live.wait(Duration::from_secs(12));
+    }
+    pump(&mut s);
+    {
+        let sim = s.sim.as_mut().unwrap();
+        if !args.watch || std::env::args().any(|a| a == "--cam") {
+            sim.cam = args.cam;
+        }
+        if let Some(t) = args.throttle {
+            sim.ctl.throttle = t;
+        }
+        if let Some(g) = args.gear {
+            sim.ctl.gear_down = g;
+        }
+        if let Some(f) = args.flaps {
+            sim.set_flap_detent(f);
+        }
+        if args.ap && !sim.ac.on_ground {
+            sim.ap.engage_hold_current(&sim.ac);
+        }
+        sim.warp = args.warp;
+    }
+    // Optional silent fast-forward to a bot phase (e.g. "Final").
+    if let Some(phase) = &args.audio_until {
+        let mut input = Input::default();
+        let mut n = 0usize;
+        loop {
+            let sim = s.sim.as_mut().unwrap();
+            if sim.bot.as_ref().is_some_and(|b| b.phase().contains(phase.as_str())) || n > 60 * 60 * 10 || sim.ac.crashed.is_some() {
+                eprintln!("fast-forwarded {:.0} s of sim time to phase {phase}", sim.time);
+                break;
+            }
+            sim.warp = 8;
+            sim.update(&s.world, &mut input, 1.0 / 60.0);
+            let p = vec2(sim.ac.pos.x, sim.ac.pos.z);
+            if s.world.wants_rebase(p) {
+                let r = s.world.rebase(p);
+                sim.rebase(&r);
+            }
+            if n % 30 == 0 {
+                s.follow();
+                pump(&mut s);
+            }
+            n += 1;
+        }
+        s.sim.as_mut().unwrap().warp = args.warp;
+    }
+    let mut cues = audio::render::parse_script(&args.audio_script);
+    let mut rec = audio::render::Recorder::new(48_000);
+    let mut input = Input::default();
+    let dt = 1.0 / 60.0;
+    for i in 0..(args.seconds.max(1.0) * 60.0) as usize {
+        let t = i as f32 * dt;
+        {
+            let sim = s.sim.as_mut().unwrap();
+            for c in cues.due(t, sim, &s.world) {
+                audio::render::apply(&c, sim, &mut input);
+                rec.mark(c);
+            }
+            sim.update(&s.world, &mut input, dt);
+            let _ = sim.frame(16.0 / 9.0);
+            let p = vec2(sim.ac.pos.x, sim.ac.pos.z);
+            if s.world.wants_rebase(p) {
+                let r = s.world.rebase(p);
+                sim.rebase(&r);
+            }
+            rec.step(sim, &s.world, dt, false);
+        }
+        if i % 30 == 0 {
+            s.follow();
+            pump(&mut s);
+        }
+    }
+    let rep = rec.finish(&path)?;
+    eprintln!("{rep}");
+    let ac = &s.sim.as_ref().unwrap().ac;
+    eprintln!("end: alt {:.0} m, ias {:.0} kt, on ground {}, crashed {:?}", ac.pos.y, ac.airspeed_kt(), ac.on_ground, ac.crashed);
+    Ok(())
+}
+
+fn main() {
+    let args = parse_args();
+    if args.audio_render.is_some() {
+        if let Err(e) = audio_render(args) {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if args.shot.is_some() {
+        if let Err(e) = headless(args) {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    let el = EventLoop::new().expect("event loop");
+    let mut app = App { args, run: None };
+    el.run_app(&mut app).expect("run");
+}
