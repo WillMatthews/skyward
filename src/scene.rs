@@ -1424,3 +1424,83 @@ fn runway_geometry(m: &mut MeshData, rw: &Runway) {
         }
     }
 }
+
+// ---------------------------------------------------------------- wire
+
+/// Tiles as bytes (platform/wire.rs): the browser builds tiles in Web
+/// Workers, separate wasm instances, and posts them to the page.
+mod wire_impls {
+    use super::*;
+    use crate::platform::wire::{get_pod, put_pod, Res, Wire, R, W};
+
+    impl Wire for MeshData {
+        fn put(&self, w: &mut W) {
+            put_pod(w, &self.verts);
+            put_pod(w, &self.idx);
+            self.mat.put(w);
+        }
+        fn get(r: &mut R) -> Res<Self> {
+            Ok(MeshData { verts: get_pod(r)?, idx: get_pod(r)?, mat: f32::get(r)? })
+        }
+    }
+
+    crate::wire_struct!(Solid { pts, lo, hi, top });
+    crate::wire_struct!(WaterPoly { outer, holes, lo, hi });
+    crate::wire_struct!(TileCollision { solids, sgrid, water, wgrid });
+
+    impl Wire for Grid {
+        fn put(&self, w: &mut W) {
+            self.origin.put(w);
+            self.cell.put(w);
+            self.nx.put(w);
+            self.nz.put(w);
+            self.cells.len().put(w);
+            for c in &self.cells {
+                put_pod(w, c);
+            }
+        }
+        fn get(r: &mut R) -> Res<Self> {
+            let (origin, cell, nx, nz) = (Vec2::get(r)?, f32::get(r)?, usize::get(r)?, usize::get(r)?);
+            let n = usize::get(r)?;
+            let cells = (0..n).map(|_| get_pod(r)).collect::<Res<Vec<Vec<u32>>>>()?;
+            Ok(Grid { origin, cell, nx, nz, cells })
+        }
+    }
+
+    impl Wire for TileBuild {
+        fn put(&self, w: &mut W) {
+            self.id.put(w);
+            self.max_h.put(w);
+            self.min_y.put(w);
+            self.flat.put(w);
+            self.ranges.put(w);
+            self.grid.put(w);
+            self.buildings.put(w);
+            put_pod(w, &self.trees);
+            self.conifers.put(w);
+            self.collision.put(w);
+            self.runways.put(w);
+            self.airports.put(w);
+            self.building_count.put(w);
+            self.lights.put(w);
+        }
+        fn get(r: &mut R) -> Res<Self> {
+            Ok(TileBuild {
+                id: Wire::get(r)?,
+                max_h: Wire::get(r)?,
+                min_y: Wire::get(r)?,
+                flat: Wire::get(r)?,
+                ranges: Wire::get(r)?,
+                grid: Wire::get(r)?,
+                buildings: Wire::get(r)?,
+                trees: get_pod(r)?,
+                conifers: Wire::get(r)?,
+                collision: Wire::get(r)?,
+                runways: Wire::get(r)?,
+                airports: Wire::get(r)?,
+                building_count: Wire::get(r)?,
+                lights: Wire::get(r)?,
+            })
+        }
+    }
+}

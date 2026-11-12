@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skyward credits</title>
+<style>
+  :root { --bg: #f7f8fa; --text: #1b2330; --text2: #566273; --accent: #a8640a; --line: #e2e6ec; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0b0f16; --text: #e8edf4; --text2: #9aa7b8; --accent: #f2b33d; --line: #222b38; } }
+  html { background: var(--bg); }
+  body { margin: 0 auto; max-width: 820px; padding: 32px 16px 64px; color: var(--text); background: var(--bg);
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  h1 { font-size: 30px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 32px 0 8px; padding-top: 16px; border-top: 1px solid var(--line); }
+  p, li { color: var(--text); }
+  .sub { color: var(--text2); margin-top: 0; }
+  a { color: var(--accent); }
+  code { font-size: 0.9em; }
+  ul { padding-left: 20px; }
+</style>
+</head>
+<body>
+<h1>Skyward — credits &amp; licence</h1>
+<p class="sub">A flight simulator over real OpenStreetMap scenery. <a href="./">Back to the simulator</a></p>
+
+<h2>Licence</h2>
+<p>Skyward is free software under the <strong>GNU General Public License, version 2</strong>
+(Skyward's own code is GPL-2.0-or-later; some bundled FlightGear content is GPL v2 only, so the
+combined work is distributed under GPL v2). See <a href="LICENSE">LICENSE</a> and
+<a href="NOTICE">NOTICE</a>. Source code: <a href="https://github.com/WillMatthews/skyward">github.com/WillMatthews/skyward</a> —
+this page is built from it by <code>scripts/web-build.sh</code>.</p>
+
+<h2>Map data</h2>
+<p>Map data © <a href="https://openmaptiles.org/">OpenMapTiles</a> ©
+<a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a> (ODbL).
+Vector tiles served by <a href="https://openfreemap.org/">OpenFreeMap</a>.
+Landmark positions and footprints from OpenStreetMap; the landmark models are procedural.</p>
+
+<h2>Elevation</h2>
+<p><a href="https://registry.opendata.aws/terrain-tiles/">Terrain Tiles</a> on AWS (Mapzen / Tilezen) —
+ArcticDEM terrain data DEM(s) were created from DigitalGlobe, Inc., imagery and funded under National Science
+Foundation awards 1043681, 1559691, and 1542736; Australia terrain data © Commonwealth of Australia
+(Geoscience Australia) 2017; Austria terrain data © offene Daten Österreichs – Digitales Geländemodell (DGM)
+Österreich; Canada terrain data contains information licensed under the Open Government Licence – Canada;
+Europe terrain data produced using Copernicus data and information funded by the European Union - EU-DEM layers;
+Global ETOPO1 terrain data U.S. National Oceanic and Atmospheric Administration; Mexico terrain data source:
+INEGI, Continental relief, 2016; New Zealand terrain data Copyright 2011 Crown copyright (c) Land Information
+New Zealand and the New Zealand Government (All rights reserved); Norway terrain data © Kartverket;
+United Kingdom terrain data © Environment Agency copyright and/or database right 2015. All rights reserved;
+United States 3DEP (formerly NED) and global GMTED2010 and SRTM terrain data courtesy of the U.S. Geological Survey.</p>
+
+<h2>Airports and weather</h2>
+<p>Airports and runways: <a href="https://ourairports.com/data/">OurAirports</a> (public domain).
+Weather: METARs from the <a href="https://aviationweather.gov/">aviationweather.gov</a> data API (NOAA),
+forecasts from <a href="https://open-meteo.com/">Open-Meteo</a> (CC BY 4.0).</p>
+
+<h2>Aircraft</h2>
+<p>The aircraft models, textures and flight-dynamics data are converted from
+<a href="https://www.flightgear.org/">FlightGear</a> aircraft (GPL): the
+<a href="https://github.com/c172p-team/c172p">c172p team</a> (Cessna 172P); FGAddon ASK 21 (Heiko Schulz,
+Detlef Faber, Thomas Polzer, Viktor Radnai, Bea Wolf, Gilberto Agostinho …), Spitfire Mk IX (Detlef Faber),
+F-16 (Erik Hofman, Nikolai V. Chr. and the F-16 team), ATR 72-500 (Ryan Miller), A320-family (Josh Davidson,
+Jonathan Redpath, merspieler, Matthew Maring, Thorsten Herrmann, Semir Gebran);
+<a href="https://github.com/YV3399/E-jet-family-YV">E-jet family</a> (Gabriel Hernandez, D-ECHO, Tobias Dammers,
+Semir Gebran, Stefan Frank, Narendran Muraleedharan …). Per-aircraft sources, authors and modifications:</p>
+<ul>
+  <li><a href="assets/aircraft/kestrel/CREDITS.md">Cessna 172P</a></li>
+  <li><a href="assets/aircraft/swift/CREDITS.md">ASK 21</a></li>
+  <li><a href="assets/aircraft/peregrine/CREDITS.md">Spitfire Mk IX</a></li>
+  <li><a href="assets/aircraft/lancer/CREDITS.md">F-16C</a></li>
+  <li><a href="assets/aircraft/aerolink/CREDITS.md">ATR 72-500</a></li>
+  <li><a href="assets/aircraft/meridian190/CREDITS.md">Embraer E190</a></li>
+  <li><a href="assets/aircraft/meridian320/CREDITS.md">Airbus A320</a></li>
+</ul>
+
+<h2>Sound</h2>
+<p>Engine and effect recordings include FlightGear sounds (GPL v2 / v2+); synthesis is Skyward's own.
+Details: <a href="assets/audio/CREDITS.md">audio credits</a>.</p>
+
+<h2>Fonts</h2>
+<p>SIL Open Font License 1.1: <a href="https://github.com/rsms/inter">Inter</a> (Rasmus Andersson,
+<a href="assets/fonts/Inter-OFL.txt">licence</a>),
+<a href="https://github.com/JetBrains/JetBrainsMono">JetBrains Mono</a>
+(<a href="assets/fonts/JetBrainsMono-OFL.txt">licence</a>) and
+<a href="https://github.com/polarsys/b612">B612</a> (Airbus / Intactile / ENAC,
+<a href="assets/fonts/B612-OFL.txt">licence</a>).</p>
+
+<h2>Software</h2>
+<p>Built with Rust, <a href="https://wgpu.rs/">wgpu</a> (WebGPU), winit, egui, glam, cpal, gilrs, lewton and
+other crates under MIT / Apache-2.0 / similar licences (see <code>Cargo.lock</code> in the source).</p>
+</body>
+</html>

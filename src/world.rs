@@ -13,7 +13,7 @@ use std::sync::Arc;
 use crate::tiles::Pool;
 use glam::{vec2, vec3, Vec2, Vec3};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 /// Default load radius (m). A z14 tile is ≈1.5 km wide at London's latitude.
 pub const LOAD_RADIUS: f32 = 7500.0;

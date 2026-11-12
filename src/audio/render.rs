@@ -11,7 +11,7 @@ use super::params::{Event, Family, Frame};
 use super::synth::{Settings, Synth};
 use crate::sim::{CamMode, Input, Key, Sim};
 use crate::world::World;
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 /// When a scripted cue fires.
 #[derive(Clone, Copy, Debug)]

@@ -2,9 +2,8 @@
 #
 #   check  — rustfmt (formatted paths), clippy -D warnings, unit tests, release build (Linux)
 #   tools  — the golden-comparison tool's own tests (tools/regress)
-#   wasm   — wasm32: the libraries the browser build depends on must compile
-#            (strict); the whole crate is checked too, informational until the
-#            WASM port (Track G) lands
+#   wasm   — wasm32: the browser build (src/platform/, tiles_web.rs) passes
+#            clippy -D warnings; pages.yml builds and publishes the site
 #
 # GPU: runners have none; GPU-dependent tests are skipped (`--skip gpu_`) and
 # golden-image / audio regression runs locally on a GPU (scripts/regress.sh).
@@ -94,16 +93,10 @@ jobs:
         with:
           toolchain: ${{ env.RUST_VERSION }}
           targets: wasm32-unknown-unknown
+          components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
           key: wasm32
 
-      - name: browser-facing libraries compile for wasm32 (strict)
-        run: >
-          cargo check --locked --target wasm32-unknown-unknown
-          -p gilrs -p egui -p egui-wgpu -p wgpu -p winit -p cpal
-          -p glam -p lewton -p hound -p image -p serde_json -p bytemuck -p earcutr -p flate2
-
-      - name: whole crate for wasm32 (informational until the WASM port lands)
-        continue-on-error: true
-        run: cargo check --locked --target wasm32-unknown-unknown
+      - name: clippy (wasm32)
+        run: cargo clippy --locked --target wasm32-unknown-unknown -- -D warnings

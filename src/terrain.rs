@@ -29,10 +29,11 @@ use crate::osm::{point_in_ring, Area, Proj, TileId};
 use crate::scene::{mat, MeshData, Vert};
 use glam::{vec2, vec3, Vec2, Vec3};
 use std::collections::HashMap;
+#[cfg(not(target_arch = "wasm32"))]
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, LazyLock, Mutex, RwLock};
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 const URL: &str = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium";
 const USER_AGENT: &str = "skyward-flightsim/0.2";
@@ -71,15 +72,18 @@ type DemMap = (HashMap<(u32, u32, u32), Entry>, u64);
 struct Dem {
     map: Mutex<DemMap>,
     cv: Condvar,
+    #[cfg(not(target_arch = "wasm32"))]
     agent: ureq::Agent,
     warned: std::sync::atomic::AtomicBool,
 }
 
 static DEM: LazyLock<Dem> = LazyLock::new(|| {
+    #[cfg(not(target_arch = "wasm32"))]
     std::thread::spawn(prune_cache);
     Dem {
         map: Mutex::new((HashMap::new(), 0)),
         cv: Condvar::new(),
+        #[cfg(not(target_arch = "wasm32"))]
         agent: ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(8)).timeout(Duration::from_secs(25)).user_agent(USER_AGENT).build(),
         warned: Default::default(),
     }
@@ -102,6 +106,7 @@ fn decode(bytes: &[u8]) -> Result<DemTile, String> {
     Ok(DemTile { h })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn load(z: u32, x: u32, y: u32) -> Result<DemTile, String> {
     let path = tile_path(z, x, y);
     if let Ok(b) = std::fs::read(&path) {
@@ -131,6 +136,7 @@ fn load(z: u32, x: u32, y: u32) -> Result<DemTile, String> {
     Ok(t)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn prune_cache() {
     let mut files = Vec::new();
     let mut total = 0u64;
@@ -176,7 +182,11 @@ fn dem_tile(z: u32, x: u32, y: u32, block: bool) -> Option<Arc<DemTile>> {
                 return Some(t.clone());
             }
             Some(Entry::Loading) => {
-                if !block {
+                #[cfg(target_arch = "wasm32")]
+                if block {
+                    web::miss(k);
+                }
+                if !block || cfg!(target_arch = "wasm32") {
                     return None;
                 }
                 g = d.cv.wait(g).unwrap();
@@ -190,36 +200,51 @@ fn dem_tile(z: u32, x: u32, y: u32, block: bool) -> Option<Arc<DemTile>> {
         }
         g.0.insert(k, Entry::Loading);
         drop(g);
-        let r = load(z, x, y);
-        g = d.map.lock().unwrap();
-        let out = match r {
-            Ok(t) => {
-                let t = Arc::new(t);
-                g.1 += 1;
-                let tick = g.1;
-                g.0.insert(k, Entry::Ready(t.clone(), tick));
-                Some(t)
-            }
-            Err(e) => {
-                if !d.warned.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                    eprintln!("terrain: DEM {z}/{x}/{y}: {e} (flat ground where missing)");
-                }
-                g.0.insert(k, Entry::Failed(Instant::now()));
-                None
-            }
-        };
-        // Evict the least recently used tiles.
-        let ready = g.0.values().filter(|e| matches!(e, Entry::Ready(..))).count();
-        if ready > MEM_TILES {
-            let mut ages: Vec<(u64, (u32, u32, u32))> = g.0.iter().filter_map(|(k, e)| if let Entry::Ready(_, u) = e { Some((*u, *k)) } else { None }).collect();
-            ages.sort();
-            for (_, k) in ages.into_iter().take(ready - MEM_TILES) {
-                g.0.remove(&k);
-            }
+        // Browser: no blocking download; start it and note the miss (the
+        // tile builder waits for it and builds again).
+        #[cfg(target_arch = "wasm32")]
+        {
+            web::miss(k);
+            web::spawn_load(k);
+            return None;
         }
-        d.cv.notify_all();
-        return out;
+        #[cfg(not(target_arch = "wasm32"))]
+        return store(k, load(z, x, y));
     }
+}
+
+/// Keep a loaded (or failed) DEM tile in memory, evicting the least recently used.
+fn store(k: (u32, u32, u32), r: Result<DemTile, String>) -> Option<Arc<DemTile>> {
+    let d = &*DEM;
+    let (z, x, y) = k;
+    let mut g = d.map.lock().unwrap();
+    let out = match r {
+        Ok(t) => {
+            let t = Arc::new(t);
+            g.1 += 1;
+            let tick = g.1;
+            g.0.insert(k, Entry::Ready(t.clone(), tick));
+            Some(t)
+        }
+        Err(e) => {
+            if !d.warned.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                eprintln!("terrain: DEM {z}/{x}/{y}: {e} (flat ground where missing)");
+            }
+            g.0.insert(k, Entry::Failed(Instant::now()));
+            None
+        }
+    };
+    // Evict the least recently used tiles.
+    let ready = g.0.values().filter(|e| matches!(e, Entry::Ready(..))).count();
+    if ready > MEM_TILES {
+        let mut ages: Vec<(u64, (u32, u32, u32))> = g.0.iter().filter_map(|(k, e)| if let Entry::Ready(_, u) = e { Some((*u, *k)) } else { None }).collect();
+        ages.sort();
+        for (_, k) in ages.into_iter().take(ready - MEM_TILES) {
+            g.0.remove(&k);
+        }
+    }
+    d.cv.notify_all();
+    out
 }
 
 /// Load the detail DEM tile at a point in the background (if not yet loaded).
@@ -232,9 +257,123 @@ pub fn prefetch(lat: f64, lon: f64) {
             return;
         }
     }
+    #[cfg(not(target_arch = "wasm32"))]
     std::thread::spawn(move || {
         dem_tile(DEM_NEAR, x, y, true);
     });
+    #[cfg(target_arch = "wasm32")]
+    web::start_load((DEM_NEAR, x, y));
+}
+
+/// Browser DEM loading: async fetches; builds that hit a tile still loading
+/// note it ([`web::miss`]) and are built again once it is in
+/// (tiles_web.rs).
+#[cfg(target_arch = "wasm32")]
+pub mod web {
+    use super::*;
+    use std::cell::RefCell;
+
+    type Key = (u32, u32, u32);
+
+    thread_local! {
+        static MISSES: RefCell<Vec<Key>> = const { RefCell::new(Vec::new()) };
+    }
+
+    pub(super) fn miss(k: Key) {
+        MISSES.with(|m| {
+            let mut m = m.borrow_mut();
+            if !m.contains(&k) {
+                m.push(k);
+            }
+        });
+    }
+
+    /// DEM tiles that were needed but not loaded since the last call.
+    pub fn take_misses() -> Vec<Key> {
+        MISSES.with(|m| std::mem::take(&mut *m.borrow_mut()))
+    }
+
+    /// Start loading a DEM tile unless loaded, loading or recently failed.
+    pub fn start_load(k: Key) {
+        let mut g = DEM.map.lock().unwrap();
+        match g.0.get(&k) {
+            Some(Entry::Ready(..) | Entry::Loading) => return,
+            Some(Entry::Failed(t)) if t.elapsed() < Duration::from_secs(30) => return,
+            _ => {}
+        }
+        g.0.insert(k, Entry::Loading);
+        drop(g);
+        spawn_load(k);
+    }
+
+    /// Fetch + decode + store (the entry is already `Loading`).
+    pub(super) fn spawn_load(k: Key) {
+        crate::platform::web::spawn_local(async move {
+            let r = load(k).await;
+            store(k, r);
+        });
+    }
+
+    async fn load((z, x, y): Key) -> Result<DemTile, String> {
+        let url = format!("{URL}/{z}/{x}/{y}.png");
+        let r = crate::platform::web::fetch(&url, Duration::from_secs(25)).await?;
+        match r.status {
+            200..=299 => decode(&r.body),
+            // No tile: sea level.
+            403 | 404 => Ok(DemTile { h: vec![0.0; 256 * 256] }),
+            s => Err(format!("HTTP {s}")),
+        }
+    }
+
+    /// The DEM tiles a map tile's build reads: its level's DEM over the tile
+    /// (plus a pixel of margin) and its parent level's.
+    pub fn keys_for(id: TileId) -> Vec<Key> {
+        let mut out = Vec::new();
+        let mut add = |t: TileId| {
+            let dz = Level::of(t).dem_z();
+            if t.z < dz {
+                return;
+            }
+            let scale = (1u64 << (t.z - dz)) as f64;
+            let n = 1i64 << dz;
+            let px = |v: u32| v as f64 * 256.0 / scale;
+            let (x0, x1) = (((px(t.x) - 1.0) / 256.0).floor() as i64, ((px(t.x + 1) + 1.0) / 256.0).floor() as i64);
+            let (y0, y1) = (((px(t.y) - 1.0) / 256.0).floor() as i64, ((px(t.y + 1) + 1.0) / 256.0).floor() as i64);
+            for y in y0.max(0)..=y1.min(n - 1) {
+                for x in x0..=x1 {
+                    let k = (dz, x.rem_euclid(n) as u32, y as u32);
+                    if !out.contains(&k) {
+                        out.push(k);
+                    }
+                }
+            }
+        };
+        add(id);
+        if let Some(p) = parent(id) {
+            add(p);
+        }
+        out
+    }
+
+    /// Load `keys` and wait until none is still loading (loaded or failed).
+    pub async fn ensure(keys: &[Key]) {
+        if *FLAT {
+            return;
+        }
+        for k in keys {
+            start_load(*k);
+        }
+        loop {
+            let busy = {
+                let g = DEM.map.lock().unwrap();
+                keys.iter().any(|k| matches!(g.0.get(k), Some(Entry::Loading)))
+            };
+            if !busy {
+                return;
+            }
+            crate::platform::web::sleep(Duration::from_millis(25)).await;
+        }
+    }
 }
 
 /// Bilinear DEM sampling at one zoom, with a few tiles held locally.
@@ -1045,6 +1184,40 @@ pub fn build_horizon_tile(id: TileId) -> crate::scene::TileBuild {
     let proj = Proj::tile_frame(id);
     let rect = id.rect(&proj);
     crate::scene::TileBuild::terrain_only(id, rect, flat, ranges, Arc::new(grid))
+}
+
+// ---------------------------------------------------------------- wire
+
+/// (Browser tile workers: platform/wire.rs.)
+mod wire_impls {
+    use super::*;
+    use crate::platform::wire::{get_pod, put_pod, Res, Wire, R, W};
+
+    impl Wire for FlatRanges {
+        fn put(&self, w: &mut W) {
+            self.b.put(w);
+            put_pod(w, &self.base);
+            put_pod(w, &self.over);
+        }
+        fn get(r: &mut R) -> Res<Self> {
+            Ok(FlatRanges { b: u32::get(r)?, base: get_pod(r)?, over: get_pod(r)? })
+        }
+    }
+
+    impl Wire for Grid {
+        fn put(&self, w: &mut W) {
+            self.n.put(w);
+            self.lo.put(w);
+            self.size.put(w);
+            put_pod(w, &self.h);
+            put_pod(w, &self.nrm);
+            self.min.put(w);
+            self.max.put(w);
+        }
+        fn get(r: &mut R) -> Res<Self> {
+            Ok(Grid { n: usize::get(r)?, lo: Vec2::get(r)?, size: Vec2::get(r)?, h: get_pod(r)?, nrm: get_pod(r)?, min: f32::get(r)?, max: f32::get(r)? })
+        }
+    }
 }
 
 #[cfg(test)]

@@ -197,7 +197,8 @@ pub fn main_menu(ui: &mut Ui, st: &mut UiState) {
         by += 76.0;
     }
     let items: [(&str, Action, &str); 4] = [("New flight", Action::Goto(Screen::Aircraft), "new"), ("Settings", Action::Goto(Screen::Settings), "settings"), ("Credits", Action::Goto(Screen::Credits), "credits"), ("Quit", Action::Quit, "quit")];
-    for (i, (label, act, id)) in items.into_iter().enumerate() {
+    // (A browser tab has nothing to quit to.)
+    for (i, (label, act, id)) in items.into_iter().filter(|it| !(crate::platform::WEB && matches!(it.1, Action::Quit))).enumerate() {
         let r = Rect::from_min_size(Pos2::new(x, by), Vec2::new(bw, 48.0));
         let kind = if i == 0 && last.is_none() { Btn::Primary } else { Btn::Secondary };
         if button(ui, r, id, label, kind, true).clicked() {
@@ -239,7 +240,10 @@ pub fn credits(ui: &mut Ui, st: &mut UiState) {
         ("Vector tiles", "OpenFreeMap"),
         ("Airports & runways", "OurAirports — public domain (ourairports.com/data)"),
         ("Weather", "METARs: aviationweather.gov (NOAA) · forecasts: Open-Meteo (CC BY 4.0)"),
+        ("Elevation", "Terrain Tiles on AWS (Mapzen / Tilezen: SRTM, GMTED2010, 3DEP, ETOPO1, EU-DEM and more)"),
+        ("Aircraft & sounds", "FlightGear aircraft and recordings — GPL v2 / v2+ (per-aircraft credits in the source)"),
         ("Fonts", "Inter (Rasmus Andersson), JetBrains Mono, B612 (Airbus / Intactile / ENAC) — SIL Open Font License 1.1"),
+        ("Licence", "Skyward is free software: GNU GPL v2 · github.com/WillMatthews/skyward"),
     ];
     for (k, v) in rows {
         p.text(Pos2::new(x, y), Align2::LEFT_TOP, k, f_semi(14.0), pal::TEXT);
@@ -248,6 +252,11 @@ pub fn credits(ui: &mut Ui, st: &mut UiState) {
     }
     if button(ui, Rect::from_min_size(Pos2::new(x, y + 24.0), Vec2::new(140.0, 44.0)), "back", "Back", Btn::Secondary, true).clicked() || esc(ui) {
         st.actions.push(Action::Back);
+    }
+    // Browser: the full attributions and the licence texts are pages of the site.
+    #[cfg(target_arch = "wasm32")]
+    if button(ui, Rect::from_min_size(Pos2::new(x + 156.0, y + 24.0), Vec2::new(240.0, 44.0)), "credits_page", "Full credits & licence", Btn::Secondary, true).clicked() {
+        crate::platform::web::open_url("credits.html");
     }
 }
 
@@ -1483,6 +1492,7 @@ pub fn pause(ui: &mut Ui, st: &mut UiState, title: &str, sub: &str) {
         ("Main menu", Action::Goto(Screen::Main), Btn::Ghost),
         ("Quit", Action::Quit, Btn::Ghost),
     ];
+    let items: Vec<_> = items.into_iter().filter(|it| !(crate::platform::WEB && matches!(it.1, Action::Quit))).collect();
     let h = 120.0 + items.len() as f32 * 54.0 + 10.0;
     let card = Rect::from_center_size(screen.center(), Vec2::new(w, h));
     panel_with(&p, card, sp::R_CARD, pal::PANEL_SOLID);

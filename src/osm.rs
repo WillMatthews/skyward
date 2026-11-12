@@ -564,6 +564,11 @@ pub fn point_in_ring(pt: Vec2, ring: &[Vec2]) -> bool {
     inside
 }
 
+// (Browser tile workers: platform/wire.rs.)
+crate::wire_struct!(TileId { z, x, y });
+crate::wire_struct!(RunwayPiece { a, b, name });
+crate::wire_struct!(Airport { pos, icao, iata, name });
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -92,6 +92,54 @@ anywhere on Earth, for as long as you like. wgpu (Vulkan), winit, egui.
 
 Default start: the last flight (first run: London City, EGLC).
 
+## Play in the browser
+
+The same code builds for the web (wasm32 + **WebGPU**): menus, all seven
+aircraft, streamed scenery, terrain, live weather and sound in a browser tab.
+
+* **Browsers**: WebGPU is required — Chrome / Edge 113+ (Windows, macOS,
+  ChromeOS, Android; Linux behind `chrome://flags/#enable-unsafe-webgpu`),
+  Safari 26+, Firefox 141+ on Windows. Without it the page says so.
+* **Download**: ≈15 MB of wasm (≈9 MB gzipped) before the first flight,
+  plus the chosen aircraft (2–15 MB) and the airport list from OurAirports
+  (≈17 MB of CSV, ≈4 MB compressed; once per browser cache). Map, terrain and
+  weather stream as natively; the browser's HTTP cache stands in for `cache/`.
+* **Differences**: no live METARs (aviationweather.gov sends no CORS headers,
+  so the weather comes from Open-Meteo alone); settings live in the browser's
+  `localStorage`; lighter defaults (Low scenery detail, 2048² shadow cascades,
+  the 3D view rendered at ≤ 1.6 Mpixel and scaled up); sound starts after the
+  click on Fly (browser autoplay rules); no aircraft-card thumbnails; no
+  Quit button. Tiles are built in Web Workers — each runs its own copy of the
+  module and posts finished tiles back (`src/tiles_web.rs`); GitHub Pages
+  can't send the COOP / COEP headers shared-memory threads need.
+* **URL options**: the query string is the command line, e.g.
+  `?airport=EGKK&aircraft=meridian320&no-menu`, `?watch`, `?time=12.00`;
+  `?scale=0.5` renders the 3D view at half size; `?noworkers` builds tiles
+  on the page.
+
+Local build and server (127.0.0.1 only):
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.130 --locked   # = Cargo.lock's wasm-bindgen
+cargo install wasm-opt --locked                              # optional (smaller, faster wasm)
+scripts/web-serve.sh            # build dist/ and serve http://127.0.0.1:8098/
+scripts/web-build.sh            # build dist/ only
+```
+
+**GitHub Pages** (`.github/workflows/pages.yml`): every push to `main`
+builds `dist/` and uploads it as the Pages artifact; the deploy job runs only
+once the repository owner turns Pages on:
+
+1. Settings › Pages › Build and deployment › Source: **GitHub Actions**.
+2. Settings › Secrets and variables › Actions › Variables › New repository
+   variable: `PAGES_ENABLED` = `true`.
+3. Actions › Pages › Run workflow (or push to `main`). The site is
+   `https://<owner>.github.io/skyward/`.
+
+(Pages for a private repository needs a paid plan; until the repository is
+public and the variable is set, the workflow builds but doesn't deploy.)
+
 ## Run
 
 ```sh
@@ -290,7 +338,8 @@ Display switches to mailbox / immediate for the lowest latency.
 GitHub Actions (`.github/workflows/ci.yml`) runs rustfmt on the formatted paths
 (`scripts/fmt-paths.txt`), `clippy -D warnings`, the tests and a release build
 on Linux, plus a wasm32 check; `render.yml` is a nightly software-Vulkan
-(lavapipe) smoke render.
+(lavapipe) smoke render; `pages.yml` builds the browser version (and deploys
+it to GitHub Pages once enabled, see *Play in the browser*).
 
 Golden regression (needs a GPU and the tile cache, so it runs locally):
 `scripts/regress.sh` renders the scenes in `tests/goldens/scenes.txt`
@@ -352,6 +401,7 @@ A shift costs well under 0.1 ms.
 | `src/gfx_aircraft.rs`, `src/shaders/aircraft*.wgsl` | textured aircraft renderer (main / reflection / shadow passes) |
 | `src/jsbsim.rs` | JSBSim aerodynamics evaluator (functions, tables, axes, stall hysteresis) |
 | `src/assets.rs` | asset loading (in-memory store first, then `assets/` on disk) |
+| `src/platform/`, `src/tiles_web.rs`, `web/` | browser build: fetch, frame budget, localStorage, lazy assets (`web.rs`), tile wire format (`wire.rs`), Web Worker tile pool, page shell / worker / credits page; `scripts/web-build.sh`, `scripts/web-serve.sh` |
 | `tools/fgimport/` | offline converter FlightGear aircraft → Skyward assets (+ neutral liveries) |
 | `src/sim.rs` | session, controls, autopilot glue, runway choice, cameras (incl. cinematic) |
 | `src/bot.rs` | auto-flight bot: glider soaring + powered take-off / tour / landing |

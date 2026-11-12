@@ -698,8 +698,12 @@ pub fn draw_map(
     radius: u8,
     reserved: &[Rect],
 ) -> Vec<Rect> {
-    let shapes = base_shapes(view, world, tiles, style);
-    let id = cv.draw(key, view.rect.size(), ppp, palette(style).bg, shapes);
+    let id = if cv.due(key, view.rect.size()) {
+        let shapes = base_shapes(view, world, tiles, style);
+        cv.draw(key, view.rect.size(), ppp, palette(style).bg, shapes)
+    } else {
+        cv.ids.get(key).copied()
+    };
     show_canvas(p, id, view.rect, radius, palette(style).bg);
     let mp = p.with_clip_rect(view.rect);
     let mut taken = reserved.to_vec();

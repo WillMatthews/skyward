@@ -45,12 +45,13 @@ mod vfx;
 mod ui;
 mod weather;
 mod world;
+mod platform;
 
 use gfx::{FrameView, Gpu, Renderer};
 use glam::{vec2, vec3, Vec2, Vec3};
 use sim::{CamMode, Input, Key, Sim, Start};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 use ui::{Action, Screen, UiState};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
@@ -64,7 +65,8 @@ const WORKERS: usize = 4;
 /// Radius around the spawn that must be loaded before flying (m).
 const SPAWN_RADIUS: f32 = 3200.0;
 /// Per-frame GPU upload budget while flying (bytes) — keeps frames hitch-free.
-const UPLOAD_BUDGET: u64 = 4 << 20;
+/// (Smaller in the browser: each buffer write is copied to the GPU process.)
+const UPLOAD_BUDGET: u64 = if cfg!(target_arch = "wasm32") { 1 << 20 } else { 4 << 20 };
 
 #[derive(Clone)]
 struct Args {
@@ -145,6 +147,24 @@ fn parse_time(s: &str) -> Option<f32> {
 }
 
 fn parse_args() -> Args {
+    parse_args_from(std::env::args().skip(1).collect())
+}
+
+/// Browser: the page URL's query is the command line
+/// (`?airport=EGLC&aircraft=kestrel&bot` → `--airport EGLC --aircraft kestrel --bot`).
+#[cfg(target_arch = "wasm32")]
+fn web_args() -> Args {
+    let mut argv = Vec::new();
+    for (k, v) in platform::web::query() {
+        argv.push(format!("--{k}"));
+        if !v.is_empty() {
+            argv.push(v);
+        }
+    }
+    parse_args_from(argv)
+}
+
+fn parse_args_from(argv: Vec<String>) -> Args {
     let mut a = Args {
         lat: 51.5045,
         lon: 0.0300,
@@ -200,7 +220,6 @@ fn parse_args() -> Args {
         vsync: None,
         location_given: false,
     };
-    let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
     let next = |i: &mut usize| -> String {
         *i += 1;
@@ -319,6 +338,7 @@ fn parse_args() -> Args {
 
 /// Resolve `--airport`: OurAirports first (exact ident / ICAO / IATA, else
 /// the best search hit), Nominatim as a fallback.
+#[cfg_attr(target_arch = "wasm32", allow(clippy::needless_return))]
 fn resolve_airport(a: &mut Args, db: Option<&airports::Db>) {
     let Some(code) = a.airport.clone() else { return };
     if let Some(db) = db {
@@ -332,6 +352,7 @@ fn resolve_airport(a: &mut Args, db: Option<&airports::Db>) {
             return;
         }
     }
+    #[cfg(not(target_arch = "wasm32"))]
     match tiles::resolve_airport(&code) {
         Ok((lat, lon, name)) => {
             eprintln!("airport {code}: {name} ({lat:.4}, {lon:.4})");
@@ -404,6 +425,8 @@ impl Session {
             }
         }
         world.set_focus(Vec2::ZERO, Vec2::ZERO);
+        // Browser: start downloading the aircraft alongside the scenery.
+        let _ = aircraft_assets(args.aircraft);
         Session { world, sim: None, stage: Stage::Area, started: Instant::now(), runway_version: u64::MAX, last_rebase: None, catch_up: None, custom, args: args.clone() }
     }
 
@@ -438,6 +461,9 @@ impl Session {
                 w.set_focus(p, Vec2::ZERO);
                 let (ready, total) = w.progress(p, SPAWN_RADIUS);
                 if ready >= total && w.uploads.is_empty() && w.gpu_pending.is_empty() {
+                    if let Some(m) = aircraft_assets(args.aircraft) {
+                        return Some(m);
+                    }
                     let mut sim = Sim::new(w, args.aircraft, args.start);
                     if let Some(c) = &self.custom {
                         sim.custom_start = Some(c.clone());
@@ -550,6 +576,32 @@ impl Session {
             sim.lat_lon = self.world.proj.to_latlon(vec2(p.x, p.z));
             self.world.set_focus(vec2(p.x, p.z), vec2(v.x, v.z));
         }
+    }
+}
+
+/// Browser: an aircraft's model and textures download when it is chosen.
+/// None when ready (always natively); else a loading-screen status line.
+#[cfg_attr(target_arch = "wasm32", allow(clippy::needless_return))]
+fn aircraft_assets(sel: usize) -> Option<String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        use platform::web::DirState;
+        let cat = flight::catalogue();
+        let id = cat.get(sel).or(cat.first())?.id;
+        let dir = format!("aircraft/{id}/");
+        return match platform::web::dir_state(&dir) {
+            DirState::Ready | DirState::Failed(_) => None,
+            DirState::Loading(d, t) => Some(format!("Loading aircraft\n{:.1} / {:.1} MB", d as f64 / 1e6, (t as f64 / 1e6).max(0.1))),
+            DirState::Absent => {
+                platform::web::preload_dir(&dir);
+                Some("Loading aircraft\n".into())
+            }
+        };
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = sel;
+        None
     }
 }
 
@@ -717,6 +769,9 @@ fn render_frame(
                 }
                 fv = FrameView { eye, view: glam::camera::rh::view::look_at_mat4(eye, look, Vec3::Y), ..fv };
             }
+            // Browser: the scene may render below the output size (upscaled by the tonemap pass).
+            #[cfg(target_arch = "wasm32")]
+            let (w, h) = platform::web::scene_size(w, h);
             renderer.render(device, queue, &mut enc, target, w, h, &fv, &dynm);
         }
         _ => {
@@ -963,6 +1018,7 @@ fn remember_plan(st: &mut UiState) {
 
 // ---------------------------------------------------------------- headless
 
+#[cfg(not(target_arch = "wasm32"))]
 fn headless(args: Args) -> Result<(), String> {
     let mut args = args;
     let path = args.shot.clone().unwrap();
@@ -1243,6 +1299,7 @@ fn headless(args: Args) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Floating-origin invariance test: render the frozen scene, switch to a frame
 /// whose origin is 20 km away (exact map + rigid shift, like a real rebase),
 /// render again and compare with the frame-to-frame baseline.
@@ -1329,6 +1386,7 @@ fn rebase_check(
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Real-time streaming test: fly straight and level for `--seconds`, rendering
 /// every frame offscreen, and report frame times, upload costs and coverage.
 #[allow(clippy::too_many_arguments)]
@@ -1576,6 +1634,7 @@ fn realtime_flight(
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Render the current state (two frames, so egui has its fonts) and write a PNG.
 #[allow(clippy::too_many_arguments)]
 fn save_png(
@@ -1600,6 +1659,7 @@ fn save_png(
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Bot soak test: fly the auto-flight bot for `--seconds` of simulated time as
 /// fast as the tile streaming allows (never ahead of the scenery within 2.5 km
 /// of the aircraft), log every minute and write PNGs every `--shot-every` s.
@@ -1863,11 +1923,22 @@ struct Running {
     quit: bool,
     saved_at: Instant,
     applied: ui::settings::Settings,
+    /// Browser diagnostics: the longest frame since the last report.
+    #[cfg(target_arch = "wasm32")]
+    web_max_ms: f32,
+    /// ... and while flying: the longest simulation + streaming step (before
+    /// rendering), (frames, frames whose step took over 8 ms).
+    #[cfg(target_arch = "wasm32")]
+    web_max_update_ms: f32,
+    #[cfg(target_arch = "wasm32")]
+    web_flying: (u64, u64),
 }
 
 struct App {
     args: Args,
     run: Option<Running>,
+    #[cfg(target_arch = "wasm32")]
+    init: Option<PendingInit>,
 }
 
 /// Interface-level actions (keyboard or controller); true when handled here.
@@ -1916,9 +1987,18 @@ fn ui_action(r: &mut Running, k: Key, flying: bool) -> bool {
     true
 }
 
-impl ApplicationHandler for App {
-    fn resumed(&mut self, el: &ActiveEventLoop) {
-        if self.run.is_some() {
+impl App {
+    /// The browser start is waiting for the GPU.
+    fn starting(&self) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        return self.init.is_some();
+        #[cfg(not(target_arch = "wasm32"))]
+        false
+    }
+
+    /// Open the window and start the GPU (asynchronously in the browser).
+    fn start_app(&mut self, el: &ActiveEventLoop) {
+        if self.run.is_some() || self.starting() {
             return;
         }
         let mut settings = ui::settings::Settings::load();
@@ -1945,30 +2025,110 @@ impl ApplicationHandler for App {
             }
         }
         // Airports: from the cache in a moment; a first run downloads them (≈17 MB).
+        #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
         let mut loader = airports::Loader::start();
-        let db = loader.wait(Duration::from_secs(if self.args.airport.is_some() { 90 } else { 5 }));
-        resolve_airport(&mut self.args, db.as_deref());
-        let attrs = Window::default_attributes().with_title("Skyward").with_inner_size(winit::dpi::LogicalSize::new(1600.0, 900.0));
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let db = loader.wait(Duration::from_secs(if self.args.airport.is_some() { 90 } else { 5 }));
+            resolve_airport(&mut self.args, db.as_deref());
+        }
+        let attrs = Window::default_attributes().with_title("Skyward");
+        #[cfg(not(target_arch = "wasm32"))]
+        let attrs = attrs.with_inner_size(winit::dpi::LogicalSize::new(1600.0, 900.0));
+        // Browser: the page's canvas (index.html), sized by CSS to the window.
+        #[cfg(target_arch = "wasm32")]
+        let attrs = {
+            use wasm_bindgen::JsCast;
+            use winit::platform::web::WindowAttributesExtWebSys;
+            let canvas = web_sys::window().and_then(|w| w.document()).and_then(|d| d.get_element_by_id("skyward")).and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok());
+            attrs.with_canvas(canvas).with_append(false).with_prevent_default(true).with_focusable(true)
+        };
         let window = Arc::new(el.create_window(attrs).expect("create window"));
+        #[cfg(not(target_arch = "wasm32"))]
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
             ..wgpu::InstanceDescriptor::new_with_display_handle(Box::new(el.owned_display_handle()))
         });
+        #[cfg(target_arch = "wasm32")]
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::BROWSER_WEBGPU, ..wgpu::InstanceDescriptor::new_without_display_handle() });
         let surface = instance.create_surface(window.clone()).expect("create surface");
-        let gpu = Gpu::new(Some(&surface), instance).expect("GPU init");
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let gpu = Gpu::new(Some(&surface), instance).expect("GPU init");
+            self.finish_init(window, surface, gpu, settings, loader);
+        }
+        // Browser: adapter and device arrive asynchronously (about_to_wait
+        // finishes the start once they, and a requested airport, are in).
+        #[cfg(target_arch = "wasm32")]
+        {
+            platform::web::status("Starting WebGPU", -1.0);
+            let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+            let s2 = slot.clone();
+            platform::web::spawn_local(async move {
+                let r = Gpu::new_async(Some(&surface), instance).await.map(|g| (surface, g));
+                *s2.borrow_mut() = Some(r);
+            });
+            window.request_redraw();
+            self.init = Some(PendingInit { window, slot, settings, loader, t0: Instant::now() });
+        }
+    }
+}
+
+/// Browser start in progress: waiting for the GPU device (async) and, if
+/// the page asked for an airport, the airport database.
+#[cfg(target_arch = "wasm32")]
+struct PendingInit {
+    window: Arc<Window>,
+    slot: std::rc::Rc<std::cell::RefCell<Option<Result<(wgpu::Surface<'static>, Gpu), String>>>>,
+    settings: ui::settings::Settings,
+    loader: airports::Loader,
+    t0: Instant,
+}
+
+impl App {
+    #[cfg(target_arch = "wasm32")]
+    fn poll_init(&mut self) {
+        let Some(p) = self.init.as_mut() else { return };
+        p.loader.poll();
+        p.window.request_redraw();
+        let db_wait = self.args.airport.is_some() && p.loader.db.is_none() && !matches!(p.loader.status, airports::Status::Failed(_)) && p.t0.elapsed() < Duration::from_secs(30);
+        if db_wait {
+            platform::web::status("Loading the airport database", -1.0);
+        }
+        let ready = p.slot.borrow().is_some();
+        if !ready || db_wait {
+            return;
+        }
+        let p = self.init.take().unwrap();
+        let r = p.slot.borrow_mut().take().unwrap();
+        match r {
+            Ok((surface, gpu)) => {
+                resolve_airport(&mut self.args, p.loader.db.as_deref());
+                self.finish_init(p.window, surface, gpu, p.settings, p.loader);
+                platform::web::ready();
+            }
+            Err(e) => platform::web::fatal(&format!("Could not start WebGPU: {e}")),
+        }
+    }
+
+    /// The rest of the start once the GPU is up: surface, renderer, UI, sound, the first session.
+    fn finish_init(&mut self, window: Arc<Window>, surface: wgpu::Surface<'static>, gpu: Gpu, settings: ui::settings::Settings, loader: airports::Loader) {
+        let db = loader.db.clone();
         eprintln!("GPU: {}", gpu.adapter_name());
         let size = window.inner_size();
         let caps = surface.get_capabilities(&gpu.adapter);
-        let format = caps.formats.iter().copied().find(|f| f.is_srgb()).unwrap_or(caps.formats[0]);
+        let surface_format = caps.formats.iter().copied().find(|f| f.is_srgb()).unwrap_or(caps.formats[0]);
+        // WebGPU canvases have no sRGB formats: render through an sRGB view.
+        let format = surface_format.add_srgb_suffix();
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format,
+            format: surface_format,
             width: size.width.max(1),
             height: size.height.max(1),
             present_mode: present_mode(&caps, settings.vsync),
             desired_maximum_frame_latency: 2,
             alpha_mode: caps.alpha_modes[0],
-            view_formats: vec![],
+            view_formats: if format != surface_format { vec![format] } else { vec![] },
             ..surface.get_default_config(&gpu.adapter, size.width.max(1), size.height.max(1)).unwrap()
         };
         eprintln!("present mode {:?}", config.present_mode);
@@ -2038,7 +2198,19 @@ impl ApplicationHandler for App {
             quit: false,
             saved_at: Instant::now(),
             applied,
+            #[cfg(target_arch = "wasm32")]
+            web_max_ms: 0.0,
+            #[cfg(target_arch = "wasm32")]
+            web_max_update_ms: 0.0,
+            #[cfg(target_arch = "wasm32")]
+            web_flying: (0, 0),
         });
+    }
+}
+
+impl ApplicationHandler for App {
+    fn resumed(&mut self, el: &ActiveEventLoop) {
+        self.start_app(el);
     }
 
     fn window_event(&mut self, el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -2124,6 +2296,8 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+        #[cfg(target_arch = "wasm32")]
+        self.poll_init();
         if let Some(r) = &self.run {
             if r.quit {
                 r.ui.st.settings.save();
@@ -2175,6 +2349,12 @@ impl App {
     /// Start (or switch to) the planned flight.
     fn start_flight(&mut self) {
         let Some(r) = self.run.as_mut() else { return };
+        // Browser: download the aircraft first (the loading screen shows it).
+        if platform::WEB && aircraft_assets(r.ui.st.plan.aircraft).is_some() {
+            r.ui.st.go(Screen::Loading);
+            r.ui.st.actions.push(Action::Fly);
+            return;
+        }
         remember_plan(&mut r.ui.st);
         let (args2, custom) = args_for_plan(&self.args, &r.ui.st);
         // Same departure area: keep the loaded world, just re-place / re-select.
@@ -2225,6 +2405,14 @@ impl App {
 
     fn frame(&mut self) {
         let Some(r) = self.run.as_mut() else { return };
+        #[cfg(target_arch = "wasm32")]
+        {
+            // Main-thread work (tile builds, decodes): a small slice of each
+            // frame while flying, more behind the menus / loading screen.
+            platform::web::frame_begin();
+            let flying = r.ui.st.screen == Screen::Flying && r.session.as_ref().is_some_and(|s| s.sim.is_some() && s.catch_up.is_none());
+            platform::web::set_budget_ms(if flying { 6.0 } else { 28.0 });
+        }
         let now = Instant::now();
         let raw_dt = (now - r.last).as_secs_f32();
         r.last = now;
@@ -2312,14 +2500,23 @@ impl App {
         if r.ui.st.screen == Screen::Loading && notice.is_none() {
             notice = Some("Preparing\n".into());
         }
+        // Browser: the chosen aircraft is still downloading.
+        if r.ui.st.screen == Screen::Loading {
+            if let Some(m) = aircraft_assets(r.ui.st.plan.aircraft) {
+                notice = Some(m);
+            }
+        }
         // Loading screen title: the destination.
         let notice = notice.map(|n| if r.ui.st.screen == Screen::Loading { loading_text(&r.ui.st, &n) } else { n });
         // Thumbnails for the aircraft cards, once there is scenery to render them over.
-        if matches!(r.ui.st.screen, Screen::Aircraft | Screen::Main) && r.ui.thumbs.is_empty() {
+        // (Not in the browser: it would download every aircraft.)
+        if !platform::WEB && matches!(r.ui.st.screen, Screen::Aircraft | Screen::Main) && r.ui.thumbs.is_empty() {
             if let Some(s) = r.session.as_ref().filter(|s| s.sim.is_some()) {
                 render_thumbs(&r.gpu, &mut r.renderer, &mut r.ui, s, r.format);
             }
         }
+        #[cfg(target_arch = "wasm32")]
+        let t_sim = now.elapsed().as_secs_f32() * 1000.0;
         let frame = match r.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
@@ -2328,7 +2525,7 @@ impl App {
             }
             _ => return,
         };
-        let view = frame.texture.create_view(&Default::default());
+        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor { format: Some(r.format), ..Default::default() });
         let raw = r.egui_state.take_egui_input(&r.window);
         let ppp = r.window.scale_factor() as f32;
         let (w, h) = (r.config.width, r.config.height);
@@ -2349,6 +2546,42 @@ impl App {
         }
         r.window.pre_present_notify();
         r.gpu.queue.present(frame);
+        #[cfg(target_arch = "wasm32")]
+        {
+            // Diagnostics for test harnesses (window.skywardStats).
+            let total = now.elapsed().as_secs_f32() * 1000.0;
+            r.web_max_ms = r.web_max_ms.max(total);
+            // While flying: frames whose simulation + streaming step took over 8 ms (hitches).
+            if r.ui.st.screen == Screen::Flying {
+                r.web_flying.0 += 1;
+                if t_sim > 8.0 {
+                    r.web_flying.1 += 1;
+                    if t_sim > 20.0 {
+                        platform::web::log(&format!("slow frame: simulation + streaming {t_sim:.1} ms"));
+                    }
+                }
+                r.web_max_update_ms = r.web_max_update_ms.max(t_sim);
+            }
+            if r.ui.st.frame_no % 30 == 0 {
+                let (tiles, queued, drawn, st) = r.session.as_ref().map(|s| (s.world.tile_count(), s.world.queued(), r.renderer.stats.tiles_drawn, s.world.stats.clone())).unwrap_or_default();
+                platform::web::publish_stats(&format!(
+                    "{{\"cpu_ms\":{total:.2},\"max_cpu_ms\":{:.2},\"update_ms\":{t_sim:.2},\"flying_frames\":{},\"slow_updates\":{},\"max_update_ms\":{:.2},\"fps\":{:.1},\"tiles\":{tiles},\"queued\":{queued},\"drawn\":{drawn},\"built\":{},\"avg_build_ms\":{:.1},\"max_build_ms\":{:.1},\"screen\":\"{:?}\",\"size\":\"{}x{}\",\"audio\":\"{}\"}}",
+                    r.web_max_ms,
+                    r.web_flying.0,
+                    r.web_flying.1,
+                    r.web_max_update_ms,
+                    r.ui.fps,
+                    st.tiles_built,
+                    st.build_ms / st.tiles_built.max(1) as f32,
+                    st.max_build_ms,
+                    r.ui.st.screen,
+                    r.config.width,
+                    r.config.height,
+                    r.ui.audio_status.replace('"', "'")
+                ));
+                r.web_max_ms = 0.0;
+            }
+        }
         // Menu actions.
         let actions: Vec<Action> = std::mem::take(&mut r.ui.st.actions);
         for a in actions {
@@ -2404,11 +2637,14 @@ impl App {
                 r.window.set_title(&t);
             }
         }
+        #[cfg(target_arch = "wasm32")]
+        platform::web::run_deferred();
     }
 }
 
 // ---------------------------------------------------------------- offline sound
 
+#[cfg(not(target_arch = "wasm32"))]
 /// `--audio-render out.wav --seconds S`: fly the sim headlessly (no GPU, no
 /// audio device) and record what the player would hear — WAV, spectrogram
 /// PNG and a report of objective checks (audio/render.rs).
@@ -2530,6 +2766,20 @@ fn audio_render(args: Args) -> Result<(), String> {
 }
 
 
+#[cfg(target_arch = "wasm32")]
+fn main() {
+    use winit::platform::web::EventLoopExtWebSys;
+    platform::web::init();
+    // A tile worker (web/worker.js) runs this module too: no app there.
+    if platform::web::in_worker() {
+        return;
+    }
+    let args = web_args();
+    let el = EventLoop::new().expect("event loop");
+    el.spawn_app(App { args, run: None, init: None });
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn main() {
     // `--controllers [SECONDS]`: list game controllers and print their inputs (input/).
     if let Some(i) = std::env::args().position(|a| a == "--controllers") {

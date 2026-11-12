@@ -95,7 +95,8 @@ impl Default for Settings {
             ui_scale: 1.0,
             hud: HudMode::Full,
             vsync: true,
-            detail: 2,
+            // The browser streams on the main thread: lighter by default.
+            detail: if crate::platform::WEB { 0 } else { 2 },
             speed: SpeedUnit::Knots,
             alt: AltUnit::Feet,
             map_style: MapStyle::Auto,
@@ -131,19 +132,28 @@ pub const DETAIL_NAMES: [&str; 4] = ["Low", "Medium", "High", "Ultra"];
 
 impl Settings {
     pub fn load() -> Settings {
+        // Browser: localStorage.
+        #[cfg(target_arch = "wasm32")]
+        let Some(text) = crate::platform::web::storage_get("skyward.settings") else { return Settings::default() };
+        #[cfg(not(target_arch = "wasm32"))]
         let Ok(text) = std::fs::read_to_string(path()) else { return Settings::default() };
         let Ok(v) = serde_json::from_str::<Value>(&text) else { return Settings::default() };
         Settings::from_json(&v)
     }
 
     pub fn save(&self) {
-        let p = path();
-        if let Some(d) = p.parent() {
-            let _ = std::fs::create_dir_all(d);
-        }
-        let tmp = p.with_extension("tmp");
-        if std::fs::write(&tmp, serde_json::to_string_pretty(&self.to_json()).unwrap_or_default()).is_ok() {
-            let _ = std::fs::rename(&tmp, &p);
+        #[cfg(target_arch = "wasm32")]
+        crate::platform::web::storage_set("skyward.settings", &serde_json::to_string(&self.to_json()).unwrap_or_default());
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let p = path();
+            if let Some(d) = p.parent() {
+                let _ = std::fs::create_dir_all(d);
+            }
+            let tmp = p.with_extension("tmp");
+            if std::fs::write(&tmp, serde_json::to_string_pretty(&self.to_json()).unwrap_or_default()).is_ok() {
+                let _ = std::fs::rename(&tmp, &p);
+            }
         }
     }
 
@@ -225,7 +235,7 @@ impl Settings {
                 _ => HudMode::Full,
             },
             vsync: b("vsync", true),
-            detail: (f("detail", 2.0) as u8).min(3),
+            detail: (f("detail", if crate::platform::WEB { 0.0 } else { 2.0 }) as u8).min(3),
             speed: match st("speed").as_str() {
                 "kmh" => SpeedUnit::Kmh,
                 "mph" => SpeedUnit::Mph,

@@ -102,11 +102,12 @@ fn fbm2(p: vec2<f32>) -> f32 {
 // Rendering is eye-relative: every vertex is placed relative to the camera
 // before the (rotation-only) view-projection, so nothing large is ever
 // cancelled in f32 — no shake of the aircraft or the ground anywhere.
-// Per-draw transform (immediate data): x' = (1 + xf.x) x + xf.y,
+// Per-draw transform (gfx.rs Xforms: a uniform with a dynamic offset per
+// draw — WebGPU has no push constants): x' = (1 + xf.x) x + xf.y,
 // y' = y + xf.w, z' = z + xf.z — a tile's frame → eye-relative (computed in
 // f64 on the CPU), world → eye-relative (-eye), or zero for meshes that are
 // already eye-relative (the aircraft).
-var<immediate> xf: vec4<f32>;
+@group(1) @binding(15) var<uniform> xf: vec4<f32>;
 
 fn tile_pos(p: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(p.x * (1.0 + xf.x) + xf.y, p.y + xf.w, p.z + xf.z);

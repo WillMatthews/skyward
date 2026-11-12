@@ -84,7 +84,7 @@ where
             *config,
             move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
                 #[cfg(not(target_arch = "wasm32"))]
-                let t0 = std::time::Instant::now();
+                let t0 = web_time::Instant::now();
                 // Never block the audio thread: take the newest frame if the
                 // game thread isn't holding the lock right now.
                 if let Ok(mut sh) = shared.try_lock() {

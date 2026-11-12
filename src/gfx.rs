@@ -17,15 +17,104 @@ pub const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// Eye distance (m) written by every scene pass (clouds depth-test against it).
 pub const DIST: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
 pub const MSAA: u32 = 4;
-pub const SHADOW_RES: u32 = 4096;
+/// Shadow cascade resolution (lower in the browser: GPU budget, memory).
+pub const SHADOW_RES: u32 = if cfg!(target_arch = "wasm32") { 2048 } else { 4096 };
 const CASCADES: usize = 4;
 const SPLITS: [f32; 5] = [0.3, 45.0, 220.0, 1100.0, 6000.0];
 /// Fraction of each cascade over which it blends into the next.
 const CASCADE_BLEND: f32 = 0.15;
 const BLOOM_LEVELS: usize = 6;
 const NEAR: f32 = 0.25;
-/// Bytes of immediate data: the per-tile transform (osm::Xform2::gpu).
-const IMMEDIATE_SIZE: u32 = 16;
+/// Bytes of immediate data (push constants) the pipelines declare: none —
+/// WebGPU has none, the per-draw transform is an [`Xforms`] uniform.
+const IMMEDIATE_SIZE: u32 = 0;
+/// Bind group of the per-draw transform (common.wgsl / shadow.wgsl `xf`).
+pub const XF_GROUP: u32 = 1;
+/// Dynamic-offset stride (WebGPU's minimum uniform offset alignment).
+const XF_STRIDE: u64 = 256;
+/// Transforms per frame (draws whose transform differs from the previous one's).
+const XF_CAP: u64 = 8192;
+
+/// Per-draw transforms (the floating origin's `xf`: a tile's frame →
+/// eye-relative, osm::Xform2::gpu) as one uniform buffer bound with a
+/// dynamic offset per draw. Draws record their transform with [`Xforms::set`]
+/// while the passes are encoded; [`Xforms::flush`] uploads them before the
+/// frame is submitted (queue writes are ordered before later submissions).
+pub struct Xforms {
+    buf: wgpu::Buffer,
+    pub bgl: wgpu::BindGroupLayout,
+    bg: wgpu::BindGroup,
+    st: std::sync::Mutex<XfState>,
+}
+
+#[derive(Default)]
+struct XfState {
+    data: Vec<u8>,
+    n: u64,
+    last: Option<[f32; 4]>,
+    warned: bool,
+}
+
+impl Xforms {
+    pub fn new(device: &wgpu::Device) -> Xforms {
+        let buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("xforms"),
+            size: XF_STRIDE * XF_CAP,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("xform"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 15,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: true, min_binding_size: wgpu::BufferSize::new(16) },
+                count: None,
+            }],
+        });
+        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("xform"),
+            layout: &bgl,
+            entries: &[wgpu::BindGroupEntry { binding: 15, resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &buf, offset: 0, size: wgpu::BufferSize::new(16) }) }],
+        });
+        Xforms { buf, bgl, bg, st: Default::default() }
+    }
+
+    /// Start a frame's transforms.
+    pub fn reset(&self) {
+        let mut s = self.st.lock().unwrap();
+        s.n = 0;
+        s.last = None;
+    }
+
+    /// Use transform `xf` for the following draws of `pass`.
+    pub fn set(&self, pass: &mut wgpu::RenderPass<'_>, xf: &[f32; 4]) {
+        let mut s = self.st.lock().unwrap();
+        if s.last != Some(*xf) {
+            if s.n < XF_CAP {
+                s.n += 1;
+            } else if !s.warned {
+                s.warned = true;
+                eprintln!("gfx: more than {XF_CAP} transforms in a frame");
+            }
+            let at = ((s.n - 1) * XF_STRIDE) as usize;
+            if s.data.len() < at + XF_STRIDE as usize {
+                s.data.resize(at + XF_STRIDE as usize, 0);
+            }
+            s.data[at..at + 16].copy_from_slice(bytemuck::cast_slice(xf));
+            s.last = Some(*xf);
+        }
+        pass.set_bind_group(XF_GROUP, &self.bg, &[((s.n - 1) * XF_STRIDE) as u32]);
+    }
+
+    /// Upload this frame's transforms (before the frame is submitted).
+    pub fn flush(&self, queue: &wgpu::Queue) {
+        let s = self.st.lock().unwrap();
+        if s.n > 0 {
+            queue.write_buffer(&self.buf, 0, &s.data[..(s.n * XF_STRIDE) as usize]);
+        }
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -432,6 +521,8 @@ struct Targets {
 }
 
 pub struct Renderer {
+    /// Per-draw transforms, shared with the light renderer.
+    xforms: std::sync::Arc<Xforms>,
     globals_bgl: wgpu::BindGroupLayout,
     post_bgl: wgpu::BindGroupLayout,
     sky_main: wgpu::RenderPipeline,
@@ -572,7 +663,8 @@ impl Renderer {
         let core = include_str!("shaders/atmos_core.wgsl");
         let common = include_str!("shaders/common.wgsl");
         let scene_src = format!("{core}\n{common}\n{}", include_str!("shaders/scene.wgsl"));
-        let lights = crate::lights::LightRenderer::new(device, queue, &format!("{core}\n{common}"));
+        let xforms = std::sync::Arc::new(Xforms::new(device));
+        let lights = crate::lights::LightRenderer::new(device, queue, &format!("{core}\n{common}"), xforms.clone());
         let scene_mod = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("scene"),
             source: wgpu::ShaderSource::Wgsl(scene_src.into()),
@@ -674,12 +766,18 @@ impl Renderer {
 
         let scene_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("scene"),
+            bind_group_layouts: &[Some(&globals_bgl), Some(&xforms.bgl)],
+            immediate_size: IMMEDIATE_SIZE,
+        });
+        // The sky draws no tile geometry (no transform group to bind).
+        let sky_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("sky"),
             bind_group_layouts: &[Some(&globals_bgl)],
             immediate_size: IMMEDIATE_SIZE,
         });
         let shadow_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("shadow"),
-            bind_group_layouts: &[Some(&shadow_bgl)],
+            bind_group_layouts: &[Some(&shadow_bgl), Some(&xforms.bgl)],
             immediate_size: IMMEDIATE_SIZE,
         });
         let post_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -700,7 +798,7 @@ impl Renderer {
             let instanced = vs == "vs_tree";
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
-                layout: Some(&scene_layout),
+                layout: Some(if vs == "vs_sky" { &sky_layout } else { &scene_layout }),
                 vertex: wgpu::VertexState {
                     module: &scene_mod,
                     entry_point: Some(vs),
@@ -922,6 +1020,7 @@ impl Renderer {
         clouds.set_field(&CloudField::new(7, crate::clouds::Weather::Scattered));
 
         Renderer {
+            xforms,
             aircraft: crate::gfx_aircraft::AircraftRenderer::new(device, queue, &globals_bgl, &shadow_bgl, IMMEDIATE_SIZE),
             globals_bgl,
             post_bgl,
@@ -1649,18 +1748,18 @@ impl Renderer {
                 Some(crate::lights::gpu::TileDraw { lights: l, xf: t.xf, dist: t.dist(eye2), visible: main_f.aabb(lo, hi), visible_refl: refl_f.aabb(lo, hi) })
             })
             .collect();
-        fn place(pass: &mut wgpu::RenderPass<'_>, xf: &[f32; 4]) {
-            pass.set_immediates(0, bytemuck::cast_slice(xf));
-        }
+        let xfs = self.xforms.clone();
+        xfs.reset();
+        let place = |pass: &mut wgpu::RenderPass<'_>, xf: &[f32; 4]| xfs.set(pass, xf);
         fn draw_mesh(pass: &mut wgpu::RenderPass<'_>, m: &GpuMesh) {
             pass.set_vertex_buffer(0, m.vb.slice(..));
             pass.set_index_buffer(m.ib.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..m.n, 0, 0..1);
         }
         // Instanced trees for one tile: (mesh lod per kind).
-        fn draw_trees(pass: &mut wgpu::RenderPass<'_>, t: &GpuTile, tm: &TreeMeshes, lod: usize) -> usize {
+        fn draw_trees(pass: &mut wgpu::RenderPass<'_>, xfs: &Xforms, t: &GpuTile, tm: &TreeMeshes, lod: usize) -> usize {
             let Some((buf, split, n)) = &t.trees else { return 0 };
-            place(pass, &t.xf);
+            xfs.set(pass, &t.xf);
             pass.set_vertex_buffer(1, buf.slice(..));
             for (kind, range) in [(0usize, 0..*split), (1, *split..*n)] {
                 if range.is_empty() {
@@ -1735,7 +1834,7 @@ impl Renderer {
                 let (lo, hi) = t.tree_box();
                 let d = t.dist(eye2);
                 if d < SPLITS[i + 1] * 1.1 && d < TREE_DIST && f.aabb(lo, hi) {
-                    draw_trees(&mut pass, t, tm, if i == 0 { 0 } else { 1 });
+                    draw_trees(&mut pass, &xfs, t, tm, if i == 0 { 0 } else { 1 });
                 }
             }
         }
@@ -1818,7 +1917,7 @@ impl Renderer {
             for tile in &tiles {
                 let (lo, hi) = tile.tree_box();
                 if tile.dist(eye2) < TREE_REFL_DIST && refl_f.aabb(lo, hi) {
-                    draw_trees(&mut pass, tile, tm, 1);
+                    draw_trees(&mut pass, &xfs, tile, tm, 1);
                 }
             }
             self.lights.draw_sprites(&mut pass, &tile_draws, world_xf, true, street > 0.0 || night_k > 0.0);
@@ -1922,7 +2021,7 @@ impl Renderer {
                 let d = tile.dist(eye2);
                 let (lo, hi) = tile.tree_box();
                 if d < TREE_DIST && main_f.aabb(lo, hi) {
-                    stats.tree_instances += draw_trees(&mut pass, tile, tm, if d < TREE_LOD0 { 0 } else { 1 });
+                    stats.tree_instances += draw_trees(&mut pass, &xfs, tile, tm, if d < TREE_LOD0 { 0 } else { 1 });
                 }
             }
             // Lights, traffic and stars (additive, depth-tested).
@@ -2098,6 +2197,7 @@ impl Renderer {
             p.finish(encoder);
         }
         drop(tiles);
+        xfs.flush(queue);
         self.prev_vp = Some((vp_rot, fv.eye));
         self.stats = stats;
     }
@@ -2189,29 +2289,39 @@ pub struct Gpu {
 }
 
 impl Gpu {
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new(surface: Option<&wgpu::Surface<'_>>, instance: wgpu::Instance) -> Result<Gpu, String> {
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            force_fallback_adapter: false,
-            compatible_surface: surface,
-            apply_limit_buckets: false,
-        }))
-        .map_err(|e| format!("no GPU adapter: {e}"))?;
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("skyward"),
-            // Timestamp queries only for the optional profiler.
-            // Immediates carry the per-tile transform (floating origin).
-            required_features: wgpu::Features::IMMEDIATES
-                | adapter.features() & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS),
-            required_limits: wgpu::Limits {
-                max_texture_dimension_2d: 8192,
-                max_buffer_size: 1 << 30,
-                max_immediate_size: IMMEDIATE_SIZE,
-                ..wgpu::Limits::default()
-            },
-            ..Default::default()
-        }))
-        .map_err(|e| format!("request_device: {e}"))?;
+        pollster::block_on(Self::new_async(surface, instance))
+    }
+
+    pub async fn new_async(surface: Option<&wgpu::Surface<'_>>, instance: wgpu::Instance) -> Result<Gpu, String> {
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: surface,
+                apply_limit_buckets: false,
+            })
+            .await
+            .map_err(|e| format!("no GPU adapter: {e}"))?;
+        // What the renderer needs beyond WebGPU's defaults, as far as the
+        // adapter goes (browsers expose only what is asked for).
+        let a = adapter.limits();
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("skyward"),
+                // Timestamp queries only for the optional profiler.
+                required_features: adapter.features() & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS),
+                required_limits: wgpu::Limits {
+                    max_texture_dimension_2d: a.max_texture_dimension_2d.min(8192),
+                    max_buffer_size: a.max_buffer_size.min(1 << 30),
+                    max_storage_buffer_binding_size: a.max_storage_buffer_binding_size.min(1 << 30),
+                    ..wgpu::Limits::default()
+                },
+                ..Default::default()
+            })
+            .await
+            .map_err(|e| format!("request_device: {e}"))?;
         Ok(Gpu { instance, adapter, device, queue })
     }
 

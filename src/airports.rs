@@ -19,7 +19,9 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+#[cfg(not(target_arch = "wasm32"))]
+use web_time::Instant;
+use web_time::Duration;
 
 pub const AIRPORTS_URL: &str = "https://davidmegginson.github.io/ourairports-data/airports.csv";
 pub const RUNWAYS_URL: &str = "https://davidmegginson.github.io/ourairports-data/runways.csv";
@@ -723,8 +725,10 @@ pub trait Fetcher: Send + Sync + 'static {
     fn get(&self, url: &str) -> Result<Vec<u8>, String>;
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub struct HttpFetcher;
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Fetcher for HttpFetcher {
     fn get(&self, url: &str) -> Result<Vec<u8>, String> {
         let ag = ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(8)).timeout(Duration::from_secs(90)).user_agent(USER_AGENT).build();
@@ -768,6 +772,31 @@ fn download(f: &dyn Fetcher) -> Result<(Vec<Airport>, usize), String> {
     Ok((list, bytes.len()))
 }
 
+#[cfg(target_arch = "wasm32")]
+pub(crate) async fn web_download() -> Result<(Vec<Airport>, usize), String> {
+    use crate::platform::web;
+    let t = Duration::from_secs(90);
+    // (Listed in the asset manifest when the build shipped it.)
+    let compact = web::load_manifest().await.is_ok() && web::has_extra("data/ourairports.tsv.gz");
+    if let Some(raw) = if compact { web::get("data/ourairports.tsv.gz", t).await.ok() } else { None } {
+        let mut text = String::new();
+        if flate2::read::GzDecoder::new(&raw[..]).read_to_string(&mut text).is_ok() {
+            if let Some(list) = decode(&text) {
+                return Ok((list, raw.len()));
+            }
+        }
+    }
+    let a = web::get(AIRPORTS_URL, t).await?;
+    let r = web::get(RUNWAYS_URL, t).await?;
+    let t0 = web_time::Instant::now();
+    let list = parse_csv(&String::from_utf8_lossy(&a), &String::from_utf8_lossy(&r));
+    web::log(&format!("airports: {} from OurAirports' CSVs, parsed in {:.0} ms", list.len(), t0.elapsed().as_secs_f32() * 1000.0));
+    if list.len() < 1000 {
+        return Err(format!("airport list too short ({})", list.len()));
+    }
+    Ok((list, a.len() + r.len()))
+}
+
 #[allow(dead_code)]
 pub enum Status {
     Loading,
@@ -784,10 +813,23 @@ pub struct Loader {
 }
 
 impl Loader {
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn start() -> Loader {
         Self::start_with(Arc::new(HttpFetcher))
     }
 
+    /// Browser: a compact copy next to the page if the build shipped one
+    /// (`data/ourairports.tsv.gz`), else OurAirports' CSVs (CORS-enabled).
+    #[cfg(target_arch = "wasm32")]
+    pub fn start() -> Loader {
+        let (tx, rx) = channel();
+        crate::platform::web::spawn_local(async move {
+            let _ = tx.send(web_download().await.map(|(list, bytes)| Arc::new(Db::new(list, bytes))));
+        });
+        Loader { rx: Some(rx), status: Status::Loading, db: None }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn start_with(fetcher: Arc<dyn Fetcher>) -> Loader {
         let (tx, rx) = channel();
         std::thread::Builder::new()
@@ -838,6 +880,7 @@ impl Loader {
         got
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// Block until loaded (headless runs).
     pub fn wait(&mut self, timeout: Duration) -> Option<Arc<Db>> {
         let t = Instant::now();
@@ -869,12 +912,17 @@ impl MetarFetch {
     pub fn start(ident: &str, icao: &str, lat: f64, lon: f64) -> MetarFetch {
         let (tx, rx) = channel();
         let id = if icao.is_empty() { ident.to_string() } else { icao.to_string() };
+        #[cfg(not(target_arch = "wasm32"))]
         std::thread::Builder::new()
             .name("metar".into())
             .spawn(move || {
                 let _ = tx.send(fetch_metar(&id, lat, lon));
             })
             .ok();
+        #[cfg(target_arch = "wasm32")]
+        crate::platform::web::spawn_local(async move {
+            let _ = tx.send(fetch_metar_web(&id, lat, lon).await);
+        });
         MetarFetch { ident: ident.to_string(), rx: Some(rx), result: None }
     }
     pub fn poll(&mut self) -> Option<&Result<(crate::weather::Metar, f64), String>> {
@@ -891,6 +939,7 @@ impl MetarFetch {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn fetch_metar(id: &str, lat: f64, lon: f64) -> Result<(crate::weather::Metar, f64), String> {
     let f = HttpFetcher;
     let parse = |body: &[u8]| -> Vec<(crate::weather::Metar, f64)> {
@@ -917,6 +966,13 @@ fn fetch_metar(id: &str, lat: f64, lon: f64) -> Result<(crate::weather::Metar, f
     let url = format!("https://aviationweather.gov/api/data/metar?bbox={:.3},{:.3},{:.3},{:.3}&format=json", lat - 0.6, lon - 1.0, lat + 0.6, lon + 1.0);
     let b = f.get(&url)?;
     parse(&b).into_iter().find(|m| m.1 < 80.0).ok_or_else(|| "no METAR nearby".to_string())
+}
+
+/// Browser: aviationweather.gov sends no CORS headers, so a page cannot
+/// read METARs (the departure screen says so).
+#[cfg(target_arch = "wasm32")]
+async fn fetch_metar_web(_id: &str, _lat: f64, _lon: f64) -> Result<(crate::weather::Metar, f64), String> {
+    Err("live METARs are not available in the browser".into())
 }
 
 // ---------------------------------------------------------------- sun

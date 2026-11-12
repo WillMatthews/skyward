@@ -1,0 +1,90 @@
+# The browser version (wasm32 + WebGPU) on GitHub Pages.
+#
+#   build   — manual runs, and pushes to main once PAGES_ENABLED is 'true': scripts/web-build.sh → dist/
+#             (page, wasm, aircraft assets, licence + credits), uploaded as the
+#             Pages artifact. (ci.yml's wasm job checks the web build on every push.)
+#   deploy  — publishes that artifact. Runs only when the repository variable
+#             PAGES_ENABLED is 'true', so the workflow stays green until the
+#             owner turns Pages on:
+#               1. Settings › Pages › Build and deployment › Source: "GitHub Actions"
+#               2. Settings › Secrets and variables › Actions › Variables ›
+#                  New repository variable: PAGES_ENABLED = true
+#               3. Actions › Pages › Run workflow (or push to main)
+#             (Pages on a private repository needs a paid plan; making the
+#             repository public is the owner's call.)
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deployment at a time; a newer push supersedes a queued one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # Keep in step with ci.yml.
+  RUST_VERSION: "1.98.1"
+  WASM_OPT_VERSION: "0.116.1"
+
+jobs:
+  build:
+    name: build the web version
+    # Saves Actions minutes while the repo is private: pushes only build once
+    # Pages is enabled; manual runs always build. CI's wasm job already checks
+    # that the web target compiles on every push.
+    if: github.event_name == 'workflow_dispatch' || vars.PAGES_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: wasm32-unknown-unknown
+
+      # Also caches ~/.cargo/bin (the tools below).
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: web
+
+      - name: wasm-bindgen-cli (the version in Cargo.lock) and wasm-opt
+        run: |
+          want=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')
+          if [[ "$(wasm-bindgen --version 2>/dev/null | awk '{print $2}')" != "$want" ]]; then
+            cargo install wasm-bindgen-cli --version "$want" --locked --force
+          fi
+          if ! wasm-opt --version >/dev/null 2>&1; then
+            cargo install wasm-opt --version "$WASM_OPT_VERSION" --locked
+          fi
+
+      - name: build dist/
+        run: scripts/web-build.sh
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    name: deploy to GitHub Pages
+    needs: build
+    # Off until the owner enables Pages (see the top of this file).
+    if: vars.PAGES_ENABLED == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

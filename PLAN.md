@@ -97,7 +97,8 @@ item lands; keep entries one line.
 
 ## 7. Platform, quality & release
 - [x] Private repo `WillMatthews/skyward`, checkpoint commits pushed as tracks land
-- [ ] **P0** WASM/WebGPU build + GitHub Pages workflow, GPL licence + credits (G) — goes live when the owner makes the repo public (owner's call only)
+- [x] **P0** WASM/WebGPU build (Web Worker tile builds, fetch, localStorage, lazy aircraft assets, lighter web defaults) + GitHub Pages workflow (deploys once `PAGES_ENABLED`), GPL licence + credits page (G) — goes live when the owner makes the repo public (owner's call only)
+- [ ] **P1** Web follow-ups: no live METAR (aviationweather.gov has no CORS) — a CORS-friendly METAR source; aircraft-card thumbnails; Cache API for tiles beyond the HTTP cache; ship the compact airport list from CI; audio decode / aircraft texture decode still on the page's thread (one-off stalls at flight start); test Safari / Firefox / mid-range GPUs
 - [x] **P1** CI: fmt (formatted paths) + clippy -D warnings + tests + release build + wasm32 check on push; lavapipe smoke render nightly; local golden image/audio regression `scripts/regress.sh` (P)
 - [ ] **P2** CI follow-ups: one-shot `cargo fmt` of the tree when no track is active → `cargo fmt --check`; burn down the crate-wide clippy allows in Cargo.toml; regenerate goldens after N/T land
 - [ ] **P1** Native release packages (Linux AppImage/Flatpak, Windows, macOS)
@@ -118,7 +119,7 @@ item lands; keep entries one line.
 | M | UI/HUD, maps, airport picker, menus, frame pacing | ✅ |
 | N | Real FlightGear aircraft + JSBSim FDM | ✅ |
 | K2 | Sample-based audio, supersonic, crash sounds | ✅ |
-| G | WASM + GitHub Pages workflow (repo stays private until owner flips it) | ⏳ last of current batch |
+| G | WASM + GitHub Pages workflow (repo stays private until owner flips it) | ✅ |
 | P | Input devices (gilrs/evdev, rebinding, curves, head-look) + CI/goldens | ✅ |
 | T | Terrain elevation + landmarks | ✅ |
 | L | Structure/flex/crashes + supersonic/atmospheric VFX (damage, debris, vfx) | ✅ |

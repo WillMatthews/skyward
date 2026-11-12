@@ -27,9 +27,31 @@ pub struct Job {
 pub struct Frame {
     pub ids: HashMap<&'static str, TextureId>,
     pub jobs: Vec<Job>,
+    /// Per canvas: (frames since redrawn, size) — see [`Frame::due`].
+    ages: HashMap<&'static str, (u32, Vec2)>,
 }
 
+/// Browser: moving-map canvases are redrawn every this many frames (their
+/// shapes and tessellation are a large share of the main thread's frame).
+const WEB_REDRAW_EVERY: u32 = 3;
+
 impl Frame {
+    /// Should canvas `key` be redrawn this frame? Always natively; in the
+    /// browser every few frames (and whenever it changes size), the texture
+    /// showing the previous drawing in between.
+    pub fn due(&mut self, key: &'static str, size: Vec2) -> bool {
+        if !crate::platform::WEB || !self.ids.contains_key(key) {
+            return true;
+        }
+        let a = self.ages.entry(key).or_insert((0, size));
+        a.0 += 1;
+        if a.0 >= WEB_REDRAW_EVERY || a.1 != size {
+            *a = (0, size);
+            return true;
+        }
+        false
+    }
+
     /// Queue a canvas; returns its texture id once it exists (from the next frame on).
     pub fn draw(&mut self, key: &'static str, size: Vec2, ppp: f32, clear: Color32, shapes: Vec<Shape>) -> Option<TextureId> {
         self.jobs.retain(|j| j.key != key);

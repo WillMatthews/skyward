@@ -983,7 +983,7 @@ pub fn probe(seconds: f32) {
     sys.add_fakes_from_env();
     println!("{}", sys.status);
     let mut cfg = crate::ui::settings::Settings::load().controls;
-    let t0 = std::time::Instant::now();
+    let t0 = web_time::Instant::now();
     let mut last = Analog::default();
     while t0.elapsed().as_secs_f32() < seconds {
         sys.update(&mut cfg, 0.01);

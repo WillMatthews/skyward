@@ -334,7 +334,7 @@ fn render_scenarios() {
         if !only.is_empty() && !only.split(',').any(|o| o == pl.id) {
             continue;
         }
-        let t0 = std::time::Instant::now();
+        let t0 = web_time::Instant::now();
         runup(pl).save(&dir, &format!("{}_runup", pl.id));
         flyby(pl, pl.cruise, 60.0, 40.0, 16.0, 0.8, 0.0, pl.cruise / 340.0)
             .save(&dir, &format!("{}_flyby", pl.id));
@@ -386,7 +386,7 @@ fn crash_cpu_profile() {
     let def = crate::flight::find(pl.id).unwrap();
     set_power(&mut f, pl, 0.7, 0.0, true);
     for sec in 0..20 {
-        let t0 = std::time::Instant::now();
+        let t0 = web_time::Instant::now();
         for k in 0..60 {
             f.crashed = sec >= 3;
             for e in f.eng.iter_mut() {

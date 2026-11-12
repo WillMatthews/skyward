@@ -9,13 +9,16 @@
 
 use crate::osm::{Proj, TileId};
 use crate::scene::{self, TileBuild};
-use std::collections::HashSet;
 use std::io::Read;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc;
-use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Duration, Instant};
+#[cfg(not(target_arch = "wasm32"))]
+use {
+    std::collections::HashSet,
+    std::sync::atomic::{AtomicU64, Ordering},
+    std::sync::mpsc,
+    std::sync::{Arc, Condvar, Mutex},
+    web_time::{Duration, Instant},
+};
 
 const TILEJSON_URL: &str = "https://tiles.openfreemap.org/planet";
 const USER_AGENT: &str = "skyward-flightsim/0.2";
@@ -30,6 +33,7 @@ fn tile_path(id: TileId) -> PathBuf {
     cache_root().join(id.z.to_string()).join(id.x.to_string()).join(format!("{}.pbf", id.y))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(8))
@@ -38,6 +42,7 @@ fn agent() -> ureq::Agent {
         .build()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Resolve the tile URL template from TileJSON (falls back to the cached copy).
 fn tile_template(agent: &ureq::Agent) -> Result<String, String> {
     let path = cache_root().join("tilejson.json");
@@ -81,6 +86,7 @@ pub enum Source {
     Network,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Fetch one tile: disk cache first, then the network.
 fn fetch(agent: &ureq::Agent, template: Option<&str>, id: TileId) -> Result<(Vec<u8>, Source), String> {
     let path = tile_path(id);
@@ -109,6 +115,7 @@ fn fetch(agent: &ureq::Agent, template: Option<&str>, id: TileId) -> Result<(Vec
     Ok((bytes, Source::Network))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Delete the oldest cached tiles if the cache exceeds its budget.
 fn prune_cache() {
     let mut files = Vec::new();
@@ -140,7 +147,34 @@ fn prune_cache() {
     }
 }
 
+/// Decode a vector tile and build its meshes, collision, lights and map
+/// vectors (the CPU-heavy part of streaming).
+fn build(id: TileId, bytes: &[u8]) -> (Result<TileBuild, String>, Option<std::sync::Arc<crate::ui::mapdata::MapVectors>>) {
+    let mut map = None;
+    let b = crate::mvt::decode(bytes).map(|layers| {
+        // Built in the tile's own frame (small coordinates); the
+        // world places it with an exact transform (osm::Xform2).
+        let proj = Proj::tile_frame(id);
+        let feats = crate::osm::extract(&layers, id, &proj);
+        map = Some(std::sync::Arc::new(crate::ui::mapdata::build(id, &proj, &feats, &layers)));
+        if id.is_far() {
+            scene::build_far_tile(id, &proj, feats)
+        } else {
+            scene::build_tile(id, &proj, feats)
+        }
+    });
+    (b, map)
+}
+
 // ---------------------------------------------------------------- pool
+
+// The browser build has its own pool (async fetches, builds on the main
+// thread under a per-frame time budget).
+#[cfg(target_arch = "wasm32")]
+#[path = "tiles_web.rs"]
+mod web;
+#[cfg(target_arch = "wasm32")]
+pub use web::{fetch_any_async, Pool};
 
 pub struct TileResult {
     pub id: TileId,
@@ -153,6 +187,7 @@ pub struct TileResult {
     pub bytes: usize,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct QState {
     /// Pending jobs, best LAST (popped from the end).
     jobs: Vec<TileId>,
@@ -160,6 +195,7 @@ struct QState {
     quit: bool,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct Shared {
     q: Mutex<QState>,
     cv: Condvar,
@@ -168,12 +204,14 @@ struct Shared {
     downloaded: AtomicU64,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub struct Pool {
     shared: Arc<Shared>,
     rx: mpsc::Receiver<TileResult>,
     threads: Vec<std::thread::JoinHandle<()>>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Pool {
     pub fn new(workers: usize) -> Pool {
         std::thread::spawn(prune_cache);
@@ -225,6 +263,7 @@ impl Pool {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for Pool {
     fn drop(&mut self) {
         self.shared.q.lock().unwrap().quit = true;
@@ -236,6 +275,7 @@ impl Drop for Pool {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn worker(shared: Arc<Shared>, tx: mpsc::Sender<TileResult>) {
     let agent = agent();
     loop {
@@ -284,18 +324,8 @@ fn worker(shared: Arc<Shared>, tx: mpsc::Sender<TileResult>) {
                     shared.downloaded.fetch_add(bytes.len() as u64, Ordering::Relaxed);
                 }
                 let n = bytes.len();
-                let b = crate::mvt::decode(&bytes).map(|layers| {
-                    // Built in the tile's own frame (small coordinates); the
-                    // world places it with an exact transform (osm::Xform2).
-                    let proj = Proj::tile_frame(id);
-                    let feats = crate::osm::extract(&layers, id, &proj);
-                    map = Some(std::sync::Arc::new(crate::ui::mapdata::build(id, &proj, &feats, &layers)));
-                    if id.is_far() {
-                        scene::build_far_tile(id, &proj, feats)
-                    } else {
-                        scene::build_tile(id, &proj, feats)
-                    }
-                });
+                let (b, m) = build(id, &bytes);
+                map = m;
                 (b, matches!(src, Source::Cache), n)
             }
             Err(e) => (Err(e), false, 0),
@@ -318,8 +348,10 @@ fn worker(shared: Arc<Shared>, tx: mpsc::Sender<TileResult>) {
 
 // ---------------------------------------------------------------- any zoom
 
+#[cfg(not(target_arch = "wasm32"))]
 static TEMPLATE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
+#[cfg(not(target_arch = "wasm32"))]
 /// One tile at any zoom (disk cache, then network), decompressed — for the
 /// overview map in the menus. Blocking: call from a worker thread.
 pub fn fetch_any(id: TileId) -> Result<Vec<u8>, String> {
@@ -339,6 +371,7 @@ pub fn fetch_any(id: TileId) -> Result<Vec<u8>, String> {
 
 // ---------------------------------------------------------------- airport lookup
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Resolve an ICAO/IATA code (or any airport name) to lat/lon via Nominatim.
 /// Results are cached in `cache/airports.json`.
 pub fn resolve_airport(code: &str) -> Result<(f64, f64, String), String> {

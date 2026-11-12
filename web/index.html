@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skyward — flight simulator</title>
+<link rel="icon" href="data:,">
+<meta name="description" content="Skyward: a flight simulator over real OpenStreetMap scenery, in the browser (WebGPU).">
+<style>
+  :root { --bg: #05070b; --panel: rgba(16, 22, 32, 0.92); --text: #e8edf4; --text2: #9aa7b8; --accent: #f2b33d; --err: #ff7a6b; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden;
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  #skyward { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; outline: none; touch-action: none; }
+  #overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px;
+    background: radial-gradient(ellipse at 50% 30%, #1b2a40 0%, #070a10 70%); z-index: 2; }
+  #overlay.hidden { display: none; }
+  .card { width: min(520px, 100%); background: var(--panel); border: 1px solid rgba(255,255,255,0.08); border-radius: 16px;
+    padding: 28px 30px; box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
+  h1 { margin: 0 0 4px; font-size: 30px; letter-spacing: 0.02em; font-weight: 650; }
+  .sub { color: var(--text2); margin: 0 0 22px; }
+  #status { min-height: 1.5em; }
+  .bar { height: 4px; border-radius: 2px; background: rgba(255,255,255,0.08); overflow: hidden; margin: 10px 0 18px; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width 0.15s; }
+  .bar.indet > div { width: 30%; animation: indet 1.2s ease-in-out infinite; }
+  @keyframes indet { 0% { margin-left: -30%; } 100% { margin-left: 100%; } }
+  button { font: inherit; font-weight: 600; color: #1a1205; background: var(--accent); border: 0; border-radius: 10px;
+    padding: 12px 22px; cursor: pointer; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  .err { color: var(--err); white-space: pre-wrap; }
+  .small { color: var(--text2); font-size: 13px; margin-top: 18px; }
+  a { color: var(--accent); }
+  #credits-link { position: fixed; right: 10px; bottom: 6px; z-index: 3; font-size: 12px; color: rgba(255,255,255,0.35); text-decoration: none; }
+  #credits-link:hover { color: rgba(255,255,255,0.8); }
+</style>
+</head>
+<body>
+<canvas id="skyward" tabindex="0"></canvas>
+<div id="overlay">
+  <div class="card">
+    <h1>Skyward</h1>
+    <p class="sub">A flight simulator over real OpenStreetMap scenery — anywhere on Earth.</p>
+    <div id="status">Checking for WebGPU…</div>
+    <div class="bar" id="bar"><div></div></div>
+    <button id="start" disabled>Fly</button>
+    <p class="small">
+      Needs a browser with WebGPU (Chrome / Edge 113+, Safari 26+, Firefox 141+ on Windows) and a GPU.
+      Map, terrain and weather stream from public services while you fly.
+      <a href="credits.html" target="_blank" rel="noopener">Credits &amp; licence</a> ·
+      <a href="https://github.com/WillMatthews/skyward" target="_blank" rel="noopener">Source</a>
+    </p>
+  </div>
+</div>
+<a id="credits-link" href="credits.html" target="_blank" rel="noopener">Credits &amp; licence</a>
+<script type="module">
+// Uncompressed module size (scripts/web-build.sh): progress while downloading.
+const WASM_SIZE = Number("__WASM_SIZE__") || 0;
+const $ = (id) => document.getElementById(id);
+const overlay = $("overlay"), statusEl = $("status"), bar = $("bar"), start = $("start");
+
+function setStatus(text, progress) {
+  statusEl.textContent = text;
+  statusEl.className = "";
+  if (progress == null || progress < 0) { bar.classList.add("indet"); bar.firstElementChild.style.width = ""; }
+  else { bar.classList.remove("indet"); bar.firstElementChild.style.width = Math.min(100, progress * 100).toFixed(1) + "%"; }
+}
+function fatal(text) {
+  overlay.classList.remove("hidden");
+  statusEl.textContent = text;
+  statusEl.className = "err";
+  bar.style.visibility = "hidden";
+  start.style.display = "none";
+}
+// Called from Rust (src/platform/web.rs).
+window.skyward = {
+  status: setStatus,
+  ready: () => { overlay.classList.add("hidden"); $("skyward").focus(); },
+  fatal,
+};
+
+async function checkWebGPU() {
+  if (!("gpu" in navigator)) return "This browser has no WebGPU. Try a recent Chrome, Edge or Safari (or enable WebGPU in Firefox).";
+  try {
+    const a = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
+    if (!a) return "WebGPU is available but found no usable GPU adapter (it may be disabled or blocklisted for this GPU).";
+  } catch (e) {
+    return "WebGPU failed to start: " + e;
+  }
+  return null;
+}
+
+async function download(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
+  const total = WASM_SIZE || Number(r.headers.get("content-length")) || 0;
+  if (!r.body || !total) return new Uint8Array(await r.arrayBuffer());
+  const reader = r.body.getReader();
+  const chunks = [];
+  let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    got += value.length;
+    setStatus(`Downloading Skyward · ${(got / 1e6).toFixed(1)} / ${(total / 1e6).toFixed(1)} MB`, got / total);
+  }
+  const out = new Uint8Array(got);
+  let o = 0;
+  for (const c of chunks) { out.set(c, o); o += c.length; }
+  return out;
+}
+
+(async () => {
+  const err = await checkWebGPU();
+  if (err) { fatal(err); return; }
+  setStatus("Downloading Skyward", 0);
+  let bytes, init;
+  try {
+    [bytes, { default: init }] = await Promise.all([download("pkg/skyward_bg.wasm"), import("./pkg/skyward.js")]);
+  } catch (e) {
+    fatal("Download failed: " + e);
+    return;
+  }
+  const go = async () => {
+    // A click starts it: browsers only allow sound after a user gesture.
+    start.disabled = true;
+    setStatus("Starting", -1);
+    try {
+      // Compiled once; the tile workers (worker.js) get the same module.
+      const module = await WebAssembly.compile(bytes);
+      window.skywardModule = module;
+      await init({ module_or_path: module });
+    } catch (e) {
+      // winit's event loop hands control back to the browser by throwing.
+      if (!String(e).includes("Using exceptions for control flow")) fatal("Skyward failed to start: " + e);
+    }
+  };
+  if (new URLSearchParams(location.search).has("autostart")) { go(); return; }
+  setStatus("Ready", 1);
+  start.disabled = false;
+  start.focus();
+  start.addEventListener("click", go, { once: true });
+})();
+</script>
+</body>
+</html>

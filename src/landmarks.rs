@@ -225,7 +225,7 @@ mod tests {
         let far = animated(&proj, vec3(40_000.0, 500.0, 0.0), 0.0, &|_| 0.0);
         assert!(far.idx.is_empty());
         // Cost: well under the per-frame budget (generous bound for debug / CI).
-        let t0 = std::time::Instant::now();
+        let t0 = web_time::Instant::now();
         for i in 0..20 {
             std::hint::black_box(animated(&proj, eye, i as f32, &|_| 0.0));
         }

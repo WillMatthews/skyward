@@ -4,7 +4,7 @@ struct ShadowU {
 };
 @group(0) @binding(0) var<uniform> su: ShadowU;
 // Eye-relative placement (see common.wgsl tile_pos); light_vp is eye-relative too.
-var<immediate> xf: vec4<f32>;
+@group(1) @binding(15) var<uniform> xf: vec4<f32>;
 
 fn tile_pos(p: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(p.x * (1.0 + xf.x) + xf.y, p.y + xf.w, p.z + xf.z);

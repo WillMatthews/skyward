@@ -248,6 +248,8 @@ impl Overview {
     pub fn new() -> Overview {
         let q = Arc::new(Queue { jobs: Mutex::new(Vec::new()), cv: Condvar::new() });
         let (tx, rx) = channel();
+        // Browser: one async fetch per request instead (see `request`).
+        #[cfg(not(target_arch = "wasm32"))]
         for i in 0..3 {
             let q = q.clone();
             let tx = tx.clone();
@@ -297,8 +299,19 @@ impl Overview {
             return;
         }
         self.pending.insert(id);
-        self.q.jobs.lock().unwrap().push(id);
-        self.q.cv.notify_one();
+        #[cfg(target_arch = "wasm32")]
+        {
+            let tx = self._tx.clone();
+            crate::platform::web::spawn_local(async move {
+                let t = crate::tiles::fetch_any_async(id).await.ok().map(|b| decode(id, &b));
+                let _ = tx.send((id, t));
+            });
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.q.jobs.lock().unwrap().push(id);
+            self.q.cv.notify_one();
+        }
     }
 
     /// Tiles covering the view at the right zoom, requesting missing ones;

@@ -4,3 +4,5 @@
 src/input/mod.rs
 src/input/sim_glue.rs
 src/ui/controls.rs
+src/platform/mod.rs
+src/tiles_web.rs

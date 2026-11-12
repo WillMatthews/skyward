@@ -759,6 +759,23 @@ impl AircraftLights {
     }
 }
 
+// ---------------------------------------------------------------- wire
+
+/// (Browser tile workers: platform/wire.rs.)
+impl crate::platform::wire::Wire for TileLights {
+    fn put(&self, w: &mut crate::platform::wire::W) {
+        use crate::platform::wire::put_pod;
+        put_pod(w, &self.lights);
+        put_pod(w, &self.traffic);
+        put_pod(w, &self.glow);
+        self.raised.put(w);
+    }
+    fn get(r: &mut crate::platform::wire::R) -> crate::platform::wire::Res<Self> {
+        use crate::platform::wire::{get_pod, Wire};
+        Ok(TileLights { lights: get_pod(r)?, traffic: get_pod(r)?, glow: get_pod(r)?, raised: Wire::get(r)? })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -118,7 +118,7 @@ impl SkyClock {
 
 /// The current calendar year (UTC) from the system clock.
 pub fn current_year() -> i32 {
-    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(1.8e9);
+    let secs = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(1.8e9);
     // Exact enough away from New Year's Eve: 365.2425-day years.
     1970 + (secs / (365.2425 * 86400.0)).floor() as i32
 }

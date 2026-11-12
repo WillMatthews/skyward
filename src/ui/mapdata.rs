@@ -332,6 +332,30 @@ pub fn build(id: TileId, proj: &Proj, f: &TileFeatures, layers: &[Layer]) -> Map
     out
 }
 
+// ---------------------------------------------------------------- wire
+
+/// (Browser tile workers: platform/wire.rs.)
+mod wire_impls {
+    use super::*;
+    use crate::platform::wire::{get_pod, put_pod, Res, Wire, R, W};
+
+    crate::wire_enum!(Fill, FILLS);
+    crate::wire_enum!(Line, LINES);
+    crate::wire_enum!(LabelKind, [LabelKind::City, LabelKind::Town, LabelKind::Village, LabelKind::Suburb, LabelKind::Water]);
+    crate::wire_struct!(Label { pos, text, kind, rank });
+    crate::wire_struct!(MapVectors { far, fills, lines, labels, fills_lo, lines_lo, verts });
+
+    impl Wire for FillMesh {
+        fn put(&self, w: &mut W) {
+            put_pod(w, &self.verts);
+            put_pod(w, &self.idx);
+        }
+        fn get(r: &mut R) -> Res<Self> {
+            Ok(FillMesh { verts: get_pod(r)?, idx: get_pod(r)? })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

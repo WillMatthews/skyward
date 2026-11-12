@@ -16,7 +16,7 @@ use crate::clouds::{CloudSpec, Weather};
 use glam::{vec2, Vec2};
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use web_time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const USER_AGENT: &str = "skyward-flightsim/0.2";
 /// How often live data is refreshed while flying.
@@ -981,10 +981,12 @@ pub fn real_time(lat: f64, lon: f64, unix: i64, offset_s: Option<i64>) -> RealTi
 
 // ================================================================== fetching
 
+#[cfg(not(target_arch = "wasm32"))]
 fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(6)).timeout(Duration::from_secs(15)).user_agent(USER_AGENT).build()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn get(agent: &ureq::Agent, url: &str) -> Result<String, String> {
     agent.get(url).call().map_err(|e| e.to_string())?.into_string().map_err(|e| e.to_string())
 }
@@ -1005,20 +1007,47 @@ fn haversine_km(a: (f64, f64), b: (f64, f64)) -> f32 {
     (2.0 * 6371.0 * h.sqrt().asin()) as f32
 }
 
+/// METAR stations in a box around a place (`box_i` 0: near, 1: wider).
+fn metar_url(lat: f64, lon: f64, box_i: usize) -> String {
+    let (dlat, dlon) = [(0.6, 1.0), (1.6, 2.6)][box_i];
+    format!("https://aviationweather.gov/api/data/metar?bbox={:.3},{:.3},{:.3},{:.3}&format=json", lat - dlat, lon - dlon, lat + dlat, lon + dlon)
+}
+
+fn open_meteo_url(lat: f64, lon: f64) -> String {
+    format!(
+        "https://api.open-meteo.com/v1/forecast?latitude={lat:.4}&longitude={lon:.4}&current=temperature_2m,dew_point_2m,precipitation,rain,showers,snowfall,weather_code,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,pressure_msl,wind_speed_10m,wind_direction_10m,wind_gusts_10m,visibility&hourly=wind_speed_850hPa,wind_direction_850hPa,cape,snow_depth&forecast_hours=1&wind_speed_unit=kn&timezone=auto"
+    )
+}
+
 impl Fetched {
+    /// Browser: Open-Meteo only — aviationweather.gov sends no CORS headers,
+    /// so pages cannot read its METARs (the weather is built from the
+    /// forecast model alone, as natively when METAR is down).
+    #[cfg(target_arch = "wasm32")]
+    async fn fetch_web(lat: f64, lon: f64) -> Result<Fetched, String> {
+        use crate::platform::web;
+        let t = Duration::from_secs(15);
+        let mut f = Fetched { unix: unix_now(), lat, lon, ..Default::default() };
+        let mut errs = Vec::new();
+        match web::get(&open_meteo_url(lat, lon), t).await.map(|b| String::from_utf8_lossy(&b).into_owned()) {
+            Ok(b) if b.contains("\"current\"") => f.om_json = Some(b),
+            Ok(b) => errs.push(format!("Open-Meteo: {}", b.chars().take(120).collect::<String>())),
+            Err(e) => errs.push(format!("Open-Meteo: {e}")),
+        }
+        if f.metar_json.is_none() && f.om_json.is_none() {
+            return Err(errs.join("; "));
+        }
+        Ok(f)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn fetch(lat: f64, lon: f64) -> Result<Fetched, String> {
         let ag = agent();
         let mut f = Fetched { unix: unix_now(), lat, lon, ..Default::default() };
         let mut errs = Vec::new();
         // Stations in a box around the spawn, widened if it is empty.
-        for (dlat, dlon) in [(0.6, 1.0), (1.6, 2.6)] {
-            let url = format!(
-                "https://aviationweather.gov/api/data/metar?bbox={:.3},{:.3},{:.3},{:.3}&format=json",
-                lat - dlat,
-                lon - dlon,
-                lat + dlat,
-                lon + dlon
-            );
+        for i in 0..2 {
+            let url = metar_url(lat, lon, i);
             match get(&ag, &url) {
                 Ok(b) if b.trim_start().starts_with('[') && b.trim() != "[]" => {
                     f.metar_json = Some(b);
@@ -1031,9 +1060,7 @@ impl Fetched {
                 }
             }
         }
-        let url = format!(
-            "https://api.open-meteo.com/v1/forecast?latitude={lat:.4}&longitude={lon:.4}&current=temperature_2m,dew_point_2m,precipitation,rain,showers,snowfall,weather_code,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,pressure_msl,wind_speed_10m,wind_direction_10m,wind_gusts_10m,visibility&hourly=wind_speed_850hPa,wind_direction_850hPa,cape,snow_depth&forecast_hours=1&wind_speed_unit=kn&timezone=auto"
-        );
+        let url = open_meteo_url(lat, lon);
         match get(&ag, &url) {
             Ok(b) if b.contains("\"current\"") => f.om_json = Some(b),
             Ok(b) => errs.push(format!("Open-Meteo: {}", b.chars().take(120).collect::<String>())),
@@ -1149,6 +1176,18 @@ impl Live {
         }
         let (tx, rx) = channel();
         let (lat, lon) = (self.lat, self.lon);
+        #[cfg(target_arch = "wasm32")]
+        crate::platform::web::spawn_local(async move {
+            loop {
+                let r = Fetched::fetch_web(lat, lon).await;
+                let ok = r.is_ok();
+                if tx.send(r).is_err() {
+                    return;
+                }
+                crate::platform::web::sleep(if ok { REFRESH } else { Duration::from_secs(60) }).await;
+            }
+        });
+        #[cfg(not(target_arch = "wasm32"))]
         std::thread::Builder::new()
             .name("weather".into())
             .spawn(move || loop {
@@ -1202,6 +1241,7 @@ impl Live {
         self.version != v0
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// Block until the first fetch has finished (or `timeout`), for headless captures.
     pub fn wait(&mut self, timeout: Duration) {
         let t = Instant::now();

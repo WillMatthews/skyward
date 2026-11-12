@@ -510,8 +510,13 @@ pub fn nd(p: &egui::Painter, cv: &mut canvas::Frame, ppp: f32, r: Rect, sim: &Si
     let pos = vec2(ac.pos.x, ac.pos.z);
     let view = View { rect: s, anchor, centre: pos, s: arc_r / range_m, up: trk };
     // map underneath, clipped to the compass circle
-    let shapes = map::base_shapes(&view, world, tiles, Style::Nd);
-    if let Some(id) = cv.draw("nd", s.size(), ppp, map::bg(Style::Nd), shapes) {
+    let id = if cv.due("nd", s.size()) {
+        let shapes = map::base_shapes(&view, world, tiles, Style::Nd);
+        cv.draw("nd", s.size(), ppp, map::bg(Style::Nd), shapes)
+    } else {
+        cv.ids.get("nd").copied()
+    };
+    if let Some(id) = id {
         canvas::image_circle(&pc, id, s, anchor, arc_r * 1.02, Color32::from_gray(255));
     }
     let mut taken = Vec::new();

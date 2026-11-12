@@ -110,6 +110,8 @@ fn load_stars() -> Vec<StarInst> {
 
 pub struct LightRenderer {
     bgl: wgpu::BindGroupLayout,
+    /// Per-draw transforms (gfx.rs).
+    xforms: std::sync::Arc<crate::gfx::Xforms>,
     sprite_main: wgpu::RenderPipeline,
     sprite_refl: wgpu::RenderPipeline,
     traffic_main: wgpu::RenderPipeline,
@@ -149,6 +151,9 @@ struct GlowJob {
 
 struct GlowWorker {
     tx: std::sync::mpsc::Sender<GlowJob>,
+    /// Browser (no threads): jobs run between frames (platform::spawn) and answer here.
+    #[cfg(target_arch = "wasm32")]
+    done: std::sync::mpsc::Sender<(Vec3, usize, GlowTable)>,
     rx: std::sync::mpsc::Receiver<(Vec3, usize, GlowTable)>,
     pending: bool,
     /// (eye, sources key, table) of the latest result.
@@ -161,6 +166,9 @@ impl GlowWorker {
     fn new() -> GlowWorker {
         let (tx, jobs) = std::sync::mpsc::channel::<GlowJob>();
         let (done, rx) = std::sync::mpsc::channel();
+        #[cfg(target_arch = "wasm32")]
+        drop(jobs);
+        #[cfg(not(target_arch = "wasm32"))]
         std::thread::Builder::new()
             .name("skyglow".into())
             .spawn(move || {
@@ -176,7 +184,15 @@ impl GlowWorker {
                 }
             })
             .expect("skyglow thread");
-        GlowWorker { tx, rx, pending: false, latest: None, stale: false }
+        GlowWorker {
+            tx,
+            #[cfg(target_arch = "wasm32")]
+            done,
+            rx,
+            pending: false,
+            latest: None,
+            stale: false,
+        }
     }
 }
 
@@ -193,7 +209,7 @@ pub struct Shared<'a> {
 }
 
 impl LightRenderer {
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, scene_header: &str) -> Self {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, scene_header: &str, xforms: std::sync::Arc<crate::gfx::Xforms>) -> Self {
         let src = format!("{scene_header}\n{}", include_str!("../shaders/lights.wgsl"));
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("lights"), source: wgpu::ShaderSource::Wgsl(src.into()) });
         let vf = wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT;
@@ -221,7 +237,7 @@ impl LightRenderer {
                 tex(13, D::D2, false),
             ],
         });
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("lights"), bind_group_layouts: &[Some(&bgl)], immediate_size: 16 });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("lights"), bind_group_layouts: &[Some(&bgl), Some(&xforms.bgl)], immediate_size: 0 });
         let add = wgpu::BlendState {
             color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
             alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
@@ -331,6 +347,7 @@ impl LightRenderer {
             mapped_at_creation: false,
         });
         let r = LightRenderer {
+            xforms,
             bgl,
             sprite_main,
             sprite_refl,
@@ -446,7 +463,35 @@ impl LightRenderer {
             }
             Some(l) if (w.stale || !fresh(l)) && !w.pending => {
                 w.stale = false;
-                w.pending = w.tx.send(GlowJob { sources: sources.to_vec(), eye, haze, key }).is_ok();
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    w.pending = w.tx.send(GlowJob { sources: sources.to_vec(), eye, haze, key }).is_ok();
+                }
+                // Browser: in a tile worker (tiles_web.rs), else between frames here.
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let (done, sources) = (w.done.clone(), sources.to_vec());
+                    let local = move |done: std::sync::mpsc::Sender<(Vec3, usize, GlowTable)>, sources: Vec<(Vec2, f32)>| {
+                        crate::platform::spawn("skyglow", move || {
+                            let _ = done.send((eye, key, super::sky::skyglow(&sources, eye, haze)));
+                        })
+                    };
+                    let payload = crate::platform::wire::encode(&(sources.clone(), (eye, haze)));
+                    let (d2, s2) = (done.clone(), sources.clone());
+                    let sent = crate::platform::web::offload(
+                        "skyglow",
+                        payload,
+                        Box::new(move |r| match r.and_then(|b| crate::platform::wire::decode::<GlowTable>(&b).ok()) {
+                            Some(t) => {
+                                let _ = d2.send((eye, key, t));
+                            }
+                            None => {
+                                local(d2, s2);
+                            }
+                        }),
+                    );
+                    w.pending = sent || local(done, sources);
+                }
             }
             _ => {}
         }
@@ -481,13 +526,13 @@ impl LightRenderer {
             if t.lights.n_map == 0 || t.dist > MAP_SIZE * 0.5 + 200.0 {
                 continue;
             }
-            pass.set_immediates(0, bytemuck::cast_slice(&t.xf));
+            self.xforms.set(&mut pass, &t.xf);
             pass.set_vertex_buffer(0, buf.slice(..));
             pass.draw(0..6, 0..t.lights.n_map);
         }
         if let (Some((buf, _)), n) = (&self.airport, self.airport_n_map) {
             if n > 0 {
-                pass.set_immediates(0, bytemuck::cast_slice(&world_xf));
+                self.xforms.set(&mut pass, &world_xf);
                 pass.set_vertex_buffer(0, buf.slice(..));
                 pass.draw(0..6, 0..n);
             }
@@ -502,7 +547,7 @@ impl LightRenderer {
         pass.set_bind_group(0, bg, &[]);
         if !refl {
             pass.set_pipeline(&self.star_main);
-            pass.set_immediates(0, bytemuck::cast_slice(&[0.0f32; 4]));
+            self.xforms.set(pass, &[0.0f32; 4]);
             pass.set_vertex_buffer(0, self.stars.0.slice(..));
             pass.draw(0..6, 0..self.stars.1);
         }
@@ -512,18 +557,18 @@ impl LightRenderer {
                 continue;
             }
             if let Some((buf, n)) = &t.lights.lights {
-                pass.set_immediates(0, bytemuck::cast_slice(&t.xf));
+                self.xforms.set(pass, &t.xf);
                 pass.set_vertex_buffer(0, buf.slice(..));
                 pass.draw(0..6, 0..*n);
             }
         }
         if let Some((buf, n)) = &self.airport {
-            pass.set_immediates(0, bytemuck::cast_slice(&world_xf));
+            self.xforms.set(pass, &world_xf);
             pass.set_vertex_buffer(0, buf.slice(..));
             pass.draw(0..6, 0..*n);
         }
         if self.dyn_n > 0 {
-            pass.set_immediates(0, bytemuck::cast_slice(&[0.0f32; 4]));
+            self.xforms.set(pass, &[0.0f32; 4]);
             pass.set_vertex_buffer(0, self.dyn_buf.slice(..));
             pass.draw(0..6, 0..self.dyn_n);
         }
@@ -536,7 +581,7 @@ impl LightRenderer {
                 continue;
             }
             if let Some((buf, n)) = &t.lights.traffic {
-                pass.set_immediates(0, bytemuck::cast_slice(&t.xf));
+                self.xforms.set(pass, &t.xf);
                 pass.set_vertex_buffer(0, buf.slice(..));
                 pass.draw(0..6 * 24, 0..*n);
             }
@@ -571,25 +616,25 @@ impl LightRenderer {
                     continue;
                 }
                 if let Some((buf, n)) = &t.lights.lights {
-                    pass.set_immediates(0, bytemuck::cast_slice(&t.xf));
+                    self.xforms.set(&mut pass, &t.xf);
                     pass.set_vertex_buffer(0, buf.slice(..));
                     pass.draw(0..6, 0..*n);
                 }
             }
             if let Some((buf, n)) = &self.airport {
-                pass.set_immediates(0, bytemuck::cast_slice(&world_xf));
+                self.xforms.set(&mut pass, &world_xf);
                 pass.set_vertex_buffer(0, buf.slice(..));
                 pass.draw(0..6, 0..*n);
             }
             if self.dyn_n > 0 {
-                pass.set_immediates(0, bytemuck::cast_slice(&[0.0f32; 4]));
+                self.xforms.set(&mut pass, &[0.0f32; 4]);
                 pass.set_vertex_buffer(0, self.dyn_buf.slice(..));
                 pass.draw(0..6, 0..self.dyn_n);
             }
         }
         if beams {
             pass.set_pipeline(&self.beams);
-            pass.set_immediates(0, bytemuck::cast_slice(&[0.0f32; 4]));
+            self.xforms.set(&mut pass, &[0.0f32; 4]);
             pass.draw(0..3, 0..1);
         }
     }
