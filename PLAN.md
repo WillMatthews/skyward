@@ -86,7 +86,8 @@ item lands; keep entries one line.
 - [ ] **P2** Localisation-ready strings
 
 ## 7. Platform, quality & release
-- [ ] **P0** WASM/WebGPU build + GitHub Pages deploy, public repo `WillMatthews/skyward`, GPL licence + credits (G)
+- [x] Private repo `WillMatthews/skyward`, checkpoint commits pushed as tracks land
+- [ ] **P0** WASM/WebGPU build + GitHub Pages workflow, GPL licence + credits (G) — goes live when the owner makes the repo public (owner's call only)
 - [ ] **P1** CI: build + tests + clippy on push; screenshot regression tests (headless `--shot` golden images); audio render regression
 - [ ] **P1** Native release packages (Linux AppImage/Flatpak, Windows, macOS)
 - [ ] **P1** Performance budgets enforced in CI (GPU timing on soak runs)
@@ -107,5 +108,5 @@ item lands; keep entries one line.
 | N | Real FlightGear aircraft + JSBSim FDM | 🟡 running |
 | K2 | Sample-based audio, supersonic, crash sounds | 🟡 running |
 | L | Structure/flex/crashes + supersonic/atmospheric VFX | ⏳ after N |
-| G | WASM + GitHub Pages + public repo | ⏳ last of current batch |
+| G | WASM + GitHub Pages workflow (repo stays private until owner flips it) | ⏳ last of current batch |
 | next | Terrain elevation, landmarks, airports detail, 3D cockpits, input devices, CI | ⏳ to schedule |
