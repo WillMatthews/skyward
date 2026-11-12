@@ -47,6 +47,18 @@ anywhere on Earth, for as long as you like. wgpu (Vulkan), winit, egui.
   time (C172, ASK 21, F-16, E190, A320; the YASim-based Spitfire and ATR use a
   calibrated model) inside one 6-DoF flight model (ISA atmosphere, engines and
   propellers, gear, spoilers, reversers, asymmetric thrust, FBW laws).
+* **Structure and crashes** — wings bend with the load on each half (first
+  bending mode; an A320's tips rise ≈ 1.2 m in 1 g flight, ≈ 2.5 m at 2.5 g),
+  limit / ultimate load factors per type, permanent set and flutter, flap and
+  gear overspeed; parts tear off with the aerodynamics responding (asymmetric
+  lift, lost tail stability). Survivable accidents (gear-up, gear collapse)
+  slide to a stop in one piece; fatal ones break up into rigid-body debris
+  that tumbles, slides, burns and sinks.
+* **Effects** — fireballs, burning fuel with wind-blown smoke columns, dust,
+  spray, sparks, tyre and engine smoke; contrails by the Schmidt–Appleman
+  criterion (persisting in ice-supersaturated air), vortex and wing-surface
+  condensation in humid air, the transonic vapour cone, afterburner shock
+  diamonds and heat haze.
 * **Autopilot** (heading / altitude / V/S / speed with autothrottle).
 * **Auto flight bot** — an AI pilot that flies the real flight model through
   the controls: glider soaring and powered take-off → landmark tour →
@@ -250,6 +262,10 @@ skyward --shot out.png --aircraft lancer --start city --heading 150 --throttle 0
 skyward --shot g.png --aircraft swift --start thermal --bot --soak --seconds 2400 --warp 8 --no-live --metar "EGLC 121150Z 25015KT 9999 SCT045 22/10 Q1015"
 skyward --shot m.png --aircraft meridian320 --bot --soak --seconds 4200 --warp 8 --no-live --metar "EGLC 121150Z 18015KT 9999 SCT040 18/08 Q1015"
 ```
+`SKYWARD_SCENARIO=pullup|overg|bellyland|hardland|crash|transonic|cruise`
+flies a scripted structures / crash / effects test (src/scenario.rs; with
+`--shot` or `--audio-render`), `SKYWARD_NO_VFX=1` turns the effects off,
+`SKYWARD_VFX_STATS=1` prints their counts, `SKYWARD_DEBUG_DEBRIS=1` the wreck;
 `BOT_TRACE=Final,Flare` prints the controls every frame in those bot phases;
 `SKYWARD_REBASE_LOG=1` logs every origin shift; `SKYWARD_FLAT_TERRAIN=1`
 flattens the world (sea level everywhere), `SKYWARD_NO_LANDMARKS=1` uses the
@@ -328,6 +344,10 @@ A shift costs well under 0.1 ms.
 | `src/clouds.rs` | volumetric cloud field + renderer, thermals |
 | `src/weather.rs` | METAR / Open-Meteo, weather → clouds / wind / precipitation, seasons |
 | `src/flight.rs` | flight dynamics + aircraft definitions (unit-tested) |
+| `src/damage.rs` | structural data per type, loads, wing bending mode, damage / failures, aero of lost surfaces |
+| `src/debris.rs` | wreckage: rigid-body debris (terrain, buildings, water), crash break-up, fires, sound / effect events |
+| `src/vfx/`, `src/shaders/vfx*.wgsl` | particles, trails, vapour, shock diamonds, heat haze; condensation physics (`atmo.rs`) |
+| `src/scenario.rs` | scripted structure / crash / effects test flights (`SKYWARD_SCENARIO`) |
 | `src/models.rs`, `src/aircraft_asset.rs` | imported aircraft models (`assets/aircraft/<id>/model.skac`): node tree, FlightGear animations → Skyward channels |
 | `src/gfx_aircraft.rs`, `src/shaders/aircraft*.wgsl` | textured aircraft renderer (main / reflection / shadow passes) |
 | `src/jsbsim.rs` | JSBSim aerodynamics evaluator (functions, tables, axes, stall hysteresis) |

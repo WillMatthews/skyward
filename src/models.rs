@@ -20,6 +20,7 @@
 
 use crate::aircraft_asset::{AircraftAsset, AnimState, Pose};
 use crate::flight::{Aircraft, AircraftDef, Controls, EngineKind};
+use glam::Vec2;
 use crate::gfx_aircraft::{AircraftFrame, ChunkDraw};
 use crate::scene::{mat, MeshData};
 use glam::{vec3, Mat4, Vec3};
@@ -39,6 +40,24 @@ pub struct AircraftModel {
     pose: Pose,
     chan: Vec<f32>,
     last_time: Option<f32>,
+    /// Structural parts of every vertex (wing flex, debris), see [`classify`].
+    pub parts: Option<Arc<PartMap>>,
+}
+
+/// The model cut into structural parts ([`crate::damage::Part`]).
+pub struct PartMap {
+    /// Per asset vertex: part index, signed span station (+ = left wing,
+    /// 0..1 root → tip; 0 = rigid), chord offset from the wing's elastic
+    /// axis (m, + = forward), and 1 for exterior / 0 for interior geometry.
+    pub vert: Vec<[f32; 4]>,
+    /// Body-frame boxes of each part (gear down).
+    pub geom: crate::debris::PartGeom,
+    /// The asset's vertices / indices with seams split between parts
+    /// (chunk ranges unchanged; duplicated vertices are appended).
+    pub vertices: Vec<crate::aircraft_asset::Vertex>,
+    pub indices: Vec<u32>,
+    /// Wing planform by span station: (|x|, leading-edge z, trailing-edge z, mean y).
+    pub planform: Vec<(f32, f32, f32, f32)>,
 }
 
 /// Load the model for an aircraft id (see the table above).
@@ -60,11 +79,11 @@ pub fn build(id: &str, def_eye: Vec3) -> AircraftModel {
             let radius = a.radius.max(1.0);
             let n = a.channels.len();
             let bounds = exterior_bounds(&a);
-            AircraftModel { asset: Some(a), eye, radius, bounds, nose_gear: None, state: AnimState::default(), pose: Pose::default(), chan: vec![0.0; n], last_time: None }
+            AircraftModel { asset: Some(a), eye, radius, bounds, nose_gear: None, state: AnimState::default(), pose: Pose::default(), chan: vec![0.0; n], last_time: None, parts: None }
         }
         Err(e) => {
             eprintln!("aircraft model {id}: {e}");
-            AircraftModel { asset: None, eye: def_eye, radius: 8.0, bounds: (Vec3::splat(-4.0), Vec3::splat(4.0)), nose_gear: None, state: AnimState::default(), pose: Pose::default(), chan: Vec::new(), last_time: None }
+            AircraftModel { asset: None, eye: def_eye, radius: 8.0, bounds: (Vec3::splat(-4.0), Vec3::splat(4.0)), nose_gear: None, state: AnimState::default(), pose: Pose::default(), chan: Vec::new(), last_time: None, parts: None }
         }
     }
 }
@@ -194,7 +213,7 @@ impl AircraftModel {
             .filter(|(_, c)| (interior || !c.interior) && self.pose.visible[c.node])
             .map(|(i, c)| ChunkDraw { chunk: i as u32, model: body * self.pose.world[c.node], emit: self.pose.emit[i] })
             .collect();
-        Some(AircraftFrame { asset: a.clone(), draws })
+        Some(AircraftFrame { asset: a.clone(), draws, parts: self.parts.clone(), dynamics: None })
     }
 
     /// Light positions (body frame, current pose) by kind.
@@ -291,4 +310,203 @@ fn exterior_bounds(a: &AircraftAsset) -> (Vec3, Vec3) {
         }
     }
     if lo.x > hi.x { (Vec3::splat(-4.0), Vec3::splat(4.0)) } else { (lo, hi) }
+}
+
+/// Cut the model into structural parts: gear by node name, then by position
+/// (nacelles around the engines, the empennage aft of the tail station, wings
+/// outboard of the fuselage, fuselage sections fore / aft), and give each
+/// wing vertex its span station and chord offset for the bending shader.
+/// Cached per aircraft id.
+pub fn classify(a: &AircraftAsset, def: &AircraftDef) -> Arc<PartMap> {
+    static CACHE: std::sync::Mutex<Vec<(String, Arc<PartMap>)>> = std::sync::Mutex::new(Vec::new());
+    if let Some(m) = CACHE.lock().unwrap().iter().find(|(k, _)| k == def.id).map(|(_, m)| m.clone()) {
+        return m;
+    }
+    let m = Arc::new(classify_uncached(a, def));
+    CACHE.lock().unwrap().push((def.id.to_string(), m.clone()));
+    m
+}
+
+fn classify_uncached(a: &AircraftAsset, def: &AircraftDef) -> PartMap {
+    use crate::damage::{gear_part, struct_def, Part};
+    let sd = struct_def(def.id);
+    let ch: Vec<f32> = a.channels.iter().map(|c| if c == "gear_pos" { 1.0 } else { 0.0 }).collect();
+    let mut st = AnimState::default();
+    let mut pose = Pose::default();
+    a.pose(&ch, &mut st, 0.0, &mut pose);
+    let semi = (def.wingspan * 0.5).max(sd.fus_r + 0.5);
+    // Gear / engine nodes by name (the node or any ancestor).
+    let chain_has = |n: usize, keys: &[&str], not: &[&str]| -> bool {
+        let mut i = n as i32;
+        while i >= 0 {
+            let name = a.nodes[i as usize].name.to_ascii_lowercase();
+            if not.iter().any(|k| name.contains(k)) {
+                return false;
+            }
+            if keys.iter().any(|k| name.contains(k)) {
+                return true;
+            }
+            i = a.nodes[i as usize].parent;
+        }
+        false
+    };
+    let gear_keys = ["wheel", "tire", "tyre", "strut", "gear", "mlg", "nlg", "axle", "link", "sidestay", "compression"];
+    let gear_not = ["door", "placard", "panel", "rod"];
+    let eng_keys = ["prop", "spinner", "fan", "reverser", "nacelle", "engine", "cowl"];
+    let has_gear = |p: Part| def.gear.iter().any(|g| gear_part(def, g) == Some(p));
+    let n_eng = def.engine_count.min(def.engine_pos.len()).min(4);
+    let wing_engine = |i: usize| def.engine_pos[i].x.abs() > sd.fus_r;
+    // Node centres (gear legs are assigned as a whole).
+    let mut node_c: Vec<(Vec3, f32)> = vec![(Vec3::ZERO, 0.0); a.nodes.len()];
+    for c in &a.chunks {
+        let m = pose.world[c.node];
+        for k in (c.first..c.first + c.count).step_by(3) {
+            let v = a.vertices[(a.indices[k as usize] + c.base_vertex) as usize];
+            node_c[c.node].0 += m.transform_point3(Vec3::from(v.pos));
+            node_c[c.node].1 += 1.0;
+        }
+    }
+    let classify_pt = |p: Vec3, node: usize, interior: bool| -> Part {
+        let fus = |z: f32| if z > sd.nose_z { Part::Nose } else if z < sd.aft_z { Part::Aft } else { Part::Fuselage };
+        if interior {
+            return fus(p.z);
+        }
+        if chain_has(node, &gear_keys, &gear_not) {
+            let c = if node_c[node].1 > 0.0 { node_c[node].0 / node_c[node].1 } else { p };
+            let g = if c.x > 0.25 { Part::GearL } else if c.x < -0.25 { Part::GearR } else if c.z > 0.0 { Part::GearNose } else { Part::Aft };
+            return if g.is_gear() && !has_gear(g) { fus(p.z) } else { g };
+        }
+        // Engines: nacelles (and pylons) around wing engines; the nose of single-engine types.
+        if n_eng > 0 {
+            let named = chain_has(node, &eng_keys, &["door"]);
+            for i in 0..n_eng {
+                let e = def.engine_pos[i];
+                if wing_engine(i) {
+                    let (r, f, b) = sd.nacelle;
+                    let d = Vec2::new(p.x - e.x, p.y - e.y);
+                    let in_z = p.z < e.z + f && p.z > e.z - b;
+                    let pylon = d.x.abs() < r * 0.35 && p.y > e.y && p.y < def.wing_height + 0.2 && in_z;
+                    if in_z && (d.length() < r * 1.08 || pylon || (named && d.length() < r * 1.6)) {
+                        return Part::engine(i);
+                    }
+                } else if let Some(fw) = sd.firewall_z {
+                    if p.z > fw && p.x.abs() < sd.fus_r * 1.6 + if named { 2.0 } else { 0.0 } {
+                        return Part::engine(i);
+                    }
+                }
+            }
+        }
+        if p.z < sd.tail_z {
+            return if p.x.abs() > sd.fin_r {
+                if p.x > 0.0 { Part::HTailL } else { Part::HTailR }
+            } else if p.y > sd.fin_y {
+                Part::Fin
+            } else {
+                Part::Aft
+            };
+        }
+        if p.x.abs() > sd.fus_r && p.z <= sd.wing_z.1 {
+            return if p.x > 0.0 { Part::WingL } else { Part::WingR };
+        }
+        fus(p.z)
+    };
+    // Triangles are classified by their centroid, so every triangle belongs
+    // to one part; vertices shared across a part boundary are duplicated
+    // (the seam is where the airframe tears).
+    let n0 = a.vertices.len();
+    let mut out_v = a.vertices.clone();
+    let mut out_i = a.indices.clone();
+    let mut vpart: Vec<i16> = vec![-1; n0];
+    let mut vext: Vec<bool> = vec![true; n0];
+    let mut pos = vec![Vec3::ZERO; n0];
+    let mut dup: std::collections::HashMap<(usize, u8), u32> = Default::default();
+    let mut geom = crate::debris::PartGeom::empty();
+    // Wing chord bins (leading / trailing edge per span station) for the elastic axis.
+    const NB: usize = 16;
+    let mut le = [f32::MIN; NB];
+    let mut te = [f32::MAX; NB];
+    let mut ysum = [0.0f64; NB];
+    let mut yn = [0.0f64; NB];
+    let bin = |x: f32| (((x.abs() - sd.fus_r) / (semi - sd.fus_r)).clamp(0.0, 0.999) * NB as f32) as usize;
+    for c in &a.chunks {
+        let m = pose.world[c.node];
+        let mut k = c.first;
+        while k + 3 <= c.first + c.count {
+            let vis = [0, 1, 2].map(|j| (a.indices[(k + j) as usize] + c.base_vertex) as usize);
+            let ps = vis.map(|vi| m.transform_point3(Vec3::from(a.vertices[vi].pos)));
+            let cen = (ps[0] + ps[1] + ps[2]) / 3.0;
+            let part = classify_pt(cen, c.node, c.interior);
+            for j in 0..3 {
+                let vi = vis[j];
+                let p = ps[j];
+                if !c.interior {
+                    geom.add(part, p);
+                }
+                if matches!(part, Part::WingL | Part::WingR) {
+                    let b = bin(p.x);
+                    le[b] = le[b].max(p.z);
+                    te[b] = te[b].min(p.z);
+                    ysum[b] += p.y as f64;
+                    yn[b] += 1.0;
+                }
+                if vpart[vi] < 0 {
+                    vpart[vi] = part as i16;
+                    pos[vi] = p;
+                    vext[vi] = !c.interior;
+                } else if vpart[vi] != part as i16 {
+                    let ni = *dup.entry((vi, part as u8)).or_insert_with(|| {
+                        out_v.push(a.vertices[vi]);
+                        pos.push(p);
+                        vpart.push(part as i16);
+                        vext.push(!c.interior);
+                        (out_v.len() - 1) as u32
+                    });
+                    out_i[k as usize + j] = ni - c.base_vertex;
+                }
+            }
+            k += 3;
+        }
+    }
+    let mut vert = vec![[0.0f32; 4]; out_v.len()];
+    for vi in 0..out_v.len() {
+        vert[vi] = [vpart[vi].max(0) as f32, 0.0, 0.0, if vext[vi] { 1.0 } else { 0.0 }];
+    }
+    let done = vec![true; out_v.len()];
+    // Elastic axis ~40 % chord; empty bins borrow their neighbours.
+    let mut ea = [0.0f32; NB];
+    let mut last = 0.5 * (sd.wing_z.0 + sd.wing_z.1);
+    for b in 0..NB {
+        if le[b] > te[b] {
+            last = le[b] - 0.4 * (le[b] - te[b]);
+        }
+        ea[b] = last;
+    }
+    let station = |x: f32| ((x.abs() - sd.fus_r) / (semi - sd.fus_r)).clamp(0.0, 1.0) * x.signum();
+    for vi in 0..vert.len() {
+        if !done[vi] {
+            continue;
+        }
+        let part = Part::from_idx(vert[vi][0] as usize);
+        let p = pos[vi];
+        match part {
+            Part::WingL | Part::WingR => {
+                vert[vi][1] = station(p.x);
+                vert[vi][2] = p.z - ea[bin(p.x)];
+            }
+            Part::Eng0 | Part::Eng1 | Part::Eng2 | Part::Eng3 => {
+                // Wing engines ride rigidly on the wing at their station.
+                let e = def.engine_pos[part.engine_index().unwrap_or(0).min(def.engine_pos.len().saturating_sub(1))];
+                if e.x.abs() > sd.fus_r {
+                    vert[vi][1] = station(e.x);
+                    vert[vi][2] = e.z - ea[bin(e.x)];
+                }
+            }
+            _ => {}
+        }
+    }
+    let planform = (0..NB)
+        .filter(|&b| le[b] > te[b] && yn[b] > 0.0)
+        .map(|b| (sd.fus_r + (b as f32 + 0.5) / NB as f32 * (semi - sd.fus_r), le[b], te[b], (ysum[b] / yn[b]) as f32))
+        .collect();
+    PartMap { vert, geom, vertices: out_v, indices: out_i, planform }
 }

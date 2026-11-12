@@ -42,8 +42,9 @@ item lands; keep entries one line.
 - [x] Rain/snow/fog, wet surfaces, sky-shake + precision fixes (H, I)
 - [x] Night: moon/stars/skyglow, street lights, lit windows, traffic, airport lighting, PAPI, landing lights (J)
 - [ ] **P2** Night follow-ups: light pools beyond 4 km, halos behind clouds, README/help for L key
-- [ ] **P0** Supersonic + atmospheric VFX: vapour cones, shock diamonds, heat haze, contrails, wingtip vortices/condensation (L)
-- [ ] **P0** Crash VFX: fire, smoke, dust, debris (L)
+- [x] Supersonic + atmospheric VFX: vapour cone, shock diamonds, heat haze, Schmidt–Appleman contrails, vortex / wing condensation (L)
+- [x] Crash VFX: fireball, fuel fire + smoke column, dust, spray, sparks, tyre / engine smoke; GPU particles lit by sun/moon/fires (L)
+- [ ] **P1** VFX follow-ups: vapour cone reads as a bubble from behind; smoke at night only lit by fire ambient (no volumetric glow); fire streaks on still-sliding wrecks; particles drawn over clouds (no cloud depth); haze strength untuned for props
 - [ ] **P1** TAA/upscaling (DLSS-class quality via own TAA + sharpening) with MSAA fallback
 - [ ] **P1** Screen-space or ray-traced reflections for glass towers/wet streets
 - [ ] **P1** Rain on canopy/windscreen droplets + wipers; icing on airframe
@@ -56,7 +57,8 @@ item lands; keep entries one line.
 - [x] JSBSim aero evaluator (C172, ASK21, F-16, E190, A320); Spitfire/ATR calibrated to YASim data (N)
 - [ ] **P1** FDM follow-ups: A320 engine-out rudder authority, A320 Mmo overshoot, E190 clean stall high, ASK21 L/D 42 vs 34, F-16 climb low; Spitfire prop-disc dome; thumbnails load ~4 s
 - [ ] **P1** Decide ATR 72 asset licence (FGAddon policy-only GPL notice)
-- [ ] **P0** Structural loads, wing flex, failures, damage model, survivable vs fatal crashes, physics debris (L)
+- [x] Structural loads, wing flex (modal), limit/ultimate damage, flutter, flap/gear overspeed, separations with asymmetric aero, survivable vs fatal crashes, rigid-body debris (L)
+- [ ] **P1** Structure follow-ups: body-body debris collisions; fuselage crush/deform; cracks along split seams; fuel model (mass/CG/fire size from actual fuel); low-poly wings (C172, ASK21 mid-span) bend piecewise
 - [ ] **P1** Full 3D cockpits with working instruments (render gauges into cockpit textures), head look (mouse/TrackIR-style)
 - [ ] **P1** Systems depth per type: electrics, fuel (burn + CG), hydraulics, engine start procedures, failures menu
 - [ ] **P1** Ground handling: taxiing with tillers, pushback, chocks, wheel friction by surface
@@ -116,9 +118,8 @@ item lands; keep entries one line.
 | M | UI/HUD, maps, airport picker, menus, frame pacing | ✅ |
 | N | Real FlightGear aircraft + JSBSim FDM | ✅ |
 | K2 | Sample-based audio, supersonic, crash sounds | ✅ |
-| L | Structure/flex/crashes + supersonic/atmospheric VFX | ⏳ after N |
 | G | WASM + GitHub Pages workflow (repo stays private until owner flips it) | ⏳ last of current batch |
 | P | Input devices (gilrs/evdev, rebinding, curves, head-look) + CI/goldens | ✅ |
 | T | Terrain elevation + landmarks | ✅ |
-| L | (see above) | 🟡 running |
+| L | Structure/flex/crashes + supersonic/atmospheric VFX (damage, debris, vfx) | ✅ |
 | next | Airports detail, live 3D cockpit instruments, ATC, missions, release packaging | ⏳ to schedule |

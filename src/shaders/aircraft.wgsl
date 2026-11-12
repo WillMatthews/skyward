@@ -11,6 +11,7 @@ struct AcInst {
 };
 
 @group(1) @binding(0) var<storage, read> ac_inst: array<AcInst>;
+@group(1) @binding(1) var<storage, read> ac_dyn: AcDyn;
 @group(2) @binding(0) var ac_tex: texture_2d<f32>;
 @group(2) @binding(1) var ac_samp: sampler;
 
@@ -18,6 +19,8 @@ struct AcIn {
     @location(0) pos: vec3<f32>,
     @location(1) nrm: vec3<f32>,
     @location(2) uv: vec2<f32>,
+    // Structural part, signed span station, chord offset, exterior (models.rs).
+    @location(3) part: vec4<f32>,
 };
 
 struct AcOut {
@@ -31,11 +34,13 @@ struct AcOut {
 @vertex
 fn vs_aircraft(v: AcIn, @builtin(instance_index) ii: u32) -> AcOut {
     let m = ac_inst[ii].model;
-    let p = (m * vec4<f32>(v.pos, 1.0)).xyz;
+    let k = u32(v.part.x + 0.5);
+    let pm = ac_dyn.parts[min(k, 15u)];
+    let p = (pm * vec4<f32>((m * vec4<f32>(v.pos, 1.0)).xyz + ac_flex(v.part), 1.0)).xyz;
     var o: AcOut;
     o.clip = g.view_proj * vec4<f32>(p, 1.0);
     o.wpos = p + vec3<f32>(0.0, g.pattern.w, 0.0);
-    o.nrm = (m * vec4<f32>(v.nrm, 0.0)).xyz;
+    o.nrm = (pm * (m * vec4<f32>(v.nrm, 0.0))).xyz;
     o.uv = v.uv;
     o.inst = ii;
     return o;
@@ -85,3 +90,4 @@ fn fs_aircraft(in: AcOut) -> FOut {
     o.dist = dist;
     return o;
 }
+

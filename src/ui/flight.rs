@@ -273,6 +273,12 @@ fn annunciators(p: &egui::Painter, screen: Rect, sim: &Sim, y: f32) -> f32 {
     if ac.stall_warning() {
         items.push(("STALL".into(), pal::RED, blink));
     }
+    // Structure: overstress / overspeed warnings, damage and lost parts (damage.rs).
+    if ac.crashed.is_none() {
+        for (t, warning) in ac.dmg.annunciations() {
+            items.push((t, if warning { pal::RED } else { pal::AMBER }, !warning || blink));
+        }
+    }
     let font = f_inst_b(11.5);
     let gs: Vec<_> = items.iter().map(|(s, c, lit)| p.layout_no_wrap(s.clone(), font.clone(), if *lit { *c } else { pal::TEXT3 })).collect();
     let gear_w = if def.retractable_gear { 74.0 } else { 0.0 };
@@ -585,12 +591,24 @@ fn warnings(p: &egui::Painter, screen: Rect, sim: &Sim) {
     let def = sim.def();
     let y = screen.center().y - screen.height() * 0.2;
     if let Some(reason) = &sim.ac.crashed {
-        let r = Rect::from_center_size(Pos2::new(screen.center().x, y), Vec2::new(520.0, 108.0));
-        super::panel_with(p, r, sp::R_CARD, Color32::from_rgba_premultiplied(60, 8, 10, 230));
-        p.rect_stroke(r, sp::R_CARD, Stroke::new(1.0, pal::RED.gamma_multiply(0.6)), egui::StrokeKind::Inside);
-        p.text(r.center() + Vec2::new(0.0, -24.0), Align2::CENTER_CENTER, "Crashed", super::f_display(28.0), pal::TEXT);
-        p.text(r.center() + Vec2::new(0.0, 6.0), Align2::CENTER_CENTER, cap(reason), f_ui(14.0), pal::TEXT2);
-        p.text(r.center() + Vec2::new(0.0, 32.0), Align2::CENTER_CENTER, "R  Restart      Esc  Menu", f_inst(12.0), pal::TEXT3);
+        // Survivable accidents (belly landing, gear collapse) read differently from a crash.
+        let survivable = sim.severity.is_some_and(|s| s.survivable());
+        let (title, sub, fill, edge) = if survivable {
+            ("Crash landing", "Aircraft damaged · everyone walks away", Color32::from_rgba_premultiplied(58, 40, 6, 230), pal::AMBER)
+        } else {
+            ("Crashed", "", Color32::from_rgba_premultiplied(60, 8, 10, 230), pal::RED)
+        };
+        let h = if sub.is_empty() { 108.0 } else { 126.0 };
+        let r = Rect::from_center_size(Pos2::new(screen.center().x, y), Vec2::new(560.0, h));
+        super::panel_with(p, r, sp::R_CARD, fill);
+        p.rect_stroke(r, sp::R_CARD, Stroke::new(1.0, edge.gamma_multiply(0.6)), egui::StrokeKind::Inside);
+        let top = r.min.y + 30.0;
+        p.text(Pos2::new(r.center().x, top), Align2::CENTER_CENTER, title, super::f_display(28.0), pal::TEXT);
+        p.text(Pos2::new(r.center().x, top + 30.0), Align2::CENTER_CENTER, cap(reason), f_ui(14.0), pal::TEXT2);
+        if !sub.is_empty() {
+            p.text(Pos2::new(r.center().x, top + 50.0), Align2::CENTER_CENTER, sub, f_ui(12.5), pal::TEXT3);
+        }
+        p.text(Pos2::new(r.center().x, r.max.y - 18.0), Align2::CENTER_CENTER, "R  Restart      Esc  Menu", f_inst(12.0), pal::TEXT3);
     } else if sim.ac.stall_warning() && blink {
         chip(p, Pos2::new(screen.center().x, y), Align2::CENTER_CENTER, "STALL", f_inst_b(28.0), Color32::WHITE, Color32::from_rgb(200, 30, 30));
     } else if def.retractable_gear && sim.ac.gear_pos() < 0.99 && !sim.ac.on_ground && sim.ac.pos.y - sim.ground_y < 150.0 && sim.ac.vertical_speed() < -1.0 && sim.ac.airspeed() < def.vref_kt * 1.3 * KT && blink {

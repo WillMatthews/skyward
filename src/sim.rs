@@ -360,6 +360,20 @@ pub struct Sim {
     pub landing_lights: Option<bool>,
     /// Analog-input and head-look state (input/sim_glue.rs).
     pub pilot: pilot::Pilot,
+    /// Loose parts and, after a crash, the wreck (debris.rs).
+    pub debris: Option<crate::debris::Debris>,
+    /// How bad the accident was (set when the aircraft crashes).
+    pub severity: Option<crate::damage::Severity>,
+    /// Sounds raised this frame by the wreckage (the audio director reads them).
+    pub audio_events: Vec<crate::audio::params::Event>,
+    /// Parts already handed to the debris simulation.
+    known_lost: u16,
+    /// Real seconds since the crash (slow motion, crash camera).
+    crash_clock: f32,
+    /// Scripted test flight (`SKYWARD_SCENARIO`, scenario.rs).
+    pub scenario: Option<crate::scenario::Scenario>,
+    /// Particles and atmospheric effects (vfx/).
+    pub vfx: crate::vfx::Vfx,
 }
 
 /// Cinematic camera state.
@@ -463,6 +477,13 @@ impl Sim {
             light_rig: Default::default(),
             landing_lights: None,
             pilot: Default::default(),
+            debris: None,
+            severity: None,
+            audio_events: Vec::new(),
+            known_lost: 0,
+            crash_clock: 0.0,
+            scenario: crate::scenario::Scenario::from_env(),
+            vfx: crate::vfx::Vfx::default(),
         };
         s.light_rig = crate::lights::AircraftLightRig::from_model(&s.model);
         s.reset(world);
@@ -568,6 +589,15 @@ impl Sim {
         self.flyby_pos = None;
         self.cine = Cine::default();
         self.acc = 0.0;
+        self.debris = None;
+        self.severity = None;
+        self.known_lost = 0;
+        self.crash_clock = 0.0;
+        self.audio_events.clear();
+        self.vfx.clear();
+        if let Some(sc) = self.scenario.as_mut() {
+            sc.restart();
+        }
         self.snap_pose();
         self.note = advice.map(|a| (a, 9.0));
         if self.watch && !self.needs_respawn {
@@ -708,6 +738,10 @@ impl Sim {
         if let Some(b) = &mut self.bot {
             b.rebase(r);
         }
+        if let Some(d) = &mut self.debris {
+            d.rebase(r.delta);
+        }
+        self.vfx.rebase(r.delta);
     }
 
     /// Hand the aircraft to the auto-flight bot.
@@ -940,6 +974,10 @@ impl Sim {
             self.ctl.elevator = ((pitch_cmd - self.ac.pitch()) * 4.0).clamp(-1.0, 1.0);
         }
 
+        if !self.paused && !self.needs_respawn {
+            crate::scenario::control(self, world, dt);
+        }
+        self.audio_events.clear();
         if !self.paused && self.ac.crashed.is_none() && !self.needs_respawn {
             self.acc += dt * self.warp as f32;
             let mut steps = 0;
@@ -974,6 +1012,10 @@ impl Sim {
             self.reset(world);
             self.say("Relaunched", 3.0);
         }
+        if !self.paused {
+            self.structures(world, dt);
+            self.effects(world, dt);
+        }
         if self.ac.crashed.is_some() {
             self.snap_pose();
         }
@@ -984,6 +1026,178 @@ impl Sim {
         let target = if f.x.abs() + f.z.abs() > 1e-3 { f.x.atan2(-f.z) } else { self.ac.heading() };
         let d = wrap(target - self.cam_heading);
         self.cam_heading += d * (1.0 - (-4.0 * dt).exp());
+    }
+
+    /// Structural events, loose parts and the wreck (damage.rs, debris.rs).
+    fn structures(&mut self, world: &World, dt: f32) {
+        let def = self.defs[self.sel].clone();
+        let sd = *crate::damage::struct_def(def.id);
+        // Messages from the structure (overstress, jammed flaps, separations).
+        let events = std::mem::take(&mut self.ac.dmg.events);
+        if let Some(e) = events.iter().rev().find(|e| !e.caution).or(events.last()) {
+            self.say(e.msg.clone(), 6.0);
+        }
+        // Parts that came off since the last frame become debris.
+        let lost = self.ac.dmg.lost;
+        let new = lost & !self.known_lost;
+        if new != 0 && self.ac.crashed.is_none() {
+            let geom = self.part_geom(&def);
+            let d = self.debris.get_or_insert_with(|| crate::debris::Debris::new(&def, geom));
+            // One body per torn-off assembly (a part with what hangs on it).
+            let mut left = new;
+            for p in crate::damage::Part::ALL {
+                if left & p.bit() == 0 {
+                    continue;
+                }
+                let parent_new = p.parent(&sd, &def).is_some_and(|q| left & q.bit() != 0 || (new & q.bit() != 0));
+                if parent_new {
+                    continue;
+                }
+                let mut group = p.bit();
+                for q in crate::damage::Part::ALL {
+                    let mut a = q.parent(&sd, &def);
+                    while let Some(x) = a {
+                        if x == p && new & q.bit() != 0 {
+                            group |= q.bit();
+                            break;
+                        }
+                        a = x.parent(&sd, &def);
+                    }
+                }
+                left &= !group;
+                d.separate_in_flight(group, self.ac.pos, self.ac.rot, self.ac.vel, self.ac.omega);
+            }
+            self.known_lost = lost;
+        }
+        // The crash: the wreck takes over from the frozen flight model.
+        if let (Some(reason), Some(imp), None) = (self.ac.crashed.clone(), self.ac.impact, self.severity) {
+            let sev = crate::damage::classify(&def, &reason, imp.vel, self.ac.dmg.failure.is_some());
+            self.severity = Some(sev);
+            self.crash_clock = 0.0;
+            let geom = self.part_geom(&def);
+            let d = self.debris.get_or_insert_with(|| crate::debris::Debris::new(&def, geom));
+            // Parts that exist (with geometry, or gear legs the flight model has).
+            let all: u16 = d.geom_has() | def.gear.iter().filter_map(|g| crate::damage::gear_part(&def, g)).fold(0, |m, p| m | p.bit()) | crate::damage::Part::Fuselage.bit();
+            // (Parts lost in the crash itself — collapsed gear — are broken off by the wreck.)
+            d.crash(&imp, &reason, sev, all & !self.known_lost, self.ac.gear_pos(), world);
+            if std::env::var_os("SKYWARD_DEBUG_DEBRIS").is_some() {
+                eprintln!("crash: {reason} — {sev:?}, impact v {:?} at {:?}; {} bodies, {} fires", imp.vel, imp.pos, d.bodies.len(), d.fires.len());
+                for b in &d.bodies {
+                    eprintln!("  body parts {:#06x} mass {:.0} com {:?} pos {:?} pts {}", b.parts, b.mass, b.com, b.pos, b.pts.len());
+                }
+            }
+            self.known_lost = lost;
+            if self.cam == CamMode::Cockpit {
+                self.cam = CamMode::Chase;
+            }
+            let msg = match sev {
+                crate::damage::Severity::Minor => "Aircraft damaged — everyone walks away",
+                crate::damage::Severity::Substantial => "Substantial damage — survivable",
+                crate::damage::Severity::Destroyed => "Aircraft destroyed",
+            };
+            self.say(msg, 8.0);
+        }
+        if self.ac.crashed.is_some() {
+            self.crash_clock += dt;
+            // The wings relax to their unloaded shape.
+            let k = 1.0 - (-3.0 * dt).exp();
+            for s in 0..2 {
+                self.ac.dmg.flex[s] += (self.ac.dmg.set[s] - self.ac.dmg.flex[s]) * k;
+            }
+        }
+        // Advance the wreckage (a moment of slow motion after a violent crash).
+        let slow = if self.severity == Some(crate::damage::Severity::Destroyed) { (0.3 + 0.7 * ((self.crash_clock - 0.6) / 2.4).clamp(0.0, 1.0)).min(1.0) } else { 1.0 };
+        let warp = (self.warp as f32).min(4.0);
+        if let Some(d) = self.debris.as_mut() {
+            let runways = &world.runways;
+            let paved = |xz: Vec2| runways.iter().any(|r| seg_dist(xz, r.a, r.b) < r.width * 0.5 + 4.0);
+            d.update(dt * warp * slow, world, &paved);
+            self.audio_events.append(&mut d.audio);
+            // The main wreck carries the aircraft (cameras, sound, HUD).
+            if let Some(b) = d.main.and_then(|m| d.bodies.get(m)) {
+                let (o, r) = b.origin();
+                self.ac.pos = o;
+                self.ac.rot = r;
+                self.ac.vel = b.vel;
+                self.ac.on_ground = b.contact || b.in_water;
+            }
+        }
+    }
+
+    /// The crash camera after a destroying accident: eye and target.
+    fn crash_camera(&self) -> Option<(Vec3, Vec3)> {
+        if self.severity != Some(crate::damage::Severity::Destroyed) {
+            return None;
+        }
+        let (c, r) = self.debris.as_ref()?.extent()?;
+        let dist = (self.orbit_dist * 0.8).max(r * 0.9 + self.size * 1.5 + 20.0).min(400.0);
+        let yaw = self.cam_heading + self.orbit_yaw + 0.6 + self.crash_clock * 0.05;
+        let p = self.orbit_pitch.max(13f32.to_radians());
+        let back = vec3(-yaw.sin(), 0.0, yaw.cos());
+        let mut eye = c + (back * p.cos() + Vec3::Y * p.sin()) * dist;
+        eye.y = eye.y.max(c.y + 2.0);
+        Some((eye, c + Vec3::Y * (r * 0.15).min(10.0)))
+    }
+
+    /// Effects data for this frame (vfx/).
+    fn effects_frame(&self, eye: Vec3) -> crate::vfx::VfxFrame {
+        let def = &self.defs[self.sel];
+        let ac = &self.ac;
+        let n = def.engine_count.min(4);
+        let mut running = [false; 4];
+        let mut thrust = [0.0; 4];
+        let per = (def.static_thrust / n.max(1) as f32).max(1.0);
+        for i in 0..n {
+            running[i] = ac.engine_running(i) && ac.crashed.is_none() && ac.dmg.lost & crate::damage::Part::engine(i).bit() == 0;
+            thrust[i] = (ac.engine_thrust(i) / per).clamp(0.0, 1.5);
+        }
+        let planform = self.model.parts.as_ref().map(|p| &p.planform[..]).unwrap_or(&[]);
+        let ctx = crate::vfx::FrameCtx {
+            def,
+            eye,
+            pos: self.rpos,
+            rot: self.rrot,
+            tips: ac.dmg.tip_deflection(crate::damage::struct_def(def.id)),
+            lost: ac.dmg.lost,
+            running,
+            thrust,
+            afterburner: ac.afterburner(),
+            planform,
+            fires: self.debris.as_ref().map(|d| &d.fires[..]),
+        };
+        self.vfx.frame(&ctx)
+    }
+
+    /// Advance the effects (after the simulation step).
+    fn effects(&mut self, world: &World, dt: f32) {
+        let def = self.defs[self.sel].clone();
+        let slow = if self.severity == Some(crate::damage::Severity::Destroyed) { (0.3 + 0.7 * ((self.crash_clock - 0.6) / 2.4).clamp(0.0, 1.0)).min(1.0) } else { 1.0 };
+        let (pos, rot) = self.pose();
+        let tips = self.ac.dmg.tip_deflection(crate::damage::struct_def(def.id));
+        let planform: Vec<(f32, f32, f32, f32)> = self.model.parts.as_ref().map(|p| p.planform.clone()).unwrap_or_default();
+        let eye = self.last_view.as_ref().map(|v| v.eye).unwrap_or(pos);
+        let ctx = crate::vfx::Ctx {
+            def: &def,
+            ac: &self.ac,
+            pos,
+            rot,
+            world,
+            debris: self.debris.as_mut(),
+            time: self.time,
+            dt: dt * slow * (self.warp as f32).min(4.0),
+            eye,
+            tips,
+            planform: &planform,
+        };
+        self.vfx.update(ctx);
+    }
+
+    /// Part boxes from the model (or estimated from the flight geometry).
+    fn part_geom(&self, def: &AircraftDef) -> crate::debris::PartGeom {
+        match &self.model.parts {
+            Some(p) => p.geom.clone(),
+            None => crate::debris::PartGeom::estimate(def, crate::damage::struct_def(def.id)),
+        }
     }
 
     /// Engine-failure practice: single-engine → fail / restore; multi-engine → fail
@@ -1188,7 +1402,16 @@ impl Sim {
                 let off = (back * p.cos() + Vec3::Y * p.sin()) * self.orbit_dist;
                 let mut eye = pos + off;
                 eye.y = eye.y.max(1.0);
-                (eye, pos + Vec3::Y * (0.5 + self.size * 0.08), Vec3::Y)
+                let target = pos + Vec3::Y * (0.5 + self.size * 0.08);
+                match self.crash_camera() {
+                    // Destroyed: a slow orbit framing the whole wreckage (blended in).
+                    Some((ce, ct)) => {
+                        let k = (self.crash_clock / 1.5).clamp(0.0, 1.0);
+                        let k = k * k * (3.0 - 2.0 * k);
+                        (eye.lerp(ce, k), target.lerp(ct, k), Vec3::Y)
+                    }
+                    None => (eye, target, Vec3::Y),
+                }
             }
             CamMode::Cockpit => {
                 fov = 72f32.to_radians();
@@ -1225,7 +1448,7 @@ impl Sim {
             // From the cockpit the lights shine out, but their lenses aren't seen.
             acl.n_sprites = 0;
         }
-        let mut fv = FrameView { eye, view, fov_y: fov, time: self.time, sun_dir: self.sun_dir(), exposure: 1.0, clock, acl, aircraft: None };
+        let mut fv = FrameView { eye, view, fov_y: fov, time: self.time, sun_dir: self.sun_dir(), exposure: 1.0, clock, acl, aircraft: None, vfx: None };
         let mut dynm = MeshData::default();
         if show_aircraft {
             // Eye-relative (see gfx: rendering is camera-relative, no f32 cancellation).
@@ -1233,7 +1456,26 @@ impl Sim {
             let interior = self.cam == CamMode::Cockpit || eye.distance(pos) < self.size * 2.5 + 4.0;
             fv.aircraft = self.aircraft_mesh(&mut dynm, eye, interior);
         }
-        self.last_view = Some(FrameView { aircraft: None, ..fv });
+        if std::env::var_os("SKYWARD_NO_VFX").is_none() {
+            let vf = self.effects_frame(eye);
+            if std::env::var_os("SKYWARD_VFX_STATS").is_some() {
+                eprintln!("vfx: {} particles, {} mesh verts, {} haze verts", vf.particles.len(), vf.mesh.len(), vf.haze.len());
+            }
+            fv.vfx = Some(std::sync::Arc::new(vf));
+        }
+        // Burning fuel lights up the scene (point lights in the aircraft-light slots).
+        if let Some(vf) = fv.vfx.as_deref() {
+            for f in vf.fires.iter().filter(|f| f[3] > 0.0) {
+                let n = fv.acl.n_spots;
+                if n < crate::lights::place::AC_SPOTS {
+                    let pos = Vec3::new(f[0], f[1], f[2]) + vf.origin - eye;
+                    let range = 30.0 + 4.5 * (f[3] / 6000.0).sqrt();
+                    fv.acl.spots[n] = crate::lights::place::SpotLight { pos, dir: Vec3::Y, cd: Vec3::new(1.0, 0.5, 0.18) * f[3], cos_inner: -1.0, cos_outer: -1.0, range };
+                    fv.acl.n_spots += 1;
+                }
+            }
+        }
+        self.last_view = Some(FrameView { aircraft: None, vfx: None, ..fv });
         (fv, dynm)
     }
 
@@ -1275,13 +1517,55 @@ impl Sim {
             }
         }
         out.append(&local, m);
-        self.model.frame(m, interior)
+        let mut f = self.model.frame(m, interior)?;
+        f.dynamics = Some(Box::new(self.structure_frame(m, eye)));
+        Some(f)
+    }
+
+    /// Wing bending, vibration and loose parts for the aircraft shader.
+    fn structure_frame(&self, body: Mat4, eye: Vec3) -> crate::gfx_aircraft::AcDynamics {
+        use crate::damage::Part;
+        let def = &self.defs[self.sel];
+        let sd = crate::damage::struct_def(def.id);
+        let ac = &self.ac;
+        let mut d = crate::gfx_aircraft::AcDynamics::default();
+        let up = self.rrot * Vec3::Y;
+        d.up = [up.x, up.y, up.z, self.time];
+        let tip = ac.dmg.tip_deflection(sd);
+        d.flex = [tip[0], tip[1], sd.twist_per_m, 0.0];
+        // Rolling on the ground: a buzz that grows with speed (more on grass).
+        if ac.on_ground && ac.crashed.is_none() {
+            let gs = Vec2::new(ac.vel.x, ac.vel.z).length();
+            let paved = self.runway.as_ref().is_some_and(|r| seg_dist(Vec2::new(ac.pos.x, ac.pos.z), r.a, r.b) < r.width * 0.5 + 2.0);
+            let k = if paved { 0.0012 } else { 0.0035 };
+            d.vib = [k * (gs / 25.0).min(2.0) * (self.size / 10.0).clamp(0.6, 2.5), if paved { 11.0 } else { 7.0 }, 0.0, 0.0];
+        }
+        let lost = ac.dmg.lost;
+        let inv = body.inverse();
+        for p in Part::ALL {
+            let k = p.idx();
+            let attached = lost & p.bit() == 0;
+            let in_main = self.debris.as_ref().and_then(|db| db.main.map(|m| db.bodies[m].parts & p.bit() != 0)).unwrap_or(false);
+            d.part_flex[k / 4][k % 4] = if attached && ac.crashed.is_none() { 1.0 } else if in_main { 1.0 } else { 0.0 };
+            if let Some((o, r)) = self.debris.as_ref().filter(|_| !in_main).and_then(|db| db.part_pose(p)) {
+                let w = Mat4::from_rotation_translation(r, o - eye);
+                d.parts[k] = (w * inv).to_cols_array_2d();
+                d.part_flex[k / 4][k % 4] = 0.0;
+            } else if !attached && !in_main {
+                // Lost but not simulated (shouldn't happen): hide it far below.
+                d.parts[k] = Mat4::from_scale(Vec3::ZERO).to_cols_array_2d();
+            }
+        }
+        d
     }
 }
 
 /// Load the model for an aircraft. Also returns the bounding radius.
 fn load_model(def: &AircraftDef) -> (AircraftModel, f32) {
     let mut model = models::build(def.id, def.eye);
+    if let Some(a) = model.asset.clone() {
+        model.parts = Some(models::classify(&a, def));
+    }
     // Nose (or steerable) wheel, for the taxi light.
     model.nose_gear = def.gear.iter().find(|g| matches!(g.kind, flight::ContactKind::Wheel { steerable: true, .. }) && g.pos.z > 0.0).map(|g| g.pos);
     let size = model.radius.max(def.wingspan * 0.5);

@@ -22,6 +22,8 @@ mod audio;
 mod autopilot;
 mod bot;
 mod clouds;
+mod damage;
+mod debris;
 mod flight;
 mod gfx;
 mod gfx_aircraft;
@@ -31,6 +33,7 @@ mod lights;
 mod models;
 mod mvt;
 mod osm;
+mod scenario;
 mod scene;
 mod input;
 mod sim;
@@ -38,6 +41,7 @@ mod startpos;
 mod terrain;
 mod landmarks;
 mod tiles;
+mod vfx;
 mod ui;
 mod weather;
 mod world;
@@ -707,6 +711,9 @@ fn render_frame(
                 let d = fv.eye - eye;
                 for v in &mut dynm.verts {
                     v.pos = (Vec3::from(v.pos) + d).into();
+                }
+                if let Some(af) = fv.aircraft.as_mut() {
+                    af.shift(d);
                 }
                 fv = FrameView { eye, view: glam::camera::rh::view::look_at_mat4(eye, look, Vec3::Y), ..fv };
             }

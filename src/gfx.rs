@@ -202,6 +202,8 @@ pub struct FrameView {
     pub acl: crate::lights::AircraftLights,
     /// The textured aircraft model for this frame (gfx_aircraft.rs).
     pub aircraft: Option<crate::gfx_aircraft::AircraftFrame>,
+    /// Particles, trails, vapour and heat haze (vfx/).
+    pub vfx: Option<std::sync::Arc<crate::vfx::VfxFrame>>,
 }
 
 /// Trees are drawn up to this distance (m) from the eye; detailed within TREE_LOD0.
@@ -490,6 +492,8 @@ pub struct Renderer {
     wpass: WeatherPasses,
     /// Night lighting: light sprites, light map, stars, beams (lights.rs).
     lights: crate::lights::LightRenderer,
+    /// Effects: particles, trails, vapour, heat haze (vfx/gpu.rs).
+    vfx: crate::vfx::gpu::VfxRenderer,
 }
 
 fn vertex_layout() -> wgpu::VertexBufferLayout<'static> {
@@ -543,7 +547,7 @@ fn tex(device: &wgpu::Device, label: &str, w: u32, h: u32, format: wgpu::Texture
 fn bgl_tex(binding: u32, dim: wgpu::TextureViewDimension) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
-        visibility: wgpu::ShaderStages::FRAGMENT,
+        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
         ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: dim, multisampled: false },
         count: None,
     }
@@ -552,7 +556,7 @@ fn bgl_tex(binding: u32, dim: wgpu::TextureViewDimension) -> wgpu::BindGroupLayo
 fn bgl_storage(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
-        visibility: wgpu::ShaderStages::FRAGMENT,
+        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
         ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None },
         count: None,
     }
@@ -616,7 +620,8 @@ impl Renderer {
                 bgl_tex(3, Dim::D2),
                 wgpu::BindGroupLayoutEntry {
                     binding: 4,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    // (Vertex too: the effects light particles per vertex, vfx.wgsl.)
+                    visibility: vf,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
@@ -912,6 +917,7 @@ impl Renderer {
         let ao_pipe = ao_pipeline("fs_ao", wgpu::TextureFormat::Rg16Float);
         let ao_blur_pipe = ao_pipeline("fs_blur", wgpu::TextureFormat::R8Unorm);
         let ao_buf = ubuf("ao u", std::mem::size_of::<AoU>() as u64);
+        let vfx = crate::vfx::gpu::VfxRenderer::new(device, &globals_bgl, IMMEDIATE_SIZE, HDR);
         let mut clouds = CloudRenderer::new(device, queue, atmos.cloud_views());
         clouds.set_field(&CloudField::new(7, crate::clouds::Weather::Scattered));
 
@@ -966,6 +972,7 @@ impl Renderer {
             wxr: crate::weather::WxRender { season: crate::weather::Season::at(crate::sim::DEFAULT_DAY, 51.5), ..Default::default() },
             cloud_version: 0,
             wpass: WeatherPasses::new(device),
+            vfx,
             lights,
         }
     }
@@ -2007,6 +2014,10 @@ impl Renderer {
                 pass.set_pipeline(&wp.fog_pipe);
                 pass.set_bind_group(0, &bg, &[]);
                 pass.draw(0..3, 0..1);
+            }
+            // Effects (fire, smoke, contrails, vapour, haze) over the scene and clouds.
+            if let Some(vf) = fv.vfx.as_deref() {
+                self.vfx.render(device, queue, encoder, vf, fv.eye, fv.time, &t.main_bg, &t.hdr, &t.dist, HDR, width, height);
             }
             let precip = wx.rain.max(wx.snow);
             if precip > 0.0 {

@@ -2477,6 +2477,20 @@ pub fn attitude(heading: f32, pitch: f32, roll: f32) -> Quat {
     Quat::from_rotation_y(PI - heading) * Quat::from_rotation_x(-pitch) * Quat::from_rotation_z(roll)
 }
 
+fn lower_first(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(f) => f.to_lowercase().collect::<String>() + c.as_str(),
+        None => String::new(),
+    }
+}
+
+/// Per-aircraft seed for the structural strength scatter.
+fn next_seed() -> u32 {
+    static SEED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x5EED);
+    SEED.fetch_add(0x9E37_79B9, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Live state of one engine.
 #[derive(Clone, Copy, Debug, Default)]
 struct EngState {
@@ -2536,6 +2550,22 @@ pub struct Aircraft {
     jsb: crate::jsbsim::JsbState,
     /// Airliner FBW: bank attitude held with the stick neutral.
     bank_hold: Option<f32>,
+    /// Structural state: wing bending, damage, separated parts (damage.rs).
+    pub dmg: crate::damage::Damage,
+    /// The state at the moment of a crash (before it was frozen): the
+    /// wreck / debris simulation continues from here.
+    pub impact: Option<Impact>,
+}
+
+/// Kinematic state captured when the aircraft crashed.
+#[derive(Clone, Copy, Debug)]
+pub struct Impact {
+    pub pos: Vec3,
+    pub vel: Vec3,
+    pub rot: Quat,
+    /// Body-frame angular velocity.
+    pub omega: Vec3,
+    pub on_ground: bool,
 }
 
 impl Aircraft {
@@ -2580,6 +2610,8 @@ impl Aircraft {
             gear_comp: [0.0; 8],
             jsb: Default::default(),
             bank_hold: None,
+            dmg: crate::damage::Damage::new(next_seed()),
+            impact: None,
         };
         a.settle_engines(def, 0.0, 0.0, &isa(0.0));
         a
@@ -2658,6 +2690,8 @@ impl Aircraft {
         a.ias = 0.0;
         a.mach = 0.0;
         a.law_blend = 0.0;
+        a.impact = None;
+        a.dmg.events.clear();
         a
     }
 
@@ -2694,6 +2728,9 @@ impl Aircraft {
         a.mach = tas / atm.speed_of_sound;
         a.oat = atm.temperature_c();
         a.law_blend = if def.control_law == ControlLaw::Direct { 0.0 } else { 1.0 };
+        // Wings already bent by the 1 g flight load.
+        let sd = crate::damage::struct_def(def.id);
+        a.dmg.flex = [sd.tip_per_g; 2];
         a
     }
 
@@ -2850,6 +2887,18 @@ impl Aircraft {
     pub fn gear_pos(&self) -> f32 {
         self.gear_pos
     }
+    /// Test / scenario helpers: gear and flaps set instantly.
+    pub fn retract_gear_now(&mut self) {
+        self.gear_pos = 0.0;
+        self.surf.gear = 1.0;
+    }
+    pub fn extend_gear_now(&mut self) {
+        self.gear_pos = 1.0;
+        self.surf.gear = 0.0;
+    }
+    pub fn set_flaps_now(&mut self, f: f32) {
+        self.surf.flaps = f.clamp(0.0, 1.0);
+    }
     /// Afterburner level 0..1 (max over engines).
     pub fn afterburner(&self) -> f32 {
         self.surf.afterburner
@@ -2861,6 +2910,12 @@ impl Aircraft {
 
     fn crash(&mut self, reason: String) {
         if self.crashed.is_none() {
+            self.impact = Some(Impact { pos: self.pos, vel: self.vel, rot: self.rot, omega: self.omega, on_ground: self.on_ground });
+            // After a structural failure in the air, that is the cause.
+            let reason = match &self.dmg.failure {
+                Some(f) if !reason.starts_with("Structural") => format!("{f}; {}", lower_first(&reason)),
+                _ => reason,
+            };
             self.crashed = Some(reason);
         }
         self.vel = Vec3::ZERO;
@@ -2884,7 +2939,11 @@ impl Aircraft {
             return;
         }
         let dt = dt.min(1.0 / 30.0);
-        let c = ctl.sanitized();
+        let mut c = ctl.sanitized();
+        // Separated engines are gone for good.
+        c.failed_engines |= self.dmg.failed_engine_bits();
+        let sd = crate::damage::struct_def(def.id);
+        let gear_before = self.gear_pos;
         let saved = self.clone();
 
         // ---- air data -----------------------------------------------------
@@ -2917,7 +2976,9 @@ impl Aircraft {
         if def.retractable_gear {
             // Weight-on-wheels interlock: no retraction on the ground.
             let target = if c.gear_down || self.on_ground { 1.0 } else { 0.0 };
-            self.gear_pos = move_toward(self.gear_pos, target, dt / def.gear_time.max(0.5));
+            if !self.dmg.gear_jam {
+                self.gear_pos = move_toward(self.gear_pos, target, dt / def.gear_time.max(0.5));
+            }
         } else {
             self.gear_pos = 1.0;
         }
@@ -2959,13 +3020,27 @@ impl Aircraft {
 
         // ---- control law & actuators --------------------------------------
         self.actuate(def, &c, vb, agl, &atm, q_slip, m_eng, dt);
+        self.dmg.apply_jams(&mut self.surf);
 
         // ---- aerodynamics -------------------------------------------------
-        let aero = self.aero(def, vb, agl, &atm, q_slip);
+        let mut aero = self.aero(def, vb, agl, &atm, q_slip);
         self.jsb = aero.jsb;
         self.alpha = aero.alpha;
         self.beta = aero.beta;
         self.air_vel = air_world;
+        // Structural loads: lift and the rolling moment (less its rate damping)
+        // decide how each half-wing is loaded.
+        let lift_dir = {
+            let vs = (vb.y * vb.y + vb.z * vb.z).sqrt();
+            if vs > 1e-2 { Vec3::new(0.0, vb.z, -vb.y) / vs } else { Vec3::Y }
+        };
+        // Lost / damaged surfaces.
+        let corr = crate::damage::aero_correction(sd, def, &self.dmg, vb, atm.density, aero.force + f_eng, &self.surf);
+        aero.force += corr.force;
+        aero.moment += corr.moment;
+        aero.damping *= corr.damp_scale;
+        let load_lift = aero.force.dot(lift_dir);
+        let load_roll = aero.moment.z - aero.damping.z * self.omega.z;
         let f_body = aero.force + f_eng;
         let mut m_body = aero.moment + m_eng;
 
@@ -3007,7 +3082,20 @@ impl Aircraft {
                 return;
             }
             if sink > def.max_touchdown_sink {
-                self.crash(format!("Hard landing: touched down at {:.0} fpm", sink / FPM));
+                // Up to ~1.7x the design sink rate the gear legs fail (the
+                // airframe survives and slides on its belly); beyond, the
+                // fuselage breaks.
+                let how = if sink > 1.7 * def.max_touchdown_sink || def.category == Category::Glider {
+                    "airframe broke up"
+                } else {
+                    for p in [crate::damage::Part::GearL, crate::damage::Part::GearR, crate::damage::Part::GearNose] {
+                        if def.gear.iter().any(|g| crate::damage::gear_part(def, g) == Some(p)) {
+                            self.dmg.separate(sd, def, p, "hard landing");
+                        }
+                    }
+                    "landing gear collapsed"
+                };
+                self.crash(format!("Hard landing: touched down at {:.0} fpm — {how}", sink / FPM));
                 return;
             }
             if bank.abs() > def.max_touchdown_bank {
@@ -3025,7 +3113,9 @@ impl Aircraft {
         self.on_ground = gnd.contact;
 
         // ---- load factor ----------------------------------------------------
-        let weight = def.mass * GRAVITY;
+        let mass = self.dmg.mass(def);
+        let weight = mass * GRAVITY;
+        // Forces now act about the shifted centre of gravity.
         let f_world = self.rot * f_body + f_ground;
         let up = self.up();
         self.g_load = f_world.dot(up) / weight;
@@ -3034,12 +3124,12 @@ impl Aircraft {
         self.g_filtered += (g_aero - self.g_filtered) * (1.0 - (-dt / 0.1f32).exp());
 
         // ---- integrate translation (symplectic Euler) -----------------------
-        let acc = f_world / def.mass - Vec3::Y * GRAVITY;
+        let acc = f_world / mass - Vec3::Y * GRAVITY;
         self.vel += acc * dt;
         self.pos += self.vel * dt;
 
         // ---- integrate rotation (damping implicit per axis) ------------------
-        let inertia = Vec3::new(def.inertia_pitch, def.inertia_yaw, def.inertia_roll);
+        let inertia = self.dmg.inertia(def);
         let w = self.omega;
         // Rigid body + spinning propellers (gyroscopic precession).
         let gyro = w.cross(inertia * w + Vec3::Z * h_prop);
@@ -3055,22 +3145,33 @@ impl Aircraft {
         self.omega = w_new;
         self.rot = (self.rot * Quat::from_scaled_axis(self.omega * dt)).normalize();
 
-        // ---- structural limits ----------------------------------------------
-        let ias = self.ias;
-        if ias > 1.25 * def.vne_kt * KT {
-            self.crash(format!("Structural failure: overspeed at {:.0} kt", ias / KT));
-            return;
-        }
-        if def.retractable_gear && self.gear_pos > 0.05 && ias > 1.35 * def.vle_kt * KT {
-            self.crash(format!(
-                "Structural failure: landing gear extended at {:.0} kt (limit {:.0} kt)",
-                ias / KT,
-                def.vle_kt
-            ));
-            return;
-        }
-        if self.g_filtered > def.g_limit_pos || self.g_filtered < def.g_limit_neg {
-            self.crash(format!("Structural failure: wings overstressed at {:+.1} g", self.g_filtered));
+        // ---- structural loads, wing bending, damage (damage.rs) ---------------
+        let loads = crate::damage::Loads {
+            lift: load_lift,
+            roll_moment: load_roll,
+            n_total: self.g_load,
+            side_g: self.side_g,
+            ias: self.ias,
+            mach: self.mach,
+            flaps: self.surf.flaps,
+            spoilers: self.surf.spoilers,
+            gear_pos: self.gear_pos,
+            gear_moving: (self.gear_pos - gear_before).abs() > 1e-6,
+            on_ground: self.on_ground,
+            ground_speed: Vec2::new(self.vel.x, self.vel.z).length(),
+            q_s: 0.5 * atm.density * vb.length_squared() * def.wing_area,
+            cl_max: def.cl_max(self.surf.flaps),
+            dt,
+        };
+        self.dmg.update(sd, def, &loads);
+        // A ground loop / hard sideways skid folds the main gear.
+        if self.on_ground && self.dmg.side_f.abs() > sd.gear_side_g && loads.ground_speed > 8.0 && self.dmg.lost & crate::damage::GEAR_BITS == 0 && def.category != Category::Glider {
+            for p in [crate::damage::Part::GearL, crate::damage::Part::GearR] {
+                if def.gear.iter().any(|g| crate::damage::gear_part(def, g) == Some(p)) {
+                    self.dmg.separate(sd, def, p, "side load");
+                }
+            }
+            self.crash(format!("Ground loop: main gear collapsed under a {:.1} g side load", self.dmg.side_f.abs()));
             return;
         }
 
@@ -3492,8 +3593,9 @@ impl Aircraft {
         let locked = self.gear_locked(def);
 
         let mut torque_world = Vec3::ZERO;
+        let gear_gone = self.dmg.lost & crate::damage::GEAR_BITS != 0;
         for gp in def.gear {
-            if gp.retracts && !locked {
+            if (gp.retracts && !locked) || self.dmg.gear_lost(def, gp) {
                 continue;
             }
             let r = self.rot * gp.pos;
@@ -3543,7 +3645,7 @@ impl Aircraft {
                 return out;
             }
             if ground_speed >= hp.tolerate_below {
-                let belly_hit = def.retractable_gear && !locked && hp.pos.y < -0.5 && hp.reason != "Wingtip strike";
+                let belly_hit = ((def.retractable_gear && !locked) || gear_gone) && hp.pos.y < -0.5 && hp.reason != "Wingtip strike";
                 let reason = if belly_hit {
                     GEAR_UP
                 } else if hp.reason == GEAR_UP {
@@ -3585,7 +3687,7 @@ impl Aircraft {
         }
         let locked = self.gear_locked(def);
         for gp in def.gear {
-            if gp.retracts && !locked {
+            if (gp.retracts && !locked) || self.dmg.gear_lost(def, gp) {
                 continue;
             }
             if hit(self.pos + self.rot * gp.pos) {
@@ -5243,8 +5345,11 @@ mod tests {
         let ctl = trimmed_controls_at(&def, speed, 3000.0);
         let mut a = Aircraft::airborne(&def, Vec3::new(0.0, 3000.0, 0.0), 0.0, speed);
         run(&mut a, &def, &env, 20.0, |_| Controls { gear_down: true, throttle: 1.0, ..ctl });
-        eprintln!("A320-class gear at 385 kt: {:?}", a.crashed);
-        assert!(a.crashed.as_deref().unwrap_or("").contains("landing gear"));
+        eprintln!("A320-class gear at 385 kt: {:?}", a.dmg.events.iter().map(|e| &e.msg).collect::<Vec<_>>());
+        // The gear is torn off; the aircraft flies on without it.
+        assert_eq!(a.dmg.lost & crate::damage::GEAR_BITS, crate::damage::GEAR_BITS);
+        assert!(a.dmg.events.iter().any(|e| e.msg.contains("landing gear")));
+        assert!(a.crashed.is_none());
         // Within Vle the drag rises but nothing breaks.
         let speed = 250.0 * KT;
         let ctl = trimmed_controls_at(&def, speed, 3000.0);
@@ -5326,8 +5431,10 @@ mod tests {
         let ctl = trimmed_controls(&k, 155.0 * KT);
         let mut a = Aircraft::airborne(&k, Vec3::new(0.0, 2000.0, 0.0), 0.0, 155.0 * KT);
         run(&mut a, &k, &env, 5.0, |_| Controls { elevator: 1.0, ..ctl });
-        eprintln!("yank at 155 kt: {:?}", a.crashed);
-        assert!(a.crashed.as_deref().unwrap_or("").contains("overstressed"));
+        eprintln!("yank at 155 kt: {:?} / {:?}", a.dmg.failure, a.crashed);
+        // Beyond ultimate load a wing comes off (the aircraft then falls out of control).
+        assert!(a.dmg.failure.as_deref().unwrap_or("").contains("overstressed"));
+        assert!(a.dmg.is_lost(crate::damage::Part::WingL) || a.dmg.is_lost(crate::damage::Part::WingR));
         // A firm 3 g pull at 110 kt is fine.
         let ctl = trimmed_controls(&k, 110.0 * KT);
         let mut a = Aircraft::airborne(&k, Vec3::new(0.0, 2000.0, 0.0), 0.0, 110.0 * KT);
@@ -5344,8 +5451,12 @@ mod tests {
         a.rot = attitude(0.0, deg(-80.0), 0.0);
         a.vel = a.forward() * a.tas();
         run(&mut a, &k, &env, 60.0, |_| Controls { throttle: 1.0, trim: -0.5, ..Default::default() });
-        eprintln!("vertical dive: {:?}", a.crashed);
-        assert!(a.crashed.as_deref().unwrap_or("").contains("overspeed"));
+        eprintln!("vertical dive: {:?} / {:?}", a.dmg.failure, a.crashed);
+        assert!(a.dmg.failure.as_deref().unwrap_or("").contains("overspeed"));
+        // The crash that follows names the structural failure as its cause.
+        if let Some(c) = &a.crashed {
+            assert!(c.starts_with("Structural failure"), "{c}");
+        }
     }
 
     // ------------------------------------------------------------------
@@ -5616,13 +5727,23 @@ mod tests {
         let mut a = Aircraft::airborne(def, Vec3::new(0.0, 1500.0, 0.0), 0.7, kt * KT);
         let v_trim = a.tas();
         a.vel *= 1.1;
-        let mut peaks = vec![];
+        let mut peaks: Vec<f32> = vec![];
+        let mut last_peak = f32::NEG_INFINITY;
+        let mut t = 0.0f32;
         let mut prev = (0.0f32, 0.0f32);
         let secs = if matches!(def.category, Category::Trainer | Category::Glider) { 120.0 } else { 200.0 };
         run(&mut a, def, &env, secs, |a| {
+            t += DT;
             let v = a.tas();
             if prev.1 > prev.0 && prev.1 > v {
-                peaks.push(prev.1 - v_trim);
+                // Phugoid periods are tens of seconds: ripples on one crest
+                // (short-period / numerical) are the same peak — keep its maximum.
+                let p = prev.1 - v_trim;
+                match peaks.last_mut() {
+                    Some(last) if t - last_peak < 8.0 => *last = last.max(p),
+                    _ => peaks.push(p),
+                }
+                last_peak = t;
             }
             prev = (prev.1, v);
             let fbw = def.control_law != ControlLaw::Direct;

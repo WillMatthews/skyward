@@ -386,6 +386,8 @@ impl Director {
                 };
                 events.push(Event::Crash { speed: self.prev_speed, vel: self.prev_vel, mass: def.mass, surface, in_air });
             }
+            // Wreckage: impacts, scrapes, separations, fires, explosions (debris.rs).
+            events.extend(sim.audio_events.iter().copied());
             for i in 0..n {
                 let r = eng[i].running;
                 if !r && self.prev_running[i] && !crashed {

@@ -29,6 +29,39 @@ pub struct ChunkDraw {
 pub struct AircraftFrame {
     pub asset: Arc<AircraftAsset>,
     pub draws: Vec<ChunkDraw>,
+    /// Structural parts of the vertices (wing flex, debris), models.rs.
+    pub parts: Option<Arc<crate::models::PartMap>>,
+    /// Wing bending, vibration and the loose parts' transforms this frame.
+    pub dynamics: Option<Box<AcDynamics>>,
+}
+
+/// Per-frame structural animation (eye-relative), shader `AcDyn`.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct AcDynamics {
+    /// Body up axis (eye-relative world), w = time (s).
+    pub up: [f32; 4],
+    /// Tip deflection left / right (m, + up), bend-twist (rad per m of tip deflection), unused.
+    pub flex: [f32; 4],
+    /// Vibration: amplitude (m), frequency (Hz), unused ×2.
+    pub vib: [f32; 4],
+    /// Per part: 1 = bends with the wing (still attached), 0 = rigid.
+    pub part_flex: [[f32; 4]; 4],
+    /// Per part: intact eye-relative world → this part's eye-relative world
+    /// (identity while attached).
+    pub parts: [[[f32; 4]; 4]; 16],
+}
+
+impl Default for AcDynamics {
+    fn default() -> Self {
+        let mut d: AcDynamics = bytemuck::Zeroable::zeroed();
+        d.up = [0.0, 1.0, 0.0, 0.0];
+        for k in 0..16 {
+            d.parts[k] = Mat4::IDENTITY.to_cols_array_2d();
+            d.part_flex[k / 4][k % 4] = 1.0;
+        }
+        d
+    }
 }
 
 impl AircraftFrame {
@@ -37,6 +70,12 @@ impl AircraftFrame {
     pub fn shift(&mut self, d: glam::Vec3) {
         for dr in &mut self.draws {
             dr.model = Mat4::from_translation(d) * dr.model;
+        }
+        if let Some(dy) = self.dynamics.as_mut() {
+            for m in &mut dy.parts {
+                let x = Mat4::from_cols_array_2d(m);
+                *m = (Mat4::from_translation(d) * x * Mat4::from_translation(-d)).to_cols_array_2d();
+            }
         }
     }
 }
@@ -52,6 +91,9 @@ struct Inst {
 
 struct GpuModel {
     key: usize,
+    /// Per-vertex structural attributes (part, span station, chord offset).
+    pv: wgpu::Buffer,
+    has_parts: bool,
     vb: wgpu::Buffer,
     ib: wgpu::Buffer,
     tex_bgs: Vec<wgpu::BindGroup>,
@@ -76,6 +118,7 @@ pub struct AircraftRenderer {
     inst_buf: wgpu::Buffer,
     inst_cap: usize,
     inst_bg: wgpu::BindGroup,
+    dyn_buf: wgpu::Buffer,
     model: Option<GpuModel>,
     asset: Option<Arc<AircraftAsset>>,
     prepared: Prepared,
@@ -90,7 +133,13 @@ fn vertex_layout() -> wgpu::VertexBufferLayout<'static> {
     }
 }
 
-fn make_inst(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout, cap: usize) -> (wgpu::Buffer, wgpu::BindGroup) {
+fn part_layout(location: u32) -> wgpu::VertexBufferLayout<'static> {
+    const A3: [wgpu::VertexAttribute; 1] = [wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 0, shader_location: 3 }];
+    const A1: [wgpu::VertexAttribute; 1] = [wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 0, shader_location: 1 }];
+    wgpu::VertexBufferLayout { array_stride: 16, step_mode: wgpu::VertexStepMode::Vertex, attributes: if location == 3 { &A3 } else { &A1 } }
+}
+
+fn make_inst(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout, cap: usize, dyn_buf: &wgpu::Buffer) -> (wgpu::Buffer, wgpu::BindGroup) {
     let buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("aircraft instances"),
         size: (cap * std::mem::size_of::<Inst>()) as u64,
@@ -100,7 +149,7 @@ fn make_inst(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout, cap: usize) -> 
     let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("aircraft instances"),
         layout: bgl,
-        entries: &[wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() }],
+        entries: &[wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() }, wgpu::BindGroupEntry { binding: 1, resource: dyn_buf.as_entire_binding() }],
     });
     (buf, bg)
 }
@@ -110,25 +159,34 @@ impl AircraftRenderer {
     /// the scene pipelines' immediate-data size (the shared shader declares it).
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, globals_bgl: &wgpu::BindGroupLayout, shadow_bgl: &wgpu::BindGroupLayout, immediate_size: u32) -> Self {
         let src = format!(
-            "{}\n{}\n{}\n{}",
+            "{}\n{}\n{}\n{}\n{}",
             include_str!("shaders/atmos_core.wgsl"),
             include_str!("shaders/common.wgsl"),
             include_str!("shaders/scene.wgsl"),
+            include_str!("shaders/aircraft_dyn.wgsl"),
             include_str!("shaders/aircraft.wgsl")
         );
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("aircraft"), source: wgpu::ShaderSource::Wgsl(src.into()) });
         let shadow_mod = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("aircraft shadow"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/aircraft_shadow.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(format!("{}\n{}", include_str!("shaders/aircraft_dyn.wgsl"), include_str!("shaders/aircraft_shadow.wgsl")).into()),
         });
         let inst_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("aircraft instances"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None },
-                count: None,
-            }],
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None },
+                    count: None,
+                },
+            ],
         });
         let tex_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("aircraft texture"),
@@ -156,7 +214,7 @@ impl AircraftRenderer {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&layout),
-                vertex: wgpu::VertexState { module: &module, entry_point: Some("vs_aircraft"), compilation_options: Default::default(), buffers: &[Some(vertex_layout())] },
+                vertex: wgpu::VertexState { module: &module, entry_point: Some("vs_aircraft"), compilation_options: Default::default(), buffers: &[Some(vertex_layout()), Some(part_layout(3))] },
                 primitive: wgpu::PrimitiveState { cull_mode: cull, ..Default::default() },
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: crate::gfx::DEPTH,
@@ -190,11 +248,14 @@ impl AircraftRenderer {
                 module: &shadow_mod,
                 entry_point: Some("vs_ac_shadow"),
                 compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<crate::aircraft_asset::Vertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 0, shader_location: 0 }],
-                })],
+                buffers: &[
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<crate::aircraft_asset::Vertex>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &[wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 0, shader_location: 0 }],
+                    }),
+                    Some(part_layout(1)),
+                ],
             },
             primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
             depth_stencil: Some(wgpu::DepthStencilState {
@@ -222,7 +283,12 @@ impl AircraftRenderer {
         let white = upload_texture(device, queue, 1, 1, &[255, 255, 255, 255]);
         let white_bg = tex_bg(device, &tex_bgl, &white, &sampler);
         let inst_cap = 256;
-        let (inst_buf, inst_bg) = make_inst(device, &inst_bgl, inst_cap);
+        let dyn_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("aircraft dynamics"),
+            contents: bytemuck::bytes_of(&AcDynamics::default()),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
+        let (inst_buf, inst_bg) = make_inst(device, &inst_bgl, inst_cap, &dyn_buf);
         AircraftRenderer {
             main_cull,
             main_twosided,
@@ -235,6 +301,7 @@ impl AircraftRenderer {
             inst_buf,
             inst_cap,
             inst_bg,
+            dyn_buf,
             model: None,
             asset: None,
             prepared: Prepared::default(),
@@ -247,20 +314,26 @@ impl AircraftRenderer {
         self.prepared.shadow.clear();
         let Some(f) = frame else { return };
         let key = Arc::as_ptr(&f.asset) as usize;
-        if self.model.as_ref().map(|m| m.key) != Some(key) {
+        if self.model.as_ref().map(|m| (m.key, m.has_parts)) != Some((key, f.parts.is_some())) {
             let a = &f.asset;
             if a.vertices.is_empty() || a.indices.is_empty() {
                 self.model = None;
                 return;
             }
+            // With structural parts: the seam-split copy of the geometry.
+            let split = f.parts.as_ref().filter(|p| p.vert.len() == p.vertices.len() && p.indices.len() == a.indices.len());
+            let (verts, idx) = match split {
+                Some(p) => (&p.vertices[..], &p.indices[..]),
+                None => (&a.vertices[..], &a.indices[..]),
+            };
             let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("aircraft vb"),
-                contents: bytemuck::cast_slice(&a.vertices),
+                contents: bytemuck::cast_slice(verts),
                 usage: wgpu::BufferUsages::VERTEX,
             });
             let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("aircraft ib"),
-                contents: bytemuck::cast_slice(&a.indices),
+                contents: bytemuck::cast_slice(idx),
                 usage: wgpu::BufferUsages::INDEX,
             });
             let tex_bgs = a
@@ -271,14 +344,25 @@ impl AircraftRenderer {
                     tex_bg(device, &self.tex_bgl, &v, &self.sampler)
                 })
                 .collect();
-            self.model = Some(GpuModel { key, vb, ib, tex_bgs });
+            let pv_data: Vec<[f32; 4]> = match split {
+                Some(p) => p.vert.clone(),
+                None => vec![[0.0, 0.0, 0.0, 1.0]; a.vertices.len()],
+            };
+            let pv = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("aircraft parts"),
+                contents: bytemuck::cast_slice(&pv_data),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            self.model = Some(GpuModel { key, pv, has_parts: f.parts.is_some(), vb, ib, tex_bgs });
             self.asset = Some(f.asset.clone());
         }
         let a = &f.asset;
         if f.draws.len() > self.inst_cap {
             self.inst_cap = f.draws.len().next_power_of_two();
-            (self.inst_buf, self.inst_bg) = make_inst(device, &self.inst_bgl, self.inst_cap);
+            (self.inst_buf, self.inst_bg) = make_inst(device, &self.inst_bgl, self.inst_cap, &self.dyn_buf);
         }
+        let dynamics = f.dynamics.as_deref().copied().unwrap_or_default();
+        queue.write_buffer(&self.dyn_buf, 0, bytemuck::bytes_of(&dynamics));
         let mut insts = Vec::with_capacity(f.draws.len());
         // Opaque first, then cut-outs, then glass (alpha-to-coverage needs no sorting,
         // but drawing glass last lets the depth test skip what it hides).
@@ -335,6 +419,7 @@ impl AircraftRenderer {
         let (Some(gm), Some(a)) = (&self.model, &self.asset) else { return };
         pass.set_bind_group(1, &self.inst_bg, &[]);
         pass.set_vertex_buffer(0, gm.vb.slice(..));
+        pass.set_vertex_buffer(1, gm.pv.slice(..));
         pass.set_index_buffer(gm.ib.slice(..), wgpu::IndexFormat::Uint32);
         let mut cur_pipe = 255u8;
         for &(ci, ii) in list {
@@ -381,6 +466,7 @@ impl AircraftRenderer {
         pass.set_pipeline(&self.shadow);
         pass.set_bind_group(1, &self.inst_bg, &[]);
         pass.set_vertex_buffer(0, gm.vb.slice(..));
+        pass.set_vertex_buffer(1, gm.pv.slice(..));
         pass.set_index_buffer(gm.ib.slice(..), wgpu::IndexFormat::Uint32);
         for &(ci, ii) in &self.prepared.shadow {
             let c = &a.chunks[ci as usize];
