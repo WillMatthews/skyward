@@ -209,8 +209,10 @@ const TREE_DIST: f32 = 4200.0;
 const TREE_LOD0: f32 = 1100.0;
 const TREE_REFL_DIST: f32 = 1500.0;
 const BUILDING_REFL_DIST: f32 = 6000.0;
-/// Half-size of the base ground quad that follows the camera (m).
+/// Half-size of the base ground quad that follows the camera (m): a backstop
+/// below the terrain (terrain.rs horizon tiles cover the view to ~95 km).
 const GROUND_HALF: f32 = 60_000.0;
+const GROUND_Y: f32 = -40.0;
 
 /// View-frustum planes extracted from a clip matrix (Gribb–Hartmann, depth 0..1).
 struct Frustum([Vec4; 6]);
@@ -239,6 +241,12 @@ struct GpuTile {
     /// Tile frame → eye-relative, this frame (immediate data for its draws).
     xf: [f32; 4],
     max_h: f32,
+    min_y: f32,
+    /// Base / draped index ranges of `flat`, bucketed (terrain.rs).
+    ranges: crate::terrain::FlatRanges,
+    /// Terrain surface (tile frame) and water bodies (bounds, level).
+    grid: std::sync::Arc<crate::terrain::Grid>,
+    water: Vec<(Vec2, Vec2, f32)>,
     flat: Option<GpuMesh>,
     buildings: Option<GpuMesh>,
     /// Instance buffer: deciduous [0, split), conifers [split, n).
@@ -253,13 +261,17 @@ impl GpuTile {
         (self.lo - p).max(p - self.hi).max(Vec2::ZERO).length()
     }
     fn flat_box(&self) -> (Vec3, Vec3) {
-        (vec3(self.lo.x, -0.5, self.lo.y), vec3(self.hi.x, 0.5, self.hi.y))
+        (vec3(self.lo.x, self.min_y - 0.5, self.lo.y), vec3(self.hi.x, self.grid.max + 0.5, self.hi.y))
     }
     fn solid_box(&self) -> (Vec3, Vec3) {
-        (vec3(self.lo.x, 0.0, self.lo.y), vec3(self.hi.x, self.max_h + 1.0, self.hi.y))
+        (vec3(self.lo.x, self.min_y, self.lo.y), vec3(self.hi.x, self.max_h + 1.0, self.hi.y))
     }
     fn tree_box(&self) -> (Vec3, Vec3) {
-        (vec3(self.lo.x - 10.0, 0.0, self.lo.y - 10.0), vec3(self.hi.x + 10.0, 26.0, self.hi.y + 10.0))
+        (vec3(self.lo.x - 10.0, self.grid.min - 1.0, self.lo.y - 10.0), vec3(self.hi.x + 10.0, self.grid.max + 26.0, self.hi.y + 10.0))
+    }
+    /// Ground height under a current-frame point inside the tile.
+    fn ground(&self, p: Vec2) -> f32 {
+        self.grid.height(self.map.inverse(p))
     }
 }
 
@@ -421,7 +433,10 @@ pub struct Renderer {
     globals_bgl: wgpu::BindGroupLayout,
     post_bgl: wgpu::BindGroupLayout,
     sky_main: wgpu::RenderPipeline,
-    flat_main: wgpu::RenderPipeline,
+    /// Terrain base surfaces (depth write) and the draped layers on them
+    /// (pulled toward the eye, no depth write): terrain.rs.
+    flat_base: wgpu::RenderPipeline,
+    flat_over: wgpu::RenderPipeline,
     solid_main: wgpu::RenderPipeline,
     sky_refl: wgpu::RenderPipeline,
     solid_refl: wgpu::RenderPipeline,
@@ -716,7 +731,8 @@ impl Renderer {
         use wgpu::CompareFunction as C;
         // Reverse-Z: larger depth = nearer.
         let sky_main = scene_pipe("sky", "vs_sky", "fs_sky", false, C::Always, false, MSAA);
-        let flat_main = scene_pipe("flat", "vs_main", "fs_main", true, C::Always, true, MSAA);
+        let flat_base = scene_pipe("flat base", "vs_main", "fs_main", true, C::GreaterEqual, true, MSAA);
+        let flat_over = scene_pipe("flat over", "vs_over", "fs_main", true, C::GreaterEqual, false, MSAA);
         let solid_main = scene_pipe("solid", "vs_main", "fs_main", true, C::GreaterEqual, true, MSAA);
         let sky_refl = scene_pipe("sky refl", "vs_sky", "fs_sky", false, C::Always, false, 1);
         let solid_refl = scene_pipe("solid refl", "vs_main", "fs_main", true, C::GreaterEqual, true, 1);
@@ -904,7 +920,8 @@ impl Renderer {
             globals_bgl,
             post_bgl,
             sky_main,
-            flat_main,
+            flat_base,
+            flat_over,
             solid_main,
             sky_refl,
             solid_refl,
@@ -989,7 +1006,23 @@ impl Renderer {
         let bytes = flat.as_ref().map_or(0, |m| m.bytes()) + buildings.as_ref().map_or(0, |m| m.bytes()) + trees.as_ref().map_or(0, |t| t.0.size()) + lights.as_ref().map_or(0, |l| l.bytes);
         let (lo, hi) = t.id.rect(&self.proj);
         let map = Proj::tile_frame(t.id).map_to(&self.proj);
-        let gt = GpuTile { id: t.id, lo, hi, map, xf: map.gpu(), max_h: t.max_h, flat, buildings, trees, lights, bytes };
+        let gt = GpuTile {
+            id: t.id,
+            lo,
+            hi,
+            map,
+            xf: map.gpu(),
+            max_h: t.max_h,
+            min_y: t.min_y,
+            ranges: t.ranges.clone(),
+            grid: t.grid.clone(),
+            water: t.water.clone(),
+            flat,
+            buildings,
+            trees,
+            lights,
+            bytes,
+        };
         self.pending.retain(|p| p.data.id != t.id);
         self.pending.push_back(PendingTile { tile: gt, data: t, part: 0, offset: 0 });
     }
@@ -1129,6 +1162,37 @@ impl Renderer {
             eprintln!("gpu ms: total {:.2} | {}", p.sums[0] / f, parts.join(", "));
             p.sums.iter_mut().for_each(|s| *s = 0.0);
             p.frames = 0;
+        }
+    }
+
+    /// Ground height at a current-frame point (finest resident tile).
+    fn ground_at(&self, p: Vec2) -> Option<f32> {
+        [crate::osm::ZOOM, crate::osm::FAR_ZOOM].iter().find_map(|&z| self.tiles.get(&TileId::at_world_z(&self.proj, p, z)).map(|t| t.ground(p)))
+    }
+
+    /// Height of the planar-reflection mirror: the surface of the water body
+    /// nearest the eye (within 3 km), else the ground under the eye.
+    fn reflection_plane(&self, eye: Vec2) -> (f32, bool) {
+        let mut best: Option<(f32, f32)> = None;
+        let mut under = None;
+        for t in self.tiles.values().filter(|t| !t.id.is_far()) {
+            if t.dist(eye) > 3000.0 {
+                continue;
+            }
+            if t.dist(eye) == 0.0 {
+                under = Some(t.ground(eye));
+            }
+            for (lo, hi, h) in &t.water {
+                let (a, b) = (t.map.apply(*lo), t.map.apply(*hi));
+                let d = (a.min(b) - eye).max(eye - a.max(b)).max(Vec2::ZERO).length();
+                if d < 3000.0 && best.is_none_or(|x| d < x.0) {
+                    best = Some((d, *h));
+                }
+            }
+        }
+        match best {
+            Some(b) => (b.1, true),
+            None => (under.unwrap_or(0.0), false),
         }
     }
 
@@ -1282,7 +1346,16 @@ impl Renderer {
         dynamic: &MeshData,
     ) {
         self.ensure_targets(device, width, height);
-        self.dynamic.set(device, queue, dynamic);
+        // Moving landmark parts (London Eye), eye-relative like the aircraft.
+        let lm = crate::landmarks::animated(&self.proj, fv.eye, fv.time, &|p| self.ground_at(p).unwrap_or(0.0));
+        if lm.idx.is_empty() {
+            self.dynamic.set(device, queue, dynamic);
+        } else {
+            let mut all = MeshData::default();
+            all.append(dynamic, Mat4::IDENTITY);
+            all.append(&lm, Mat4::IDENTITY);
+            self.dynamic.set(device, queue, &all);
+        }
         self.aircraft.prepare(device, queue, fv.aircraft.as_ref());
         self.lights.set_aircraft(queue, &fv.acl.sprites[..fv.acl.n_sprites]);
         self.lights.set_coverage(queue, self.tiles.keys().filter(|id| !id.is_far()).copied());
@@ -1291,7 +1364,7 @@ impl Renderer {
             let c = (Vec2::new(fv.eye.x, fv.eye.z) / 1000.0).round() * 1000.0;
             let g = GROUND_HALF;
             let mut m = MeshData { mat: scene::mat::GROUND, ..Default::default() };
-            m.flat_quad([c + Vec2::new(-g, -g), c + Vec2::new(g, -g), c + Vec2::new(g, g), c + Vec2::new(-g, g)], 0.0, scene::LAND);
+            m.flat_quad([c + Vec2::new(-g, -g), c + Vec2::new(g, -g), c + Vec2::new(g, g), c + Vec2::new(-g, g)], GROUND_Y, scene::LAND);
             self.ground.set(device, queue, &m);
         }
         // Camera cuts drop the clouds' temporal history.
@@ -1342,6 +1415,9 @@ impl Renderer {
         let night_k = 1.0 - smooth(-0.10, 0.06, sun.y);
         let lut_scale = atmosphere::lut_scale(sun.y);
         let pre = atmosphere::pre_exposure(sun.y);
+        // Planar reflection plane: the nearest water body's surface, else the
+        // ground under the eye (puddles).
+        let (plane_h, water_plane) = self.reflection_plane(Vec2::new(fv.eye.x, fv.eye.z));
         // Skyglow from the far tiles' built-up areas (cached in the light renderer).
         let glow_src: Vec<(Vec2, f32)> = self.tiles.values().filter_map(|t| t.lights.as_ref().map(|l| (t, l))).flat_map(|(t, l)| l.glow.iter().map(move |(p, lm)| (t.map.apply(*p), *lm))).collect();
         let (glow, city_up) = self.lights.skyglow(&glow_src, fv.eye, haze);
@@ -1431,7 +1507,7 @@ impl Renderer {
             misc: [airport_level, beacon, wx.fog_ext, wx.fog_top],
             misc2: [night.traffic, n_spots as f32, night.moon_alpha, 0.0],
             alights: spots,
-            pre: [pre, 1.0 / pre, 0.0, 0.0],
+            pre: [pre, 1.0 / pre, plane_h, 0.0],
         };
         let px_per_m = height as f32 * 0.5 / (fv.fov_y * 0.5).tan();
         let aou = AoU {
@@ -1442,16 +1518,19 @@ impl Renderer {
         };
         queue.write_buffer(&self.ao_buf, 0, bytemuck::bytes_of(&aou));
         queue.write_buffer(&self.globals_buf, 0, bytemuck::bytes_of(&globals));
+        // Mirror about the plane y = plane_h.
         let mirror = Mat4::from_scale(vec3(1.0, -1.0, 1.0));
-        let rvp = proj * fv.view * mirror;
+        let mirror_h = Mat4::from_translation(vec3(0.0, plane_h, 0.0)) * mirror * Mat4::from_translation(vec3(0.0, -plane_h, 0.0));
+        let rvp = proj * fv.view * mirror_h;
         let rvp_rot = vp_rot * mirror;
-        let reye = fv.eye * vec3(1.0, -1.0, 1.0);
+        let reye = vec3(fv.eye.x, 2.0 * plane_h - fv.eye.y, fv.eye.z);
+        let eh = fv.eye.y - plane_h;
         let (rw, rh) = t.refl_size;
         // Mirrored pass, eye-relative: world p = rel + eye, mirrored and seen from the eye.
-        let rvp_rel = proj * view_rot * Mat4::from_translation(vec3(0.0, -2.0 * fv.eye.y, 0.0)) * mirror;
+        let rvp_rel = proj * view_rot * Mat4::from_translation(vec3(0.0, -2.0 * eh, 0.0)) * mirror;
         let rglobals = Globals {
             view_proj: rvp_rel.to_cols_array_2d(),
-            pattern: [pat[0], pat[1], pat[2], 2.0 * fv.eye.y],
+            pattern: [pat[0], pat[1], pat[2], 2.0 * eh],
             inv_view_proj: rvp_rot.inverse().to_cols_array_2d(),
             cam_pos: [reye.x, reye.y, reye.z, fv.time],
             shadow_info: [SHADOW_RES as f32, 1.0, CASCADE_BLEND, 0.0],
@@ -1610,6 +1689,24 @@ impl Renderer {
             let f = &shadow_f[i];
             pass.set_bind_group(0, &self.shadow_bg, &[(UNIFORM_STRIDE * i as u64) as u32]);
             pass.set_pipeline(&self.shadow_pipe);
+            // Terrain casts too (ridges shading valleys); its base surfaces only.
+            for t in &tiles {
+                let Some(m) = &t.flat else { continue };
+                if t.grid.max - t.grid.min < 8.0 {
+                    continue; // flat land: nothing to cast
+                }
+                let (lo, hi) = t.flat_box();
+                if !f.aabb(lo, hi) {
+                    continue;
+                }
+                let (base, _) = ground_runs(t, &self.tiles);
+                place(&mut pass, &t.xf);
+                pass.set_vertex_buffer(0, m.vb.slice(..));
+                pass.set_index_buffer(m.ib.slice(..), wgpu::IndexFormat::Uint32);
+                for r in &base {
+                    pass.draw_indexed(r.0..r.1, 0, 0..1);
+                }
+            }
             for t in &tiles {
                 if let Some(m) = &t.buildings {
                     let (lo, hi) = t.solid_box();
@@ -1673,6 +1770,27 @@ impl Renderer {
             pass.set_pipeline(&self.sky_refl);
             pass.draw(0..3, 0..1);
             pass.set_pipeline(&self.solid_refl);
+            // Hills and mountains mirrored in the water (the mirror pass
+            // discards everything below the water level).
+            if water_plane {
+                for tile in &tiles {
+                    let Some(m) = &tile.flat else { continue };
+                    if tile.grid.max < plane_h + 3.0 {
+                        continue;
+                    }
+                    let (lo, hi) = tile.flat_box();
+                    if !refl_f.aabb(lo, hi) {
+                        continue;
+                    }
+                    let (base, _) = ground_runs(tile, &self.tiles);
+                    place(&mut pass, &tile.xf);
+                    pass.set_vertex_buffer(0, m.vb.slice(..));
+                    pass.set_index_buffer(m.ib.slice(..), wgpu::IndexFormat::Uint32);
+                    for r in &base {
+                        pass.draw_indexed(r.0..r.1, 0, 0..1);
+                    }
+                }
+            }
             for tile in &tiles {
                 if let Some(m) = &tile.buildings {
                     let (lo, hi) = tile.solid_box();
@@ -1733,20 +1851,42 @@ impl Renderer {
             pass.set_bind_group(0, &t.main_bg, &[]);
             pass.set_pipeline(&self.sky_main);
             pass.draw(0..3, 0..1);
-            // Ground layers: painter's order (base ground, tiles, runways), no depth test.
-            pass.set_pipeline(&self.flat_main);
+            // Ground: every tile's terrain surface (depth write), coarser
+            // levels only where no finer tile is resident, then the draped
+            // layers in painter's order (no depth write) and the runways.
+            pass.set_pipeline(&self.flat_base);
             place(&mut pass, &world_xf);
             pass.set_vertex_buffer(0, self.ground.vb.slice(..));
             pass.set_index_buffer(self.ground.ib.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..self.ground.n, 0, 0..1);
-            for tile in &tiles {
-                if let Some(m) = &tile.flat {
+            let visible: Vec<(&GpuTile, &GpuMesh, Vec<(u32, u32)>, Vec<(u32, u32)>)> = tiles
+                .iter()
+                .filter_map(|tile| {
+                    let m = tile.flat.as_ref()?;
                     let (lo, hi) = tile.flat_box();
-                    if main_f.aabb(lo, hi) {
-                        place(&mut pass, &tile.xf);
-                        draw_mesh(&mut pass, m);
-                        stats.tiles_drawn += 1;
+                    if !main_f.aabb(lo, hi) {
+                        return None;
                     }
+                    let (b, o) = ground_runs(tile, &self.tiles);
+                    Some((*tile, m, b, o))
+                })
+                .collect();
+            for (tile, m, base, _) in &visible {
+                place(&mut pass, &tile.xf);
+                pass.set_vertex_buffer(0, m.vb.slice(..));
+                pass.set_index_buffer(m.ib.slice(..), wgpu::IndexFormat::Uint32);
+                for r in base {
+                    pass.draw_indexed(r.0..r.1, 0, 0..1);
+                }
+                stats.tiles_drawn += 1;
+            }
+            pass.set_pipeline(&self.flat_over);
+            for (tile, m, _, over) in &visible {
+                place(&mut pass, &tile.xf);
+                pass.set_vertex_buffer(0, m.vb.slice(..));
+                pass.set_index_buffer(m.ib.slice(..), wgpu::IndexFormat::Uint32);
+                for r in over {
+                    pass.draw_indexed(r.0..r.1, 0, 0..1);
                 }
             }
             if let Some(m) = &self.runways {
@@ -1950,6 +2090,49 @@ impl Renderer {
         self.prev_vp = Some((vp_rot, fv.eye));
         self.stats = stats;
     }
+}
+
+/// Index ranges of a tile's ground mesh to draw: (base, draped), with the
+/// buckets a finer resident tile covers left out (merged into runs).
+fn ground_runs(t: &GpuTile, tiles: &HashMap<TileId, GpuTile>) -> (Vec<(u32, u32)>, Vec<(u32, u32)>) {
+    let r = &t.ranges;
+    let b = r.b.max(1);
+    if r.base.len() < 2 || r.over.len() < 2 {
+        return (Vec::new(), Vec::new());
+    }
+    let child_z = match crate::terrain::Level::of(t.id) {
+        crate::terrain::Level::Near => None,
+        crate::terrain::Level::Far => Some(crate::osm::ZOOM),
+        crate::terrain::Level::Horizon => Some(crate::osm::FAR_ZOOM),
+    };
+    let covered = |k: u32| {
+        child_z.is_some_and(|z| {
+            let (i, j) = (k % b, k / b);
+            tiles.contains_key(&TileId { z, x: t.id.x * b + i, y: t.id.y * b + j })
+        })
+    };
+    let (mut base, mut over) = (Vec::new(), Vec::new());
+    let mut k = 0;
+    let n = b * b;
+    while k < n {
+        if covered(k) {
+            k += 1;
+            continue;
+        }
+        let s = k;
+        while k < n && !covered(k) {
+            k += 1;
+        }
+        let (b0, b1) = (r.base[s as usize], r.base[k as usize]);
+        let (o0, o1) = (r.over[s as usize], r.over[k as usize]);
+        if b1 > b0 {
+            base.push((b0, b1));
+        }
+        if o1 > o0 {
+            over.push((o0, o1));
+        }
+    }
+    (base, over)
 }
 
 /// Fit a stable, texel-snapped orthographic light matrix around a slice of

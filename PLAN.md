@@ -26,8 +26,9 @@ item lands; keep entries one line.
 ## 1. World & scenery
 - [x] Endless OSM vector-tile streaming, far-field tiles, floating origin (D, I)
 - [x] Buildings with procedural facades, pitched roofs, trees, seasons (E, H)
-- [ ] **P0** Terrain elevation (DEM tiles, e.g. Terrarium/Copernicus) + normal/detail shading; runways/airports flattened correctly
-- [ ] **P0** Landmark-quality buildings: use OSM `building:part` / `roof:shape` / heights fully; hand-authored or procedural landmarks (Shard, Tower Bridge, London Eye, St Paul's, O2, Canary Wharf tops)
+- [x] **P0** Terrain elevation (Terrarium DEM, 3 LODs to ~95 km, draped layers, flattened runways, terrain shadows, alpine shading) (T)
+- [x] **P0** Procedural landmarks registry: 12 London landmarks incl. turning London Eye, floodlit at night (T)
+- [ ] **P1** Terrain follow-ups: aprons/taxiways flattened like runways; detail normals near the ground; per-water-body reflection planes; far-field popping (geomorph); coastal sea in horizon tiles; OSM `building:part` / `roof:shape` via Overpass for non-landmark buildings; more cities' landmarks
 - [ ] **P1** Satellite/aerial imagery option for ground texture (licence-clean source) blended with vector landuse
 - [ ] **P1** Airports: terminals, hangars, jet bridges, apron markings, stands, parked aircraft, ground vehicles, windsocks, signage
 - [ ] **P1** Bridges with decks/towers, tunnels hidden, rail with trains, motorways with moving traffic (day + night)
@@ -118,6 +119,6 @@ item lands; keep entries one line.
 | L | Structure/flex/crashes + supersonic/atmospheric VFX | ⏳ after N |
 | G | WASM + GitHub Pages workflow (repo stays private until owner flips it) | ⏳ last of current batch |
 | P | Input devices (gilrs/evdev, rebinding, curves, head-look) + CI/goldens | ✅ |
-| T | Terrain elevation + landmarks | 🟡 running |
+| T | Terrain elevation + landmarks | ✅ |
 | L | (see above) | 🟡 running |
 | next | Airports detail, live 3D cockpit instruments, ATC, missions, release packaging | ⏳ to schedule |

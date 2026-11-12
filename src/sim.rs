@@ -346,6 +346,8 @@ pub struct Sim {
     pub custom_start: Option<crate::startpos::CustomStart>,
     cine: Cine,
     real_time: f32,
+    /// Ground height under the aircraft (terrain.rs), for heights above the ground.
+    pub ground_y: f32,
     /// Physics state one fixed step back, for render interpolation.
     prev_pos: Vec3,
     prev_rot: Quat,
@@ -453,6 +455,7 @@ impl Sim {
             custom_start: None,
             cine: Cine::default(),
             real_time: 0.0,
+            ground_y: 0.0,
             prev_pos: Vec3::ZERO,
             prev_rot: Quat::IDENTITY,
             rpos: Vec3::ZERO,
@@ -650,7 +653,9 @@ impl Sim {
                     None => (world.home_pos(), vec2(0.0, -1.0)),
                 };
                 let p = thr - dir * d;
-                let (ac, mut ctl) = air(vec3(p.x, alt, p.y), heading_of(dir), v);
+                // (Above the threshold / the terrain: terrain.rs.)
+                let base = rw.map_or_else(|| crate::flight::Environment::ground_height(world, p), |r| r.height_at(thr));
+                let (ac, mut ctl) = air(vec3(p.x, alt + base, p.y), heading_of(dir), v);
                 if def.has_engine {
                     // A shallow descent with the approach flap set.
                     ctl.throttle *= 0.75;
@@ -667,14 +672,14 @@ impl Sim {
                     Category::Glider => 900.0,
                     Category::Trainer => 400.0,
                 };
-                let (ac, ctl) = air(vec3(p.x, alt, p.y), heading_of(vec2(-1.0, 0.0)), cruise_ias(def));
+                let (ac, ctl) = air(vec3(p.x, alt + crate::flight::Environment::ground_height(world, p), p.y), heading_of(vec2(-1.0, 0.0)), cruise_ias(def));
                 (ac, ctl, 0)
             }
             Start::Thermal => {
                 let target = Self::best_thermal(world).unwrap_or(world.home_pos());
                 let p = target + vec2(500.0, 300.0);
                 let v = (def.vs1_kt * 1.4 * KT).max(25.0);
-                let (ac, ctl) = air(vec3(p.x, 650.0, p.y), heading_of(target - p), v);
+                let (ac, ctl) = air(vec3(p.x, 650.0 + crate::flight::Environment::ground_height(world, p), p.y), heading_of(target - p), v);
                 (ac, ctl, 0)
             }
         }
@@ -733,6 +738,7 @@ impl Sim {
     pub fn update(&mut self, world: &World, input: &mut Input, dt: f32) {
         let dt = dt.min(0.1);
         self.real_time += dt;
+        self.ground_y = crate::flight::Environment::ground_height(world, vec2(self.ac.pos.x, self.ac.pos.z));
         if let Some((_, t)) = &mut self.note {
             *t -= dt;
             if *t <= 0.0 {
@@ -1031,11 +1037,11 @@ impl Sim {
     pub fn landing_lights_on(&self) -> bool {
         self.landing_lights.unwrap_or_else(|| {
             if self.bot.is_some() {
-                self.ac.on_ground || self.ac.pos.y < 3000.0
+                self.ac.on_ground || self.ac.pos.y - self.ground_y < 3000.0
             } else if self.defs[self.sel].retractable_gear {
                 self.ac.gear_pos() > 0.5
             } else {
-                self.ac.pos.y < 900.0
+                self.ac.pos.y - self.ground_y < 900.0
             }
         })
     }
@@ -1122,7 +1128,7 @@ impl Sim {
             self.cine.fixed = None;
             self.flyby_pos = None;
         }
-        let near_runway = self.runway.as_ref().is_some_and(|rw| seg_dist(vec2(pos.x, pos.z), rw.a, rw.b) < 2500.0) && pos.y < 400.0;
+        let near_runway = self.runway.as_ref().is_some_and(|rw| seg_dist(vec2(pos.x, pos.z), rw.a, rw.b) < 2500.0) && pos.y - self.ground_y < 400.0;
         let kind = match self.cine.shot % 6 {
             1 if near_runway => 3, // tower
             0 | 3 => 0,            // chase angles
@@ -1243,7 +1249,7 @@ impl Sim {
         let beacon_flash = running && (self.time * 1.0).fract() < 0.12;
         let st = (self.time / 1.2).fract();
         let strobe_flash = strobe && (st < 0.05 || (0.12..0.17).contains(&st));
-        let landing = ac.gear_pos() > 0.5 && ac.pos.y < 460.0 && running;
+        let landing = ac.gear_pos() > 0.5 && ac.pos.y - self.ground_y < 460.0 && running;
         self.model.update(&ModelInputs { def, ac, ctl: &self.ctl, time: self.time, nav: true, beacon: running, strobe, landing });
         let m = Mat4::from_rotation_translation(self.rrot, self.rpos - eye);
         let mut local = MeshData::default();

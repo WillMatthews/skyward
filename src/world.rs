@@ -19,6 +19,8 @@ use std::time::{Duration, Instant};
 pub const LOAD_RADIUS: f32 = 7500.0;
 /// Far-field (low-zoom) tiles are kept within this distance (m).
 pub const FAR_RADIUS: f32 = 30_000.0;
+/// Terrain-only horizon tiles (terrain.rs) out to this distance (m).
+pub const HORIZON_RADIUS: f32 = 95_000.0;
 /// The frame is re-centred on the aircraft once it is this far (m) from the
 /// origin: keeps f32 positions precise and the local projection accurate.
 pub const REBASE_DIST: f32 = 20_000.0;
@@ -41,7 +43,14 @@ pub struct TileMeshes {
     pub id: TileId,
     /// Geometry is in the tile's own frame (`Proj::tile_frame`).
     pub max_h: f32,
+    pub min_y: f32,
     pub flat: scene::MeshData,
+    /// Base / draped index ranges of `flat` (terrain.rs).
+    pub ranges: crate::terrain::FlatRanges,
+    /// Water bodies (tile-frame bounds, surface height): the reflection plane.
+    pub water: Vec<(Vec2, Vec2, f32)>,
+    /// Terrain surface (tile frame).
+    pub grid: Arc<crate::terrain::Grid>,
     pub buildings: scene::MeshData,
     pub trees: Vec<TreeInst>,
     pub conifers: usize,
@@ -56,6 +65,8 @@ struct Loaded {
     xf: Xform2,
     far: bool,
     collision: TileCollision,
+    /// Terrain surface (tile frame).
+    grid: Arc<crate::terrain::Grid>,
     buildings: usize,
     trees: usize,
 }
@@ -126,6 +137,9 @@ pub struct World {
     map_vectors: Vec<(TileId, Arc<MapVectors>)>,
     /// Bumped whenever `runways` changes (the GPU runway mesh is rebuilt).
     pub runway_version: u64,
+    /// Some runway's elevation is still unknown (waiting for DEM data).
+    runway_elev_pending: bool,
+    elev_retry: Option<Instant>,
     /// Database runways around `db_centre`, in the current frame.
     db_runways: Vec<Runway>,
     pub airports: Vec<Airport>,
@@ -162,6 +176,10 @@ pub struct World {
     clock: (f32, u32),
     /// Real local time text when live time is on.
     pub real_time: Option<weather::RealTime>,
+    /// Ground elevation (m) the cloud layers / ground fog are referred to
+    /// (reported heights are above the ground): the terrain around the focus.
+    pub terrain_base: f32,
+    base_check: Option<Instant>,
 }
 
 fn rect_dist(r: (Vec2, Vec2), p: Vec2) -> f32 {
@@ -188,6 +206,8 @@ impl World {
             db_centre: None,
             map_vectors: Vec::new(),
             runway_version: 0,
+            runway_elev_pending: false,
+            elev_retry: None,
             db_runways: Vec::new(),
             airports: Vec::new(),
             radius: LOAD_RADIUS,
@@ -213,6 +233,8 @@ impl World {
             sim_time: 0.0,
             clock: (crate::sim::DEFAULT_HOURS, crate::sim::DEFAULT_DAY),
             real_time: None,
+            terrain_base: 0.0,
+            base_check: None,
         }
     }
 
@@ -236,6 +258,7 @@ impl World {
         self.wind = WindField::from_wx(&self.wx);
         let drift = self.clouds.drift();
         self.clouds = CloudField::new(self.clouds.seed(), w);
+        self.clouds.raise(self.terrain_base);
         self.clouds.set_drift(drift);
         self.cloud_version += 1;
     }
@@ -255,6 +278,7 @@ impl World {
         let spec = self.wx.cloud_spec(self.sun_up(), &self.season);
         let drift = self.clouds.drift();
         self.clouds = CloudField::from_spec(self.clouds.seed(), &spec);
+        self.clouds.raise(self.terrain_base);
         self.clouds.set_drift(drift);
         self.wind = WindField::from_wx(&self.wx);
         self.cloud_version += 1;
@@ -290,8 +314,35 @@ impl World {
             self.apply_wx();
         }
         self.sim_time = if sim_time.is_finite() { sim_time } else { 0.0 };
+        // Weather heights follow the terrain: re-place the layers when the
+        // ground around the focus is well above / below what they refer to.
+        if self.base_check.is_none_or(|t| t.elapsed() > Duration::from_secs(2)) {
+            self.base_check = Some(Instant::now());
+            let e = self.regional_elevation();
+            if (e - self.terrain_base).abs() > 250.0 {
+                let preset = self.wx.source.starts_with("preset");
+                self.terrain_base = e;
+                if preset && !self.live_weather {
+                    let w = self.clouds.weather();
+                    let drift = self.clouds.drift();
+                    self.clouds = CloudField::new(self.clouds.seed(), w);
+                    self.clouds.raise(e);
+                    self.clouds.set_drift(drift);
+                    self.cloud_version += 1;
+                } else {
+                    self.apply_wx();
+                }
+            }
+        }
         self.update_drift();
         out
+    }
+
+    /// Mean ground height around the focus (±3 km).
+    fn regional_elevation(&self) -> f32 {
+        let f = self.focus;
+        let pts = [vec2(0.0, 0.0), vec2(3000.0, 0.0), vec2(-3000.0, 0.0), vec2(0.0, 3000.0), vec2(0.0, -3000.0)];
+        pts.iter().map(|o| self.terrain_height(f + *o)).sum::<f32>() / pts.len() as f32
     }
 
     /// Clouds drift with the wind aloft; the field also stays put in the world when the origin moves.
@@ -376,7 +427,12 @@ impl World {
     /// Weather parameters for the renderer.
     pub fn render_weather(&self) -> WxRender {
         let cirrus_drift = self.wind.aloft * (self.sim_time % 1.0e6) * 1.5;
-        WxRender { drift: self.clouds.drift(), cirrus_drift, season: self.season, cloud_version: self.cloud_version, ..self.wx.render(self.sun_up()) }
+        let mut r = WxRender { drift: self.clouds.drift(), cirrus_drift, season: self.season, cloud_version: self.cloud_version, ..self.wx.render(self.sun_up()) };
+        if r.fog_top > 0.0 {
+            // Ground fog lies on the terrain (top above the local ground).
+            r.fog_top += self.terrain_base;
+        }
+        r
     }
 
     /// Ground roughness 0 (open) .. 1 (dense city) from the tile's buildings.
@@ -399,6 +455,17 @@ impl World {
     /// Integrate finished tiles, evict far ones, reschedule work. Cheap; call every frame.
     pub fn update(&mut self) {
         self.update_db_area(false);
+        if self.runway_elev_pending && self.elev_retry.is_none_or(|t| t.elapsed() > Duration::from_millis(500)) {
+            self.elev_retry = Some(Instant::now());
+            self.update_runway_elevations();
+            // Make sure the DEM data of runways nobody streams arrives.
+            for r in self.runways.iter().filter(|r| !r.elev_known) {
+                for p in [r.a, r.b, (r.a + r.b) * 0.5] {
+                    let (lat, lon) = self.proj.to_latlon(p);
+                    crate::terrain::prefetch(lat, lon);
+                }
+            }
+        }
         while let Some(r) = self.pool.try_recv() {
             self.dirty = true;
             if let Some(m) = r.map {
@@ -470,11 +537,18 @@ impl World {
             }
         }
         let trees = b.trees.len();
-        self.tiles.insert(b.id, Loaded { rect, xf, far: b.id.is_far(), collision: b.collision, buildings: b.building_count, trees });
-        self.uploads.push_back(TileMeshes { id: b.id, max_h: b.max_h, flat: b.flat, buildings: b.buildings, trees: b.trees, conifers: b.conifers, lights: b.lights });
+        let water = b.collision.water_levels(&b.grid);
+        self.tiles.insert(b.id, Loaded { rect, xf, far: b.id.is_far(), collision: b.collision, grid: b.grid.clone(), buildings: b.building_count, trees });
+        self.uploads.push_back(TileMeshes { id: b.id, max_h: b.max_h, min_y: b.min_y, flat: b.flat, ranges: b.ranges, water, grid: b.grid, buildings: b.buildings, trees: b.trees, conifers: b.conifers, lights: b.lights });
+        if self.runway_elev_pending {
+            self.update_runway_elevations();
+        }
     }
 
     fn keep(&self, id: TileId, rect: (Vec2, Vec2)) -> bool {
+        if id.z == crate::terrain::HORIZON_ZOOM {
+            return rect_dist(rect, self.focus) <= HORIZON_RADIUS + 20_000.0;
+        }
         if id.is_far() {
             return rect_dist(rect, self.focus) <= FAR_RADIUS + 8000.0;
         }
@@ -514,17 +588,25 @@ impl World {
         out
     }
 
+    /// Terrain-only horizon tiles that should be resident, nearest first.
+    fn desired_horizon(&self) -> Vec<TileId> {
+        self.desired_ring(HORIZON_RADIUS, crate::terrain::HORIZON_ZOOM)
+    }
+
     /// Far-field tiles that should be resident, nearest first.
     fn desired_far(&self) -> Vec<TileId> {
-        let r = FAR_RADIUS;
+        self.desired_ring(FAR_RADIUS, FAR_ZOOM)
+    }
+
+    fn desired_ring(&self, r: f32, zoom: u32) -> Vec<TileId> {
         let (lat_n, lon_w) = self.proj.to_latlon(self.focus - Vec2::splat(r));
         let (lat_s, lon_e) = self.proj.to_latlon(self.focus + Vec2::splat(r));
-        let (x0, y0) = TileId::frac(lat_n, lon_w, FAR_ZOOM);
-        let (x1, y1) = TileId::frac(lat_s, lon_e, FAR_ZOOM);
+        let (x0, y0) = TileId::frac(lat_n, lon_w, zoom);
+        let (x1, y1) = TileId::frac(lat_s, lon_e, zoom);
         let mut out = Vec::new();
         for y in y0.floor() as u32..=y1.floor() as u32 {
             for x in x0.floor() as u32..=x1.floor() as u32 {
-                let id = TileId { z: FAR_ZOOM, x, y };
+                let id = TileId { z: zoom, x, y };
                 let d = rect_dist(id.rect(&self.proj), self.focus);
                 if d <= r {
                     out.push((id, d));
@@ -553,6 +635,10 @@ impl World {
         let far: Vec<TileId> = self.desired_far().into_iter().filter(wanted).collect();
         let at = jobs.len().min(6);
         jobs.splice(at..at, far);
+        // Horizon terrain: after the nearest detailed tiles too, before the rest.
+        let horizon: Vec<TileId> = self.desired_horizon().into_iter().filter(wanted).collect();
+        let at = jobs.len().min(16);
+        jobs.splice(at..at, horizon);
         self.pool.set_jobs(jobs);
     }
 
@@ -625,7 +711,47 @@ impl World {
         let changed = runways.len() != self.runways.len()
             || runways.iter().zip(&self.runways).any(|(a, b)| a.a.distance(b.a) > 0.5 || a.b.distance(b.b) > 0.5);
         if changed {
+            // Keep known elevations (re-resolved below).
+            for r in &mut runways {
+                if let Some(o) = self.runways.iter().find(|o| o.name == r.name && o.airport == r.airport && o.a.distance(r.a) < 0.5) {
+                    r.elev = o.elev;
+                }
+            }
             self.runways = runways;
+            self.runway_version += 1;
+            self.runway_elev_pending = true;
+            self.update_runway_elevations();
+        }
+    }
+
+    /// Runway plane heights (terrain.rs: the same profiles the tiles are
+    /// flattened to). Non-blocking: retried as DEM data arrives.
+    fn update_runway_elevations(&mut self) {
+        let mut pending = false;
+        let mut changed = false;
+        for r in &mut self.runways {
+            let e = match r.source {
+                scene::RunwaySource::Tiles => crate::terrain::fit_elevation(r, &self.proj),
+                _ => crate::terrain::runway_elevation(r, &self.proj).or_else(|| if crate::terrain::has_airport_db() { None } else { crate::terrain::fit_elevation(r, &self.proj) }),
+            };
+            match e {
+                Some((a, b)) => {
+                    if (r.elev[0] - a).abs() > 0.01 || (r.elev[1] - b).abs() > 0.01 || !r.elev_known {
+                        r.elev = [a, b];
+                        r.elev_known = true;
+                        changed = true;
+                    }
+                }
+                None => pending |= !r.elev_known,
+            }
+        }
+        self.runway_elev_pending = pending;
+        if changed && std::env::var_os("SKYWARD_TERRAIN_DEBUG").is_some() {
+            for r in self.runways.iter().take(12) {
+                eprintln!("runway {} {} {:?} elev {:?} known {}", r.airport, r.name, r.source, r.elev, r.elev_known);
+            }
+        }
+        if changed {
             self.runway_version += 1;
         }
     }
@@ -700,6 +826,24 @@ impl World {
         self.desired_far().iter().all(|id| self.tiles.contains_key(id) || self.failed.contains_key(id))
     }
 
+    /// Ground height from the finest resident surface, else the DEM tiles in
+    /// memory, else sea level.
+    fn terrain_height(&self, xz: Vec2) -> f32 {
+        for z in [ZOOM, FAR_ZOOM, crate::terrain::HORIZON_ZOOM] {
+            if let Some(t) = self.tiles.get(&TileId::at_world_z(&self.proj, xz, z)) {
+                return t.grid.height(t.xf.inverse(xz));
+            }
+        }
+        let (lat, lon) = self.proj.to_latlon(xz);
+        crate::terrain::cached_height(lat, lon).unwrap_or(0.0)
+    }
+
+    /// Water-surface height of the water body nearest `xz` within `r` (m).
+    pub fn water_level_near(&self, xz: Vec2, r: f32) -> Option<f32> {
+        let t = self.tiles.get(&TileId::at_world(&self.proj, xz))?;
+        t.collision.nearest_water(t.xf.inverse(xz), r).map(|p| t.grid.height(p))
+    }
+
     pub fn take_evicted(&mut self) -> Vec<TileId> {
         std::mem::take(&mut self.evicted)
     }
@@ -719,6 +863,17 @@ impl World {
 
     /// Use the OurAirports database for runways (and airport names).
     pub fn set_airport_db(&mut self, db: Arc<crate::airports::Db>) {
+        let late = !crate::terrain::has_airport_db();
+        crate::terrain::set_airport_db(db.clone());
+        if late {
+            // Detailed tiles built before the database have no runway flattening: rebuild them.
+            let near: Vec<TileId> = self.tiles.keys().filter(|id| !id.is_far()).copied().collect();
+            for id in near {
+                self.tiles.remove(&id);
+                self.uploads.retain(|u| u.id != id);
+                self.evicted.push(id);
+            }
+        }
         self.airport_db = Some(db);
         self.db_centre = None;
         self.update_db_area(true);
@@ -827,8 +982,8 @@ fn same_runway(p: &RunwayPiece, q: &RunwayPiece) -> bool {
 }
 
 impl Environment for World {
-    fn ground_height(&self, _xz: Vec2) -> f32 {
-        0.0
+    fn ground_height(&self, xz: Vec2) -> f32 {
+        self.terrain_height(xz)
     }
     fn obstacle_top(&self, xz: Vec2) -> Option<f32> {
         self.tile_at(xz).and_then(|t| t.collision.obstacle_top(t.xf.inverse(xz)))
@@ -845,7 +1000,8 @@ impl Environment for World {
         let lift = self.clouds.updraft(p).abs();
         let in_cloud = if p.y > self.clouds.cu_base() - 50.0 && p.y < self.clouds.top() { self.clouds.coverage(xz) } else { 0.0 };
         let conv = (lift / 3.0).max(in_cloud).clamp(0.0, 1.0);
-        let pf = vec3((p.x as f64 + self.field_off.0) as f32, p.y, (p.z as f64 + self.field_off.1) as f32);
+        // (The boundary layer follows the terrain: height above the ground.)
+        let pf = vec3((p.x as f64 + self.field_off.0) as f32, p.y - self.terrain_height(xz), (p.z as f64 + self.field_off.1) as f32);
         self.wind.at(pf, self.sim_time, self.roughness(xz), conv)
     }
 }

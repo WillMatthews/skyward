@@ -507,6 +507,7 @@ pub fn to_world(a: &Airport, r: &Rwy, proj: &Proj) -> Option<Runway> {
         lighted: r.lighted,
         airport: a.ident.clone(),
         source,
+        ..Default::default()
     })
 }
 

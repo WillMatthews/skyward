@@ -98,6 +98,9 @@ pub struct RunwayEnd {
     pub len: f32,
     pub width: f32,
     pub name: String,
+    /// Runway surface height (m) at the threshold and at the far end (terrain.rs).
+    pub elev: f32,
+    pub elev_far: f32,
 }
 
 impl RunwayEnd {
@@ -105,7 +108,13 @@ impl RunwayEnd {
     pub fn of(rw: &Runway, reverse: bool) -> RunwayEnd {
         let (thr, far) = if reverse { (rw.b, rw.a) } else { (rw.a, rw.b) };
         let dir = (far - thr).normalize_or(vec2(0.0, -1.0));
-        RunwayEnd { thr, dir, len: rw.length(), width: rw.width, name: rwy_number(heading_of(dir)) }
+        let (elev, elev_far) = (rw.height_at(thr), rw.height_at(far));
+        RunwayEnd { thr, dir, len: rw.length(), width: rw.width, name: rwy_number(heading_of(dir)), elev, elev_far }
+    }
+    /// Runway surface height at `p` (level beyond the ends).
+    pub fn elev_at(&self, p: Vec2) -> f32 {
+        let t = (self.along(p) / self.len.max(1.0)).clamp(0.0, 1.0);
+        self.elev + (self.elev_far - self.elev) * t
     }
     pub fn course(&self) -> f32 {
         heading_of(self.dir)
@@ -126,7 +135,7 @@ impl RunwayEnd {
     }
     pub fn reversed(&self) -> RunwayEnd {
         let dir = -self.dir;
-        RunwayEnd { thr: self.far(), dir, len: self.len, width: self.width, name: rwy_number(heading_of(dir)) }
+        RunwayEnd { thr: self.far(), dir, len: self.len, width: self.width, name: rwy_number(heading_of(dir)), elev: self.elev_far, elev_far: self.elev }
     }
     pub fn same_runway(&self, rw: &Runway) -> bool {
         let m = (rw.a + rw.b) * 0.5;
@@ -145,7 +154,9 @@ pub fn approach_slope(world: &World, end: &RunwayEnd, aim: f32) -> f32 {
         let mut l = -half;
         while l <= half {
             let p = end.thr - end.dir * s + end.right() * l;
-            if let Some(top) = world.obstacle_top(p) {
+            // Buildings and the terrain itself, above the threshold.
+            let top = world.obstacle_top(p).unwrap_or(f32::MIN).max(world.ground_height(p)) - end.elev;
+            if top > -50.0 {
                 need = need.max(((top + 60.0) / (s + aim)).atan());
             }
             l += 45.0;
@@ -165,7 +176,9 @@ pub fn departure_gradient(world: &World, end: &RunwayEnd) -> f32 {
         let half = 90.0 + 0.1 * (s - end.len);
         let mut l = -half;
         while l <= half {
-            if let Some(top) = world.obstacle_top(end.thr + end.dir * s + end.right() * l) {
+            let q = end.thr + end.dir * s + end.right() * l;
+            let top = world.obstacle_top(q).unwrap_or(f32::MIN).max(world.ground_height(q)) - end.elev;
+            if top > -50.0 {
                 need = need.max((top + 60.0) / (s - lift).max(50.0));
             }
             l += 45.0;
@@ -927,7 +940,8 @@ impl Glider {
         // The wind weakens on the way down: use the mean of here and the surface.
         let w = (self.wind + self.wind_sfc) * 0.5;
         let ld = self.best_ld_wind(headwind(w, to)) * 0.65;
-        d / ld.max(6.0) + 250.0
+        // (Absolute: above the field's runway.)
+        d / ld.max(6.0) + 250.0 + field.height_at(p)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1300,7 +1314,7 @@ impl Glider {
 
         // Choose (or keep) a cloud to glide to.
         let ld_plan = self.best_ld() * 0.7;
-        let reach = ((ac.pos.y - 250.0) * ld_plan).max(0.0);
+        let reach = ((ac.pos.y - world.ground_height(p) - 250.0) * ld_plan).max(0.0);
         let wp = self.tour.get(self.wp).map(|l| l.pos).unwrap_or(self.home);
         let visible = sky(world).visible();
         // Keys in field coordinates: a cloud keeps its key while it drifts.
@@ -1348,7 +1362,7 @@ impl Glider {
                 continue;
             }
             let arrive = ac.pos.y - d / ld_w.max(1.0);
-            if arrive < 300.0 {
+            if arrive < 300.0 + world.ground_height(c.pos) {
                 continue;
             }
             if let Some(f) = &field {
@@ -1441,7 +1455,9 @@ impl Glider {
         let x = end.cross(p);
         let aim = 120.0;
         let gp = (s + aim) * l.slope.tan() + def.gear_height;
-        let h = ac.pos.y;
+        // Heights above the threshold; the wheels above the ground below.
+        let h = ac.pos.y - end.elev;
+        let agl = ac.pos.y - world.ground_height(p);
         // Approach speed plus half the headwind on final.
         let vapp = self.vs1 * 1.38 + (0.5 * headwind(wind, end.dir)).clamp(0.0, 5.0);
         let gate = end.thr - end.dir * 1800.0;
@@ -1484,7 +1500,7 @@ impl Glider {
                 let b = bank_for_heading(ac, hdg, 25f32.to_radians());
                 // Airbrakes fly the glidepath; nominal half brakes.
                 let brake = (0.5 + (h - gp) * 0.03).clamp(0.0, 1.0);
-                let wheels = h - def.gear_height;
+                let wheels = agl - def.gear_height;
                 if wheels < 4.5 {
                     l.phase = LPhase::Flare;
                     self.flare_pitch = ac.pitch();
@@ -1493,7 +1509,7 @@ impl Glider {
                 (b, vapp, brake, format!("Final approach RWY {} ({}) — {:.0} m", end.name, l.field, s.max(0.0)))
             }
             LPhase::Flare => {
-                let wheels = (h - def.gear_height).max(0.0);
+                let wheels = (agl - def.gear_height).max(0.0);
                 let target_vs = -(0.35 + 0.22 * wheels);
                 let err = target_vs - ac.vertical_speed();
                 self.sink_i = (self.sink_i + 0.06 * err * dt).clamp(-0.1, 0.25);
@@ -1547,6 +1563,23 @@ impl Glider {
     }
 }
 
+/// Highest ground (or building) within `dist` ahead along `vel` (and a
+/// little to either side): the floor a cruise altitude must clear.
+fn terrain_floor(world: &World, p: Vec2, vel: Vec2, dist: f32) -> f32 {
+    let d = vel.normalize_or(vec2(0.0, -1.0));
+    let side = vec2(-d.y, d.x);
+    let mut top = world.ground_height(p);
+    let mut s = 0.0;
+    while s <= dist {
+        for l in [-600.0, 0.0, 600.0] {
+            let q = p + d * s + side * l;
+            top = top.max(world.obstacle_top(q).unwrap_or(f32::MIN).max(world.ground_height(q)));
+        }
+        s += 300.0;
+    }
+    top
+}
+
 /// If the path ahead (next `secs` seconds) passes within `margin` m above a
 /// building, a heading that clears, else None.
 fn avoid_obstacles(world: &World, ac: &Aircraft, secs: f32, margin: f32) -> Option<f32> {
@@ -1561,10 +1594,11 @@ fn avoid_obstacles(world: &World, ac: &Aircraft, secs: f32, margin: f32) -> Opti
             let t = s / v;
             let alt = ac.pos.y + ac.vertical_speed().min(0.0) * t;
             for l in [-90.0, 0.0, 90.0] {
-                if let Some(top) = world.obstacle_top(p + d * s + side * l) {
-                    if top + margin > alt {
-                        return false;
-                    }
+                let q = p + d * s + side * l;
+                // Buildings and rising ground.
+                let top = world.obstacle_top(q).unwrap_or(f32::MIN).max(world.ground_height(q));
+                if top + margin > alt {
+                    return false;
                 }
             }
             s += 60.0;
@@ -1875,7 +1909,7 @@ impl Powered {
             let (end, _) = best_landing_end(world, f, s.pf.aim);
             let d = -end.along(p);
             let on_final = d > 0.0 && d < 30_000.0 && end.cross(p).abs() < 3000.0 && wrap_pi(end.course() - ac.heading()).abs() < 0.8;
-            (on_final || (ac.gear_pos() > 0.5 && seg_dist(p, f.a, f.b) < 15_000.0)) && ac.pos.y < 1200.0
+            (on_final || (ac.gear_pos() > 0.5 && seg_dist(p, f.a, f.b) < 15_000.0)) && ac.pos.y - f.height_at(p) < 1200.0
         }) {
             s.start_approach(world, ac);
         } else {
@@ -1937,7 +1971,12 @@ impl Powered {
         self.ias_f += (ias - self.ias_f) * (dt / 2.0).min(1.0);
         let wind = self.wind;
         let tas = ac.tas().max(20.0);
-        let wheels = ac.pos.y - def.gear_height;
+        // Heights above the runway in use (terrain.rs) and of the wheels above the ground.
+        let fe = self.rw.as_ref().map(|e| e.elev).or_else(|| self.field.as_ref().map(|f| f.height_at(p))).unwrap_or(0.0);
+        let ay = ac.pos.y - fe;
+        let wheels = ac.pos.y - def.gear_height - world.ground_height(p);
+        // Cruise high enough over the terrain ahead (and the field).
+        let terrain_alt = terrain_floor(world, p, vec2(ac.vel.x, ac.vel.z), 9000.0) + pf.tour_alt.min(450.0);
         let rwname = self.rw.as_ref().map(|r| r.name.clone()).unwrap_or_default();
         let fbw = def.control_law != ControlLaw::Direct;
         // Throttle never touched by the AP on the ground.
@@ -2056,11 +2095,11 @@ impl Powered {
                 if wheels > pf.hand_off {
                     ap.engage_hold_current(ac);
                     ap.hdg = Some(hdg);
-                    ap.alt = Some(pf.tour_alt.max(ac.pos.y));
+                    ap.alt = Some((fe + pf.tour_alt).max(terrain_alt).max(ac.pos.y));
                     ap.ias = Some(pf.climb_ias);
                     ap.vs = None;
                     if self.phase == PPhase::GoAround {
-                        ap.alt = Some((pf.final_dist * self.gs_angle.tan()).max(450.0));
+                        ap.alt = Some(fe + (pf.final_dist * self.gs_angle.tan()).max(450.0));
                         ap.ias = Some(pf.vapp + 25.0 * KT);
                         let w = world;
                         self.start_approach(w, ac);
@@ -2133,10 +2172,10 @@ impl Powered {
                                 hdg = ac.heading();
                             }
                         }
-                        alt = pf.tour_alt;
+                        alt = (fe + pf.tour_alt).max(terrain_alt);
                         // Afterburner climb for the fighter, then cruise power.
-                        spd = if ac.pos.y < pf.tour_alt - 60.0 { pf.climb_ias } else { pf.cruise_ias };
-                        if self.ab_climb && ac.pos.y > pf.tour_alt - 100.0 {
+                        spd = if ac.pos.y < alt - 60.0 { pf.climb_ias } else { pf.cruise_ias };
+                        if self.ab_climb && ac.pos.y > alt - 100.0 {
                             self.ab_climb = false;
                         }
                     }
@@ -2150,14 +2189,14 @@ impl Powered {
                         }
                         if !self.lp_inbound {
                             hdg = crab(heading_of(self.gate - p), tas, wind);
-                            alt = 450.0;
+                            alt = fe + 450.0;
                             spd = 300.0 * KT;
                             *status = format!("Setting up a low pass RWY {} — {:.1} km", end.name, p.distance(self.gate) / 1000.0);
                         } else {
                             // Intercept gain matched to the (large) turn radius, or it orbits.
                             hdg = crab(end.course() + (-x / r_turn.max(1200.0)).atan().clamp(-0.6, 0.6), tas, wind);
                             let lined = x.abs() < 500.0 && wrap_pi(end.course() - ac.heading()).abs() < 0.35;
-                            alt = if lined && s < 6000.0 && s > -end.len - 800.0 { 120.0 } else { 350.0 };
+                            alt = fe + if lined && s < 6000.0 && s > -end.len - 800.0 { 120.0 } else { 350.0 };
                             spd = if lined { 450.0 } else { 300.0 } * KT;
                             *status = format!("Fast low pass RWY {} — {:.0} kt", end.name, ias / KT);
                             if s < -end.len - 1500.0 || (s < -end.len && x.abs() > 3000.0) {
@@ -2190,9 +2229,9 @@ impl Powered {
                             hdg = crab(heading_of(self.gate - p), tas, wind);
                             *status = format!("Returning to {} — RWY {} {:.1} km", self.field_name, end.name, to_gate / 1000.0);
                         }
-                        alt = faf_alt.max(300.0);
-                        if self.ab_climb && ac.pos.y < 900.0 {
-                            alt = 1000.0;
+                        alt = fe + faf_alt.max(300.0);
+                        if self.ab_climb && ay < 900.0 {
+                            alt = fe + 1000.0;
                         } else {
                             self.ab_climb = false;
                         }
@@ -2211,7 +2250,7 @@ impl Powered {
                         }
                         // Glidepath capture from below.
                         let gp = (s + pf.aim) * self.gs_angle.tan();
-                        if self.phase_t < 0.0 && x.abs() < 400.0 && ac.pos.y >= gp - 15.0 && s < pf.final_dist + 3000.0 {
+                        if self.phase_t < 0.0 && x.abs() < 400.0 && ay >= gp - 15.0 && s < pf.final_dist + 3000.0 {
                             ev.push(format!("established RWY {} at {:.1} nm, {:.0} ft (glidepath {:.1}°)", end.name, s / NM, ac.pos.y / FT, self.gs_angle.to_degrees()));
                             self.set_phase(PPhase::Final, t);
                         }
@@ -2230,7 +2269,7 @@ impl Powered {
                 if !ap.update(def, ac, ctl, dt) {
                     ap.engage_hold_current(ac);
                 }
-                if self.ab_climb && self.phase != PPhase::LowPass && ac.pos.y < 900.0 && ac.vertical_speed() > -1.0 {
+                if self.ab_climb && self.phase != PPhase::LowPass && ay < 900.0 && ac.vertical_speed() > -1.0 {
                     ctl.throttle = 1.0;
                 }
             }
@@ -2246,7 +2285,7 @@ impl Powered {
                     }
                     let l = 1500.0;
                     ap.hdg = Some(crab(end.course() + (-x / l).atan().clamp(-0.4, 0.4), tas, wind));
-                    ap.alt = Some(gp.max(100.0).min(ac.pos.y.max(100.0)));
+                    ap.alt = Some(fe + gp.max(100.0).min(ay.max(100.0)));
                     ap.vs = None;
                     ap.ias = Some(420.0 * KT);
                     ctl.gear_down = false;
@@ -2280,7 +2319,7 @@ impl Powered {
                 }
                 ap.hdg = Some(hdg);
                 ap.alt = None;
-                ap.vs = Some((vs_gp + 0.12 * (gp - ac.pos.y)).clamp(vs_gp * 1.8 - 1.0, 1.5));
+                ap.vs = Some((vs_gp + 0.12 * (gp - ay)).clamp(vs_gp * 1.8 - 1.0, 1.5));
                 ap.ias = Some(self.vapp);
                 if !ap.update(def, ac, ctl, dt) {
                     ap.engage_hold_current(ac);
@@ -2289,7 +2328,7 @@ impl Powered {
                 // Stabilised-approach gate below 500 ft.
                 if wheels < 150.0 && wheels > pf.flare_h + 5.0 {
                     let unstable = x.abs() > pf.stab_x
-                        || (ac.pos.y - gp).abs() > 35.0
+                        || (ay - gp).abs() > 35.0
                         || self.ias_f < self.vapp - 10.0 * KT
                         || self.ias_f > self.vapp + 25.0 * KT
                         || ac.gear_pos() < 0.99;
@@ -2298,7 +2337,7 @@ impl Powered {
                             "go-around: unstable at {:.0} ft (x {:.0} m, gp {:+.0} m, {:.0} kt)",
                             wheels / FT,
                             x,
-                            ac.pos.y - gp,
+                            ay - gp,
                             ias / KT
                         ));
                         stats.go_arounds += 1;

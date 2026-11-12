@@ -323,6 +323,14 @@ impl CloudField {
     }
 
     /// Lowest cloud base of any drawn layer (m).
+    /// Lift every layer by `dy` (m): reported bases are above the ground,
+    /// which is not at sea level in the hills (terrain.rs, World::apply_wx).
+    pub fn raise(&mut self, dy: f32) {
+        self.p.base += dy;
+        self.p.strato_base += dy;
+        self.p.mid_base += dy;
+    }
+
     pub fn base(&self) -> f32 {
         let p = &self.p;
         let mut b = f32::MAX;

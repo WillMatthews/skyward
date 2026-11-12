@@ -593,7 +593,7 @@ fn warnings(p: &egui::Painter, screen: Rect, sim: &Sim) {
         p.text(r.center() + Vec2::new(0.0, 32.0), Align2::CENTER_CENTER, "R  Restart      Esc  Menu", f_inst(12.0), pal::TEXT3);
     } else if sim.ac.stall_warning() && blink {
         chip(p, Pos2::new(screen.center().x, y), Align2::CENTER_CENTER, "STALL", f_inst_b(28.0), Color32::WHITE, Color32::from_rgb(200, 30, 30));
-    } else if def.retractable_gear && sim.ac.gear_pos() < 0.99 && !sim.ac.on_ground && sim.ac.pos.y < 150.0 && sim.ac.vertical_speed() < -1.0 && sim.ac.airspeed() < def.vref_kt * 1.3 * KT && blink {
+    } else if def.retractable_gear && sim.ac.gear_pos() < 0.99 && !sim.ac.on_ground && sim.ac.pos.y - sim.ground_y < 150.0 && sim.ac.vertical_speed() < -1.0 && sim.ac.airspeed() < def.vref_kt * 1.3 * KT && blink {
         chip(p, Pos2::new(screen.center().x, y), Align2::CENTER_CENTER, "GEAR NOT DOWN", f_inst_b(22.0), Color32::WHITE, Color32::from_rgb(200, 30, 30));
     }
     if sim.paused {

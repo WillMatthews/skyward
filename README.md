@@ -10,6 +10,22 @@ anywhere on Earth, for as long as you like. wgpu (Vulkan), winit, egui.
   facades and windows, instanced trees, roads, water, parks, airfields with
   merged runways) out to ~7.5 km, generalised z10 tiles to ~30 km, with
   collision and a moving map. Tiles are cached in `cache/tiles/`.
+* **Terrain** — real elevation from DEM tiles (AWS Terrain Tiles, Terrarium
+  encoding; cached in `cache/terrain/`) under every level of detail: ~24 m
+  grids under the detailed tiles, ~380 m under the far tiles and terrain-only
+  horizon tiles to ~95 km. The map layers are clipped to the terrain's
+  triangles so roads, rivers and land use lie exactly on the hills; buildings
+  stand on foundations, lakes are level, runways are flattened to their
+  surveyed line and blended into the hills around them; ridges cast shadows;
+  rock, alpine meadow and a seasonal snow line on the mountains. The flight
+  model, bot (glidepaths above the threshold, terrain clearance), clouds,
+  fog, wind and radio altitude all follow the ground.
+* **Landmarks** — procedural models of famous buildings from their real
+  dimensions replace the OSM extrusions (London: the Shard, Tower Bridge,
+  the London Eye with its turning wheel, St Paul's, Big Ben and the Palace of
+  Westminster, BT Tower, the Gherkin, the Walkie-Talkie, One Canada Square,
+  The O2, Wembley, Battersea Power Station); floodlit at night. A registry
+  by location (`src/landmarks/`): more cities are more table rows.
 * **Long flights** — a floating origin re-centres the local frame on the
   aircraft as it flies (see *Floating origin* below), so London → Paris (or
   further) stays precise, undistorted and hitch-free.
@@ -235,7 +251,10 @@ skyward --shot g.png --aircraft swift --start thermal --bot --soak --seconds 240
 skyward --shot m.png --aircraft meridian320 --bot --soak --seconds 4200 --warp 8 --no-live --metar "EGLC 121150Z 18015KT 9999 SCT040 18/08 Q1015"
 ```
 `BOT_TRACE=Final,Flare` prints the controls every frame in those bot phases;
-`SKYWARD_REBASE_LOG=1` logs every origin shift; `SKYWARD_GPU_TIMING=1` prints
+`SKYWARD_REBASE_LOG=1` logs every origin shift; `SKYWARD_FLAT_TERRAIN=1`
+flattens the world (sea level everywhere), `SKYWARD_NO_LANDMARKS=1` uses the
+plain OSM buildings, `SKYWARD_TERRAIN_DEBUG=1` logs per-tile terrain grids and
+runway elevations; `SKYWARD_GPU_TIMING=1` prints
 a per-pass GPU timing breakdown; `SKYWARD_UI_TIMING=1` the interface's CPU
 cost and map vertex counts; `SKYWARD_FRAME_LOG=file` (windowed) logs each
 frame's raw time and the smoothed simulation step; `SKYWARD_UI_SCRIPT=
@@ -301,6 +320,8 @@ A shift costs well under 0.1 ms.
 | `src/mvt.rs` | Mapbox Vector Tile decoder |
 | `src/osm.rs` | projections / frames, tile math, MVT → clipped tile-frame features |
 | `src/scene.rs` | per-tile meshes (ground, buildings, instanced trees), collision, minimap tiles, runways |
+| `src/terrain.rs` | DEM tiles + cache, per-tile terrain grids (adaptive), drape of the flat layers, skirts / LOD buckets, runway flattening |
+| `src/landmarks.rs`, `src/landmarks/` | landmark registry (by location) and the procedural London models |
 | `src/world.rs` | streaming, floating origin, runway merging, environment queries (ground, wind, lift) |
 | `src/gfx.rs`, `src/shaders/` | wgpu renderer (per-tile culling and transforms, chunked uploads) |
 | `src/atmosphere.rs` | sun position, sky / aerial-perspective LUTs |
@@ -323,6 +344,24 @@ A shift costs well under 0.1 ms.
 See `ROADMAP.md` for what's next.
 
 ## Credits
+
+Elevation: [Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) on
+AWS (Mapzen / Tilezen) — ArcticDEM terrain data DEM(s) were created from
+DigitalGlobe, Inc., imagery and funded under National Science Foundation
+awards 1043681, 1559691, and 1542736; Australia terrain data © Commonwealth
+of Australia (Geoscience Australia) 2017; Austria terrain data © offene Daten
+Österreichs – Digitales Geländemodell (DGM) Österreich; Canada terrain data
+contains information licensed under the Open Government Licence – Canada;
+Europe terrain data produced using Copernicus data and information funded by
+the European Union - EU-DEM layers; Global ETOPO1 terrain data U.S. National
+Oceanic and Atmospheric Administration; Mexico terrain data source: INEGI,
+Continental relief, 2016; New Zealand terrain data Copyright 2011 Crown
+copyright (c) Land Information New Zealand and the New Zealand Government
+(All rights reserved); Norway terrain data © Kartverket; United Kingdom
+terrain data © Environment Agency copyright and/or database right 2015. All
+rights reserved; United States 3DEP (formerly NED) and global GMTED2010 and
+SRTM terrain data courtesy of the U.S. Geological Survey. Landmark positions
+and footprints from OpenStreetMap (ODbL); the models are procedural.
 
 Map data © [OpenMapTiles](https://openmaptiles.org/) ©
 [OpenStreetMap contributors](https://www.openstreetmap.org/copyright) (ODbL);

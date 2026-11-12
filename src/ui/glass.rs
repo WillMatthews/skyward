@@ -266,7 +266,7 @@ fn attitude(p: &egui::Painter, r: Rect, sim: &Sim, u: f32) {
     p.rect_filled(Rect::from_center_size(c, Vec2::splat(1.8 * u)), 0, Color32::BLACK);
     p.rect_stroke(Rect::from_center_size(c, Vec2::splat(1.8 * u)), 0, Stroke::new(1.2, YELLOW), egui::StrokeKind::Outside);
     // radio altitude
-    let agl = ac.pos.y * FT;
+    let agl = (ac.pos.y - sim.ground_y) * FT;
     if agl < 2500.0 && !ac.on_ground {
         let col = if agl < 400.0 { AMBER } else { GREEN };
         digits(p, Pos2::new(c.x, r.max.y - 3.0 * u), Align2::CENTER_CENTER, format!("{:.0}", (agl / 10.0).round() * 10.0), 3.6 * u, col);

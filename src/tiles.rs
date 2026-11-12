@@ -253,6 +253,16 @@ fn worker(shared: Arc<Shared>, tx: mpsc::Sender<TileResult>) {
             }
         };
         let t0 = Instant::now();
+        // Terrain-only horizon tiles: no vector data.
+        if id.z == crate::terrain::HORIZON_ZOOM {
+            let b = crate::terrain::build_horizon_tile(id);
+            let r = TileResult { id, build: Ok(b), map: None, fetch_ms: 0.0, build_ms: t0.elapsed().as_secs_f32() * 1000.0, from_cache: true, bytes: 0 };
+            shared.q.lock().unwrap().active.remove(&id);
+            if tx.send(r).is_err() {
+                return;
+            }
+            continue;
+        }
         let template = {
             let mut t = shared.template.lock().unwrap();
             let due = t.1.is_none_or(|i| i.elapsed() > Duration::from_secs(30));

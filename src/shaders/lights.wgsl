@@ -277,6 +277,7 @@ fn fs_halo(in: SOut) -> @location(0) vec4<f32> {
 struct TIn {
     @location(0) ab: vec4<f32>,      // a.xz, b.xz (tile frame)
     @location(1) info: vec4<f32>,    // width, seed, cars, speed
+    @location(2) yy: vec4<f32>,      // ground height at a, b (terrain)
 };
 
 // 6 cars x 2 directions x 2 lights (head, tail) x 6 vertices.
@@ -292,10 +293,14 @@ fn vs_traffic(@builtin(vertex_index) vi: u32, t: TIn) -> SOut {
     }
     var a = t.ab.xy;
     var b = t.ab.zw;
+    var ya = t.yy.x;
+    var yb = t.yy.y;
     if (side == 1u) {
         let tmp = a;
         a = b;
         b = tmp;
+        ya = t.yy.y;
+        yb = t.yy.x;
     }
     let len = distance(a, b);
     let d = (b - a) / max(len, 1e-3);
@@ -308,7 +313,7 @@ fn vs_traffic(@builtin(vertex_index) vi: u32, t: TIn) -> SOut {
     let ofs = select(-2.1, 2.1, light == 0u);
     let xz = a + d * (s + ofs) + lane;
     var l: LIn;
-    l.pos = vec3<f32>(xz.x, 0.7, xz.y);
+    l.pos = vec3<f32>(xz.x, mix(ya, yb, clamp((s + ofs) / max(len, 1e-3), 0.0, 1.0)) + 0.7, xz.y);
     let fwd = vec3<f32>(d.x, 0.0, d.y);
     var col: vec3<f32>;
     var cd: f32;

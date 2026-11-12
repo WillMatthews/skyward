@@ -8,7 +8,7 @@ use glam::{vec2, vec3, Quat, Vec2, Vec3};
 // ---------------------------------------------------------------- city
 
 /// Moving traffic on one stretch of major road (tile frame), drawn as head /
-/// tail-light pairs animated in the vertex shader. 32 bytes.
+/// tail-light pairs animated in the vertex shader. 48 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct TrafficSeg {
@@ -22,6 +22,10 @@ pub struct TrafficSeg {
     pub cars: f32,
     /// Speed (m/s).
     pub speed: f32,
+    /// Ground height (m) at `a` and `b` (terrain.rs).
+    pub ya: f32,
+    pub yb: f32,
+    pub _pad: [f32; 2],
 }
 
 /// Light sources of one map tile, in the tile's frame.
@@ -32,6 +36,9 @@ pub struct TileLights {
     /// Far (low-zoom) tiles: upward light flux (lumen) of the built-up area on
     /// a `GLOW_N` x `GLOW_N` grid over the tile (row 0 = north), for skyglow.
     pub glow: Vec<f32>,
+    /// Lights already at their final height (on a building / landmark), by
+    /// index; the rest are lifted onto the terrain (scene.rs), then cleared.
+    pub raised: Vec<bool>,
 }
 
 /// Skyglow source grid per far tile.
@@ -94,6 +101,29 @@ impl<'a> CityGen<'a> {
 
     pub fn finish(self) -> TileLights {
         self.out
+    }
+
+    /// Lights generated so far.
+    pub fn light_count(&self) -> usize {
+        self.out.lights.len()
+    }
+
+    /// Lift the lights added since `from` by `base` (they stand on a building
+    /// whose base is there) and keep them off the terrain drape.
+    pub fn raise_from(&mut self, from: usize, base: f32) {
+        let n = self.out.lights.len();
+        self.out.raised.resize(n, false);
+        for i in from..n {
+            self.out.lights[i].pos[1] += base;
+            self.out.raised[i] = true;
+        }
+    }
+
+    /// Add lights already placed relative to `base` (landmarks).
+    pub fn extend_raised(&mut self, lights: &[LightInst], base: f32) {
+        let from = self.out.lights.len();
+        self.out.lights.extend_from_slice(lights);
+        self.raise_from(from, base);
     }
 
     /// Mark which parts of the tile are built up (street lights only there).
@@ -182,7 +212,7 @@ impl<'a> CityGen<'a> {
                     let seed = h01((p0.x.to_bits() as u64) << 21 ^ p1.y.to_bits() as u64);
                     let cars = (l / 38.0 * busy * (0.6 + 0.8 * seed)).clamp(0.0, 6.0);
                     let speed = if width > 15.0 { 24.0 } else if major { 13.0 } else { 10.0 } * (0.8 + 0.4 * seed);
-                    self.out.traffic.push(TrafficSeg { a: p0.into(), b: p1.into(), width, seed, cars, speed });
+                    self.out.traffic.push(TrafficSeg { a: p0.into(), b: p1.into(), width, seed, cars, speed, ..Default::default() });
                 }
             }
         }
@@ -386,7 +416,8 @@ pub fn airport_lights(runways: &[crate::scene::Runway], beacons: &[Vec2], glide:
         let d = (rw.b - rw.a) / len;
         let n = vec2(-d.y, d.x); // right, looking from a to b
         let w = rw.width;
-        let p3 = |p: Vec2, h: f32| vec3(p.x, h, p.y);
+        // Heights above the runway plane (terrain.rs; approach lights at the threshold's level).
+        let p3 = |p: Vec2, h: f32| vec3(p.x, h + rw.height_at(p), p.y);
         let axis = vec3(d.x, 0.0, d.y);
         let big = len >= 1800.0;
         let edge_cd = if big { 10000.0 } else { 3000.0 };
@@ -519,9 +550,20 @@ pub fn airport_lights(runways: &[crate::scene::Runway], beacons: &[Vec2], glide:
         }
     }
     for b in beacons {
-        out.push(LightInst::new(vec3(b.x, 28.0, b.y), 40000.0, [1.0, 0.95, 0.85], kind::BEACON).with_ab(col_param(colour::RWY_GREEN), 0.0));
+        // On the ground of the nearest runway's airfield.
+        let base = runways
+            .iter()
+            .min_by(|p, q| seg_d(*b, p.a, p.b).total_cmp(&seg_d(*b, q.a, q.b)))
+            .map_or(0.0, |r| r.height_at(*b));
+        out.push(LightInst::new(vec3(b.x, 28.0 + base, b.y), 40000.0, [1.0, 0.95, 0.85], kind::BEACON).with_ab(col_param(colour::RWY_GREEN), 0.0));
     }
     out
+}
+
+fn seg_d(p: Vec2, a: Vec2, b: Vec2) -> f32 {
+    let ab = b - a;
+    let t = ((p - a).dot(ab) / ab.length_squared().max(1e-6)).clamp(0.0, 1.0);
+    p.distance(a + ab * t)
 }
 
 /// Where the aerodrome beacons stand: one per airport that has a runway

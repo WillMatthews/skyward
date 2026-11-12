@@ -29,6 +29,29 @@ struct FOut {
 
 @vertex
 fn vs_main(v: VIn) -> VOut {
+    return main_vertex(v);
+}
+
+// Map layers draped on the terrain (terrain.rs): exactly on the base
+// surface, so pulled a hair toward the eye in depth only (they are drawn
+// without depth write and must pass against the surface they lie on).
+@vertex
+fn vs_over(v: VIn) -> VOut {
+    var o = main_vertex(v);
+    let d = o.clip.w;
+    // Enough for ~1 cm of vertical mismatch (runways are computed in another
+    // frame) at any viewing angle; relative far away (depth precision).
+    let cosv = abs(dot(normalize(v.nrm), o.wpos / max(length(o.wpos), 1e-3)));
+    let pull = min(max(d * 5e-5, 0.012 / max(cosv, 0.01)), d * 0.25);
+    // Reverse-Z (infinite far): ndc z = near / d -> near / (d - pull).
+    // (Vertices behind the eye keep their clip z: the clipper needs it.)
+    if (d > 0.0) {
+        o.clip.z = o.clip.z * d / (d - pull);
+    }
+    return o;
+}
+
+fn main_vertex(v: VIn) -> VOut {
     var o: VOut;
     let p = tile_pos(v.pos);
     o.clip = g.view_proj * vec4<f32>(p, 1.0);
@@ -371,7 +394,9 @@ fn shade_water(in: VOut, px: vec2<f32>, fw: f32) -> vec3<f32> {
 
     var refl: vec3<f32>;
     let R = reflect(-V, n);
-    if (is_refl()) {
+    let wpw = rel + g.cam_pos.xyz;
+    if (is_refl() || abs(wpw.y - g.pre.z) > 1.5) {
+        // (Water off the mirror plane: a lake at another level.)
         refl = sky_reflection(vec3<f32>(R.x, abs(R.y), R.z));
     } else {
         let suv = px * g.screen.zw + n.xz * 0.05 / (1.0 + dist * 0.002);
@@ -664,6 +689,46 @@ fn field_surface(wp: vec3<f32>, np: vec2<f32>, n: vec3<f32>, fw: f32, dist: f32)
     return mix(c, suburb, sub_mask);
 }
 
+// ---------------------------------------------------------------- terrain
+
+// Mountain ground (terrain.rs): no crop fields on slopes (pasture), alpine
+// meadow above the tree line, bare rock / scree on steep faces, and old
+// snow above a seasonal snow line. `n` is the smooth terrain normal.
+fn mountain(c0: vec3<f32>, wp: vec3<f32>, np: vec2<f32>, n: vec3<f32>, fw: f32, fields: bool) -> vec3<f32> {
+    let up = n.y;
+    // Lowland on gentle ground (most of the world): nothing to do.
+    if (wp.y < 900.0 && up > 0.986) {
+        return c0;
+    }
+    // Tree / snow lines rise toward the tropics (season strength ~ latitude).
+    let lat_k = g.season2.z * g.season2.z;
+    let h = wp.y + (pfbm(np, 0.004, vec2<f32>(3.0)) - 0.5) * 220.0 - mix(2200.0, 0.0, lat_k);
+    var c = c0;
+    if (fields) {
+        // Fields only on gentle ground: pasture on slopes.
+        let pasture = grass_season(mix(vec3<f32>(0.22, 0.31, 0.11), vec3<f32>(0.29, 0.36, 0.15), pn(np, 0.01, vec2<f32>(0.0))));
+        c = mix(c, pasture, 1.0 - smoothstep(0.955, 0.985, up));
+    }
+    // Above the tree line: short alpine grass, browner and patchier.
+    let alp = grass_season(vec3<f32>(0.33, 0.35, 0.20)) * (0.8 + 0.4 * pna(np, 0.03, vec2<f32>(1.0), fw * 0.03));
+    c = mix(c, alp, smoothstep(1500.0, 2300.0, h));
+    // Steep: rock (light limestone / darker gneiss by region), with strata.
+    let region = pfbm(np, 0.0003, vec2<f32>(7.0));
+    let rock = mix(vec3<f32>(0.40, 0.38, 0.35), vec3<f32>(0.58, 0.56, 0.52), smoothstep(0.35, 0.65, region))
+        * (0.7 + 0.6 * pna(np + vec2<f32>(wp.y * 0.7, 0.0), 0.05, vec2<f32>(0.0), fw * 0.05))
+        * (0.85 + 0.3 * pna(np, 0.004, vec2<f32>(wp.y * 0.02, 0.0), fw * 0.004));
+    let steep = 1.0 - smoothstep(0.70, 0.84, up - 0.06 * smoothstep(1800.0, 2800.0, h));
+    c = mix(c, rock, steep);
+    // Scree aprons below the faces, high up.
+    let scree = mix(vec3<f32>(0.46, 0.44, 0.40), vec3<f32>(0.56, 0.54, 0.50), region) * (0.85 + 0.3 * pna(np, 0.3, vec2<f32>(0.0), fw * 0.3));
+    c = mix(c, scree, smoothstep(2100.0, 2700.0, h) * (1.0 - steep) * smoothstep(0.45, 0.7, pn(np, 0.006, vec2<f32>(5.0))) * 0.7);
+    // Old snow above the snow line (lower in winter), lying on the gentler slopes.
+    let line = mix(2900.0, 1300.0, g.season.w) - 300.0 * g.wx.w;
+    let snow = smoothstep(line - 120.0, line + 180.0, h) * smoothstep(0.55, 0.78, up);
+    c = mix(c, vec3<f32>(0.86, 0.88, 0.92), snow);
+    return c;
+}
+
 // ---------------------------------------------------------------- main
 
 @fragment
@@ -689,11 +754,15 @@ fn fs_main(in: VOut) -> FOut {
     }
     var o: FOut;
     o.dist = dist;
+    // Mirrored pass: nothing below the mirror plane (it would appear above it).
+    if (is_refl() && wp.y < g.pre.z + 0.4) {
+        discard;
+    }
     if (m == 1) {
         o.col = vec4<f32>(apply_fog_px(shade_water(in, px, fwp), px, dist), 1.0);
         return o;
     }
-    if (m == 17) {
+    if (m == 17 && in.uv.y < 0.5) {
         // Floodlit crowns of towers: luminance (cd/m²) in uv.x, at night only.
         let c = pre_exposed(srgb_to_lin(in.col) * in.uv.x * LUX * g.sun_true.w);
         o.col = vec4<f32>(apply_fog_px(c, px, dist), 1.0);
@@ -725,6 +794,7 @@ fn fs_main(in: VOut) -> FOut {
             let stripe = step(0.5, fract(np.x * (nper(1.0 / 7.0) / NP) + 0.3 * pn(np, 0.01, vec2<f32>(0.0))));
             s.albedo *= 1.0 + (stripe - 0.5) * 0.12 * (1.0 - smoothstep(0.3, 1.5, fwp));
             s.albedo = srgb_to_lin(grass_season(pow(s.albedo, vec3<f32>(1.0 / 2.2))));
+            s.albedo = srgb_to_lin(mountain(pow(s.albedo, vec3<f32>(1.0 / 2.2)), wp, np, ngeo0, fwp, false));
             s.albedo *= 1.0 - 0.18 * g.wx.x;
             s.rough = 0.9;
             s = snowy(s, np, ngeo, 1.0, fwp);
@@ -736,7 +806,7 @@ fn fs_main(in: VOut) -> FOut {
                 s = wet_paving(s, wp, px, fwp, 0.6);
                 s = snowy(s, np, ngeo, 0.8, fwp);
             } else {
-                s.albedo = srgb_to_lin(field_surface(wp, np, ngeo, fwp, dist)) * 0.95;
+                s.albedo = srgb_to_lin(mountain(field_surface(wp, np, ngeo, fwp, dist), wp, np, ngeo0, fwp, true)) * 0.95;
                 s.albedo *= 1.0 - 0.22 * g.wx.x;
                 s.rough = 0.92;
                 s = snowy(s, np, ngeo, 1.0, fwp);
@@ -837,6 +907,9 @@ fn fs_main(in: VOut) -> FOut {
         case 3: { // curtain-wall glass tower
             s = glass_surface(in, ngeo, in.col, fwuv);
         }
+        case 17: { // floodlit (landmarks): diffuse by day, + self-lit at night (uv.x = cd/m²)
+            s.emit = srgb_to_lin(in.col) * in.uv.x * LUX * g.sun_true.w;
+        }
         case 8: { // glossy aircraft paint
             s.rough = 0.28;
             s.f0 = vec3<f32>(0.05);
@@ -896,11 +969,13 @@ fn fs_main(in: VOut) -> FOut {
     // Wet paving: glossy reflections smeared toward the viewer (the long
     // streaks of street lights and headlights on a wet road at night).
     let paved = m == 7 || m == 15 || m == 16 || (m == 12 && in.uv.x > 0.5) || (m == 5 && ngeo.y > 0.95);
-    if (paved && g.wx.x > 0.15 && !is_refl() && wp.y < 0.5) {
+    // (Only on the mirror plane: the planar reflection is wrong elsewhere.)
+    let on_plane = abs(wp.y - g.pre.z) < 0.6;
+    if (paved && g.wx.x > 0.15 && !is_refl() && on_plane) {
         col += wet_streaks(px, ngeo, V, dist) * smoothstep(0.15, 0.6, g.wx.x) * (1.0 - puddle);
     }
     // Puddles: a thin sheet of water mirroring the scene (planar reflection).
-    if (puddle > 0.0 && wp.y < 0.5) {
+    if (puddle > 0.0 && on_plane) {
         let rip = rain_ripples(np, 2.2 * 1.7, g.cam_pos.w, fwp * 0.1);
         let n = normalize(vec3<f32>(-rip.x, 1.0, -rip.y));
         let nv = max(dot(n, V), 1e-3);

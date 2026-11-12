@@ -384,6 +384,21 @@ impl TileCollision {
         }
         top
     }
+    /// Water bodies (tile-frame bounds, surface height on `grid`).
+    pub fn water_levels(&self, grid: &crate::terrain::Grid) -> Vec<(Vec2, Vec2, f32)> {
+        self.water.iter().filter(|w| !w.outer.is_empty()).map(|w| (w.lo, w.hi, grid.height(w.outer[0]))).collect()
+    }
+    /// A shore point of the water body nearest `p` within `r` (tile frame).
+    pub fn nearest_water(&self, p: Vec2, r: f32) -> Option<Vec2> {
+        let mut best: Option<(f32, Vec2)> = None;
+        for w in &self.water {
+            let d = (w.lo - p).max(p - w.hi).max(Vec2::ZERO).length();
+            if d <= r && best.is_none_or(|b| d < b.0) && !w.outer.is_empty() {
+                best = Some((d, w.outer[0]));
+            }
+        }
+        best.map(|b| b.1)
+    }
     pub fn is_water(&self, p: Vec2) -> bool {
         self.wgrid.at(p).iter().any(|&i| {
             let w = &self.water[i as usize];
@@ -597,10 +612,16 @@ fn tree_tint(rng: &mut Rng, conifer: bool) -> [f32; 3] {
 /// Everything a worker builds for one map tile.
 pub struct TileBuild {
     pub id: TileId,
-    /// Tallest building (m), for culling bounds.
+    /// Highest point (terrain or building top, world y), for culling bounds.
     pub max_h: f32,
-    /// Ground layers, drawn in order with no depth test (painter's).
+    /// Lowest point (terrain, skirts), for culling bounds.
+    pub min_y: f32,
+    /// Ground: the terrain base surface, then the draped layers in painter's
+    /// order (index ranges in `ranges`, see terrain.rs).
     pub flat: MeshData,
+    pub ranges: crate::terrain::FlatRanges,
+    /// The terrain surface (tile frame): ground height queries.
+    pub grid: std::sync::Arc<crate::terrain::Grid>,
     pub buildings: MeshData,
     /// Deciduous trees first, then `conifers` conifers at the end.
     pub trees: Vec<TreeInst>,
@@ -624,17 +645,21 @@ fn sel<'a>(f: &'a TileFeatures, pred: impl Fn(&Kind) -> bool + 'a) -> impl Itera
 pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
     let rect = id.rect(proj);
     let (lo, hi) = rect;
+    // Terrain first: everything else sits on it.
+    let grid = {
+        let water: Vec<&Area> = sel(&f, |k| *k == Kind::Water).collect();
+        let zones = crate::terrain::zones_for(id);
+        std::sync::Arc::new(crate::terrain::build_grid(id, &water, &zones))
+    };
+    // Ground layers are built flat (y = 0) in painter's order, then draped
+    // onto the terrain (terrain::assemble).
     let mut flat = MeshData::default();
     let mut bld = MeshData::default();
     let mut lights = crate::lights::place::CityGen::new(id, proj, rect);
     let rx_mask = RasterXf::new(rect, MASK_N);
     let mut mask = vec![0u8; (MASK_N * MASK_N) as usize];
     let mut mask_set = |x: i32, y: i32| mask[(y as u32 * MASK_N + x as u32) as usize] = 1;
-
-
-    // --- opaque field ground over the whole tile (hides the far-field layer)
-    flat.mat = mat::GROUND;
-    flat.flat_quad([lo, vec2(hi.x, lo.y), hi, vec2(lo.x, hi.y)], 0.0, LAND);
+    let landmarks = if std::env::var_os("SKYWARD_NO_LANDMARKS").is_some() { Vec::new() } else { crate::landmarks::for_tile(id) };
 
     // --- building density → urban ground cells
     let mut density = vec![0f32; DENSITY_N * DENSITY_N];
@@ -815,20 +840,69 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
     let mut solids = Vec::new();
     let mut sgrid = Grid::new(lo, hi, 16);
     let mut building_count = 0;
-    let mut max_h: f32 = 0.0;
-    for a in sel(&f, |k| matches!(k, Kind::Building { .. })) {
-        let Kind::Building { height, min_height, colour } = a.kind else { continue };
-        if a.outer.len() < 3 {
-            continue;
+    let mut max_h: f32 = grid.max;
+    // Each building stands on the lowest ground under its footprint (its
+    // walls run a little below: foundations on slopes). Parts raised off the
+    // ground (min_height) share the base of the building part under them.
+    let blds: Vec<&Area> = sel(&f, |k| matches!(k, Kind::Building { .. }))
+        .filter(|a| a.outer.len() >= 3)
+        .filter(|a| {
+            let c = a.outer.iter().copied().sum::<Vec2>() / a.outer.len() as f32;
+            !landmarks.iter().any(|l| l.suppress.iter().any(|r| point_in_ring(c, r)))
+        })
+        .collect();
+    let mut bases: Vec<f32> = blds.iter().map(|a| grid.min_over(&a.outer)).collect();
+    {
+        let mut ix = Grid::new(lo, hi, 32);
+        let boxes: Vec<(Vec2, Vec2)> = blds.iter().map(|a| bbox(&a.outer)).collect();
+        for (i, b) in boxes.iter().enumerate() {
+            ix.insert(b.0, b.1, i as u32);
         }
+        for (i, a) in blds.iter().enumerate() {
+            let Kind::Building { min_height, .. } = a.kind else { continue };
+            if min_height <= 0.5 {
+                continue;
+            }
+            let (blo, bhi) = boxes[i];
+            for &k in ix.at((blo + bhi) * 0.5) {
+                let k = k as usize;
+                let Kind::Building { min_height: mk, .. } = blds[k].kind else { continue };
+                if k != i && mk <= 0.5 && boxes[k].0.x <= bhi.x && boxes[k].1.x >= blo.x && boxes[k].0.y <= bhi.y && boxes[k].1.y >= blo.y {
+                    bases[i] = bases[i].min(bases[k]);
+                }
+            }
+        }
+    }
+    for (a, &base) in blds.iter().zip(&bases) {
+        let Kind::Building { height, min_height, colour } = a.kind else { continue };
+        let v0 = bld.verts.len();
         building(&mut bld, a, height, min_height, colour);
+        for v in &mut bld.verts[v0..] {
+            v.pos[1] = if min_height <= 0.5 && v.pos[1] <= 1e-3 { base - FOUNDATION } else { v.pos[1] + base };
+        }
+        let l0 = lights.light_count();
         lights.tall_building(&a.outer, height);
+        lights.raise_from(l0, base);
         building_count += 1;
-        max_h = max_h.max(height);
+        max_h = max_h.max(base + height);
         let (blo, bhi) = bbox(&a.outer);
         sgrid.insert(blo, bhi, solids.len() as u32);
-        solids.push(Solid { pts: a.outer.clone(), lo: blo, hi: bhi, top: height });
+        solids.push(Solid { pts: a.outer.clone(), lo: blo, hi: bhi, top: base + height });
         rx_mask.fill(&a.outer, &[], &mut mask_set);
+    }
+    // Landmarks (landmarks.rs): procedural models of famous buildings.
+    for l in &landmarks {
+        let base = grid.height(l.anchor);
+        bld.append(&l.mesh, glam::Mat4::from_translation(vec3(0.0, base, 0.0)));
+        for (ring, top) in &l.solids {
+            let (blo, bhi) = bbox(ring);
+            sgrid.insert(blo, bhi, solids.len() as u32);
+            solids.push(Solid { pts: ring.clone(), lo: blo, hi: bhi, top: base + top });
+            rx_mask.fill(ring, &[], &mut mask_set);
+        }
+        lights.extend_raised(&l.lights, base);
+        max_h = max_h.max(base + l.max_h);
+        building_count += 1;
     }
     let mut water = Vec::new();
     let mut wgrid = Grid::new(lo, hi, 8);
@@ -877,22 +951,29 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
                 break;
             }
             let p = vec2(rng.range(blo.x, bhi.x), rng.range(blo.y, bhi.y));
-            if mask_at(p) || !point_in_ring(p, &a.outer) || a.holes.iter().any(|h| point_in_ring(p, h)) {
+            if mask_at(p) || !point_in_ring(p, &a.outer) || a.holes.iter().any(|h| point_in_ring(p, h)) || landmarks.iter().any(|l| l.suppress.iter().any(|r| point_in_ring(p, r))) {
                 continue;
             }
             let conifer = rng.f() < conifer_frac;
-            let t = TreeInst { pos: [p.x, 0.0, p.y], height: rng.range(hmin, hmax), tint: tree_tint(&mut rng, conifer), rot: rng.range(0.0, std::f32::consts::TAU) };
+            let t = TreeInst { pos: [p.x, grid.height(p), p.y], height: rng.range(hmin, hmax), tint: tree_tint(&mut rng, conifer), rot: rng.range(0.0, std::f32::consts::TAU) };
             if conifer { conif.push(t) } else { decid.push(t) }
             placed += 1;
         }
     }
     let conifers = conif.len();
     decid.extend(conif);
+    let (flat, ranges) = crate::terrain::assemble(id, &grid, &flat, LAND);
+    let min_y = flat.verts.iter().fold(grid.min, |m, v| m.min(v.pos[1]));
+    let mut lights = lights.finish();
+    drape_lights(&mut lights, &grid);
 
     TileBuild {
         id,
         max_h,
+        min_y,
         flat,
+        ranges,
+        grid,
         buildings: bld,
         trees: decid,
         conifers,
@@ -900,7 +981,25 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
         runways: f.runways,
         airports: f.airports,
         building_count,
-        lights: lights.finish(),
+        lights,
+    }
+}
+
+/// Wall bottoms run this far below a building's base (its lowest ground point).
+const FOUNDATION: f32 = 0.6;
+
+/// Lift a tile's ground-level lights and traffic onto the terrain (lights on
+/// buildings / landmarks were raised with them already).
+fn drape_lights(l: &mut crate::lights::TileLights, grid: &crate::terrain::Grid) {
+    for (i, li) in l.lights.iter_mut().enumerate() {
+        if !l.raised.get(i).copied().unwrap_or(false) {
+            li.pos[1] += grid.height(vec2(li.pos[0], li.pos[2]));
+        }
+    }
+    l.raised.clear();
+    for t in &mut l.traffic {
+        t.ya = grid.height(t.a.into());
+        t.yb = grid.height(t.b.into());
     }
 }
 
@@ -908,6 +1007,10 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
 pub fn build_far_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
     let rect = id.rect(proj);
     let (lo, hi) = rect;
+    let grid = {
+        let water: Vec<&Area> = sel(&f, |k| *k == Kind::Water).collect();
+        std::sync::Arc::new(crate::terrain::build_grid(id, &water, &[]))
+    };
     let mut flat = MeshData::default();
     let mut lights = crate::lights::place::CityGen::new(id, proj, rect);
     {
@@ -958,10 +1061,17 @@ pub fn build_far_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
         flat.mat = m;
         flat.strip_cut(&l.pts, w, 0.0, col, l.cut);
     }
+    let (flat, ranges) = crate::terrain::assemble(id, &grid, &flat, LAND);
+    let min_y = flat.verts.iter().fold(grid.min, |m, v| m.min(v.pos[1]));
+    let mut lights = lights.finish();
+    drape_lights(&mut lights, &grid);
     TileBuild {
         id,
-        max_h: 0.0,
+        max_h: grid.max,
+        min_y,
         flat,
+        ranges,
+        grid,
         buildings: MeshData::default(),
         trees: Vec::new(),
         conifers: 0,
@@ -969,7 +1079,30 @@ pub fn build_far_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
         runways: Vec::new(),
         airports: Vec::new(),
         building_count: 0,
-        lights: lights.finish(),
+        lights,
+    }
+}
+
+impl TileBuild {
+    /// A terrain-only tile (terrain.rs horizon tiles).
+    pub fn terrain_only(id: TileId, rect: (Vec2, Vec2), flat: MeshData, ranges: crate::terrain::FlatRanges, grid: std::sync::Arc<crate::terrain::Grid>) -> TileBuild {
+        let (lo, hi) = rect;
+        TileBuild {
+            id,
+            max_h: grid.max,
+            min_y: flat.verts.iter().fold(grid.min, |m, v| m.min(v.pos[1])),
+            flat,
+            ranges,
+            grid,
+            buildings: MeshData::default(),
+            trees: Vec::new(),
+            conifers: 0,
+            collision: TileCollision { solids: Vec::new(), sgrid: Grid::new(lo, hi, 1), water: Vec::new(), wgrid: Grid::new(lo, hi, 1) },
+            runways: Vec::new(),
+            airports: Vec::new(),
+            building_count: 0,
+            lights: crate::lights::TileLights::default(),
+        }
     }
 }
 
@@ -1184,6 +1317,11 @@ pub struct Runway {
     /// Owning airport ident (OurAirports), empty for tile runways.
     pub airport: String,
     pub source: RunwaySource,
+    /// Surface height (m) at `a` and `b`: the runway is a plane between them,
+    /// level across (terrain.rs flattens the ground to it).
+    pub elev: [f32; 2],
+    /// `elev` is resolved (else 0 while the terrain data loads).
+    pub elev_known: bool,
 }
 
 /// Where a runway's geometry came from.
@@ -1203,6 +1341,12 @@ impl Runway {
     pub fn length(&self) -> f32 {
         self.a.distance(self.b)
     }
+    /// Height of the runway plane at `p` (level beyond the ends).
+    pub fn height_at(&self, p: Vec2) -> f32 {
+        let len = self.length().max(1e-3);
+        let t = ((p - self.a).dot(self.b - self.a) / (len * len)).clamp(0.0, 1.0);
+        self.elev[0] + (self.elev[1] - self.elev[0]) * t
+    }
     /// Typical width for a runway of this length (z14 lines carry no width).
     pub fn width_for(len: f32) -> f32 {
         match len {
@@ -1220,7 +1364,11 @@ pub fn runway_mesh(runways: &[Runway]) -> MeshData {
     let mut m = MeshData::default();
     m.mat = mat::ASPHALT;
     for rw in runways {
+        let v0 = m.verts.len();
         runway_geometry(&mut m, rw);
+        for v in &mut m.verts[v0..] {
+            v.pos[1] = rw.height_at(vec2(v.pos[0], v.pos[2]));
+        }
     }
     m
 }

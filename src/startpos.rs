@@ -176,7 +176,8 @@ pub fn spawn(def: &AircraftDef, world: &World, cs: &CustomStart) -> Option<(Airc
             let (thr, d) = airports::threshold(&rw, b);
             let dist = nm * 1852.0;
             let p = thr - d * dist;
-            let alt = dist * 3f32.to_radians().tan() + 15.0;
+            // (Above the threshold: terrain.rs runway elevation.)
+            let alt = dist * 3f32.to_radians().tan() + 15.0 + rw.height_at(thr);
             let v = approach_ias(def, dist);
             let (ac, mut ctl) = air(vec3(p.x, alt, p.y), heading_of(d), v);
             let last = def.flap_detents.len().saturating_sub(1);
@@ -247,7 +248,7 @@ pub fn spawn(def: &AircraftDef, world: &World, cs: &CustomStart) -> Option<(Airc
         Spec::Air { lat, lon, alt_m, hdg } => {
             let p = world.proj.to_world(*lat, *lon);
             let v = cruise_ias(def);
-            let (ac, ctl) = air(vec3(p.x, alt_m.max(60.0), p.y), hdg.to_radians(), v);
+            let (ac, ctl) = air(vec3(p.x, alt_m.max(world.ground_height(p) + 60.0), p.y), hdg.to_radians(), v);
             Some((ac, ctl, 0, nearest_runway(p)))
         }
         Spec::Thermal => None,

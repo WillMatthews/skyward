@@ -35,6 +35,8 @@ mod scene;
 mod input;
 mod sim;
 mod startpos;
+mod terrain;
+mod landmarks;
 mod tiles;
 mod ui;
 mod weather;
