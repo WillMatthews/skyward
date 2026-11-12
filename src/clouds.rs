@@ -924,6 +924,15 @@ impl CloudRenderer {
         &self.shadow_view
     }
 
+    /// The latest half-resolution cloud result of a slot (after `render`):
+    /// colour (a = transmittance) and depth (x = march limit, y = mean cloud
+    /// distance) — the effects composite against it (vfx/gpu.rs).
+    pub fn history(&self, slot: usize) -> Option<(&wgpu::TextureView, &wgpu::TextureView)> {
+        let s = self.slots.get(slot)?.as_ref()?;
+        let h = &s.hist[s.cur];
+        Some((&h.0, &h.1))
+    }
+
     /// origin_x, origin_z, inv_size, cloud base: uv = (xz - origin) * inv_size + 0.5.
     pub fn shadow_params(&self) -> [f32; 4] {
         [self.shadow_origin.x, self.shadow_origin.y, 1.0 / (SHADOW_RES as f32 * SHADOW_TEXEL), self.field.base()]

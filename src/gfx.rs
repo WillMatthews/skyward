@@ -2017,7 +2017,7 @@ impl Renderer {
             }
             // Effects (fire, smoke, contrails, vapour, haze) over the scene and clouds.
             if let Some(vf) = fv.vfx.as_deref() {
-                self.vfx.render(device, queue, encoder, vf, fv.eye, fv.time, &t.main_bg, &t.hdr, &t.dist, HDR, width, height);
+                self.vfx.render(device, queue, encoder, vf, fv.eye, fv.time, &t.main_bg, &t.hdr, &t.dist, self.clouds.history(0), key, HDR, width, height);
             }
             let precip = wx.rain.max(wx.snow);
             if precip > 0.0 {

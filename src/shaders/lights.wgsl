@@ -479,6 +479,10 @@ fn fs_beams(in: BOut) -> @location(0) vec4<f32> {
         let cos_o = g.alights[i * 3 + 1].w;
         let cd = g.alights[i * 3 + 2].rgb;
         let cos_i = g.alights[i * 3 + 2].w;
+        // Fires (cos_i < -1.5) light their own smoke (vfx), not the clear air.
+        if (cos_i < -1.5) {
+            continue;
+        }
         // March the part of the ray near the light.
         let tc = clamp(dot(lp, rd), 0.0, dmax);
         let closest = length(lp - rd * tc);

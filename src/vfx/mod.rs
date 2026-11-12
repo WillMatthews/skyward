@@ -1,4 +1,4 @@
-//! Visual effects (Track L): a CPU-simulated particle system drawn as GPU
+//! Visual effects (Tracks L, V): a CPU-simulated particle system drawn as GPU
 //! instanced, lit, soft particles (fire, smoke, dust, spray, sparks, tyre
 //! smoke, condensation), camera-facing ribbons (contrails, vortex cores,
 //! smoke trails), procedural meshes (vapour cone, wing-surface vapour,
@@ -63,9 +63,21 @@ struct Particle {
     buoy: f32,
     rot: f32,
     seed: f32,
+    /// Flames: temperature at birth (K) and cooling time constant (s; 0 =
+    /// a flame tongue, cooling over its life). 0 for other kinds.
+    temp0: f32,
+    cool: f32,
+    /// Velocity of the source at birth (a burning, moving wreck): the flame
+    /// axis is the motion relative to it.
+    src_vel: Vec3,
+    /// Flame elongation (length / width).
+    stretch: f32,
+    /// Fire plume: buoyancy flux F (m⁴/s³) and source height (0 = no plume).
+    flux: f32,
+    y0: f32,
 }
 
-/// One particle on the GPU (64 bytes; == `vfx.wgsl`).
+/// One particle on the GPU (80 bytes; == `vfx.wgsl`).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuParticle {
@@ -75,18 +87,24 @@ pub struct GpuParticle {
     pub col: [f32; 4],
     /// Velocity (m/s, for stretched kinds), kind.
     pub vel: [f32; 4],
-    /// Age 0..1, rotation, seed, emissive scale.
+    /// Age 0..1, rotation, seed, stretch (flames).
     pub extra: [f32; 4],
+    /// Key-light transmittance, fire irradiance (lux), temperature (K), sky
+    /// visibility (the first, second and fourth filled in by `gpu.rs`).
+    pub light: [f32; 4],
 }
 
-/// A ribbon / mesh vertex (32 bytes; == `vfx.wgsl`).
+/// A ribbon / mesh vertex (48 bytes; == `vfx.wgsl`).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct VfxVert {
-    /// Position relative to the frame origin, kind.
+    /// Position relative to the frame origin (ribbons: the centre line), kind.
     pub pos: [f32; 4],
-    /// u (along), v (across −1..1), intensity, extra.
+    /// u (along), v (across −1..1), intensity, width (m).
     pub uv: [f32; 4],
+    /// Ribbons: unit side vector, age (s). Meshes: normal, shell flag.
+    /// Diamonds: -, -, nozzle radius, cell length.
+    pub aux: [f32; 4],
 }
 
 /// Mesh / ribbon kinds (== `vfx.wgsl`).
@@ -165,6 +183,9 @@ pub struct Ctx<'a> {
 
 const MAX_PARTICLES: usize = 24_000;
 
+/// Heights (m above the reference ground) of the wind profile samples.
+const WIND_H: [f32; 10] = [0.0, 10.0, 30.0, 70.0, 150.0, 300.0, 600.0, 1000.0, 1800.0, 3000.0];
+
 pub struct Vfx {
     parts: Vec<Particle>,
     trails: Vec<Trail>,
@@ -176,9 +197,14 @@ pub struct Vfx {
     eng_smoke: [f32; 4],
     /// Effects state for the mesh effects this frame.
     cone: f32,
+    cone_mach: f32,
+    cone_aoa: f32,
     wing_vapour: f32,
     air: atmo::Air,
     wind: Vec3,
+    /// Wind profile over the effects (reference ground height, samples at `WIND_H`).
+    wind_ref: f32,
+    winds: [Vec3; 10],
     /// Optional: humidity / temperature from ISA (tests, no weather).
     pub isa_only: bool,
     /// Accumulators for rate-based emitters.
@@ -197,9 +223,13 @@ impl Default for Vfx {
             prev_running: [true; 4],
             eng_smoke: [0.0; 4],
             cone: 0.0,
+            cone_mach: 0.0,
+            cone_aoa: 0.0,
             wing_vapour: 0.0,
             air: atmo::Air::default(),
             wind: Vec3::ZERO,
+            wind_ref: 0.0,
+            winds: [Vec3::ZERO; 10],
             isa_only: false,
             acc: Vec::new(),
         }
@@ -209,6 +239,23 @@ impl Default for Vfx {
 fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
     let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
+}
+
+/// A pool / wreck fire's scale: diameter (m), heat release (kW) and mean
+/// flame height (m, Heskestad: L = 0.235 Q^⅖ − 1.02 D).
+pub fn flame(f: &crate::debris::Fire) -> (f32, f32, f32) {
+    let d = 2.0 * f.radius.max(0.3);
+    // Hydrocarbon fuel: ≈ 43 MJ/kg.
+    let q = (f.rate * 43_000.0 * f.size).max(1.0);
+    let l = (0.235 * q.powf(0.4) - 1.02 * d).max(0.5 * d).max(0.6) * f.size.sqrt().max(0.2);
+    (d, q, l)
+}
+
+/// Luminous intensity (cd) of a fire: mean flame luminance × projected area.
+fn fire_cd(f: &crate::debris::Fire) -> f32 {
+    let (d, _, l) = flame(f);
+    // (≈ 1.2 kcd/m² over the flame's silhouette: its sooty mantle hides much of the hot core.)
+    1200.0 * 0.6 * d * l * f.size
 }
 
 impl Vfx {
@@ -228,7 +275,9 @@ impl Vfx {
     pub fn rebase(&mut self, delta: Vec3) {
         for p in &mut self.parts {
             p.pos += delta;
+            p.y0 += delta.y;
         }
+        self.wind_ref += delta.y;
         for t in &mut self.trails {
             for q in &mut t.pts {
                 q.pos += delta;
@@ -257,6 +306,21 @@ impl Vfx {
         }
     }
 
+    /// Wind at height `y` (from the profile sampled this frame).
+    fn wind_at(&self, y: f32) -> Vec3 {
+        let h = y - self.wind_ref;
+        if h <= WIND_H[0] {
+            return self.winds[0];
+        }
+        for k in 1..WIND_H.len() {
+            if h < WIND_H[k] {
+                let t = (h - WIND_H[k - 1]) / (WIND_H[k] - WIND_H[k - 1]);
+                return self.winds[k - 1].lerp(self.winds[k], t);
+            }
+        }
+        self.winds[WIND_H.len() - 1]
+    }
+
     /// Rate-based emission: how many to emit this frame for `rate` per second.
     fn count(&mut self, key: u32, rate: f32, dt: f32) -> usize {
         let i = match self.acc.iter().position(|a| a.0 == key) {
@@ -273,22 +337,20 @@ impl Vfx {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn emit(&mut self, kind: Kind, pos: Vec3, vel: Vec3, life: f32, size0: f32, size1: f32, col: Vec3, alpha: f32, drag: f32, grav: f32, buoy: f32) {
+    fn emit(&mut self, kind: Kind, pos: Vec3, vel: Vec3, life: f32, size0: f32, size1: f32, col: Vec3, alpha: f32, drag: f32, grav: f32, buoy: f32) -> Option<&mut Particle> {
         if self.parts.len() >= MAX_PARTICLES {
             // Full: the oldest smoke makes room for fresh fire / sparks.
             if matches!(kind, Kind::Smoke | Kind::Dust | Kind::Steam) {
-                return;
+                return None;
             }
-            if let Some(i) = self.parts.iter().position(|p| p.kind == Kind::Smoke && p.age > 0.5 * p.life) {
-                self.parts.swap_remove(i);
-            } else {
-                return;
-            }
+            let i = self.parts.iter().position(|p| p.kind == Kind::Smoke && p.age > 0.5 * p.life)?;
+            self.parts.swap_remove(i);
         }
         let rot = self.rnd() * std::f32::consts::TAU;
         let seed = self.rnd() * 97.0;
         let life = life * (0.75 + 0.5 * self.rnd());
-        self.parts.push(Particle { pos, vel, age: 0.0, life, size0, size1, kind, col, alpha, drag, grav, buoy, rot, seed });
+        self.parts.push(Particle { pos, vel, age: 0.0, life, size0, size1, kind, col, alpha, drag, grav, buoy, rot, seed, temp0: 0.0, cool: 0.0, src_vel: Vec3::ZERO, stretch: 1.0, flux: 0.0, y0: pos.y });
+        self.parts.last_mut()
     }
 
     fn trail_mut(&mut self, key: u32, kind: f32, life: f32, growth: f32, sink: f32, fade_in: f32, seg: f32) -> &mut Trail {
@@ -335,13 +397,18 @@ impl Vfx {
         let ac = c.ac;
         let def = c.def;
         let sd = crate::damage::struct_def(def.id);
-        // Air and wind at the aircraft (one sample per frame; particles far
-        // from it use the same wind, fine at these scales).
+        // Air at the aircraft; the wind as a profile over the effects (smoke
+        // columns rise into the faster, veered wind aloft).
         self.air = atmo::air_at(c.world, c.pos, self.isa_only);
         let w = crate::flight::Environment::wind(c.world, c.pos);
         self.wind = if w.is_finite() { w } else { Vec3::ZERO };
-        let wind = self.wind;
         let gh = |p: Vec3| crate::flight::Environment::ground_height(c.world, Vec2::new(p.x, p.z));
+        let reference = c.debris.as_deref().and_then(|d| d.crash_at).unwrap_or(c.pos);
+        self.wind_ref = gh(reference);
+        for (k, h) in WIND_H.iter().enumerate() {
+            let w = crate::flight::Environment::wind(c.world, Vec3::new(reference.x, self.wind_ref + h.max(2.0), reference.z));
+            self.winds[k] = if w.is_finite() { w } else { Vec3::ZERO };
+        }
         for t in &mut self.trails {
             t.head = None;
         }
@@ -349,16 +416,46 @@ impl Vfx {
         // ---- particles
         let mut i = 0;
         while i < self.parts.len() {
+            let wind = self.wind_at(self.parts[i].pos.y);
             let p = &mut self.parts[i];
             p.age += dt;
             if p.age >= p.life {
                 self.parts.swap_remove(i);
                 continue;
             }
+            if p.age < 0.0 {
+                // Not born yet (delayed smoke): carried along.
+                p.vel += (wind - p.vel) * (p.drag * dt).min(1.0);
+                p.pos += p.vel * dt;
+                i += 1;
+                continue;
+            }
             let k = (p.drag * dt).min(1.0);
-            p.vel += (wind - p.vel) * k;
-            let lift = p.buoy * (1.0 - p.age / p.life).max(0.0);
-            p.vel.y += (lift - GRAVITY * p.grav) * dt;
+            if p.flux > 0.0 {
+                // Buoyant fire plume (Morton–Taylor–Turner): rise speed
+                // ∝ F^⅓ z^-⅓ up to the equilibrium height in a stable
+                // atmosphere; spreading b ≈ 0.12 z; bent over by the wind.
+                let z = (p.pos.y - p.y0).max(1.0);
+                let zmax = 3.8 * p.flux.powf(0.25) * 0.012f32.powf(-0.75);
+                let w_up = 1.7 * p.flux.cbrt() * (z + 8.0).powf(-1.0 / 3.0) * (1.0 - smoothstep(0.6 * zmax, zmax, z));
+                // Large eddies: each puff wanders across the column (its own
+                // slowly turning direction), so the outline billows.
+                let ph = p.seed + p.age * 0.35;
+                let eddy = Vec3::new(ph.cos(), 0.0, (ph * 1.3).sin()) * (0.35 * p.size1 / (p.age + 4.0)).min(3.0);
+                p.vel.x += (wind.x + eddy.x - p.vel.x) * k;
+                p.vel.z += (wind.z + eddy.z - p.vel.z) * k;
+                p.vel.y += (w_up + wind.y - p.vel.y) * (1.5 * dt).min(1.0);
+                // Spreads with height, and fast once it stops rising (it flattens out).
+                let b = 0.13 * z + p.size0 + 0.25 * smoothstep(0.7 * zmax, zmax, z) * (z - 0.7 * zmax).max(0.0);
+                p.size1 = p.size1.max(1.5 * b);
+            } else {
+                // Flames on a moving wreck ride in its wake (the air there
+                // moves with it), then fall behind into the free stream.
+                let target = if p.kind == Kind::Fire && p.cool == 0.0 { wind + (p.src_vel - wind) * (-p.age / 0.35).exp() } else { wind };
+                p.vel += (target - p.vel) * k;
+                let lift = p.buoy * (1.0 - p.age / p.life).max(0.0);
+                p.vel.y += (lift - GRAVITY * p.grav) * dt;
+            }
             p.pos += p.vel * dt;
             if matches!(p.kind, Kind::Spark | Kind::Spray | Kind::Dust) && p.grav > 0.0 {
                 let g = gh(p.pos);
@@ -383,7 +480,7 @@ impl Vfx {
             let time = self.time;
             for q in &mut t.pts {
                 let age = time - q.born;
-                q.pos += (wind + Vec3::new(0.0, -t.sink * (-age / 40.0).exp(), 0.0)) * dt;
+                q.pos += (self.wind + Vec3::new(0.0, -t.sink * (-age / 40.0).exp(), 0.0)) * dt;
             }
             while t.pts.front().is_some_and(|q| time - q.born > t.life) {
                 t.pts.pop_front();
@@ -397,18 +494,22 @@ impl Vfx {
             for f in fx {
                 self.debris_fx(&f, &gh);
             }
-            let fires: Vec<crate::debris::Fire> = d.fires.clone();
-            for (k, f) in fires.iter().enumerate() {
-                self.fire(k as u32, f, dt);
+            let fires: Vec<(crate::debris::Fire, Vec3)> = d.fires.iter().map(|f| (*f, f.body.and_then(|b| d.bodies.get(b)).map_or(Vec3::ZERO, |b| b.vel))).collect();
+            for (k, (f, v)) in fires.iter().enumerate() {
+                self.fire(k as u32, f, *v, dt);
             }
             let bodies: Vec<(Vec3, Vec3, f32, bool, bool, usize)> = d.bodies.iter().enumerate().map(|(i, b)| (b.pos, b.vel, b.half.max_element(), b.smoking && !b.in_water, b.sleeping, i)).collect();
             for (pos, vel, r, smoking, sleeping, i) in bodies {
                 if smoking && d.time < 90.0 {
-                    let n = self.count(1000 + i as u32, if sleeping { 1.5 } else { 6.0 }, dt);
+                    // Torn, hot pieces trail grey-brown smoke while they move, a thin wisp once still.
+                    let n = self.count(1000 + i as u32, if sleeping { 1.2 } else { 6.0f32.max(vel.length() / (0.5 + 0.2 * r)) }, dt);
                     for _ in 0..n {
-                        let o = self.rsph() * r * 0.5;
-                        let v = vel * 0.2 + Vec3::new(0.0, 1.5, 0.0);
-                        self.emit(Kind::Smoke, pos + o, v, 9.0, 0.6 + 0.2 * r, 4.0 + r, Vec3::splat(0.06), 0.55, 0.6, 0.0, 1.5);
+                        let o = self.rsph() * r * 0.5 - vel * dt * self.rnd();
+                        let v = vel * 0.3 + Vec3::new(0.0, 1.5, 0.0);
+                        let g = 0.09 + 0.05 * self.rnd();
+                        if let Some(p) = self.emit(Kind::Smoke, pos + o, v, 10.0, 0.5 + 0.2 * r, 4.0 + 1.5 * r, Vec3::new(g, g * 0.95, g * 0.9), 0.45, 0.8, 0.0, 1.2) {
+                            p.src_vel = vel;
+                        }
                     }
                 }
             }
@@ -428,21 +529,37 @@ impl Vfx {
         use crate::audio::params::Surface;
         match *f {
             Fx::Explosion { pos, vel, energy, radius } => {
-                // Fireball: a burst of expanding flame that rolls up into black smoke.
-                let n = (60.0 + 160.0 * energy) as usize;
+                // Fireball: a few big, very hot, expanding puffs that decelerate,
+                // rise and roll up, cooling from yellow-white through orange
+                // into black soot; a dark cloud follows them up.
+                let n = (18.0 + 26.0 * energy) as usize;
+                let tau = 0.7 + 0.9 * energy;
                 for _ in 0..n {
                     let d = self.rsph();
-                    let v = vel * 0.4 + d * radius * (0.8 + 0.8 * self.rnd()) + Vec3::Y * radius * 0.3;
-                    let s0 = radius * (0.12 + 0.12 * self.rnd());
-                    self.emit(Kind::Fire, pos + d * radius * 0.2, v, 1.4 + 1.6 * energy, s0, s0 * 2.6, Vec3::new(1.0, 0.45, 0.12) * (3.0 + 4.0 * energy), 1.0, 1.6, 0.0, 6.0);
+                    let v = vel * 0.35 + d * radius * (1.6 + 1.2 * self.rnd()) + Vec3::Y * radius * (0.5 + 0.4 * self.rnd());
+                    let s0 = radius * (0.22 + 0.12 * self.rnd());
+                    let t0 = 1800.0 + 180.0 * self.rnd();
+                    let life = 6.0 + 4.0 * energy;
+                    if let Some(p) = self.emit(Kind::Fire, pos + d * radius * 0.25, v, life, s0, radius * (0.55 + 0.25 * self.rnd()), Vec3::splat(0.035), 1.0, 2.2, 0.0, 5.0 + 4.0 * energy) {
+                        p.temp0 = t0;
+                        p.cool = tau * (0.7 + 0.6 * p.seed / 97.0);
+                        p.stretch = 1.0;
+                    }
                 }
-                for _ in 0..(n / 2) {
+                // The smoke cloud left behind (born as the fireball cools).
+                let flux = 4.0e4 * energy;
+                for _ in 0..(n + 10) {
                     let d = self.rsph();
-                    let v = vel * 0.3 + d * radius * 0.5 + Vec3::Y * radius * 0.35;
-                    let s0 = radius * 0.25;
-                    self.emit(Kind::Smoke, pos + d * radius * 0.4, v, 14.0 + 10.0 * energy, s0, radius * 1.4, Vec3::splat(0.035), 0.85, 0.8, 0.0, 4.0);
+                    let v = vel * 0.3 + d * radius * 1.4 + Vec3::Y * radius * 0.7;
+                    let s0 = radius * 0.5;
+                    let g = 0.06 + 0.04 * self.rnd();
+                    if let Some(p) = self.emit(Kind::Smoke, pos + d * radius * 0.4, v, 35.0 + 20.0 * energy, s0, s0 * 1.5, Vec3::new(g, g * 0.93, g * 0.86), 0.55, 0.6, 0.0, 0.0) {
+                        p.age = -(tau * 1.6 + 0.6 * p.seed / 97.0);
+                        p.flux = flux;
+                        p.y0 = gh(pos);
+                    }
                 }
-                for _ in 0..(n / 3) {
+                for _ in 0..(n * 2) {
                     let d = self.rsph();
                     let v = vel * 0.5 + d * radius * 2.2 + Vec3::Y * radius;
                     self.emit(Kind::Spark, pos, v, 1.5 + 2.0 * self.rnd(), 0.08, 0.05, Vec3::new(1.0, 0.55, 0.2) * 6.0, 1.0, 0.3, 1.0, 0.0);
@@ -484,14 +601,15 @@ impl Vfx {
                         }
                     }
                     Surface::Ground => {
+                        // Clods thrown out ballistically, then a low, spreading dust cloud.
                         for _ in 0..n {
                             let d = self.rsph();
                             let v = vel * 0.35 + Vec3::new(d.x * 5.0, 3.0 + 6.0 * self.rnd(), d.z * 5.0);
-                            self.emit(Kind::Dust, pos + d * 0.5, v, 2.0 + 2.0 * self.rnd(), 0.15, 0.25, Vec3::new(0.22, 0.17, 0.11), 0.95, 0.3, 1.0, 0.0);
+                            self.emit(Kind::Dust, pos + d * 0.5, v, 2.0 + 2.0 * self.rnd(), 0.12, 0.2, Vec3::new(0.2, 0.15, 0.1), 0.95, 0.3, 1.0, 0.0);
                         }
                         for _ in 0..n {
                             let d = self.rsph();
-                            self.emit(Kind::Dust, pos + d, vel * 0.25 + Vec3::Y * (1.0 + 2.0 * self.rnd()), 5.0 + 4.0 * e.min(1.0), 1.0, 4.0 + 5.0 * e.min(1.5), Vec3::new(0.36, 0.3, 0.22), 0.55, 0.9, 0.0, 0.25);
+                            self.emit(Kind::Dust, pos + d, vel * 0.25 + Vec3::Y * (0.6 + 1.5 * self.rnd()), 6.0 + 4.0 * e.min(1.0), 1.0, 4.0 + 5.0 * e.min(1.5), Vec3::new(0.36, 0.3, 0.22), 0.5, 0.9, 0.0, 0.15);
                         }
                     }
                 }
@@ -524,7 +642,7 @@ impl Vfx {
                         let n = self.count(10 + (pos.x as u32 & 0xff), 40.0 * k, dt);
                         for _ in 0..n {
                             let d = self.rsph();
-                            self.emit(Kind::Dust, pos + d * 0.8, vel * 0.3 + Vec3::Y * (0.5 + 2.0 * self.rnd()), 4.0 + 3.0 * self.rnd(), 0.8, 3.5 + 3.0 * k.min(1.0), Vec3::new(0.34, 0.28, 0.2), 0.55, 0.9, 0.0, 0.15);
+                            self.emit(Kind::Dust, pos + d * 0.8, vel * 0.3 + Vec3::Y * (0.4 + 1.5 * self.rnd()), 5.0 + 3.0 * self.rnd(), 0.8, 3.5 + 3.0 * k.min(1.0), Vec3::new(0.34, 0.28, 0.2), 0.5, 0.9, 0.0, 0.1);
                         }
                     }
                 }
@@ -543,35 +661,70 @@ impl Vfx {
         }
     }
 
-    /// A burning fuel fire: flames, embers and a dense, wind-blown smoke column.
-    fn fire(&mut self, k: u32, f: &crate::debris::Fire, dt: f32) {
+    /// A burning fuel fire: layered flame tongues sized by the heat release
+    /// (Heskestad flame height, puffing at f ≈ 1.5 / √D Hz), embers and a
+    /// buoyant, wind-bent smoke column. A fire on a moving wreck streams
+    /// behind it (the flames start with the wreck's velocity).
+    fn fire(&mut self, k: u32, f: &crate::debris::Fire, src_vel: Vec3, dt: f32) {
         if f.size <= 0.01 {
             return;
         }
-        let r = f.radius;
-        let s = f.size;
-        let n = self.count(2000 + k, (20.0 + 6.0 * r * r).min(160.0) * s, dt);
+        let (dia, q, l) = flame(f);
+        let r = 0.5 * dia;
+        let moving = src_vel.length();
+        // Puffing: large eddies shed at ≈ 1.5 / √D Hz swell the flames.
+        let fp = 1.5 / dia.sqrt();
+        let puff = (std::f32::consts::TAU * fp * self.time + k as f32 * 2.1).sin();
+        // Flame tongues: rise to the flame height in their lifetime.
+        let rise = (0.55 * (GRAVITY * l).sqrt()).max(2.0);
+        // Fast through the air the flame is shortened (blown off downstream).
+        let life = (l / rise).clamp(0.5, 4.0) / (1.0 + moving / 12.0);
+        let alive = (6.0 + 1.2 * dia).min(48.0);
+        let n = self.count(2000 + k, alive / life * (1.0 + 0.45 * puff), dt);
         for _ in 0..n {
             let a = self.rnd() * std::f32::consts::TAU;
-            let rr = r * self.rnd().sqrt() * 0.8;
-            let p = f.pos + Vec3::new(a.cos() * rr, 0.3 + self.rnd() * 0.5, a.sin() * rr);
-            let up = 3.0 + 3.0 * self.rnd() + r * 0.3;
-            let s0 = (0.5 + 0.25 * r) * (0.6 + 0.6 * self.rnd());
-            self.emit(Kind::Fire, p, Vec3::new(0.0, up, 0.0), 0.8 + 0.2 * r.sqrt(), s0, s0 * 1.6, Vec3::new(1.0, 0.42, 0.1) * (2.2 + 1.5 * s), 1.0, 1.2, 0.0, 4.0);
+            let rr = r * self.rnd().sqrt() * 0.75;
+            let off = Vec3::new(a.cos() * rr, 0.0, a.sin() * rr);
+            // Spread along this frame's path (no gaps behind a moving wreck).
+            let p = f.pos + off * if moving > 2.0 { 0.5 } else { 1.0 } + Vec3::Y * (0.2 + 0.1 * l * self.rnd()) - src_vel * dt * self.rnd();
+            // Necking: the flame narrows as it rises (air entrained at the base).
+            let v = src_vel + Vec3::new(-off.x, 0.0, -off.z) * (0.5 / life) + Vec3::Y * rise * (0.8 + 0.4 * self.rnd());
+            let s0 = (0.13 * l).min(0.42 * dia).max(0.35) * (0.8 + 0.4 * self.rnd()) * (1.0 + 0.15 * puff);
+            let t0 = 1450.0 + 170.0 * self.rnd() + 50.0 * puff;
+            let drag = if moving > 2.0 { 6.0 } else { 1.0 };
+            if let Some(pt) = self.emit(Kind::Fire, p, v, life, s0, s0 * 1.35, Vec3::splat(0.04), 1.0, drag, 0.0, 1.5) {
+                pt.temp0 = t0;
+                pt.src_vel = src_vel;
+                pt.stretch = 1.5 + 0.7 * pt.seed / 97.0;
+            }
         }
-        let n = self.count(3000 + k, (4.0 + 1.2 * r) * s, dt);
+        // Smoke column from the flame tips (pool fires: dense black soot).
+        let flux = 0.7 * q * 1000.0 * GRAVITY / (1.2 * 1005.0 * 293.0);
+        let s0 = (0.35 * dia).max(0.8);
+        // Moving: puffs close enough to overlap along the path, each thinner
+        // (the same smoke spread over more track).
+        let base_rate = (1.2 + 0.16 * dia) * f.size.sqrt();
+        let rate = base_rate.max(moving / s0);
+        let thin = (base_rate / rate).sqrt().max(0.2);
+        let n = self.count(3000 + k, rate, dt);
         for _ in 0..n {
             let a = self.rnd() * std::f32::consts::TAU;
-            let rr = r * self.rnd().sqrt() * 0.6;
-            let p = f.pos + Vec3::new(a.cos() * rr, 1.0 + r * 0.6, a.sin() * rr);
-            let s0 = 0.5 + 0.35 * r;
-            // Buoyant plume: rises fast near the fire, then drifts downwind and spreads.
-            self.emit(Kind::Smoke, p, Vec3::new(0.0, 5.0 + 0.6 * r, 0.0), 30.0 + 2.0 * r, s0, 8.0 + 2.6 * r, Vec3::splat(0.03), 0.9, 0.25, 0.0, 3.0 + 0.3 * r);
+            let rr = r * self.rnd().sqrt() * 0.35;
+            let p = f.pos + Vec3::new(a.cos() * rr, 0.6 * l, a.sin() * rr) - src_vel * dt * self.rnd();
+            let g = 0.07 + 0.04 * self.rnd();
+            let life = (40.0 + 2.5 * dia).min(110.0);
+            if let Some(pt) = self.emit(Kind::Smoke, p, src_vel * 0.5 + Vec3::Y * rise, life, s0, s0 * 1.5, Vec3::new(g, g * 0.92, g * 0.85), 0.92 * thin, 0.35, 0.0, 0.0) {
+                pt.flux = flux;
+                pt.y0 = f.pos.y + 0.5 * l;
+                pt.src_vel = src_vel;
+            }
         }
-        let n = self.count(4000 + k, 8.0 * s, dt);
+        // Embers lofted by the plume.
+        let n = self.count(4000 + k, (3.0 + 0.4 * dia) * f.size, dt);
         for _ in 0..n {
             let d = self.rsph();
-            self.emit(Kind::Spark, f.pos + d * r * 0.5, Vec3::new(d.x * 2.0, 4.0 + 6.0 * self.rnd(), d.z * 2.0), 2.5, 0.05, 0.03, Vec3::new(1.0, 0.5, 0.15) * 5.0, 1.0, 0.8, 0.15, 0.0);
+            let v = src_vel * 0.5 + Vec3::new(d.x * 2.0, rise * (0.8 + 0.8 * self.rnd()), d.z * 2.0);
+            self.emit(Kind::Spark, f.pos + d * r * 0.5 + Vec3::Y * l * 0.3, v, 2.5, 0.05, 0.03, Vec3::new(1.0, 0.45, 0.12) * 5.0, 1.0, 0.8, 0.12, 0.0);
         }
     }
 
@@ -601,9 +754,10 @@ impl Vfx {
                     let n = (6.0 + 22.0 * k) as usize;
                     for _ in 0..n {
                         let d = self.rsph();
-                        let v = vel * (0.6 + 0.3 * self.rnd()) + d * 1.5 + Vec3::Y * 0.8;
-                        let size = (0.4 + 0.4 * self.rnd()) * (c.def.gear_height * 0.5).clamp(0.4, 1.0);
-                        self.emit(Kind::Steam, p + d * 0.3, v, 2.2 + 1.5 * self.rnd(), size, size * 6.0, Vec3::new(0.72, 0.72, 0.74), 0.5 * k.min(1.0) + 0.2, 1.6, 0.0, 0.2);
+                        // Left behind on the runway: most of the wheel's speed is lost at once.
+                        let v = vel * (0.35 + 0.25 * self.rnd()) + Vec3::new(d.x * 1.5, 0.6 + 0.8 * self.rnd(), d.z * 1.5);
+                        let size = (0.35 + 0.35 * self.rnd()) * (c.def.gear_height * 0.5).clamp(0.4, 1.0);
+                        self.emit(Kind::Steam, p + d * 0.3, v, 2.5 + 1.5 * self.rnd(), size, size * 7.0, Vec3::new(0.7, 0.7, 0.72), 0.45 * k.min(1.0) + 0.15, 1.4, 0.0, 0.15);
                     }
                 }
             }
@@ -628,7 +782,7 @@ impl Vfx {
                 let n = self.count(100 + i as u32, 30.0 * (self.eng_smoke[i] / 25.0).min(1.0), dt);
                 for _ in 0..n {
                     let d = self.rsph();
-                    let p = at(exhaust) + d * 0.3;
+                    let p = at(exhaust) + d * 0.3 - vel * dt * self.rnd();
                     self.emit(Kind::Smoke, p, vel * 0.85 + d, 6.0, 0.4, 3.5, Vec3::splat(0.18), 0.55, 0.5, 0.0, 0.0);
                 }
             }
@@ -637,17 +791,14 @@ impl Vfx {
             }
             let thrust_k = (ac.engine_thrust(i) / (def.static_thrust / n_eng as f32).max(1.0)).clamp(0.0, 1.5);
             if forms > 0.0 {
-                // The plume needs ~0.3 s (a couple of wingspans) to cool and saturate.
+                // A clear gap behind the engine while the plume cools and
+                // mixes (~0.2 s), then a thin, dense line that spreads.
                 let p = at(exhaust);
-                self.trail(200 + i as u32, mk::TRAIL, p, 1.4 + 0.6 * thrust_k, 0.85 * forms, c_life, c_spread, 1.2, 0.35, 25.0);
+                self.trail(200 + i as u32, mk::TRAIL, p, 0.9 + 0.5 * thrust_k, forms, c_life, c_spread, 1.2, 0.22, 25.0);
             }
-            // Heat haze behind the jets.
-            let _ = thrust_k;
         }
         // ---- condensation in low-pressure regions (humid air only)
-        let ld = ac.alpha().clamp(-0.2, 0.5);
         let cl = (ac.g_load() * def.mass * GRAVITY / (q * def.wing_area).max(1.0)).clamp(-1.5, 3.5);
-        let _ = ld;
         let semi = def.wingspan * 0.5;
         let airborne = !ac.on_ground && tas > 25.0;
         // Wingtip vortices: core velocity from the circulation; flap tips are tighter.
@@ -666,7 +817,7 @@ impl Vfx {
                 let amt = atmo::condensation(&air, atmo::cooling(&air, dp));
                 if amt > 0.02 {
                     let p = at(*tp + Vec3::Y * c.tips[side] - Vec3::Z * 0.3);
-                    self.trail(300 + k as u32, mk::TRAIL, p, 0.18 + 0.006 * def.wingspan, amt.min(1.0) * 0.8, 1.6, 0.4, 0.0, 0.05, 6.0);
+                    self.trail(300 + k as u32, mk::TRAIL, p, 0.12 + 0.004 * def.wingspan, amt.min(1.0) * 0.75, 1.3, 0.25, 0.0, 0.03, 4.0);
                 }
             }
             // Flap tips (outer flap edge, ~60 % span) with flaps out.
@@ -683,7 +834,7 @@ impl Vfx {
                     for (side, sx) in [(0usize, 1.0f32), (1, -1.0)] {
                         let w = bend(0.62) * c.tips[side];
                         let p = at(Vec3::new(sx * x, y + w, te - 0.3));
-                        self.trail(310 + side as u32, mk::TRAIL, p, 0.12 + 0.004 * def.wingspan, amt.min(1.0) * 0.7, 1.2, 0.3, 0.0, 0.05, 6.0);
+                        self.trail(310 + side as u32, mk::TRAIL, p, 0.1 + 0.003 * def.wingspan, amt.min(1.0) * 0.65, 1.0, 0.2, 0.0, 0.03, 4.0);
                     }
                 }
             }
@@ -695,11 +846,12 @@ impl Vfx {
             let bell = smoothstep(0.88, 0.97, m) * (1.0 - smoothstep(1.03, 1.12, m));
             let amt = atmo::condensation(&air, atmo::cooling(&air, q * 0.9 * bell));
             self.cone += (amt * bell - self.cone) * (dt / 0.25).min(1.0);
+            self.cone_mach = m;
+            self.cone_aoa = ac.alpha().clamp(-0.1, 0.35);
         } else {
             self.wing_vapour = 0.0;
             self.cone = 0.0;
         }
-        let _ = gh;
     }
 
     /// Build the GPU data for this frame (relative to `origin` = the eye).
@@ -707,28 +859,48 @@ impl Vfx {
         let origin = c.eye;
         let mut f = VfxFrame { origin, ..Default::default() };
         // ---- particles, back to front
-        let mut idx: Vec<(f32, usize)> = self.parts.iter().enumerate().map(|(i, p)| ((p.pos - origin).length_squared(), i)).collect();
+        let mut idx: Vec<(f32, usize)> = self.parts.iter().enumerate().filter(|(_, p)| p.age >= 0.0).map(|(i, p)| ((p.pos - origin).length_squared(), i)).collect();
         idx.sort_unstable_by(|a, b| b.0.total_cmp(&a.0));
         f.particles.reserve(idx.len());
         for (_, i) in idx {
             let p = &self.parts[i];
             let t = (p.age / p.life).clamp(0.0, 1.0);
             // Size grows fast at first (turbulent mixing), then slowly.
-            let size = p.size0 + (p.size1 - p.size0) * (1.0 - (1.0 - t).powi(3));
+            let size = if p.flux > 0.0 { p.size1 } else { p.size0 + (p.size1 - p.size0) * (1.0 - (1.0 - t).powi(3)) };
+            let mut alpha = p.alpha;
+            let mut temp = 0.0;
+            let mut vel = p.vel;
             let fade = match p.kind {
-                Kind::Fire => smoothstep(0.0, 0.08, t) * (1.0 - smoothstep(0.35, 1.0, t)),
+                Kind::Fire => {
+                    temp = if p.cool > 0.0 {
+                        // Fireball: exponential cooling toward soot.
+                        900.0 + (p.temp0 - 900.0) * (-p.age / p.cool).exp()
+                    } else {
+                        // Flame tongue: hot most of its life, its tip cooling to soot.
+                        p.temp0 + (980.0 - p.temp0) * smoothstep(0.3, 1.0, t).powf(1.3)
+                    };
+                    // Flame axis: the motion relative to its source, and up.
+                    vel = p.vel - p.src_vel + Vec3::Y * 1.5;
+                    smoothstep(0.0, 0.06, t) * (1.0 - smoothstep(if p.cool > 0.0 { 0.5 } else { 0.8 }, 1.0, t))
+                }
                 Kind::Spark => 1.0 - t * t,
+                Kind::Smoke if p.flux > 0.0 => {
+                    // A plume dilutes as it spreads (column optical depth ∝ z^-⅔).
+                    alpha *= (p.size0 / size).powf(0.6).clamp(0.12, 1.0);
+                    smoothstep(0.0, 0.4, p.age) * (1.0 - smoothstep(0.6, 1.0, t))
+                }
                 _ => smoothstep(0.0, 0.06, t) * (1.0 - smoothstep(0.55, 1.0, t)),
             };
             let rel = p.pos - origin;
             f.particles.push(GpuParticle {
                 pos: [rel.x, rel.y, rel.z, size],
-                col: [p.col.x, p.col.y, p.col.z, p.alpha * fade],
-                vel: [p.vel.x, p.vel.y, p.vel.z, p.kind as u8 as f32],
-                extra: [t, p.rot + t * 0.6, p.seed, 1.0],
+                col: [p.col.x, p.col.y, p.col.z, alpha * fade],
+                vel: [vel.x, vel.y, vel.z, p.kind as u8 as f32],
+                extra: [t, p.rot + t * 0.6, p.seed, p.stretch],
+                light: [1.0, 0.0, temp, 1.0],
             });
         }
-        // ---- ribbons
+        // ---- ribbons (centre line + side vector; the shader sets the width)
         for t in &self.trails {
             let mut pts: Vec<TrailPt> = t.pts.iter().copied().collect();
             if let Some(h) = t.head {
@@ -746,13 +918,15 @@ impl Vfx {
                 let next = pts[(k + 1).min(n - 1)].pos;
                 let tan = (next - prev).normalize_or(Vec3::Z);
                 let view = (q.pos - origin).normalize_or(Vec3::Z);
-                let side = tan.cross(view).normalize_or(Vec3::X) * (0.5 * width);
+                let side = tan.cross(view).normalize_or(Vec3::X);
                 let life_t = (age / t.life).clamp(0.0, 1.0);
-                let a = q.alpha * smoothstep(0.0, t.fade_in.max(1e-3), age) * (1.0 - smoothstep(0.6, 1.0, life_t)) * (q.width / width).sqrt().max(0.15);
+                // A gap while the plume mixes, then it appears quickly; dense
+                // when thin, fading as it spreads and as the ice sublimates.
+                let onset = smoothstep(0.5 * t.fade_in, 1.4 * t.fade_in.max(1e-3), age);
+                let a = q.alpha * onset * (1.0 - smoothstep(0.6, 1.0, life_t)) * (q.width / width).powf(0.6).max(0.12);
                 let rel = q.pos - origin;
                 for s in [-1.0f32, 1.0] {
-                    let p = rel + side * s;
-                    f.mesh.push(VfxVert { pos: [p.x, p.y, p.z, t.kind], uv: [age * 0.15 + (q.born * 0.37).fract() * 0.0, s, a, width] });
+                    f.mesh.push(VfxVert { pos: [rel.x, rel.y, rel.z, t.kind], uv: [q.born * 4.0, s, a, width], aux: [side.x, side.y, side.z, age] });
                 }
             }
             for k in 0..(n as u32 - 1) {
@@ -762,14 +936,17 @@ impl Vfx {
         }
         // ---- surface / transonic vapour and afterburner diamonds
         self.surface_effects(c, &mut f);
-        // ---- fire lights (strongest four)
+        // ---- fire lights (strongest four), flickering with the puffing
         if let Some(fires) = c.fires {
             let mut v: Vec<&crate::debris::Fire> = fires.iter().filter(|f| f.size > 0.02).collect();
-            v.sort_by(|a, b| (b.size * b.radius).total_cmp(&(a.size * a.radius)));
+            v.sort_by(|a, b| fire_cd(b).total_cmp(&fire_cd(a)));
             for (k, fi) in v.iter().take(4).enumerate() {
-                let rel = fi.pos - origin + Vec3::Y * (1.0 + fi.radius * 0.5);
-                let flick = 0.85 + 0.15 * ((self.time * 13.0 + k as f32).sin() * (self.time * 7.3).cos());
-                f.fires[k] = [rel.x, rel.y, rel.z, 6.0e3 * fi.size * fi.radius * fi.radius * flick];
+                let (dia, _, l) = flame(fi);
+                let rel = fi.pos - origin + Vec3::Y * (0.35 * l).max(1.0);
+                let fp = 1.5 / dia.sqrt();
+                let ph = std::f32::consts::TAU * fp * self.time + fi.id as f32 * 2.1;
+                let flick = 0.84 + 0.1 * ph.sin() + 0.04 * (2.3 * ph + 1.0).sin() + 0.02 * (self.time * 17.0 + k as f32).sin();
+                f.fires[k] = [rel.x, rel.y, rel.z, fire_cd(fi) * flick];
             }
         }
         f
@@ -781,6 +958,7 @@ impl Vfx {
         let def = c.def;
         let sd = crate::damage::struct_def(def.id);
         let semi = def.wingspan * 0.5;
+        let up = c.rot * Vec3::Y;
         // Wing-surface vapour: a sheet hugging the upper surface, from the
         // root to ~85 % span over the forward 60 % of the chord.
         if self.wing_vapour > 0.01 && !c.planform.is_empty() {
@@ -789,7 +967,7 @@ impl Vfx {
                     continue;
                 }
                 let base = f.mesh.len() as u32;
-                let ns = 10;
+                let ns = 16;
                 for i in 0..=ns {
                     let s = 0.05 + 0.8 * i as f32 / ns as f32;
                     let x = sd.fus_r + s * (semi - sd.fus_r);
@@ -800,7 +978,7 @@ impl Vfx {
                         let z = le - frac * chord;
                         let h = 0.06 * chord * (1.0 - frac);
                         let p = at(Vec3::new(sx * x, y + w + 0.05 + h, z));
-                        f.mesh.push(VfxVert { pos: [p.x, p.y, p.z, mk::VAPOUR], uv: [s * 3.0, j as f32 * 2.0 - 1.0, self.wing_vapour * (1.0 - s * 0.7), 0.0] });
+                        f.mesh.push(VfxVert { pos: [p.x, p.y, p.z, mk::VAPOUR], uv: [s * 3.0, j as f32 * 2.0 - 1.0, self.wing_vapour * (1.0 - s * 0.7), 0.0], aux: [up.x, up.y, up.z, 0.0] });
                     }
                 }
                 for i in 0..ns as u32 {
@@ -809,32 +987,29 @@ impl Vfx {
                 }
             }
         }
-        // Vapour cone: a bell-shaped shell opening aft from the wing's leading
-        // region, ending sharply at the shock near the trailing edge.
+        // Vapour cone: thin shells of condensation in the expansion ahead of
+        // the shocks — one over the canopy, one around the wing — flaring aft
+        // and ending sharply at the shock, which moves aft toward the
+        // trailing edge as Mach → 1. Bigger and offset over the suction side
+        // with angle of attack.
         if self.cone > 0.01 {
+            let m = self.cone_mach;
+            let ak = (self.cone_aoa / 0.15).clamp(-0.5, 1.5);
             let chord = sd.wing_z.1 - sd.wing_z.0;
-            let (z0, z1) = (sd.wing_z.1 + 0.9 * chord, sd.wing_z.0 - 0.05 * chord);
-            let r1 = 0.6 * semi.max(3.0) + 0.5;
-            let rings = 10;
-            let segs = 32;
-            let base = f.mesh.len() as u32;
-            for i in 0..=rings {
-                let t = i as f32 / rings as f32;
-                let z = z0 + (z1 - z0) * t;
-                // A cone flaring aft (the expansion region), cut off by the shock.
-                let r = r1 * (0.12 + 0.88 * t.powf(0.85));
-                for j in 0..=segs {
-                    let a = j as f32 / segs as f32 * std::f32::consts::TAU;
-                    let p = at(Vec3::new(a.cos() * r, a.sin() * r * 0.92 + def.wing_height * 0.5, z));
-                    f.mesh.push(VfxVert { pos: [p.x, p.y, p.z, mk::VAPOUR], uv: [j as f32 / segs as f32 * 6.0, (t * 1.6 - 1.0).min(0.0), self.cone * smoothstep(0.15, 0.9, t) * (1.0 - smoothstep(0.97, 1.0, t) * 0.6), 1.0] });
-                }
-            }
-            let w = segs as u32 + 1;
-            for i in 0..rings as u32 {
-                for j in 0..segs as u32 {
-                    let a = base + i * w + j;
-                    f.mesh_idx.extend([a, a + w, a + 1, a + 1, a + w, a + w + 1]);
-                }
+            let shock = smoothstep(0.86, 0.99, m);
+            let fus = sd.fus_r.min(0.12 * def.wingspan + 0.4);
+            // Wing shroud.
+            let z_f = sd.wing_z.1 + 0.35 * chord;
+            let z_s = sd.wing_z.1 - chord * (0.6 + 0.42 * shock);
+            let r_s = (0.5 + 0.12 * shock) * semi.max(3.0) * (0.85 + 0.3 * self.cone.min(1.0));
+            shell(f, &at, c.rot, z_f, z_s, fus * 0.85, r_s, def.wing_height * 0.5, ak, self.cone);
+            // (An inner layer: the condensation region has depth.)
+            shell(f, &at, c.rot, z_f - 0.15 * (z_f - z_s), z_s, fus * 0.8, r_s * 0.78, def.wing_height * 0.5, ak, self.cone * 0.6);
+            // Canopy cone (fighters: the canopy shock ahead of the wing's).
+            if def.eye.z > z_f + 0.5 {
+                let zc_f = def.eye.z + 0.9;
+                let zc_s = (def.eye.z - 1.6 - 0.6 * shock).max(z_f + 0.2);
+                shell(f, &at, c.rot, zc_f, zc_s, fus * 0.5, fus * (1.15 + 0.25 * shock), def.eye.y * 0.6, ak * 0.6, self.cone * 0.8);
             }
         }
         // Engines: afterburner shock diamonds, heat haze.
@@ -852,32 +1027,99 @@ impl Vfx {
             let ab = c.afterburner;
             let thrust = c.thrust[i];
             if ab > 0.05 && def.has_afterburner {
-                // Diamonds: under-expanded jet, cell length ≈ 1.2 D √(Mj² − 1), Mj ≈ 1.5–1.8.
-                let len = 3.5 + 2.5 * ab;
-                beam(f, at(nozzle), c.rot * -Vec3::Z, len, r * 0.9, origin, c.pos, mk::DIAMONDS, ab, 0.0, false);
+                // Under-expanded jet: Mj from the nozzle pressure ratio (higher
+                // as the ambient pressure falls), cell length ≈ 1.22 D √(Mj² − 1).
+                let npr = (3.2 * (101_325.0 / self.air.p.max(5000.0)).powf(0.8)).clamp(2.0, 9.0);
+                let g = 1.3f32;
+                let mj = ((2.0 / (g - 1.0)) * (npr.powf((g - 1.0) / g) - 1.0)).max(1.05).sqrt();
+                let ls = 1.22 * 2.0 * r * (mj * mj - 1.0).sqrt();
+                diamonds(f, at(nozzle), c.rot * -Vec3::Z, ls, r, ab);
             }
             if thrust > 0.05 {
                 let len = (6.0 + 22.0 * thrust + 18.0 * ab) * (r / 0.5).clamp(0.6, 2.0);
-                beam(f, at(nozzle), c.rot * -Vec3::Z, len, r * 1.6, origin, c.pos, mk::HAZE, (0.25 + 0.75 * thrust + ab).min(1.5), 0.0, true);
+                beam(f, at(nozzle), c.rot * -Vec3::Z, len, r * 1.6, mk::HAZE, (0.25 + 0.75 * thrust + ab).min(1.5));
             }
         }
         // Heat haze over fires.
         if let Some(fires) = c.fires {
             for fi in fires.iter().filter(|f| f.size > 0.05).take(4) {
-                let base = fi.pos - origin + Vec3::Y * fi.radius * 0.5;
-                beam(f, base, Vec3::Y, 6.0 + fi.radius * 3.0, fi.radius * 1.2, origin, c.pos, mk::HAZE, fi.size, 0.0, true);
+                let (dia, _, l) = flame(fi);
+                let base = fi.pos - origin + Vec3::Y * l * 0.6;
+                beam(f, base, Vec3::Y, 4.0 + l * 1.5, dia * 0.6, mk::HAZE, fi.size);
             }
         }
     }
 }
 
-/// A camera-facing beam (quad strip along `dir` from `start`, eye-relative).
+/// A transonic condensation shell: a surface of revolution about the body
+/// axis from `z_f` (front, radius `r_f`) to the shock at `z_s` (radius
+/// `r_s`), with short wisps behind it. Body frame; `at` maps to eye-relative.
 #[allow(clippy::too_many_arguments)]
-fn beam(f: &mut VfxFrame, start: Vec3, dir: Vec3, len: f32, radius: f32, _origin: Vec3, _pos: Vec3, kind: f32, intensity: f32, extra: f32, haze: bool) {
+fn shell(f: &mut VfxFrame, at: &dyn Fn(Vec3) -> Vec3, rot: Quat, z_f: f32, z_s: f32, r_f: f32, r_s: f32, y_c: f32, ak: f32, amount: f32) {
+    let rings = 22;
+    let segs = 72;
+    let s_end = 1.16;
+    let base = f.mesh.len() as u32;
+    let len = (z_f - z_s).max(0.3);
+    for i in 0..=rings {
+        let s = i as f32 / rings as f32 * s_end;
+        let sc = s.min(1.0);
+        let z = z_f - len * s;
+        // Bell: flares quickly behind the front, then nearly cylindrical.
+        let shape = |s: f32| r_f + (r_s - r_f) * (1.0 - (1.0 - s).powi(2)).max(0.0).sqrt();
+        let r = shape(sc) * (1.0 + 0.04 * (s - 1.0).max(0.0) / 0.16);
+        let dr = (shape((sc + 0.01).min(1.0)) - shape((sc - 0.01).max(0.0))) / (0.02 * len);
+        for j in 0..=segs {
+            let a = j as f32 / segs as f32 * std::f32::consts::TAU;
+            let (sa, ca) = a.sin_cos();
+            // Larger over the suction side, centre lifted with angle of attack.
+            let rr = r * (1.0 + 0.18 * ak * sa);
+            let yc = y_c + 0.12 * ak * r_s * sc;
+            let p = Vec3::new(ca * rr, sa * rr * 0.94 + yc, z);
+            let n = (rot * Vec3::new(ca, sa, dr.clamp(-3.0, 3.0)).normalize()).normalize();
+            let q = at(p);
+            let edge = 1.0 - smoothstep(0.0, 0.2, (sa + 1.0) * 0.5) * 0.25;
+            f.mesh.push(VfxVert { pos: [q.x, q.y, q.z, mk::VAPOUR], uv: [j as f32 / segs as f32, s, amount * edge, 0.0], aux: [n.x, n.y, n.z, 1.0] });
+        }
+    }
+    let w = segs as u32 + 1;
+    for i in 0..rings as u32 {
+        for j in 0..segs as u32 {
+            let a = base + i * w + j;
+            f.mesh_idx.extend([a, a + w, a + 1, a + 1, a + w, a + w + 1]);
+        }
+    }
+}
+
+/// Afterburner plume with shock cells: a camera-facing strip from the nozzle
+/// (eye-relative `start`) along `dir`, `cells` long; `ls` = cell length.
+fn diamonds(f: &mut VfxFrame, start: Vec3, dir: Vec3, ls: f32, rn: f32, ab: f32) {
+    let dir = dir.normalize_or(Vec3::Z);
+    let len = ls * (4.0 + 3.0 * ab) + 0.8;
+    let hw = rn * 1.3;
+    let n = 24;
+    let base = f.mesh.len() as u32;
+    for k in 0..=n {
+        let t = k as f32 / n as f32;
+        let p = start + dir * (len * t);
+        let side = dir.cross(p.normalize_or(Vec3::Z)).normalize_or(Vec3::X);
+        for s in [-1.0f32, 1.0] {
+            let q = p + side * hw * s;
+            f.mesh.push(VfxVert { pos: [q.x, q.y, q.z, mk::DIAMONDS], uv: [t * len, s, ab, hw], aux: [0.0, 0.0, rn, ls] });
+        }
+    }
+    for k in 0..n as u32 {
+        let i = base + k * 2;
+        f.mesh_idx.extend([i, i + 1, i + 2, i + 1, i + 3, i + 2]);
+    }
+}
+
+/// A camera-facing beam (quad strip along `dir` from eye-relative `start`)
+/// for the heat haze.
+fn beam(f: &mut VfxFrame, start: Vec3, dir: Vec3, len: f32, radius: f32, kind: f32, intensity: f32) {
     let dir = dir.normalize_or(Vec3::Z);
     let n = 8;
-    let (verts, idx) = if haze { (&mut f.haze, &mut f.haze_idx) } else { (&mut f.mesh, &mut f.mesh_idx) };
-    let base = verts.len() as u32;
+    let base = f.haze.len() as u32;
     for k in 0..=n {
         let t = k as f32 / n as f32;
         let p = start + dir * (len * t);
@@ -887,12 +1129,12 @@ fn beam(f: &mut VfxFrame, start: Vec3, dir: Vec3, len: f32, radius: f32, _origin
         let r = radius * (1.0 + 1.2 * t);
         for s in [-1.0f32, 1.0] {
             let q = p + side * r * s;
-            verts.push(VfxVert { pos: [q.x, q.y, q.z, kind], uv: [t * len, s, intensity, if extra != 0.0 { extra } else { len }] });
+            f.haze.push(VfxVert { pos: [q.x, q.y, q.z, kind], uv: [t * len, s, intensity, len], aux: [0.0; 4] });
         }
     }
     for k in 0..n as u32 {
         let i = base + k * 2;
-        idx.extend([i, i + 1, i + 2, i + 1, i + 3, i + 2]);
+        f.haze_idx.extend([i, i + 1, i + 2, i + 1, i + 3, i + 2]);
     }
 }
 
@@ -985,5 +1227,34 @@ mod tests {
         assert!(f.mesh.iter().any(|m| m.pos[3] == mk::DIAMONDS));
         assert!(f.haze.iter().any(|m| m.pos[3] == mk::HAZE));
         assert!(f.mesh.iter().chain(f.haze.iter()).all(|m| m.pos.iter().all(|x| x.is_finite())));
+    }
+
+    #[test]
+    fn flame_height_follows_the_heat_release() {
+        let fire = |radius: f32| crate::debris::Fire { pos: Vec3::ZERO, body: None, local: Vec3::ZERO, fuel: 1000.0, rate: (0.05 * std::f32::consts::PI * radius * radius).max(0.5), size: 1.0, age: 10.0, id: 0, radius };
+        // Airliner pool (D ≈ 26 m): flames ≈ 1–1.5 D; a light aircraft's (D ≈ 3 m) a few metres.
+        let (d, q, l) = flame(&fire(13.0));
+        eprintln!("pool D {d} Q {q:.0} kW L {l:.1}");
+        assert!((25.0..45.0).contains(&l), "{l}");
+        let (_, _, l) = flame(&fire(1.5));
+        assert!((3.0..12.0).contains(&l), "{l}");
+        // Intensity grows with the fire; bounded (no glow dome from a light the size of the sun).
+        assert!(fire_cd(&fire(13.0)) > 20.0 * fire_cd(&fire(1.5)));
+        assert!(fire_cd(&fire(13.0)) < 5.0e6);
+    }
+
+    #[test]
+    fn transonic_shell_has_crisp_unit_normals() {
+        let mut f = VfxFrame::default();
+        let at = |p: Vec3| p;
+        shell(&mut f, &at, Quat::IDENTITY, 2.0, -3.0, 1.0, 3.0, 0.0, 0.5, 1.0);
+        assert!(!f.mesh.is_empty() && f.mesh_idx.len() % 3 == 0);
+        for v in &f.mesh {
+            let n = Vec3::new(v.aux[0], v.aux[1], v.aux[2]);
+            assert!((n.length() - 1.0).abs() < 1e-3);
+            // Normals face outward (away from the body axis).
+            let p = Vec3::new(v.pos[0], v.pos[1], 0.0);
+            assert!(n.x * p.x + n.y * p.y > -1e-3);
+        }
     }
 }

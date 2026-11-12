@@ -1469,8 +1469,10 @@ impl Sim {
                 let n = fv.acl.n_spots;
                 if n < crate::lights::place::AC_SPOTS {
                     let pos = Vec3::new(f[0], f[1], f[2]) + vf.origin - eye;
-                    let range = 30.0 + 4.5 * (f[3] / 6000.0).sqrt();
-                    fv.acl.spots[n] = crate::lights::place::SpotLight { pos, dir: Vec3::Y, cd: Vec3::new(1.0, 0.5, 0.18) * f[3], cos_inner: -1.0, cos_outer: -1.0, range };
+                    // Inverse square out to ~0.3 lx; cos_inner < -1.5 marks a fire (no
+                    // beam scattering in the air: the effects draw its lit smoke).
+                    let range = (f[3] / 0.3).sqrt().clamp(60.0, 2500.0);
+                    fv.acl.spots[n] = crate::lights::place::SpotLight { pos, dir: Vec3::Y, cd: Vec3::new(2.4, 0.66, 0.1) * f[3], cos_inner: -2.0, cos_outer: -1.0, range };
                     fv.acl.n_spots += 1;
                 }
             }
@@ -1532,7 +1534,8 @@ impl Sim {
         let up = self.rrot * Vec3::Y;
         d.up = [up.x, up.y, up.z, self.time];
         let tip = ac.dmg.tip_deflection(sd);
-        d.flex = [tip[0], tip[1], sd.twist_per_m, 0.0];
+        // (w: 1 / the flexing half-span, for the bent normals in the shader.)
+        d.flex = [tip[0], tip[1], sd.twist_per_m, 1.0 / (def.wingspan * 0.5 - sd.fus_r).max(0.5)];
         // Rolling on the ground: a buzz that grows with speed (more on grass).
         if ac.on_ground && ac.crashed.is_none() {
             let gs = Vec2::new(ac.vel.x, ac.vel.z).length();

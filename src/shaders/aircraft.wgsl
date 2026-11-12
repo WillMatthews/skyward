@@ -40,7 +40,7 @@ fn vs_aircraft(v: AcIn, @builtin(instance_index) ii: u32) -> AcOut {
     var o: AcOut;
     o.clip = g.view_proj * vec4<f32>(p, 1.0);
     o.wpos = p + vec3<f32>(0.0, g.pattern.w, 0.0);
-    o.nrm = (pm * (m * vec4<f32>(v.nrm, 0.0))).xyz;
+    o.nrm = (pm * vec4<f32>(ac_flex_normal(v.part, (m * vec4<f32>(v.nrm, 0.0)).xyz, normalize(m[0].xyz)), 0.0)).xyz;
     o.uv = v.uv;
     o.inst = ii;
     return o;
