@@ -22,6 +22,7 @@ struct VfxU {
     fires: [[f32; 4]; 4],
     misc: [f32; 4],
     key: [f32; 4],
+    vol: [[f32; 4]; super::VOL_N],
 }
 
 struct Buf {
@@ -69,6 +70,7 @@ pub struct VfxRenderer {
     particles: wgpu::RenderPipeline,
     mesh: wgpu::RenderPipeline,
     haze: wgpu::RenderPipeline,
+    vol: wgpu::RenderPipeline,
     blit: wgpu::RenderPipeline,
     ubuf: wgpu::Buffer,
     pbuf: Buf,
@@ -156,6 +158,7 @@ impl VfxRenderer {
         let particles = pipe("vfx particles", "vs_particle", "fs_particle", &[], Some(premul()));
         let mesh = pipe("vfx mesh", "vs_mesh", "fs_mesh", &mesh_layout, Some(premul()));
         let haze = pipe("vfx haze", "vs_mesh", "fs_haze", &mesh_layout, Some(premul()));
+        let vol = pipe("vfx volumes", "vs_vol", "fs_vol", &[], Some(premul()));
         let blit = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("vfx blit"),
             layout: Some(&blit_layout),
@@ -200,6 +203,7 @@ impl VfxRenderer {
             particles,
             mesh,
             haze,
+            vol,
             blit,
             ubuf,
             pbuf: Buf::new(device, "vfx particles", st, 64 * 1024),
@@ -260,6 +264,7 @@ impl VfxRenderer {
             fires,
             misc: [1.0, if clouds.is_some() { 1.0 } else { 0.0 }, 0.0, 0.0],
             key: [key.x, key.y, key.z, 0.0],
+            vol: f.vol,
         };
         queue.write_buffer(&self.ubuf, 0, bytemuck::bytes_of(&u));
         // Lighting through the smoke (CPU, coarse grid).
@@ -349,6 +354,15 @@ impl VfxRenderer {
                 pass.set_vertex_buffer(0, self.vbuf.buf.slice(..));
                 pass.set_index_buffer(self.ibuf.buf.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..f.mesh_idx.len() as u32, 0, 0..1);
+            }
+            if f.vol_boxes != 0 {
+                // Condensation volumes: a box each (36 vertices), ray-marched.
+                pass.set_pipeline(&self.vol);
+                for i in 0..3u32 {
+                    if f.vol_boxes & (1 << i) != 0 {
+                        pass.draw(0..36, i..i + 1);
+                    }
+                }
             }
             if !self.lit.is_empty() {
                 pass.set_pipeline(&self.particles);

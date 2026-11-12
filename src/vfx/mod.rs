@@ -1,8 +1,9 @@
 //! Visual effects (Tracks L, V): a CPU-simulated particle system drawn as GPU
 //! instanced, lit, soft particles (fire, smoke, dust, spray, sparks, tyre
 //! smoke, condensation), camera-facing ribbons (contrails, vortex cores,
-//! smoke trails), procedural meshes (vapour cone, wing-surface vapour,
-//! afterburner shock diamonds) and screen-space heat haze.
+//! smoke trails), ray-marched condensation volumes in the aircraft's frame
+//! (vapour cone, wing-surface fog), afterburner shock diamonds and
+//! screen-space heat haze.
 //!
 //! Everything is physically motivated and cheap:
 //! * fire / smoke / dust / spray / sparks come from the wreckage
@@ -102,7 +103,7 @@ pub struct VfxVert {
     pub pos: [f32; 4],
     /// u (along), v (across −1..1), intensity, width (m).
     pub uv: [f32; 4],
-    /// Ribbons: unit side vector, age (s). Meshes: normal, shell flag.
+    /// Ribbons: unit side vector, age (s).
     /// Diamonds: -, -, nozzle radius, cell length.
     pub aux: [f32; 4],
 }
@@ -113,12 +114,12 @@ pub mod mk {
     pub const TRAIL: f32 = 10.0;
     /// Smoke trail: lit grey.
     pub const SMOKE: f32 = 11.0;
-    /// Vapour sheet / cone: lit white, noisy.
-    pub const VAPOUR: f32 = 12.0;
     /// Afterburner core with shock diamonds: emissive.
     pub const DIAMONDS: f32 = 13.0;
     /// Heat haze (distortion pass only).
     pub const HAZE: f32 = 14.0;
+    /// Vortex-core condensation: a lit white tube with a helical twist.
+    pub const VORTEX: f32 = 15.0;
 }
 
 /// Everything the renderer needs this frame (positions relative to `origin`).
@@ -132,11 +133,19 @@ pub struct VfxFrame {
     pub haze_idx: Vec<u32>,
     /// Up to four fire lights: position (relative to `origin`), intensity (cd).
     pub fires: [[f32; 4]; 4],
+    /// Volumetric condensation in aircraft space (== `vfx.wgsl` `VOL_*`):
+    /// the transonic (Prandtl–Glauert) bells and the fog over the wings,
+    /// ray-marched inside up to three boxes (bits of `vol_boxes`).
+    pub vol: [[f32; 4]; VOL_N],
+    pub vol_boxes: u32,
 }
+
+/// Size of [`VfxFrame::vol`] (vec4s).
+pub const VOL_N: usize = 20;
 
 impl VfxFrame {
     pub fn is_empty(&self) -> bool {
-        self.particles.is_empty() && self.mesh.is_empty() && self.haze.is_empty()
+        self.particles.is_empty() && self.mesh.is_empty() && self.haze.is_empty() && self.vol_boxes == 0
     }
 }
 
@@ -791,10 +800,11 @@ impl Vfx {
             }
             let thrust_k = (ac.engine_thrust(i) / (def.static_thrust / n_eng as f32).max(1.0)).clamp(0.0, 1.5);
             if forms > 0.0 {
-                // A clear gap behind the engine while the plume cools and
-                // mixes (~0.2 s), then a thin, dense line that spreads.
+                // A short clear gap behind the engine while the plume cools
+                // and mixes (≈ 0.1 s, a few tens of metres), then a bold,
+                // dense line that spreads.
                 let p = at(exhaust);
-                self.trail(200 + i as u32, mk::TRAIL, p, 0.9 + 0.5 * thrust_k, forms, c_life, c_spread, 1.2, 0.22, 25.0);
+                self.trail(200 + i as u32, mk::TRAIL, p, 0.9 + 0.5 * thrust_k, forms, c_life, c_spread, 1.2, 0.14, 20.0);
             }
         }
         // ---- condensation in low-pressure regions (humid air only)
@@ -816,8 +826,12 @@ impl Vfx {
                 let dp = air.rho * vc * vc;
                 let amt = atmo::condensation(&air, atmo::cooling(&air, dp));
                 if amt > 0.02 {
+                    // The visible core is the part of the vortex below the dew
+                    // point: wider the more the air is cooled (≈ rc √(1 − spread/ΔT)).
+                    let spread = (air.t_c - air.td_c).max(0.0);
+                    let wet = (1.0 - spread / atmo::cooling(&air, dp).max(0.05)).clamp(0.15, 1.0).sqrt();
                     let p = at(*tp + Vec3::Y * c.tips[side] - Vec3::Z * 0.3);
-                    self.trail(300 + k as u32, mk::TRAIL, p, 0.12 + 0.004 * def.wingspan, amt.min(1.0) * 0.75, 1.3, 0.25, 0.0, 0.03, 4.0);
+                    self.trail(300 + k as u32, mk::VORTEX, p, (0.9 * rc * wet).clamp(0.12, 1.4), (amt * 1.6).min(1.0), 1.6 + 1.2 * amt, 0.05, 0.0, 0.02, 3.0);
                 }
             }
             // Flap tips (outer flap edge, ~60 % span) with flaps out.
@@ -828,19 +842,25 @@ impl Vfx {
                 let vc = g2 / (std::f32::consts::TAU * rc);
                 let amt = atmo::condensation(&air, atmo::cooling(&air, air.rho * vc * vc));
                 if amt > 0.02 {
+                    let spread = (air.t_c - air.td_c).max(0.0);
+                    let wet = (1.0 - spread / atmo::cooling(&air, air.rho * vc * vc).max(0.05)).clamp(0.15, 1.0).sqrt();
                     let x = sd.fus_r + 0.62 * (semi - sd.fus_r);
                     let te = planform_at(c.planform, x).2;
                     let y = planform_at(c.planform, x).3;
                     for (side, sx) in [(0usize, 1.0f32), (1, -1.0)] {
                         let w = bend(0.62) * c.tips[side];
                         let p = at(Vec3::new(sx * x, y + w, te - 0.3));
-                        self.trail(310 + side as u32, mk::TRAIL, p, 0.1 + 0.003 * def.wingspan, amt.min(1.0) * 0.65, 1.0, 0.2, 0.0, 0.03, 4.0);
+                        self.trail(310 + side as u32, mk::VORTEX, p, (1.2 * rc * wet).clamp(0.1, 0.8), (amt * 1.5).min(1.0), 1.2 + 0.8 * amt, 0.04, 0.0, 0.02, 3.0);
                     }
                 }
             }
-            // Over the wing: the suction peak at high lift.
-            let cp_min = 0.5 + 2.4 * cl.max(0.0);
-            self.wing_vapour = atmo::condensation(&air, atmo::cooling(&air, q * cp_min)) * smoothstep(0.5, 1.2, cl);
+            // Over the wing: the suction over the forward upper surface at
+            // high lift (its mean, not the peak), thicker the further the
+            // air is cooled past its dew point.
+            let cp_up = 0.35 + 1.4 * cl.max(0.0);
+            let cool = atmo::cooling(&air, q * cp_up);
+            let excess = smoothstep(0.0, 6.0, cool - (air.t_c - air.td_c).max(0.0));
+            self.wing_vapour = atmo::condensation(&air, cool) * excess.sqrt() * smoothstep(0.5, 1.2, cl);
             // Vapour cone: the local supersonic pocket around Mach 1 (Prandtl–Glauert).
             let m = ac.mach();
             let bell = smoothstep(0.88, 0.97, m) * (1.0 - smoothstep(1.03, 1.12, m));
@@ -957,61 +977,7 @@ impl Vfx {
         let at = |p: Vec3| c.pos + c.rot * p - origin;
         let def = c.def;
         let sd = crate::damage::struct_def(def.id);
-        let semi = def.wingspan * 0.5;
-        let up = c.rot * Vec3::Y;
-        // Wing-surface vapour: a sheet hugging the upper surface, from the
-        // root to ~85 % span over the forward 60 % of the chord.
-        if self.wing_vapour > 0.01 && !c.planform.is_empty() {
-            for (side, sx) in [(0usize, 1.0f32), (1, -1.0)] {
-                if c.lost & [crate::damage::Part::WingL, crate::damage::Part::WingR][side].bit() != 0 {
-                    continue;
-                }
-                let base = f.mesh.len() as u32;
-                let ns = 16;
-                for i in 0..=ns {
-                    let s = 0.05 + 0.8 * i as f32 / ns as f32;
-                    let x = sd.fus_r + s * (semi - sd.fus_r);
-                    let (_, le, te, y) = planform_at(c.planform, x);
-                    let w = bend(s) * c.tips[side];
-                    let chord = (le - te).max(0.3);
-                    for (j, frac) in [0.02f32, 0.6].iter().enumerate() {
-                        let z = le - frac * chord;
-                        let h = 0.06 * chord * (1.0 - frac);
-                        let p = at(Vec3::new(sx * x, y + w + 0.05 + h, z));
-                        f.mesh.push(VfxVert { pos: [p.x, p.y, p.z, mk::VAPOUR], uv: [s * 3.0, j as f32 * 2.0 - 1.0, self.wing_vapour * (1.0 - s * 0.7), 0.0], aux: [up.x, up.y, up.z, 0.0] });
-                    }
-                }
-                for i in 0..ns as u32 {
-                    let k = base + i * 2;
-                    f.mesh_idx.extend([k, k + 1, k + 2, k + 1, k + 3, k + 2]);
-                }
-            }
-        }
-        // Vapour cone: thin shells of condensation in the expansion ahead of
-        // the shocks — one over the canopy, one around the wing — flaring aft
-        // and ending sharply at the shock, which moves aft toward the
-        // trailing edge as Mach → 1. Bigger and offset over the suction side
-        // with angle of attack.
-        if self.cone > 0.01 {
-            let m = self.cone_mach;
-            let ak = (self.cone_aoa / 0.15).clamp(-0.5, 1.5);
-            let chord = sd.wing_z.1 - sd.wing_z.0;
-            let shock = smoothstep(0.86, 0.99, m);
-            let fus = sd.fus_r.min(0.12 * def.wingspan + 0.4);
-            // Wing shroud.
-            let z_f = sd.wing_z.1 + 0.35 * chord;
-            let z_s = sd.wing_z.1 - chord * (0.6 + 0.42 * shock);
-            let r_s = (0.5 + 0.12 * shock) * semi.max(3.0) * (0.85 + 0.3 * self.cone.min(1.0));
-            shell(f, &at, c.rot, z_f, z_s, fus * 0.85, r_s, def.wing_height * 0.5, ak, self.cone);
-            // (An inner layer: the condensation region has depth.)
-            shell(f, &at, c.rot, z_f - 0.15 * (z_f - z_s), z_s, fus * 0.8, r_s * 0.78, def.wing_height * 0.5, ak, self.cone * 0.6);
-            // Canopy cone (fighters: the canopy shock ahead of the wing's).
-            if def.eye.z > z_f + 0.5 {
-                let zc_f = def.eye.z + 0.9;
-                let zc_s = (def.eye.z - 1.6 - 0.6 * shock).max(z_f + 0.2);
-                shell(f, &at, c.rot, zc_f, zc_s, fus * 0.5, fus * (1.15 + 0.25 * shock), def.eye.y * 0.6, ak * 0.6, self.cone * 0.8);
-            }
-        }
+        self.volume(c, f);
         // Engines: afterburner shock diamonds, heat haze.
         let n_eng = def.engine_count.min(def.engine_pos.len()).min(4);
         let jet = def.engine_kind == EngineKind::Jet;
@@ -1051,43 +1017,92 @@ impl Vfx {
     }
 }
 
-/// A transonic condensation shell: a surface of revolution about the body
-/// axis from `z_f` (front, radius `r_f`) to the shock at `z_s` (radius
-/// `r_s`), with short wisps behind it. Body frame; `at` maps to eye-relative.
-#[allow(clippy::too_many_arguments)]
-fn shell(f: &mut VfxFrame, at: &dyn Fn(Vec3) -> Vec3, rot: Quat, z_f: f32, z_s: f32, r_f: f32, r_s: f32, y_c: f32, ak: f32, amount: f32) {
-    let rings = 22;
-    let segs = 72;
-    let s_end = 1.16;
-    let base = f.mesh.len() as u32;
-    let len = (z_f - z_s).max(0.3);
-    for i in 0..=rings {
-        let s = i as f32 / rings as f32 * s_end;
-        let sc = s.min(1.0);
-        let z = z_f - len * s;
-        // Bell: flares quickly behind the front, then nearly cylindrical.
-        let shape = |s: f32| r_f + (r_s - r_f) * (1.0 - (1.0 - s).powi(2)).max(0.0).sqrt();
-        let r = shape(sc) * (1.0 + 0.04 * (s - 1.0).max(0.0) / 0.16);
-        let dr = (shape((sc + 0.01).min(1.0)) - shape((sc - 0.01).max(0.0))) / (0.02 * len);
-        for j in 0..=segs {
-            let a = j as f32 / segs as f32 * std::f32::consts::TAU;
-            let (sa, ca) = a.sin_cos();
-            // Larger over the suction side, centre lifted with angle of attack.
-            let rr = r * (1.0 + 0.18 * ak * sa);
-            let yc = y_c + 0.12 * ak * r_s * sc;
-            let p = Vec3::new(ca * rr, sa * rr * 0.94 + yc, z);
-            let n = (rot * Vec3::new(ca, sa, dr.clamp(-3.0, 3.0)).normalize()).normalize();
-            let q = at(p);
-            let edge = 1.0 - smoothstep(0.0, 0.2, (sa + 1.0) * 0.5) * 0.25;
-            f.mesh.push(VfxVert { pos: [q.x, q.y, q.z, mk::VAPOUR], uv: [j as f32 / segs as f32, s, amount * edge, 0.0], aux: [n.x, n.y, n.z, 1.0] });
+impl Vfx {
+    /// The volumetric condensation (`vfx.wgsl` `fs_vol`): the parameters of
+    /// the density fields, in the aircraft's body frame, and their boxes.
+    ///
+    /// * Transonic (Prandtl–Glauert) vapour: a bell around the wing and one
+    ///   over the canopy. The flow accelerates and expands from the leading
+    ///   edge (condensation building up) to the near-normal shock, which
+    ///   moves aft toward the trailing edge as Mach → 1; the shock evaporates
+    ///   it abruptly, so the aft face is crisp. Bigger and offset over the
+    ///   suction side with angle of attack.
+    /// * Wing-surface fog: a layer over the forward upper surface (the suction
+    ///   peak) at high lift in humid air, ending where the pressure recovers.
+    fn volume(&self, c: &FrameCtx, f: &mut VfxFrame) {
+        let def = c.def;
+        let sd = crate::damage::struct_def(def.id);
+        let semi = def.wingspan * 0.5;
+        let rel = c.pos - c.eye;
+        let q = c.rot;
+        let v = &mut f.vol;
+        v[0] = [rel.x, rel.y, rel.z, self.time];
+        v[1] = [q.x, q.y, q.z, q.w];
+        let mut mask = 0u32;
+        let wings_ok = [crate::damage::Part::WingL, crate::damage::Part::WingR].map(|p| c.lost & p.bit() == 0);
+        if self.cone > 0.01 {
+            let m = self.cone_mach;
+            let ak = (self.cone_aoa / 0.15).clamp(-0.5, 1.5);
+            let chord = sd.wing_z.1 - sd.wing_z.0;
+            let shock = smoothstep(0.86, 0.99, m);
+            let fus = sd.fus_r.min(0.12 * def.wingspan + 0.4);
+            let z_f = sd.wing_z.1 + 0.45 * chord;
+            let z_s = sd.wing_z.1 - chord * (0.62 + 0.4 * shock);
+            let r_s = (0.5 + 0.12 * shock) * semi.max(3.0) * (0.85 + 0.3 * self.cone.min(1.0));
+            let y_c = def.wing_height * 0.5;
+            v[2] = [z_f, z_s, fus * 0.8, r_s];
+            v[3] = [y_c, ak, self.cone.min(1.0), m];
+            let mut lo = Vec3::new(-1.3 * r_s, y_c - 1.0 * r_s, z_s - 0.3 * (z_f - z_s));
+            let mut hi = Vec3::new(1.3 * r_s, y_c + (1.2 + 0.2 * ak.max(0.0)) * r_s, z_f + 0.2);
+            // Canopy bell (fighters: the canopy shock ahead of the wing's).
+            if def.eye.z > z_f + 0.5 {
+                let zc_f = def.eye.z + 1.0;
+                let zc_s = (def.eye.z - 1.7 - 0.6 * shock).max(z_f - 0.3);
+                let rc = fus * (1.25 + 0.3 * shock);
+                let yc = def.eye.y * 0.55;
+                v[4] = [zc_f, zc_s, fus * 0.45, rc];
+                v[5] = [yc, self.cone.min(1.0) * 0.85, ak * 0.6, 0.0];
+                lo = lo.min(Vec3::new(-1.3 * rc, yc - rc, zc_s - 0.3));
+                hi = hi.max(Vec3::new(1.3 * rc, yc + 1.4 * rc, zc_f + 0.2));
+            } else {
+                v[4] = [0.0, -1.0, 0.0, 0.0];
+                v[5] = [0.0; 4];
+            }
+            v[12] = [lo.x, lo.y, lo.z, 0.0];
+            v[13] = [hi.x, hi.y, hi.z, 0.0];
+            mask |= 1;
         }
-    }
-    let w = segs as u32 + 1;
-    for i in 0..rings as u32 {
-        for j in 0..segs as u32 {
-            let a = base + i * w + j;
-            f.mesh_idx.extend([a, a + w, a + 1, a + 1, a + w, a + w + 1]);
+        if self.wing_vapour > 0.01 && !c.planform.is_empty() {
+            // Four stations from the root to 90 % span: x, leading edge, trailing edge, y.
+            let mut lo = Vec3::splat(f32::MAX);
+            let mut hi = Vec3::splat(f32::MIN);
+            let tip = c.tips[0].abs().max(c.tips[1].abs());
+            for k in 0..4 {
+                let x = sd.fus_r + [0.0, 0.3, 0.6, 0.9][k] * (semi - sd.fus_r);
+                let (_, le, te, y) = planform_at(c.planform, x);
+                v[8 + k] = [x, le, te.min(le - 0.3), y];
+                lo = lo.min(Vec3::new(x, y - 0.4, te - 0.4));
+                hi = hi.max(Vec3::new(x, y, le + 0.3));
+            }
+            let chord = (v[8][1] - v[8][2]).max(0.5);
+            // Fog depth: a few % of the chord over the upper surface, more as the suction grows.
+            let depth = 0.2 * chord * (0.6 + 0.6 * self.wing_vapour.min(1.0));
+            v[6] = [self.wing_vapour.min(1.0), sd.fus_r, semi, depth];
+            v[7] = [c.tips[0], c.tips[1], 0.0, 0.0];
+            hi.y += tip + depth + 0.12 * chord + 0.3;
+            lo.y -= tip;
+            for (side, sx) in [(0usize, 1.0f32), (1, -1.0)] {
+                if !wings_ok[side] {
+                    continue;
+                }
+                let (a, b) = (Vec3::new(sx * lo.x, lo.y, lo.z), Vec3::new(sx * hi.x, hi.y, hi.z));
+                let (l, h) = (a.min(b), a.max(b));
+                v[14 + 2 * side] = [l.x, l.y, l.z, 0.0];
+                v[15 + 2 * side] = [h.x, h.y, h.z, 0.0];
+                mask |= 2 << side;
+            }
         }
+        f.vol_boxes = mask;
     }
 }
 
@@ -1244,17 +1259,27 @@ mod tests {
     }
 
     #[test]
-    fn transonic_shell_has_crisp_unit_normals() {
-        let mut f = VfxFrame::default();
-        let at = |p: Vec3| p;
-        shell(&mut f, &at, Quat::IDENTITY, 2.0, -3.0, 1.0, 3.0, 0.0, 0.5, 1.0);
-        assert!(!f.mesh.is_empty() && f.mesh_idx.len() % 3 == 0);
-        for v in &f.mesh {
-            let n = Vec3::new(v.aux[0], v.aux[1], v.aux[2]);
-            assert!((n.length() - 1.0).abs() < 1e-3);
-            // Normals face outward (away from the body axis).
-            let p = Vec3::new(v.pos[0], v.pos[1], 0.0);
-            assert!(n.x * p.x + n.y * p.y > -1e-3);
-        }
+    fn condensation_volumes_enclose_their_fields() {
+        let def = crate::flight::find("lancer").unwrap();
+        let mut v = Vfx { cone: 0.8, cone_mach: 0.98, cone_aoa: 0.05, wing_vapour: 0.7, ..Default::default() };
+        v.time = 3.0;
+        let pf = [(1.0, 2.0, -1.5, 0.0), (3.0, 0.5, -1.4, 0.05), (4.8, -0.6, -1.3, 0.1)];
+        let ctx = FrameCtx { def: &def, eye: Vec3::new(0.0, 0.0, -30.0), pos: Vec3::ZERO, rot: Quat::IDENTITY, tips: [0.2, 0.2], lost: 0, running: [false; 4], thrust: [0.0; 4], afterburner: 0.0, planform: &pf, fires: None };
+        let f = v.frame(&ctx);
+        assert_eq!(f.vol_boxes, 0b111);
+        assert!(!f.is_empty());
+        let (lo, hi) = (Vec3::from_slice(&f.vol[12][..3]), Vec3::from_slice(&f.vol[13][..3]));
+        // The bell: from its front (z_f) to its shock (z_s), radius r_s.
+        let [z_f, z_s, _, r_s] = f.vol[2];
+        assert!(z_f > z_s && r_s > 1.0);
+        assert!(lo.z < z_s && hi.z > z_f && lo.x <= -r_s && hi.x >= r_s);
+        // Each wing box lies on its own side and covers the stations.
+        assert!(f.vol[14][0] >= 0.0 && f.vol[17][0] <= 0.0);
+        let semi = def.wingspan * 0.5;
+        assert!(f.vol[15][0] >= 0.85 * semi && f.vol[16][0] <= -0.85 * semi, "{:?}", &f.vol[14..18]);
+        assert!(f.vol.iter().all(|q| q.iter().all(|x| x.is_finite())));
+        // A lost wing has no fog box.
+        let ctx = FrameCtx { lost: crate::damage::Part::WingR.bit(), ..ctx };
+        assert_eq!(v.frame(&ctx).vol_boxes, 0b011);
     }
 }

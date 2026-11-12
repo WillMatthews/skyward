@@ -14,8 +14,11 @@
 // * Everything is soft against the scene and hidden by clouds in front of it
 //   (the clouds' half-resolution transmittance + mean depth).
 // * Ribbons (contrails, vortex cores) keep a minimum on-screen width and
-//   trade opacity for it (no aliasing at a distance); the vapour cone is a
-//   thin shell whose opacity follows the path length through it (crisp rims).
+//   trade some opacity for it (no aliasing at a distance, still bold).
+// * Condensation volumes (transonic vapour, wing-surface fog) are ray-marched
+//   in the aircraft's frame inside boxes (vs_vol / fs_vol): density fields
+//   with crisp boundaries where the physics has them (the shock, the edge of
+//   the expansion), streaky and flickering inside.
 
 struct VfxU {
     off: vec4<f32>,               // frame origin - eye (xyz), w = time (s)
@@ -23,6 +26,7 @@ struct VfxU {
     fires: array<vec4<f32>, 4>,   // fire lights: eye-relative position, intensity (cd)
     misc: vec4<f32>,              // x = haze strength scale, y = cloud result bound
     key: vec4<f32>,               // toward the key light
+    vol: array<vec4<f32>, 20>,    // condensation volumes (vfx/mod.rs `Vfx::volume`)
 };
 
 struct GP {
@@ -48,9 +52,9 @@ const K_SPARK: f32 = 4.0;
 const K_STEAM: f32 = 5.0;
 const K_TRAIL: f32 = 10.0;
 const K_SMOKETRAIL: f32 = 11.0;
-const K_VAPOUR: f32 = 12.0;
 const K_DIAMONDS: f32 = 13.0;
 const K_HAZE: f32 = 14.0;
+const K_VORTEX: f32 = 15.0;
 // Emission units of sparks / diamonds → scene radiance (≈ cd/m² × LUX).
 const E_SCALE: f32 = 0.06;
 // Fire light colour (≈ 1600 K blackbody), luminance 1 (== sim.rs fire lights).
@@ -94,8 +98,13 @@ fn hg(c: f32, gg: f32) -> f32 {
 
 // Phase asymmetry per kind: condensation scatters strongly forward.
 fn kind_g(kind: f32) -> f32 {
-    if (kind == K_STEAM || kind == K_TRAIL || kind == K_VAPOUR) {
+    if (kind == K_STEAM) {
         return 0.7;
+    }
+    if (kind == K_TRAIL || kind == K_VORTEX) {
+        // Dense young ice / droplet lines: multiple scattering evens the
+        // phase function out (bright white from every side).
+        return 0.45;
     }
     if (kind == K_SPRAY) {
         return 0.5;
@@ -127,12 +136,13 @@ fn bb_lum(tk: f32) -> f32 {
 // flooding the glare (bloom) with a screen-sized halo.
 fn highlight(rad: vec3<f32>) -> vec3<f32> {
     let v = dot(rad, vec3<f32>(0.2126, 0.7152, 0.0722)) * atmos.expo.x;
-    let k = 3.0;
+    let k = 2.2;
     if (v <= k) {
         return rad;
     }
-    // Compressed (not clipped): hotter parts stay brighter.
-    return rad * (min(k * pow(v / k, 0.3), 9.0) / v);
+    // Compressed (not clipped): hotter parts stay brighter, but a large
+    // emitter never reaches the glare's threshold by much (no halo dome).
+    return rad * (min(k * pow(v / k, 0.25), 4.5) / v);
 }
 
 // Soot fraction of a flame puff at temperature `tk` (== vfx/gpu.rs `soot`).
@@ -360,7 +370,9 @@ fn fs_particle(in: VO) -> @location(0) vec4<f32> {
         // noise eats into it from the top (licking tongues).
         let hw = mix(0.95, 0.3, y) + (n - 0.5) * 0.5;
         let env = clamp(1.0 - pow(abs(x) / max(hw, 0.05), 2.0), 0.0, 1.0) * smoothstep(0.0, 0.12, y);
-        let den = clamp(env * (0.25 + 1.5 * n) - y * 0.55 - 0.08, 0.0, 1.0);
+        // (Fades out before the quad's edges: no straight cut-off tips.)
+        let rim = (1.0 - smoothstep(0.7, 0.98, y)) * (1.0 - smoothstep(0.75, 0.98, abs(x)));
+        let den = clamp((env * (0.25 + 1.5 * n) - y * 0.55 - 0.08) * rim, 0.0, 1.0);
         if (den <= 0.002) {
             discard;
         }
@@ -422,14 +434,15 @@ fn vs_mesh(v: MIn) -> VO {
     var rel = v.pos.xyz + V.off.xyz;
     var inten = v.uv.z;
     let kind = v.pos.w;
-    if (kind == K_TRAIL || kind == K_SMOKETRAIL) {
-        // Ribbon: centre line + side vector; at least ~1.4 px wide, fainter
-        // in proportion (the same light over a wider line).
+    if (kind == K_TRAIL || kind == K_SMOKETRAIL || kind == K_VORTEX) {
+        // Ribbon: centre line + side vector; at least ~1.6 px wide (no
+        // aliasing), fainter for it — but less than in proportion: a thin
+        // bright line against the sky stays bold to the eye.
         let hw = 0.5 * v.uv.w;
         let px = length(rel) / max(g.sky.w, 1.0);
-        let hwd = max(hw, 0.7 * px);
+        let hwd = max(hw, 0.8 * px);
         rel += v.aux.xyz * v.uv.y * hwd;
-        inten *= hw / hwd;
+        inten *= pow(hw / hwd, 0.55);
     }
     o.clip = g.view_proj * vec4<f32>(rel, 1.0);
     o.uv = v.uv.xy;
@@ -496,65 +509,40 @@ fn fs_mesh(in: VO) -> @location(0) vec4<f32> {
     var albedo = vec3<f32>(0.92);
     var ss = 0.3;
     var nrm = normalize(-normalize(in.rel) + vec3<f32>(0.0, 0.3, 0.0));
-    if (kind == K_TRAIL || kind == K_SMOKETRAIL) {
+    if (kind == K_TRAIL || kind == K_SMOKETRAIL || kind == K_VORTEX) {
         // Gaussian cross-section; lumpy along its length as it ages.
         let age = in.aux.w;
         let sub = in.uv.x;
-        let prof = exp(-v * v * 2.2);
-        let lump = n2(vec2<f32>(sub * 0.35, v * 1.2 + age * 0.02));
-        let fine = noise2(vec2<f32>(sub * 2.2, v * 3.0));
-        a = inten * prof * mix(1.0, 0.45 + 0.9 * lump * (0.8 + 0.4 * fine), smoothstep(2.0, 30.0, age));
-        if (in.col.y < 1.0) {
-            // Vortex cores: a thin twisted tube.
-            let tw = 0.5 + 0.5 * sin(sub * 9.0 + v * 2.5 - t * 6.0);
-            a *= 0.65 + 0.35 * tw;
-        }
-        // Lit as a tube: normal from the cross-section.
         let side = normalize(in.aux.xyz);
         let view = -normalize(in.rel);
-        nrm = normalize(side * v + view * sqrt(max(1.0 - v * v, 0.0)));
-        if (kind == K_SMOKETRAIL) {
-            albedo = vec3<f32>(0.12);
-            ss = 0.7;
-        } else {
-            ss = 0.25;
-        }
-    } else if (kind == K_VAPOUR) {
-        let view = -normalize(in.rel);
-        let n = normalize(in.aux.xyz);
-        let mu = max(abs(dot(n, view)), 0.07);
-        if (in.aux.w > 0.5) {
-            // Transonic shroud: u = around (0..1), v = along (0 front .. 1
-            // shock, > 1 wisps behind it). A thin shell: opacity follows the
-            // path through it, so its rims are crisp and its face translucent.
-            let s = in.uv.y;
-            let ang = in.uv.x;
-            // Streamwise striations, patches and fine flicker.
-            let streak = n2(vec2<f32>(ang * 38.0, s * 1.2 - t * 0.8));
-            let blot = n2(vec2<f32>(ang * 12.0 + 3.1, s * 3.0 - t * 2.0));
-            let fine = noise2(vec2<f32>(ang * 150.0, s * 8.0 - t * 12.0));
-            let wobble = (noise2(vec2<f32>(ang * 9.0, t * 3.0)) - 0.5) * 0.04;
-            // Condensation builds up as the flow expands toward the shock and
-            // evaporates abruptly through it: densest at the crisp aft edge.
-            let build = pow(smoothstep(0.03, 1.0, s), 1.5);
-            let shock = 1.0 - smoothstep(0.99 + wobble, 1.0 + wobble, s);
-            let tail = (1.0 - smoothstep(1.0, 1.15, s)) * step(1.0 + wobble, s) * smoothstep(0.6, 0.9, streak) * 0.45;
-            let patchy = smoothstep(0.28, 0.78, 0.6 * streak + 0.4 * blot + 0.12 * fine);
-            let dens = build * shock * patchy + tail;
-            // A shell with depth: the rim shows at most ~2x its face.
-            a = 1.0 - exp(-inten * dens * 1.1 / max(mu, 0.5));
-            nrm = n * sign(dot(n, view));
-            ss = 0.1;
+        if (kind == K_VORTEX) {
+            // Vortex core: a thin tube of condensation whose striations wind
+            // around it (helical bands slanted across the tube), flickering.
+            let ang = asin(clamp(v, -0.999, 0.999));
+            let helix = 0.5 + 0.5 * sin(sub * 40.0 - ang * 2.0 - t * 9.0);
+            let wisp = n2(vec2<f32>(sub * 6.0 - t * 2.0, v * 1.5));
+            let prof = exp(-v * v * 3.0);
+            a = inten * prof * (0.45 + 0.4 * helix + 0.35 * wisp) * (1.0 - smoothstep(0.6, 1.0, abs(v)));
+            nrm = normalize(side * v + view * sqrt(max(1.0 - v * v, 0.0)));
+            ss = 0.2;
             albedo = vec3<f32>(0.95);
         } else {
-            // Wing-surface condensation: a streaky film over the suction peak.
-            let nn = n2(vec2<f32>(in.uv.x * 2.0, v * 0.7) + vec2<f32>(t * 3.0, t * 0.7));
-            let streak = n2(vec2<f32>(in.uv.x * 14.0, t * 4.0));
-            let edge = 1.0 - smoothstep(0.4, 1.0, abs(v));
-            let dens = edge * clamp(nn * 1.6 - 0.35, 0.0, 1.0) * (0.6 + 0.6 * streak);
-            a = 1.0 - exp(-inten * dens * 0.6 / mu);
-            nrm = n * sign(dot(n, view));
-            ss = 0.15;
+            let prof = exp(-v * v * 2.2);
+            let lump = n2(vec2<f32>(sub * 0.35, v * 1.2 + age * 0.02));
+            let fine = noise2(vec2<f32>(sub * 2.2, v * 3.0));
+            a = inten * prof * mix(1.0, 0.45 + 0.9 * lump * (0.8 + 0.4 * fine), smoothstep(2.0, 30.0, age));
+            // Lit as a tube: normal from the cross-section.
+            nrm = normalize(side * v + view * sqrt(max(1.0 - v * v, 0.0)));
+            if (kind == K_SMOKETRAIL) {
+                albedo = vec3<f32>(0.12);
+                ss = 0.7;
+            } else {
+                // Young contrails are optically thick: bright, white, a little
+                // denser in the core than a gaussian.
+                a = min(a * 1.25, 0.97);
+                albedo = vec3<f32>(0.97);
+                ss = 0.15;
+            }
         }
     }
     a = clamp(a, 0.0, 1.0) * soft(px, d, 0.6) * in.cloud;
@@ -563,6 +551,263 @@ fn fs_mesh(in: VO) -> @location(0) vec4<f32> {
     }
     let c = shade(in, albedo, nrm, ss) * in.fog.a + in.fog.rgb;
     return vec4<f32>(c * a, a);
+}
+
+// ---------------------------------------------------------------- condensation volumes
+
+// V.vol (vfx/mod.rs `Vfx::volume`), body frame (+z nose, +y up, +x left):
+//  0 aircraft position (frame-origin relative), 1 attitude quaternion,
+//  2 wing bell (z front, z shock, r front, r shock), 3 (y centre, AoA k, amount, Mach),
+//  4 canopy bell, 5 (y centre, amount, AoA k, -),
+//  6 wing fog (amount, fuselage r, semi-span, depth), 7 (tip deflection L, R),
+//  8..11 wing stations (x, leading edge z, trailing edge z, y),
+//  12..17 boxes (lo, hi): bells, left wing, right wing.
+
+fn qrot(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
+    return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
+}
+
+fn h3(p: vec3<f32>) -> f32 {
+    var q = fract(p * 0.1031);
+    q += dot(q, q.yzx + 33.33);
+    return fract((q.x + q.y) * q.z);
+}
+
+// Smooth 3D value noise 0..1.
+fn n3(p: vec3<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = mix(mix(h3(i), h3(i + vec3<f32>(1.0, 0.0, 0.0)), u.x), mix(h3(i + vec3<f32>(0.0, 1.0, 0.0)), h3(i + vec3<f32>(1.0, 1.0, 0.0)), u.x), u.y);
+    let b = mix(mix(h3(i + vec3<f32>(0.0, 0.0, 1.0)), h3(i + vec3<f32>(1.0, 0.0, 1.0)), u.x), mix(h3(i + vec3<f32>(0.0, 1.0, 1.0)), h3(i + vec3<f32>(1.0, 1.0, 1.0)), u.x), u.y);
+    return mix(a, b, u.z);
+}
+
+// Transonic condensation bell: density at body point `p` and its outward
+// direction (for the lighting). `b` = (z front, z shock, r front, r shock),
+// `yc` centre height, `ak` angle-of-attack factor.
+fn bell(p: vec3<f32>, b: vec4<f32>, yc: f32, ak: f32, t: f32, seed: f32) -> vec4<f32> {
+    let len = max(b.x - b.y, 0.3);
+    let s = (b.x - p.z) / len;
+    if (s < 0.0 || s > 1.3) {
+        return vec4<f32>(0.0);
+    }
+    let sc = min(s, 1.0);
+    // A cone flaring from the front (the leading-edge / canopy expansion)
+    // to the shock, slightly bell-shaped.
+    let rad = b.z + (b.w - b.z) * pow(sc, 0.75);
+    let ycc = yc + 0.12 * ak * b.w * sc;
+    let q = vec2<f32>(p.x, (p.y - ycc) / 0.9);
+    let r = length(q);
+    if (r > rad * (1.04 + 0.18 * abs(ak))) {
+        return vec4<f32>(0.0);
+    }
+    let cs = q / max(r, 1e-3);
+    // Larger over the suction side; its rim ripples a little.
+    let rim = rad * (1.0 + 0.18 * ak * cs.y) * (1.0 + 0.07 * (noise2(cs * 2.5 + vec2<f32>(t * 2.5 + seed, 0.0)) - 0.5));
+    if (r > rim) {
+        return vec4<f32>(0.0);
+    }
+    // The shock: a crisp, rippling face that jitters as the Mach number
+    // (and so its position) fluctuates.
+    let wob = 0.045 * (noise2(cs * 1.8 + vec2<f32>(0.0, t * 6.0 + seed)) - 0.5) + 0.015 * sin(t * 13.0 + seed * 3.0);
+    let es = 1.0 + wob;
+    // Streamwise striations round the body (thin, high contrast, slowly
+    // varying along it), coarser patches, fine flicker.
+    let ang = cs * b.w;
+    let streak = smoothstep(0.25, 0.85, noise2(ang * 3.2 + vec2<f32>(p.z * 0.18 - t * 0.7 + seed + r * 0.8, 0.0)));
+    let blot = noise2(ang * 0.9 + vec2<f32>(p.z * 0.5 - t * 1.6 + seed, 0.0));
+    let fine = noise2(ang * 6.0 + vec2<f32>(p.z * 0.4 + r * 1.5 - t * 9.0 + seed, 0.0));
+    // Crisp outer surface.
+    let outer = 1.0 - smoothstep(rim * 0.955, rim, r);
+    var d = 0.0;
+    if (s < es) {
+        // Condensation builds up as the flow expands toward the shock. Most
+        // of it sits in the bell's outer layer (the cone reads as a shell
+        // with a translucent body), thin wisps inside.
+        let build = smoothstep(0.0, 0.1, s) * (0.35 + 0.65 * pow(sc, 1.3));
+        let skin = 0.18 + 0.82 * smoothstep(0.45, 0.93, r / rim);
+        let body = (0.25 + 0.95 * streak) * (0.55 + 0.6 * blot) * (0.85 + 0.3 * fine);
+        d = build * skin * outer * body * (1.0 - smoothstep(es - 0.012, es, s));
+    } else {
+        // Wisps torn off behind the shock.
+        d = (1.0 - smoothstep(es, 1.3, s)) * streak * outer * 0.35 * fine;
+    }
+    return vec4<f32>(d, cs.x, cs.y, 0.0);
+}
+
+// Wing-section at |x| from the four stations: (leading edge, trailing edge, y, 0..1 along them).
+fn wing_station(ax: f32) -> vec4<f32> {
+    var a = V.vol[8];
+    var b = V.vol[9];
+    var k = 0.0;
+    if (ax > V.vol[10].x) {
+        a = V.vol[10];
+        b = V.vol[11];
+        k = 2.0;
+    } else if (ax > V.vol[9].x) {
+        a = V.vol[9];
+        b = V.vol[10];
+        k = 1.0;
+    }
+    let f = clamp((ax - a.x) / max(b.x - a.x, 1e-3), 0.0, 1.0);
+    let w = mix(a, b, f);
+    return vec4<f32>(w.y, w.z, w.w, (k + f) / 3.0);
+}
+
+// Fog over the forward upper surface of the wings (the suction peak).
+fn wing_fog(p: vec3<f32>, t: f32) -> f32 {
+    let ax = abs(p.x);
+    if (ax < V.vol[8].x || ax > V.vol[11].x) {
+        return 0.0;
+    }
+    let st = wing_station(ax);
+    let fus = V.vol[6].y;
+    let sb = clamp((ax - fus) / max(V.vol[6].z - fus, 0.5), 0.0, 1.0);
+    let tip = select(V.vol[7].y, V.vol[7].x, p.x >= 0.0);
+    let wy = st.z + sb * sb * (6.0 - 4.0 * sb + sb * sb) / 3.0 * tip;
+    let chord = max(st.x - st.y, 0.3);
+    let f = (st.x - p.z) / chord;
+    if (f < -0.05 || f > 0.75) {
+        return 0.0;
+    }
+    // Upper surface of a ~15 % section, thickest near 30 % chord; the fog
+    // starts inside the wing (the scene depth cuts it at the real skin).
+    let fc = clamp(f, 0.0, 1.0);
+    let surf = wy + 0.075 * chord * sqrt(fc) * (1.0 - fc) * 2.2;
+    let h = p.y - surf;
+    let depth = V.vol[6].w * (1.0 - 0.5 * st.w);
+    let floor_h = wy + 0.01 * chord - surf;
+    if (h < floor_h || h > depth * 1.4) {
+        return 0.0;
+    }
+    // Ends where the pressure recovers (a ragged, flickering line).
+    let fe = 0.45 + 0.16 * n3(vec3<f32>(ax * 0.9, 0.0, t * 3.0)) + 0.04 * sin(ax * 2.3 + t * 9.0);
+    let along = smoothstep(-0.04, 0.04, f) * (1.0 - smoothstep(fe - 0.05, fe, f));
+    // Chordwise streaks, thicker in billows.
+    let streak = n3(vec3<f32>(ax * 4.5, f * 1.2 - t * 5.0, h * 2.0));
+    let top = depth * (0.5 + 0.9 * n3(vec3<f32>(ax * 0.9, f * 2.0 - t * 3.0, 7.0)));
+    let vert = (1.0 - smoothstep(0.4 * top, top, h));
+    let span = 1.0 - smoothstep(0.75, 1.0, st.w);
+    return along * vert * span * (0.45 + 0.8 * streak);
+}
+
+@vertex
+fn vs_vol(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VO {
+    var o: VO;
+    let lo = V.vol[12u + 2u * ii].xyz;
+    let hi = V.vol[13u + 2u * ii].xyz;
+    // A box: face vi / 6, corner vi % 6 (both windings drawn, fs_vol keeps the far side).
+    let face = vi / 6u;
+    let c = corner(vi) * 0.5 + 0.5;
+    let sd = f32(face % 2u);
+    var u = vec3<f32>(c.x, c.y, sd);
+    if (face / 2u == 0u) {
+        u = vec3<f32>(sd, c.x, c.y);
+    } else if (face / 2u == 1u) {
+        u = vec3<f32>(c.x, sd, c.y);
+    }
+    let base = V.vol[0].xyz + V.off.xyz;
+    let rel = qrot(V.vol[1], mix(lo, hi, u)) + base;
+    o.clip = g.view_proj * vec4<f32>(rel, 1.0);
+    o.uv = vec2<f32>(0.0);
+    o.rel = rel;
+    o.kind = f32(ii);
+    o.col = vec4<f32>(0.0);
+    o.extra = vec4<f32>(0.0);
+    o.centre = base;
+    o.size = 1.0;
+    o.aux = vec4<f32>(0.0);
+    o.light = vec4<f32>(1.0, 0.0, 0.0, 1.0);
+    let lt = light_at(rel, 0.55, o.clip, true);
+    o.direct = lt.direct;
+    o.ambient = lt.ambient;
+    o.fog = lt.fog;
+    o.cloud = cloud_vis(o.clip, length(rel));
+    return o;
+}
+
+@fragment
+fn fs_vol(in: VO) -> @location(0) vec4<f32> {
+    let ii = u32(in.kind + 0.5);
+    let lo = V.vol[12u + 2u * ii].xyz;
+    let hi = V.vol[13u + 2u * ii].xyz;
+    let q = V.vol[1];
+    let qi = vec4<f32>(-q.xyz, q.w);
+    let d = length(in.rel);
+    let dw = in.rel / max(d, 1e-4);
+    let eye = qrot(qi, -(V.vol[0].xyz + V.off.xyz));
+    let dir = qrot(qi, dw);
+    // Ray / box in the body frame.
+    let inv = select(vec3<f32>(1e8), 1.0 / dir, abs(dir) > vec3<f32>(1e-6));
+    let ta = (lo - eye) * inv;
+    let tb = (hi - eye) * inv;
+    let t0 = max(max(min(ta.x, tb.x), min(ta.y, tb.y)), min(ta.z, tb.z));
+    let t1 = min(min(max(ta.x, tb.x), max(ta.y, tb.y)), max(ta.z, tb.z));
+    // Only the far side of the box shades (one fragment per pixel).
+    if (t1 <= max(t0, 0.0) || d < 0.5 * (max(t0, 0.0) + t1)) {
+        discard;
+    }
+    let px = in.clip.xy;
+    let scene = textureLoad(dist_tex, vec2<i32>(px), 0).x;
+    let s0 = max(t0, 0.05);
+    let s1 = min(t1, scene);
+    if (s1 <= s0) {
+        discard;
+    }
+    let t = V.off.w;
+    let wing = ii > 0u;
+    let n = select(32, 24, wing);
+    let dt = (s1 - s0) / f32(n);
+    // Interleaved gradient noise: per-pixel start offset (no banding).
+    let jit = fract(52.9829189 * fract(dot(px, vec2<f32>(0.06711056, 0.00583715))));
+    let sun = qrot(qi, g.sun_dir.xyz);
+    var k = 0.0;
+    if (wing) {
+        k = V.vol[6].x * 6.0 / max(V.vol[6].w, 0.08);
+    }
+    var tr = 1.0;
+    var lum = vec3<f32>(0.0);
+    let alb = 0.96;
+    for (var i = 0; i < n; i++) {
+        let p = eye + dir * (s0 + (f32(i) + jit) * dt);
+        var den = 0.0;
+        var wrap = 0.5 + 0.5 * sun.y;
+        if (wing) {
+            den = wing_fog(p, t) * k;
+        } else {
+            let a = bell(p, V.vol[2], V.vol[3].x, V.vol[3].y, t, 0.0);
+            var dd = a.x * V.vol[3].z * 3.8 / max(V.vol[2].w, 0.5);
+            var nl = vec3<f32>(a.y, a.z, 0.0);
+            if (V.vol[5].y > 0.0) {
+                let c = bell(p, V.vol[4], V.vol[5].x, V.vol[5].z, t, 4.7);
+                let dc = c.x * V.vol[5].y * 3.8 / max(V.vol[4].w, 0.3);
+                if (dc > dd) {
+                    nl = vec3<f32>(c.y, c.z, 0.0);
+                }
+                dd = max(dd, dc);
+            }
+            den = dd;
+            wrap = 0.5 + 0.5 * dot(nl, sun);
+        }
+        if (den > 1e-4) {
+            let e = exp(-den * dt);
+            // Key light (wrapped: the far side is lit through the cloud by
+            // multiple scattering), sky light, a bounce of the key light.
+            let s = in.direct * (0.4 + 0.6 * wrap) + in.ambient + in.direct * 0.2;
+            lum += tr * (1.0 - e) * alb * s;
+            tr *= e;
+            if (tr < 0.01) {
+                break;
+            }
+        }
+    }
+    let a = (1.0 - tr) * in.cloud;
+    if (a < 0.002) {
+        discard;
+    }
+    let c = lum * in.fog.a * in.cloud + in.fog.rgb * a;
+    return vec4<f32>(c, a);
 }
 
 // ---------------------------------------------------------------- heat haze

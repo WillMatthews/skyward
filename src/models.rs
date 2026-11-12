@@ -52,10 +52,12 @@ pub struct PartMap {
     pub vert: Vec<[f32; 4]>,
     /// Body-frame boxes of each part (gear down).
     pub geom: crate::debris::PartGeom,
-    /// The asset's vertices / indices with seams split between parts
-    /// (chunk ranges unchanged; duplicated vertices are appended).
+    /// The asset's vertices / indices with seams split between parts and
+    /// the wings tessellated spanwise (new vertices are appended).
     pub vertices: Vec<crate::aircraft_asset::Vertex>,
     pub indices: Vec<u32>,
+    /// Per asset chunk: its (first index, index count) in `indices`.
+    pub ranges: Vec<(u32, u32)>,
     /// Wing planform by span station: (|x|, leading-edge z, trailing-edge z, mean y).
     pub planform: Vec<(f32, f32, f32, f32)>,
 }
@@ -467,6 +469,9 @@ fn classify_uncached(a: &AircraftAsset, def: &AircraftDef) -> PartMap {
             k += 3;
         }
     }
+    // Coarse wings bend piecewise (a kink at every spanwise vertex): cut
+    // their triangles to short spanwise segments.
+    let ranges = tessellate_wings(a, &mut out_v, &mut out_i, &mut pos, &mut vpart, &mut vext, WING_SEG);
     let mut vert = vec![[0.0f32; 4]; out_v.len()];
     for vi in 0..out_v.len() {
         vert[vi] = [vpart[vi].max(0) as f32, 0.0, 0.0, if vext[vi] { 1.0 } else { 0.0 }];
@@ -508,5 +513,121 @@ fn classify_uncached(a: &AircraftAsset, def: &AircraftDef) -> PartMap {
         .filter(|&b| le[b] > te[b] && yn[b] > 0.0)
         .map(|b| (sd.fus_r + (b as f32 + 0.5) / NB as f32 * (semi - sd.fus_r), le[b], te[b], (ysum[b] / yn[b]) as f32))
         .collect();
-    PartMap { vert, geom, vertices: out_v, indices: out_i, planform }
+    PartMap { vert, geom, vertices: out_v, indices: out_i, ranges, planform }
+}
+
+/// Longest spanwise extent (m) of a wing triangle edge after tessellation.
+const WING_SEG: f32 = 0.5;
+
+/// Subdivide the wing triangles (parts `WingL` / `WingR`) until no edge
+/// spans more than `seg` metres sideways (body x), so the bending shader's
+/// smooth curve shows in the silhouette. Edges are split at their midpoints
+/// (position, normal and UV interpolated), keyed by their vertex pair, so
+/// neighbouring triangles split alike (no cracks); a triangle with one, two
+/// or three split edges becomes two, three or four, keeping its winding.
+/// Rebuilds `idx` chunk by chunk and returns each chunk's (first, count).
+fn tessellate_wings(a: &AircraftAsset, verts: &mut Vec<crate::aircraft_asset::Vertex>, idx: &mut Vec<u32>, pos: &mut Vec<Vec3>, vpart: &mut Vec<i16>, vext: &mut Vec<bool>, seg: f32) -> Vec<(u32, u32)> {
+    use crate::damage::Part;
+    let wing = |p: i16| p == Part::WingL as i16 || p == Part::WingR as i16;
+    let mut mid: std::collections::HashMap<(u32, u32), u32> = Default::default();
+    let mut out = Vec::with_capacity(idx.len());
+    let mut ranges = Vec::with_capacity(a.chunks.len());
+    for c in &a.chunks {
+        let first = out.len() as u32;
+        let base = c.base_vertex;
+        let mut tris: Vec<[u32; 3]> = (c.first..c.first + c.count).step_by(3).filter(|&k| k + 3 <= c.first + c.count).map(|k| [0, 1, 2].map(|j| idx[(k + j) as usize] + base)).collect();
+        if !c.interior {
+            for _ in 0..8 {
+                let mut next = Vec::with_capacity(tris.len());
+                let mut changed = false;
+                for t in tris {
+                    if !t.iter().all(|&v| wing(vpart[v as usize])) {
+                        next.push(t);
+                        continue;
+                    }
+                    let mut m = [None; 3];
+                    for e in 0..3 {
+                        let (p, q) = (t[e], t[(e + 1) % 3]);
+                        if (pos[p as usize].x - pos[q as usize].x).abs() > seg {
+                            let key = (p.min(q), p.max(q));
+                            m[e] = Some(*mid.entry(key).or_insert_with(|| {
+                                let (va, vb) = (verts[p as usize], verts[q as usize]);
+                                let l = |x: [f32; 3], y: [f32; 3]| [0.5 * (x[0] + y[0]), 0.5 * (x[1] + y[1]), 0.5 * (x[2] + y[2])];
+                                let n = Vec3::from(l(va.nrm, vb.nrm)).normalize_or(Vec3::from(va.nrm));
+                                verts.push(crate::aircraft_asset::Vertex { pos: l(va.pos, vb.pos), nrm: n.to_array(), uv: [0.5 * (va.uv[0] + vb.uv[0]), 0.5 * (va.uv[1] + vb.uv[1])] });
+                                pos.push(0.5 * (pos[p as usize] + pos[q as usize]));
+                                vpart.push(vpart[p as usize]);
+                                vext.push(vext[p as usize]);
+                                (verts.len() - 1) as u32
+                            }));
+                        }
+                    }
+                    let n_split = m.iter().filter(|x| x.is_some()).count();
+                    if n_split == 0 {
+                        next.push(t);
+                        continue;
+                    }
+                    changed = true;
+                    // Rotate so the first split edge is edge 0 (a → b).
+                    let r = (0..3).find(|&e| m[e].is_some() && (n_split == 3 || m[(e + 2) % 3].is_none())).unwrap_or(0);
+                    let [a0, b0, c0] = [t[r], t[(r + 1) % 3], t[(r + 2) % 3]];
+                    let [m0, m1, m2] = [m[r], m[(r + 1) % 3], m[(r + 2) % 3]];
+                    match (m0, m1, m2) {
+                        (Some(x), None, None) => next.extend([[a0, x, c0], [x, b0, c0]]),
+                        (Some(x), Some(y), None) => next.extend([[x, b0, y], [a0, x, y], [a0, y, c0]]),
+                        (Some(x), Some(y), Some(z)) => next.extend([[a0, x, z], [x, b0, y], [z, y, c0], [x, y, z]]),
+                        _ => next.push(t),
+                    }
+                }
+                tris = next;
+                if !changed {
+                    break;
+                }
+            }
+        }
+        for t in tris {
+            out.extend(t.iter().map(|&v| v - base));
+        }
+        ranges.push((first, out.len() as u32 - first));
+    }
+    *idx = out;
+    ranges
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wings_are_tessellated_spanwise() {
+        use crate::damage::Part;
+        for id in ["kestrel", "swift", "meridian320"] {
+            let def = crate::flight::find(id).unwrap();
+            let Ok(a) = AircraftAsset::load(id) else { continue };
+            let pm = classify_uncached(&a, &def);
+            let sd = crate::damage::struct_def(id);
+            let span = (def.wingspan * 0.5).max(sd.fus_r + 0.5) - sd.fus_r;
+            assert_eq!(pm.ranges.len(), a.chunks.len());
+            assert_eq!(pm.vert.len(), pm.vertices.len());
+            let mut n = 0;
+            for (c, &(first, count)) in a.chunks.iter().zip(&pm.ranges) {
+                assert_eq!(count % 3, 0);
+                assert!((first + count) as usize <= pm.indices.len());
+                for t in pm.indices[first as usize..(first + count) as usize].chunks(3) {
+                    let v = [t[0], t[1], t[2]].map(|i| (i + c.base_vertex) as usize);
+                    assert!(v.iter().all(|&i| i < pm.vertices.len()));
+                    let wing = v.iter().all(|&i| matches!(Part::from_idx(pm.vert[i][0] as usize), Part::WingL | Part::WingR));
+                    if wing && !c.interior {
+                        n += 1;
+                        // Spanwise extent of every edge ≤ the segment (stations are clamped at the root).
+                        for e in 0..3 {
+                            let ds = (pm.vert[v[e]][1] - pm.vert[v[(e + 1) % 3]][1]).abs() * span;
+                            assert!(ds <= WING_SEG + 0.01, "{id}: wing edge spans {ds} m");
+                        }
+                    }
+                }
+            }
+            assert!(n > 100, "{id}: {n} wing triangles");
+        }
+    }
 }

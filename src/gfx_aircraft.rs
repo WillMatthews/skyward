@@ -96,6 +96,8 @@ struct GpuModel {
     has_parts: bool,
     vb: wgpu::Buffer,
     ib: wgpu::Buffer,
+    /// Per chunk (first index, count) in `ib` (the parts copy re-tessellates the wings).
+    ranges: Vec<(u32, u32)>,
     tex_bgs: Vec<wgpu::BindGroup>,
 }
 
@@ -321,7 +323,7 @@ impl AircraftRenderer {
                 return;
             }
             // With structural parts: the seam-split copy of the geometry.
-            let split = f.parts.as_ref().filter(|p| p.vert.len() == p.vertices.len() && p.indices.len() == a.indices.len());
+            let split = f.parts.as_ref().filter(|p| p.vert.len() == p.vertices.len() && p.ranges.len() == a.chunks.len());
             let (verts, idx) = match split {
                 Some(p) => (&p.vertices[..], &p.indices[..]),
                 None => (&a.vertices[..], &a.indices[..]),
@@ -353,7 +355,11 @@ impl AircraftRenderer {
                 contents: bytemuck::cast_slice(&pv_data),
                 usage: wgpu::BufferUsages::VERTEX,
             });
-            self.model = Some(GpuModel { key, pv, has_parts: f.parts.is_some(), vb, ib, tex_bgs });
+            let ranges = match split {
+                Some(p) => p.ranges.clone(),
+                None => a.chunks.iter().map(|c| (c.first, c.count)).collect(),
+            };
+            self.model = Some(GpuModel { key, pv, has_parts: f.parts.is_some(), vb, ib, ranges, tex_bgs });
             self.asset = Some(f.asset.clone());
         }
         let a = &f.asset;
@@ -436,7 +442,8 @@ impl AircraftRenderer {
             }
             let bg = m.tex.and_then(|t| gm.tex_bgs.get(t)).unwrap_or(&self.white_bg);
             pass.set_bind_group(2, bg, &[]);
-            pass.draw_indexed(c.first..c.first + c.count, c.base_vertex as i32, ii..ii + 1);
+            let (first, count) = gm.ranges[ci as usize];
+            pass.draw_indexed(first..first + count, c.base_vertex as i32, ii..ii + 1);
         }
     }
 
@@ -470,7 +477,8 @@ impl AircraftRenderer {
         pass.set_index_buffer(gm.ib.slice(..), wgpu::IndexFormat::Uint32);
         for &(ci, ii) in &self.prepared.shadow {
             let c = &a.chunks[ci as usize];
-            pass.draw_indexed(c.first..c.first + c.count, c.base_vertex as i32, ii..ii + 1);
+            let (first, count) = gm.ranges[ci as usize];
+            pass.draw_indexed(first..first + count, c.base_vertex as i32, ii..ii + 1);
         }
     }
 }
