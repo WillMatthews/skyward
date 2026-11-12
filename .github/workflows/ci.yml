@@ -1,0 +1,109 @@
+# Build, lint and test on every push / pull request.
+#
+#   check  — rustfmt (formatted paths), clippy -D warnings, unit tests, release build (Linux)
+#   tools  — the golden-comparison tool's own tests (tools/regress)
+#   wasm   — wasm32: the libraries the browser build depends on must compile
+#            (strict); the whole crate is checked too, informational until the
+#            WASM port (Track G) lands
+#
+# GPU: runners have none; GPU-dependent tests are skipped (`--skip gpu_`) and
+# golden-image / audio regression runs locally on a GPU (scripts/regress.sh).
+# render.yml has an optional software-Vulkan (lavapipe) smoke render.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+  # Keep in step with the toolchain the code is developed on: new clippy lints
+  # land with new releases.
+  RUST_VERSION: "1.98.1"
+
+jobs:
+  check:
+    name: fmt · clippy · test · build (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System libraries (ALSA for cpal, udev for gilrs)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev libudev-dev
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The code base predates a formatter config; files listed in
+      # scripts/fmt-paths.txt are kept rustfmt-clean (rustfmt.toml) and checked.
+      # Run `cargo fmt` on a quiet tree and switch to `cargo fmt --check` later.
+      - name: rustfmt (formatted paths)
+        run: scripts/fmt-check.sh
+
+      - name: clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: tests
+        run: cargo test --locked -- --skip gpu_
+
+      - name: release build
+        run: cargo build --locked --release
+
+  tools:
+    name: tools/regress tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tools/regress
+      - name: test + clippy
+        working-directory: tools/regress
+        run: |
+          cargo test --locked
+          cargo clippy --locked -- -D warnings
+
+  wasm:
+    name: wasm32 check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm32
+
+      - name: browser-facing libraries compile for wasm32 (strict)
+        run: >
+          cargo check --locked --target wasm32-unknown-unknown
+          -p gilrs -p egui -p egui-wgpu -p wgpu -p winit -p cpal
+          -p glam -p lewton -p hound -p image -p serde_json -p bytemuck -p earcutr -p flate2
+
+      - name: whole crate for wasm32 (informational until the WASM port lands)
+        continue-on-error: true
+        run: cargo check --locked --target wasm32-unknown-unknown

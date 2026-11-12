@@ -18,6 +18,9 @@ flate2 = "1"
 egui = { version = "0.37", features = ["default_fonts"] }
 egui-wgpu = "0.37"
 egui-winit = "0.37"
+# Game controllers (src/input): gamepads, joysticks / HOTAS, pedals, quadrants;
+# hot-plug; Linux evdev, Windows WGI, macOS IOKit, web Gamepad API.
+gilrs = { version = "0.11.2", default-features = false, features = ["wgi"] }
 glam = "0.34.3"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 pollster = "1.0.1"
@@ -41,3 +44,37 @@ opt-level = 3
 [profile.release]
 debug = 0
 strip = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Axis-only controllers (most rudder pedals) that gilrs skips (src/input/backend.rs).
+evdev = { version = "0.13.2", default-features = false }
+
+# CI runs `cargo clippy --all-targets -- -D warnings`. These lints are allowed
+# crate-wide because the existing code base (and work in progress on other
+# tracks) trips them; tighten one at a time once the tree is quiet.
+[lints.rust]
+dead_code = "allow"
+
+[lints.clippy]
+collapsible_if = "allow"
+type_complexity = "allow"
+too_many_arguments = "allow"
+manual_range_contains = "allow"
+if_same_then_else = "allow"
+needless_range_loop = "allow"
+neg_multiply = "allow"
+manual_clamp = "allow"
+wrong_self_convention = "allow"
+field_reassign_with_default = "allow"
+manual_is_multiple_of = "allow"
+chunks_exact_to_as_chunks = "allow"
+clone_on_copy = "allow"
+doc_lazy_continuation = "allow"
+int_plus_one = "allow"
+manual_div_ceil = "allow"
+manual_pattern_char_comparison = "allow"
+match_ref_pats = "allow"
+needless_borrow = "allow"
+unnecessary_cast = "allow"
+unnecessary_map_or = "allow"
+useless_borrows_in_formatting = "allow"

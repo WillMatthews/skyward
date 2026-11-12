@@ -1,0 +1,6 @@
+# Files kept rustfmt-clean (rustfmt.toml) and checked in CI (scripts/fmt-check.sh).
+# Add files as they are formatted; once the whole tree is formatted, CI can use
+# `cargo fmt --check` instead.
+src/input/mod.rs
+src/input/sim_glue.rs
+src/ui/controls.rs

@@ -116,14 +116,24 @@ impl Start {
     }
 }
 
-/// Keyboard/mouse state fed in by the window layer (or a script).
+/// Keyboard/mouse/controller state fed in by the window layer (or a script).
 #[derive(Default)]
 pub struct Input {
     pub held: HashSet<Key>,
     pub pressed: Vec<Key>,
     pub orbit_delta: Vec2,
     pub zoom_delta: f32,
+    /// Actions held on game controllers (input/).
+    pub pad_held: HashSet<Key>,
+    /// Analog axes from controllers / the mouse yoke (input/).
+    pub analog: crate::input::Analog,
+    /// Head-look settings, and whether the look / orbit drag is in progress.
+    pub mouse: crate::input::MouseCfg,
+    pub dragging: bool,
 }
+
+#[path = "input/sim_glue.rs"]
+pub mod pilot;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Key {
@@ -165,6 +175,17 @@ pub enum Key {
     AutoFlight,
     /// Landing / taxi lights on / off (L).
     LandingLights,
+    /// Glance while held (hat / keypad), centre the view (input/).
+    LookLeft,
+    LookRight,
+    LookUp,
+    LookDown,
+    LookCenter,
+    /// Mouse yoke on / off; interface toggles handled by the window layer.
+    MouseYoke,
+    Instruments,
+    WeatherPanel,
+    Mute,
 }
 
 impl Key {
@@ -335,6 +356,8 @@ pub struct Sim {
     light_rig: crate::lights::AircraftLightRig,
     /// Landing / taxi lights: None = automatic (gear down / with the bot), Some = the pilot's choice (L).
     pub landing_lights: Option<bool>,
+    /// Analog-input and head-look state (input/sim_glue.rs).
+    pub pilot: pilot::Pilot,
 }
 
 /// Cinematic camera state.
@@ -436,6 +459,7 @@ impl Sim {
             rrot: Quat::IDENTITY,
             light_rig: Default::default(),
             landing_lights: None,
+            pilot: Default::default(),
         };
         s.light_rig = crate::lights::AircraftLightRig::from_model(&s.model);
         s.reset(world);
@@ -717,16 +741,18 @@ impl Sim {
         }
         self.ap_warn = (self.ap_warn - dt).max(0.0);
         let def = self.defs[self.sel].clone();
-        let held = |k: Key| input.held.contains(&k);
-        let axes = [Key::PitchDown, Key::PitchUp, Key::RollLeft, Key::RollRight, Key::YawLeft, Key::YawRight].into_iter().any(held);
-        let throttle_keys = held(Key::ThrottleUp) || held(Key::ThrottleDown);
+        // Analog inputs moved enough to take over from the bot / autopilot (input/sim_glue.rs).
+        let analog = self.analog_takeover(input);
+        let held = |k: Key| input.held.contains(&k) || input.pad_held.contains(&k);
+        let axes = [Key::PitchDown, Key::PitchUp, Key::RollLeft, Key::RollRight, Key::YawLeft, Key::YawRight].into_iter().any(held) || analog.stick;
+        let throttle_keys = held(Key::ThrottleUp) || held(Key::ThrottleDown) || analog.throttle;
         // Pilot input takes control back from the bot.
         if self.bot.is_some() {
             let levers = input
                 .pressed
                 .iter()
                 .any(|k| matches!(k, Key::FlapsDown | Key::FlapsUp | Key::Gear | Key::SpoilerOut | Key::SpoilerIn | Key::Reverse | Key::ApToggle));
-            if axes || throttle_keys || levers || held(Key::Brakes) {
+            if axes || throttle_keys || levers || analog.levers || held(Key::Brakes) {
                 self.disable_bot("you have control");
                 self.watch = false;
                 if self.cam == CamMode::Cinematic {
@@ -843,6 +869,12 @@ impl Sim {
                     self.landing_lights = Some(on);
                     self.say(if on { "Landing lights on" } else { "Landing lights off" }, 2.0);
                 }
+                Key::LookCenter => {
+                    self.pilot.free = Vec2::ZERO;
+                    if self.cam == CamMode::Chase {
+                        self.orbit_yaw = 0.0;
+                    }
+                }
                 Key::AutoFlight => {
                     if self.bot.is_some() {
                         self.disable_bot("you have control");
@@ -855,10 +887,8 @@ impl Sim {
                 _ => {}
             }
         }
-        // Camera orbit/zoom.
-        self.orbit_yaw += input.orbit_delta.x * 0.005;
-        self.orbit_pitch = (self.orbit_pitch + input.orbit_delta.y * 0.005).clamp(-0.3, 1.45);
-        input.orbit_delta = Vec2::ZERO;
+        // Camera orbit / head-look (input/sim_glue.rs), zoom.
+        self.update_look(input, dt);
         if input.zoom_delta != 0.0 {
             self.orbit_dist = (self.orbit_dist * (1.0 - input.zoom_delta * 0.1)).clamp((self.size * 1.2).max(6.0), 600.0);
             input.zoom_delta = 0.0;
@@ -866,7 +896,7 @@ impl Sim {
 
         // Controls with keyboard smoothing (skipped for what the AP / bot is flying).
         let bot_on = self.bot.is_some();
-        let h = |k: Key| if input.held.contains(&k) { 1.0 } else { 0.0 };
+        let h = |k: Key| if input.held.contains(&k) || input.pad_held.contains(&k) { 1.0 } else { 0.0 };
         let approach = |cur: f32, target: f32, rate: f32| {
             let r = if target.abs() < 1e-3 { rate * 1.6 } else { rate };
             cur + (target - cur).clamp(-r * dt, r * dt)
@@ -880,8 +910,10 @@ impl Sim {
         if def.has_engine && !bot_on && !(self.ap.engaged && self.ap.ias.is_some()) {
             self.ctl.throttle = (self.ctl.throttle + (h(Key::ThrottleUp) - h(Key::ThrottleDown)) * 0.6 * dt).clamp(0.0, 1.0);
         }
+        // Controllers: analog axes straight to the controls, levers when moved.
+        self.apply_analog(input);
         if !bot_on {
-            self.ctl.brakes = h(Key::Brakes);
+            self.ctl.brakes = h(Key::Brakes).max(pilot::toe_brakes(&input.analog));
             let det = def.flap_detents;
             let full = det.last().copied().unwrap_or(1.0).max(1e-3);
             let target_flaps = det.get(self.flap_idx).copied().unwrap_or(0.0) / full;
@@ -1140,8 +1172,6 @@ impl Sim {
     pub fn frame(&mut self, aspect: f32) -> (FrameView, MeshData) {
         (self.rpos, self.rrot) = self.pose();
         let pos = self.rpos;
-        let fwd = self.rrot * Vec3::Z;
-        let up = self.rrot * Vec3::Y;
         let mut fov = 60f32.to_radians();
         let show_aircraft = true;
         let (eye, target, cam_up) = match self.cam {
@@ -1157,7 +1187,9 @@ impl Sim {
             CamMode::Cockpit => {
                 fov = 72f32.to_radians();
                 let e = pos + self.rrot * self.model.eye;
-                (e, e + fwd * 100.0, up)
+                // Head-look (input/sim_glue.rs).
+                let head = self.rrot * self.pilot.look_rot();
+                (e, e + head * Vec3::Z * 100.0, head * Vec3::Y)
             }
             CamMode::Tower => {
                 let eye = self.tower_eye();

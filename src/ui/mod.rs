@@ -9,6 +9,7 @@
 #![allow(deprecated)]
 
 pub mod canvas;
+pub mod controls;
 pub mod flight;
 pub mod gauges;
 pub mod glass;
@@ -490,6 +491,11 @@ pub struct UiState {
     pub show_wx: bool,
     pub ap_open: bool,
     pub audio_status: String,
+    /// Game controllers, rebinding and the mouse yoke (input/).
+    pub input: crate::input::InputSystem,
+    /// Settings › Controls: sub-page and the expanded axis row.
+    pub controls_page: usize,
+    pub controls_axis: Option<(crate::input::AxisAction, usize)>,
     /// Seconds since the last frame / since start, frame counter.
     pub dt: f32,
     pub time: f32,
@@ -519,6 +525,9 @@ impl UiState {
             show_wx: true,
             ap_open: true,
             audio_status: String::new(),
+            input: crate::input::InputSystem::new(),
+            controls_page: 0,
+            controls_axis: None,
             dt: 1.0 / 60.0,
             time: 0.0,
             frame_no: 0,

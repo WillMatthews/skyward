@@ -118,7 +118,9 @@ the city (fast jets: 3,000 m), glider thermal release.
 | K | engine-failure practice (fails engine 1, then 2, then restores) |
 | J | **auto flight**: the bot flies; any stick / throttle / lever input takes back |
 | C | camera: chase → cockpit → tower → fly-by → cinematic |
-| Right-drag, wheel | orbit / zoom chase camera |
+| Right-drag, wheel | orbit / zoom chase camera; in the cockpit: look around |
+| Num 4 / 6 / 8 / 2, Num 5 | glance left / right / up / down (hold), centre the view |
+| Y | mouse yoke on / off (enable it in Settings › Controls › Mouse & view) |
 | M, `,` / `.` | moving map: corner / large / off, range out / in |
 | U | instruments: full / minimal / off |
 | I | weather panel: expand / collapse |
@@ -132,7 +134,26 @@ the city (fast jets: 3,000 m), glider thermal release.
 | | quit from the pause or main menu |
 
 Stick inputs disconnect the autopilot (flashing AP DISCONNECT); throttle keys
-only drop the autothrottle.
+only drop the autothrottle. Every key is rebindable in **Settings › Controls**.
+
+### Game controllers
+Gamepads, joysticks / HOTAS, throttle quadrants and rudder pedals work out of
+the box and can be used together (gilrs: Linux evdev, Windows, macOS, browser
+Gamepad API; on Linux button-less pedals are read straight from evdev).
+Hot-plug is supported; each device model gets a default layout on first sight —
+Xbox / PlayStation pads (left stick flies, triggers = rudder, right stick
+looks, bumpers = throttle), sticks (T.16000M, X52, Extreme 3D...: twist =
+rudder, slider / Z = throttle, hat = glance), throttles (TCA quadrant, X56:
+per-engine levers), pedals (rudder + toe brakes) — saved per device in the
+settings file. **Settings › Controls**: bind any axis or button by moving /
+pressing it, deadzone, response curve, sensitivity, invert and calibration per
+axis with a live response plot, conflict warnings, per-device enable / reset,
+mouse yoke and head-look options. Analog axes drive the controls directly
+(keys keep their smoothing); levers apply when moved; automation is only
+disconnected when an input moves clearly away from where it was when the
+autopilot / bot took over. `skyward --controllers` lists devices and prints
+their inputs; `SKYWARD_FAKE_INPUT=xbox,x52,t16000m,tca,pedals` adds virtual
+devices (tests, screenshots).
 
 ### Auto flight (watch mode)
 Tick **Auto flight (watch)** in the menu, `--watch`, or press **J** in flight.
@@ -228,6 +249,21 @@ keeps sim time on wall time), with the physics pose interpolated between
 120 Hz steps — even motion at any refresh rate. `--vsync off` or Settings ›
 Display switches to mailbox / immediate for the lowest latency.
 
+## Tests and CI
+
+`cargo test` runs the unit tests (flight model, audio, input mapping...).
+GitHub Actions (`.github/workflows/ci.yml`) runs rustfmt on the formatted paths
+(`scripts/fmt-paths.txt`), `clippy -D warnings`, the tests and a release build
+on Linux, plus a wasm32 check; `render.yml` is a nightly software-Vulkan
+(lavapipe) smoke render.
+
+Golden regression (needs a GPU and the tile cache, so it runs locally):
+`scripts/regress.sh` renders the scenes in `tests/goldens/scenes.txt`
+(fixed time / date / METAR, no live data) and compares them with the committed
+PNGs perceptually (CIELAB ΔE + SSIM) and the audio renders by spectral distance
+(`tools/regress`); diffs and heat-maps land in `target/regress/`. After an
+intended visual or sound change: `scripts/regress.sh --update [scene...]`.
+
 ## Floating origin
 
 Positions are f32 metres in a local frame (+X east, −Z north, +Y up), an
@@ -279,7 +315,8 @@ A shift costs well under 0.1 ms.
 | `src/sim.rs` | session, controls, autopilot glue, runway choice, cameras (incl. cinematic) |
 | `src/bot.rs` | auto-flight bot: glider soaring + powered take-off / tour / landing |
 | `src/autopilot.rs` | heading / altitude / V/S / speed autopilot |
-| `src/ui/` | interface: design system (`mod.rs`), instruments (`gauges.rs`, `glass.rs`, `hudsym.rs`), moving map (`mapdata.rs` worker side, `map.rs`, MSAA `canvas.rs`), menus (`menus.rs`, `overview.rs` world map), in-flight UI (`flight.rs`), settings, toasts |
+| `src/ui/` | interface: design system (`mod.rs`), instruments (`gauges.rs`, `glass.rs`, `hudsym.rs`), moving map (`mapdata.rs` worker side, `map.rs`, MSAA `canvas.rs`), menus (`menus.rs`, `overview.rs` world map), in-flight UI (`flight.rs`), settings (`controls.rs`: bindings / devices), toasts |
+| `src/input/` | game controllers (gilrs + Linux evdev), bindings, default layouts, curves, head-look / analog glue (`sim_glue.rs`) |
 | `src/airports.rs` | OurAirports download / cache / search, runways in the world frame, METAR lookup |
 | `src/startpos.rs` | departure-screen starts (runway end, final, apron, air) |
 

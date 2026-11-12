@@ -44,7 +44,7 @@ pub fn button(ui: &mut Ui, rect: Rect, id: impl std::hash::Hash + std::fmt::Debu
 }
 
 /// Toggle chip; returns true when clicked.
-fn chip_btn(ui: &mut Ui, rect: Rect, id: impl std::hash::Hash + std::fmt::Debug, text: &str, on: bool) -> bool {
+pub(super) fn chip_btn(ui: &mut Ui, rect: Rect, id: impl std::hash::Hash + std::fmt::Debug, text: &str, on: bool) -> bool {
     let r = ui.interact(rect, ui.id().with(id), Sense::click());
     let p = ui.painter();
     let fill = if on { pal::ACCENT_DEEP } else if r.hovered() { pal::RAISED_HI } else { pal::RAISED };
@@ -57,7 +57,7 @@ fn chip_btn(ui: &mut Ui, rect: Rect, id: impl std::hash::Hash + std::fmt::Debug,
 }
 
 /// Segmented control; returns the newly clicked index.
-fn segmented(ui: &mut Ui, rect: Rect, id: &str, items: &[&str], sel: usize) -> Option<usize> {
+pub(super) fn segmented(ui: &mut Ui, rect: Rect, id: &str, items: &[&str], sel: usize) -> Option<usize> {
     let p = ui.painter().clone();
     p.rect_filled(rect, sp::R_CTRL, Color32::from_rgb(9, 11, 15));
     let w = rect.width() / items.len() as f32;
@@ -1349,8 +1349,9 @@ pub fn settings(ui: &mut Ui, st: &mut UiState, in_flight: bool) {
     let screen = ui.ctx().content_rect();
     let p = ui.painter().clone();
     backdrop(&p, screen, if in_flight { 0.85 } else { 1.0 });
-    let w = 760.0f32.min(screen.width() - 80.0);
-    let card = Rect::from_center_size(screen.center(), Vec2::new(w, (screen.height() - 120.0).min(760.0)));
+    // Controls needs room for its binding table.
+    let w = if st.settings_tab == 3 { 960.0 } else { 760.0f32 }.min(screen.width() - 80.0);
+    let card = Rect::from_center_size(screen.center(), Vec2::new(w, (screen.height() - 120.0).min(if st.settings_tab == 3 { 820.0 } else { 760.0 })));
     panel_with(&p, card, sp::R_CARD, pal::PANEL_SOLID);
     let x = card.min.x + 32.0;
     p.text(Pos2::new(x, card.min.y + 26.0), Align2::LEFT_TOP, "Settings", f_display(28.0), pal::TEXT);
@@ -1450,31 +1451,18 @@ pub fn settings(ui: &mut Ui, st: &mut UiState, in_flight: bool) {
             p.text(Pos2::new(x, y + 6.0), Align2::LEFT_TOP, st.audio_status.clone(), f_ui(12.0), pal::TEXT3);
         }
         _ => {
-            let def = st.defs[st.plan.aircraft.min(st.defs.len() - 1)].clone();
-            let rows = super::flight::control_rows(&def);
-            ui.scope_builder(UiBuilder::new().max_rect(body), |ui| {
-                egui::ScrollArea::vertical().id_salt("controls").auto_shrink([false, false]).show(ui, |ui| {
-                    let mut group = "";
-                    for (g, k, d) in rows {
-                        if g != group {
-                            group = g;
-                            ui.add_space(6.0);
-                            ui.label(RichText::new(g.to_uppercase()).font(f_inst_b(11.0)).color(pal::ACCENT));
-                        }
-                        ui.horizontal(|ui| {
-                            ui.add_sized([200.0, 22.0], egui::Label::new(RichText::new(k).font(f_mono(13.0)).color(pal::TEXT)));
-                            ui.label(RichText::new(d).font(f_ui(13.5)).color(pal::TEXT2));
-                        });
-                    }
-                });
-            });
+            // Bindings, devices, mouse (ui/controls.rs).
+            let foot = Rect::from_min_size(Pos2::new(x, card.max.y - 64.0), Vec2::new(w - 240.0, 44.0));
+            super::controls::page(ui, st, body, foot);
         }
     }
     if st.settings != s0 {
         st.settings_dirty = true;
     }
     let fy = card.max.y - 64.0;
-    if button(ui, Rect::from_min_size(Pos2::new(card.max.x - 172.0, fy), Vec2::new(140.0, 44.0)), "done", "Done", Btn::Primary, true).clicked() || esc(ui) {
+    if button(ui, Rect::from_min_size(Pos2::new(card.max.x - 172.0, fy), Vec2::new(140.0, 44.0)), "done", "Done", Btn::Primary, true).clicked() || (esc(ui) && !super::controls::swallow_esc(st)) {
+        st.input.listen = None;
+        st.input.calib = None;
         st.actions.push(Action::Back);
     }
 }

@@ -10,6 +10,7 @@
 //! Auto flight: skyward [--bot | --watch] ...        (hand the aircraft to the AI pilot; --watch adds the cinematic camera)
 //! Soak test:  skyward --shot out.png --bot --soak --seconds 1800 [--warp 8] [--shot-every 300] [--weather scattered]
 //! Weather:    live METAR + real local time by default; --no-live, --metar "EGLC 121450Z 22012KT 3000 RA BKN008 09/08 Q1002", --time HH.MM, --date MM-DD, --weather clear|few|scattered|broken|overcast
+//! Controllers: --controllers [SECONDS] lists devices and prints their inputs (SKYWARD_FAKE_INPUT=xbox,x52,pedals,tca adds virtual ones)
 //! Sound:      --mute (N toggles in flight; volumes in Settings › Sound); offline: --audio-render out.wav --seconds S [--audio-script "2:cam=cockpit,9:gear"] [--audio-until Final]
 //! Display:    --vsync on|off (default on: FIFO present, smoothed frame step); SKYWARD_FRAME_LOG=file logs per-frame timing
 
@@ -31,6 +32,7 @@ mod models;
 mod mvt;
 mod osm;
 mod scene;
+mod input;
 mod sim;
 mod startpos;
 mod tiles;
@@ -998,6 +1000,16 @@ fn headless(args: Args) -> Result<(), String> {
         None if args.menu => Screen::Aircraft,
         None => Screen::Flying,
     };
+    // Settings screenshots: SKYWARD_SETTINGS_TAB="3:0:pitch" (tab, Controls page, open axis);
+    // virtual controllers from SKYWARD_FAKE_INPUT (input/).
+    ui.st.input.add_fakes_from_env();
+    ui.st.input.update(&mut ui.st.settings.controls, 0.0);
+    if let Ok(t) = std::env::var("SKYWARD_SETTINGS_TAB") {
+        let mut it = t.split(':');
+        ui.st.settings_tab = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+        ui.st.controls_page = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+        ui.st.controls_axis = it.next().and_then(input::AxisAction::from_id).map(|a| (a, 0));
+    }
     let custom = args.start_at.clone().map(|spec| startpos::CustomStart { airport: ui.st.plan.airport.clone(), spec });
 
     // Load the start area + spawn.
@@ -1057,6 +1069,11 @@ fn headless(args: Args) -> Result<(), String> {
         let sim = s.sim.as_mut().unwrap();
         if !args.watch || std::env::args().any(|a| a == "--cam") {
             sim.cam = args.cam;
+        }
+        // Cockpit head-look for captures: SKYWARD_LOOK="yaw_deg,pitch_deg" (right / up positive).
+        if let Some(v) = std::env::var("SKYWARD_LOOK").ok().map(|s| s.split(',').filter_map(|x| x.trim().parse::<f32>().ok()).collect::<Vec<_>>()).filter(|v| v.len() == 2) {
+            sim.pilot.free = glam::vec2(v[0].to_radians(), v[1].to_radians());
+            sim.pilot.look = sim.pilot.free;
         }
         if let Some(z) = args.map_zoom {
             sim.map_zoom = z.min(sim::MAP_RANGES.len() - 1);
@@ -1844,47 +1861,50 @@ struct App {
     run: Option<Running>,
 }
 
-fn key_map(code: KeyCode) -> Option<Key> {
-    Some(match code {
-        KeyCode::ArrowUp | KeyCode::KeyW => Key::PitchDown,
-        KeyCode::ArrowDown | KeyCode::KeyS => Key::PitchUp,
-        KeyCode::ArrowLeft | KeyCode::KeyA => Key::RollLeft,
-        KeyCode::ArrowRight | KeyCode::KeyD => Key::RollRight,
-        KeyCode::KeyQ => Key::YawLeft,
-        KeyCode::KeyE => Key::YawRight,
-        KeyCode::ShiftLeft | KeyCode::ShiftRight | KeyCode::Equal | KeyCode::NumpadAdd | KeyCode::PageUp => Key::ThrottleUp,
-        KeyCode::ControlLeft | KeyCode::ControlRight | KeyCode::Minus | KeyCode::NumpadSubtract | KeyCode::PageDown => Key::ThrottleDown,
-        KeyCode::KeyF => Key::FlapsDown,
-        KeyCode::KeyV => Key::FlapsUp,
-        KeyCode::KeyB | KeyCode::Space => Key::Brakes,
-        KeyCode::BracketLeft => Key::TrimDown,
-        KeyCode::BracketRight => Key::TrimUp,
-        KeyCode::KeyC => Key::Camera,
-        KeyCode::KeyR => Key::Reset,
-        KeyCode::KeyP => Key::Pause,
-        KeyCode::KeyM => Key::Map,
-        KeyCode::Comma => Key::MapZoomOut,
-        KeyCode::Period => Key::MapZoomIn,
-        KeyCode::KeyH | KeyCode::F1 => Key::Help,
-        KeyCode::Tab => Key::Menu,
-        KeyCode::F12 => Key::Screenshot,
-        KeyCode::KeyX => Key::TimeWarp,
-        KeyCode::KeyG => Key::Gear,
-        KeyCode::Slash => Key::SpoilerOut,
-        KeyCode::Backslash | KeyCode::Quote => Key::SpoilerIn,
-        KeyCode::KeyT => Key::Reverse,
-        KeyCode::KeyZ => Key::ApToggle,
-        KeyCode::Insert => Key::ApHdgLeft,
-        KeyCode::Delete => Key::ApHdgRight,
-        KeyCode::Home => Key::ApAltUp,
-        KeyCode::End => Key::ApAltDown,
-        KeyCode::Digit9 => Key::ApSpdDown,
-        KeyCode::Digit0 => Key::ApSpdUp,
-        KeyCode::KeyK => Key::EngineFail,
-        KeyCode::KeyJ => Key::AutoFlight,
-        KeyCode::KeyL => Key::LandingLights,
-        _ => return None,
-    })
+/// Interface-level actions (keyboard or controller); true when handled here.
+fn ui_action(r: &mut Running, k: Key, flying: bool) -> bool {
+    let st = &mut r.ui.st;
+    match k {
+        Key::Menu if flying => {
+            match st.screen {
+                Screen::Flying => st.go(Screen::Pause),
+                Screen::Pause => st.go(Screen::Flying),
+                _ => return true,
+            }
+            r.ui.audio_clicks += 1;
+            r.input.held.clear();
+        }
+        Key::Mute => {
+            st.settings.sound.muted = !st.settings.sound.muted;
+            st.settings_dirty = true;
+            let m = st.settings.sound.muted;
+            st.toasts.push(ui::toast::Kind::Info, if m { "Sound muted" } else { "Sound on" }, "", 1.6);
+        }
+        _ if st.screen != Screen::Flying => return !matches!(k, Key::Menu),
+        Key::Map => st.map.mode = st.map.mode.next(),
+        Key::Instruments => {
+            st.settings.hud = st.settings.hud.next();
+            st.settings_dirty = true;
+            let n = st.settings.hud.name();
+            st.toasts.push(ui::toast::Kind::Info, format!("Instruments: {n}"), "", 1.4);
+        }
+        Key::WeatherPanel => st.show_wx = !st.show_wx,
+        Key::MouseYoke => {
+            if !st.settings.controls.mouse.yoke {
+                st.toasts.push(ui::toast::Kind::Info, "Mouse yoke is off", "Turn it on in Settings › Controls › Mouse & view", 3.0);
+            } else {
+                st.input.mouse_yoke_on = !st.input.mouse_yoke_on;
+                let on = st.input.mouse_yoke_on;
+                st.toasts.push(ui::toast::Kind::Info, if on { "Mouse yoke on" } else { "Mouse yoke off" }, if on { "The cursor's offset from the centre is the stick" } else { "" }, 2.4);
+            }
+        }
+        Key::MapZoomIn | Key::MapZoomOut => {
+            st.map_zoom_override = false;
+            return false;
+        }
+        _ => return false,
+    }
+    true
 }
 
 impl ApplicationHandler for App {
@@ -1948,6 +1968,10 @@ impl ApplicationHandler for App {
         let applied = settings.clone();
         let mut ui = Ui::new(&gpu.device, format, settings);
         let egui_state = egui_winit::State::new(ui.ctx.clone(), egui::ViewportId::ROOT, &window, Some(window.scale_factor() as f32), None, None);
+        // Game controllers (hot-plug), plus virtual ones for testing (SKYWARD_FAKE_INPUT).
+        ui.st.input.start();
+        ui.st.input.add_fakes_from_env();
+        eprintln!("{}", ui.st.input.status);
         ui.st.db = db.clone();
         if let Some(m) = self.args.hud_mode {
             ui.st.settings.hud = m;
@@ -2027,57 +2051,38 @@ impl ApplicationHandler for App {
                 if let PhysicalKey::Code(code) = ke.physical_key {
                     let pressed = ke.state == ElementState::Pressed && !ke.repeat;
                     let flying = r.session.as_ref().is_some_and(|s| s.sim.is_some());
-                    if pressed && (code == KeyCode::Escape || code == KeyCode::Tab) && flying {
-                        match screen {
-                            Screen::Flying => r.ui.st.go(Screen::Pause),
-                            Screen::Pause => r.ui.st.go(Screen::Flying),
-                            _ => {}
+                    // Settings › Controls waiting for a key (Esc cancels).
+                    if let Some(input::Listen::Key(k)) = r.ui.st.input.listen {
+                        if pressed {
+                            r.ui.st.input.listen = None;
+                            if code != KeyCode::Escape {
+                                r.ui.st.input.captured = Some(input::Captured::Key(k, code));
+                            }
                         }
-                        r.ui.audio_clicks += 1;
-                        r.input.held.clear();
                         return;
                     }
-                    if pressed && code == KeyCode::KeyN && !typing {
-                        r.ui.st.settings.sound.muted = !r.ui.st.settings.sound.muted;
-                        r.ui.st.settings_dirty = true;
-                        let m = r.ui.st.settings.sound.muted;
-                        r.ui.st.toasts.push(ui::toast::Kind::Info, if m { "Sound muted" } else { "Sound on" }, "", 1.6);
+                    if pressed && code == KeyCode::Escape && flying {
+                        ui_action(r, Key::Menu, flying);
+                        return;
                     }
+                    // Bound actions (input/: rebindable in Settings › Controls).
+                    let keys = r.ui.st.settings.controls.actions_for_key(code);
                     if screen != Screen::Flying || typing {
                         if ke.state == ElementState::Released {
-                            if let Some(k) = key_map(code) {
-                                r.input.held.remove(&k);
+                            for k in &keys {
+                                r.input.held.remove(k);
+                            }
+                        } else if pressed && !typing {
+                            for k in keys.iter().filter(|k| matches!(k, Key::Menu | Key::Mute)) {
+                                ui_action(r, *k, flying);
                             }
                         }
                         return;
                     }
-                    if pressed {
-                        match code {
-                            KeyCode::KeyM => {
-                                r.ui.st.map.mode = r.ui.st.map.mode.next();
-                                return;
-                            }
-                            KeyCode::KeyU => {
-                                r.ui.st.settings.hud = r.ui.st.settings.hud.next();
-                                r.ui.st.settings_dirty = true;
-                                let n = r.ui.st.settings.hud.name();
-                                r.ui.st.toasts.push(ui::toast::Kind::Info, format!("Instruments: {n}"), "", 1.4);
-                                return;
-                            }
-                            KeyCode::KeyI => {
-                                r.ui.st.show_wx = !r.ui.st.show_wx;
-                                return;
-                            }
-                            _ => {}
-                        }
-                    }
-                    if let Some(k) = key_map(code) {
+                    for k in keys {
                         match ke.state {
                             ElementState::Pressed => {
-                                if !ke.repeat || k.repeats() {
-                                    if k == Key::MapZoomIn || k == Key::MapZoomOut {
-                                        r.ui.st.map_zoom_override = false;
-                                    }
+                                if (!ke.repeat || k.repeats()) && !ui_action(r, k, flying) {
                                     r.input.pressed.push(k);
                                 }
                                 r.input.held.insert(k);
@@ -2119,6 +2124,42 @@ impl ApplicationHandler for App {
             r.window.request_redraw();
         }
     }
+}
+
+/// Game controllers and the mouse yoke → this frame's input (input/).
+fn poll_controllers(r: &mut Running, dt: f32) {
+    let st = &mut r.ui.st;
+    if st.input.update(&mut st.settings.controls, dt) {
+        st.settings_dirty = true;
+    }
+    for n in std::mem::take(&mut st.input.arrived) {
+        let p = st.input.devices.iter().find(|d| d.info.name == n).and_then(|d| st.settings.controls.profile(&d.info.key)).map(|p| p.preset.clone()).unwrap_or_default();
+        st.toasts.push(ui::toast::Kind::Info, format!("{n} connected"), format!("{p} · Settings › Controls to change"), 3.5);
+    }
+    for n in std::mem::take(&mut st.input.left) {
+        st.toasts.push(ui::toast::Kind::Warn, format!("{n} disconnected"), "", 3.5);
+    }
+    // Mouse yoke: the cursor's offset from the window centre (−1..1, +y down = pull).
+    let flying = st.screen == Screen::Flying && !r.ui.ctx.is_pointer_over_egui();
+    st.input.mouse_offset = match (flying, r.last_cursor) {
+        (true, Some((x, y))) => {
+            let (w, h) = (r.config.width as f64, r.config.height as f64);
+            let s = 0.5 * w.min(h);
+            Some((((x - 0.5 * w) / s).clamp(-1.0, 1.0) as f32, ((y - 0.5 * h) / s).clamp(-1.0, 1.0) as f32))
+        }
+        _ => None,
+    };
+    let in_flight = r.session.as_ref().is_some_and(|s| s.sim.is_some());
+    for k in r.ui.st.input.take_pressed() {
+        if !ui_action(r, k, in_flight) && r.ui.st.screen == Screen::Flying {
+            r.input.pressed.push(k);
+        }
+    }
+    let st = &r.ui.st;
+    r.input.pad_held = if st.screen == Screen::Flying { st.input.held.clone() } else { Default::default() };
+    r.input.analog = st.input.analog;
+    r.input.mouse = st.settings.controls.mouse.clone();
+    r.input.dragging = r.right_drag;
 }
 
 impl App {
@@ -2223,6 +2264,7 @@ impl App {
             }
         }
         r.ui.st.toasts.tick(dt);
+        poll_controllers(r, dt);
         let screen = r.ui.st.screen;
         let mut notice: Option<String> = None;
         if let Some(s) = r.session.as_mut() {
@@ -2480,6 +2522,11 @@ fn audio_render(args: Args) -> Result<(), String> {
 
 
 fn main() {
+    // `--controllers [SECONDS]`: list game controllers and print their inputs (input/).
+    if let Some(i) = std::env::args().position(|a| a == "--controllers") {
+        input::probe(std::env::args().nth(i + 1).and_then(|s| s.parse().ok()).unwrap_or(10.0));
+        return;
+    }
     let args = parse_args();
     if args.audio_render.is_some() {
         if let Err(e) = audio_render(args) {

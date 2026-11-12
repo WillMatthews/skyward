@@ -1,0 +1,58 @@
+# Software-Vulkan (lavapipe) smoke render: the headless renderer starts, streams
+# scenery and writes a non-trivial picture without a GPU. Not a golden
+# comparison — CI fetches live map tiles, so pixels drift with the map data;
+# goldens run locally (scripts/regress.sh). Nightly and on demand only, since
+# it depends on external tile / airport services.
+name: Render smoke (lavapipe)
+
+on:
+  # Nightly schedule disabled to save Actions minutes on the private repo;
+  # re-enable with:  schedule: [{cron: "30 3 * * *"}]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_VERSION: "1.98.1"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System libraries + Mesa lavapipe
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev libudev-dev mesa-vulkan-drivers
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: build
+        run: cargo build --locked --release
+
+      - name: headless shot + audio render on lavapipe
+        env:
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
+          SKYWARD_FAKE_INPUT: xbox,pedals
+          SKYWARD_SETTINGS_TAB: "3:0:pitch"
+        run: |
+          mkdir -p out
+          M='EGLC 151350Z 24008KT 9999 SCT040 18/09 Q1018'
+          target/release/skyward --shot out/chase.png --width 640 --height 360 --no-live --airport EGLC --aircraft kestrel --time 14.00 --date 06-15 --metar "$M"
+          target/release/skyward --shot out/controls.png --width 1280 --height 800 --no-live --airport EGLC --menu-screen settings --time 14.00 --metar "$M"
+          target/release/skyward --audio-render out/piston.wav --no-live --airport EGLC --aircraft kestrel --throttle 1.0 --seconds 4 --metar "$M"
+          for f in out/chase.png out/controls.png out/piston.wav; do
+            s=$(stat -c %s "$f"); echo "$f: $s bytes"
+            [ "$s" -gt 50000 ] || { echo "$f looks empty"; exit 1; }
+          done
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: render-smoke
+          path: out/

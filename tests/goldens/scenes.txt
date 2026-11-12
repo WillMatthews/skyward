@@ -1,0 +1,15 @@
+# Golden regression scenes (scripts/regress.sh). One per line:
+#   name | image|audio | ENV=VALUE ... | skyward arguments | comparison options
+# Images: headless --shot at 960x540 with live weather / time off and a fixed
+# METAR, so only code changes move the pixels (and the tile cache: run from the
+# repository root with cache/ populated). Audio: --audio-render, bit-exact
+# today; the tolerance absorbs harmless DSP changes.
+chase_day      | image | | --airport EGLC --aircraft kestrel --cam chase --time 14.00 --date 06-15 --metar "EGLC 151350Z 24008KT 9999 SCT040 18/09 Q1018" |
+cockpit_dusk   | image | | --airport EGLC --aircraft kestrel --cam cockpit --time 20.40 --date 06-15 --metar "EGLC 151950Z 24006KT 9999 FEW050 16/09 Q1018" |
+cockpit_look   | image | SKYWARD_LOOK=-60,10 | --airport EGLC --aircraft kestrel --cam cockpit --time 11.00 --date 06-15 --metar "EGLC 151050Z 24008KT 9999 SCT045 17/09 Q1018" |
+night_city     | image | | --airport EGLC --aircraft lancer --start city --heading 270 --cam chase --time 22.30 --date 01-15 --metar "EGLC 152220Z 27010KT 9999 FEW030 05/01 Q1012" |
+rain_low_cloud | image | | --airport EGLC --aircraft aerolink --cam chase --time 13.00 --date 11-10 --metar "EGLC 101250Z 18014KT 3000 RA BKN008 OVC015 11/10 Q1003" |
+menu_main      | image | | --airport EGLC --aircraft kestrel --menu-screen main --time 14.00 --date 06-15 --metar "EGLC 151350Z 24008KT 9999 SCT040 18/09 Q1018" |
+menu_controls  | image | SKYWARD_FAKE_INPUT=xbox,x52,pedals,tca SKYWARD_SETTINGS_TAB=3:0:pitch | --airport EGLC --aircraft kestrel --menu-screen settings --time 14.00 --date 06-15 --metar "EGLC 151350Z 24008KT 9999 SCT040 18/09 Q1018" |
+audio_piston   | audio | | --airport EGLC --aircraft kestrel --cam chase --throttle 1.0 --seconds 6 --metar "EGLC 151350Z 24008KT 9999 SCT040 18/09 Q1018" |
+audio_jet      | audio | | --airport EGLC --aircraft meridian320 --cam cockpit --throttle 0.9 --seconds 6 --audio-script "3:gear" --metar "EGLC 151350Z 24008KT 9999 SCT040 18/09 Q1018" |

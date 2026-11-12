@@ -87,14 +87,16 @@ item lands; keep entries one line.
 - [x] Menus: aircraft cards, conditions, settings, pause, loading, toasts; frame pacing fix (M)
 - [ ] **P1** UI follow-ups: ND label overlapping heading scale; airport-diagram backdrop detail (higher-zoom tiles); apron/parking data; UI CPU cost ~4 ms in dense ND
 - [ ] **P1** Bot uses displaced thresholds; A320 bot occasional go-around on stable final
-- [ ] **P1** Input: gamepad, joystick/HOTAS, rudder pedals, key rebinding, sensitivity/curves
+- [x] **P1** Input: gamepad, joystick/HOTAS, rudder pedals, quadrants (gilrs + evdev, hot-plug), rebinding UI, curves/deadzone/calibration, mouse yoke, head-look (P)
+- [ ] **P2** Input follow-ups: differential toe brakes + per-engine throttles need `Controls` fields; help overlay shows default keys not bindings; menu navigation by gamepad; mouse-yoke reticle; verify defaults on real X52/X56/TCA/Windows
 - [ ] **P1** Accessibility: UI scale, colour-blind-safe palettes, subtitles for callouts/ATC
 - [ ] **P2** Localisation-ready strings
 
 ## 7. Platform, quality & release
 - [x] Private repo `WillMatthews/skyward`, checkpoint commits pushed as tracks land
 - [ ] **P0** WASM/WebGPU build + GitHub Pages workflow, GPL licence + credits (G) — goes live when the owner makes the repo public (owner's call only)
-- [ ] **P1** CI: build + tests + clippy on push; screenshot regression tests (headless `--shot` golden images); audio render regression
+- [x] **P1** CI: fmt (formatted paths) + clippy -D warnings + tests + release build + wasm32 check on push; lavapipe smoke render nightly; local golden image/audio regression `scripts/regress.sh` (P)
+- [ ] **P2** CI follow-ups: one-shot `cargo fmt` of the tree when no track is active → `cargo fmt --check`; burn down the crate-wide clippy allows in Cargo.toml; regenerate goldens after N/T land
 - [ ] **P1** Native release packages (Linux AppImage/Flatpak, Windows, macOS)
 - [ ] **P1** Performance budgets enforced in CI (GPU timing on soak runs)
 - [ ] **P1** Licence/attribution audit for every asset and data source (OSM/OpenMapTiles, FlightGear, OurAirports, fonts, audio)
@@ -115,4 +117,7 @@ item lands; keep entries one line.
 | K2 | Sample-based audio, supersonic, crash sounds | ✅ |
 | L | Structure/flex/crashes + supersonic/atmospheric VFX | ⏳ after N |
 | G | WASM + GitHub Pages workflow (repo stays private until owner flips it) | ⏳ last of current batch |
-| next | Terrain elevation, landmarks, airports detail, 3D cockpits, input devices, CI | ⏳ to schedule |
+| P | Input devices (gilrs/evdev, rebinding, curves, head-look) + CI/goldens | ✅ |
+| T | Terrain elevation + landmarks | 🟡 running |
+| L | (see above) | 🟡 running |
+| next | Airports detail, live 3D cockpit instruments, ATC, missions, release packaging | ⏳ to schedule |

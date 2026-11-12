@@ -1,0 +1,14 @@
+[package]
+name = "regress"
+version = "0.1.0"
+edition = "2024"
+description = "Golden-file comparison for Skyward's regression scenes: perceptual image distance (CIELAB dE + SSIM) and audio spectral distance"
+license = "GPL-2.0-or-later"
+publish = false
+
+[dependencies]
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+hound = "3.5.1"
+
+[profile.dev]
+opt-level = 2
