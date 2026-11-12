@@ -1,0 +1,42 @@
+{
+ "props": {},
+ "channels": [],
+ "light_models": [
+  "procedural_light",
+  "Effects/lights/",
+  "[Ll]ights?/.*(nav|beacon|strobe|landing|taxi)",
+  "/(nav|beacon|strobe)"
+ ],
+ "max_tex": 2048,
+ "interior_max_tex": 1024,
+ "id": "lancer",
+ "name": "General Dynamics F-16C Fighting Falcon",
+ "fg_name": "f16",
+ "model": "Models/F-16.xml",
+ "fdm": {
+  "jsbsim": "f16b52.xml"
+ },
+ "exclude_models": [
+  "Armament",
+  "Pilots",
+  "Ramp",
+  "chocks",
+  "Effects/",
+  "pylon",
+  "irst",
+  "Stores",
+  "stores",
+  "Human",
+  "walker",
+  "(?i)pilot_externalview|/Pilots/|pilot\\.xml"
+ ],
+ "interior_models": [
+  "Cockpit"
+ ],
+ "fuel_kg": 2600,
+ "eye_model": [
+  -4.05,
+  0,
+  0.8
+ ]
+}

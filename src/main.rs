@@ -15,13 +15,17 @@
 
 mod airports;
 mod atmosphere;
+mod aircraft_asset;
+mod assets;
 mod audio;
 mod autopilot;
 mod bot;
 mod clouds;
 mod flight;
 mod gfx;
+mod gfx_aircraft;
 mod hud;
+mod jsbsim;
 mod lights;
 mod models;
 mod mvt;
@@ -210,7 +214,7 @@ fn parse_args() -> Args {
             }
             "--aircraft" => {
                 let v = next(&mut i);
-                a.aircraft = flight::catalogue().iter().position(|d| d.id == v).unwrap_or(0);
+                a.aircraft = flight::index_of(&v).unwrap_or(0);
                 a.aircraft_given = true;
             }
             "--start" => a.start = Start::parse(&next(&mut i)).unwrap_or(Start::Runway),
@@ -854,6 +858,10 @@ fn render_thumbs(gpu: &Gpu, renderer: &mut Renderer, ui: &mut Ui, s: &Session, f
         let d = fv.eye - eye;
         for v in &mut dynm.verts {
             v.pos = (Vec3::from(v.pos) + d).into();
+        }
+        let mut fv = fv;
+        if let Some(af) = fv.aircraft.as_mut() {
+            af.shift(d);
         }
         let fv = FrameView { eye, view: glam::camera::rh::view::look_at_mat4(eye, pos, Vec3::Y), fov_y: 38f32.to_radians(), ..fv };
         renderer.reset_history();

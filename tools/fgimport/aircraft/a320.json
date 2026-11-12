@@ -1,0 +1,42 @@
+{
+ "props": {},
+ "channels": [],
+ "light_models": [
+  "procedural_light",
+  "Effects/lights/",
+  "[Ll]ights?/.*(nav|beacon|strobe|landing|taxi)",
+  "/(nav|beacon|strobe)"
+ ],
+ "max_tex": 2048,
+ "interior_max_tex": 1024,
+ "id": "meridian320",
+ "name": "Airbus A320-200",
+ "fg_name": "A320-family",
+ "model": "Models/A320-200-CFM.xml",
+ "fdm": {
+  "jsbsim": "FDE/A320-200-CFM.xml"
+ },
+ "exclude_models": [
+  "Effects/",
+  "Services",
+  "Pushback",
+  "Human",
+  "pilot",
+  "Pilot"
+ ],
+ "interior_models": [
+  "FlightDeck",
+  "Instruments",
+  "Cabin",
+  "Interior"
+ ],
+ "textures": {
+  "Fuse-Main.png": "Skyward/fuselage-white.png",
+  "engine-CFM56.png": "Models/Liveries/CFM/2k/CFM56-white.png"
+ },
+ "eye_body": [
+  0.55,
+  1.15,
+  13.55
+ ]
+}

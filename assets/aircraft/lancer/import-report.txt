@@ -1,0 +1,72 @@
+"lancer": 199 nodes (198 animated out of 225), 205 materials, 68 textures (5.0 MB), 334 chunks
+triangles: exterior 20815, interior 96546; vertices 103346; model.skac 1.7 MB; radius 13.1 m
+eye: Some(Vec3(0.0, 1.0714585, 4.1639924))
+lights: 7
+channels used: brakes ctl_aileron ctl_elevator ctl_gear ctl_rudder ctl_trim elevator eng0_n1 eng0_n2 eng0_running flaps gear0_comp_norm gear1_comp_norm gear2_comp_norm gear_pos heading_deg ias_kt landing_light pitch_deg roll_deg rudder slip spoilers turn_rate
+animation types: [("knob", 178), ("material", 102), ("noshadow", 8), ("pick", 112), ("range", 2), ("rotate", 159), ("scale", 4), ("select", 209), ("spin", 5), ("textranslate", 14), ("translate", 82)]
+unmapped properties (count):
+   119 controls/test/test-panel/mal-ind-lts
+    75 sim/variant-id
+    65 sim/multiplay/generic/float
+    29 controls/lighting/lighting-panel/mal-ind-lts-brightness
+    18 fdm/jsbsim/elec/bus/batt-2
+    17 controls/lighting/lighting-panel/pri-inst-pnl
+    13 fdm/jsbsim/elec/bus/emergency-ac-2
+    12 sim/rendering/shaders/skydome
+    12 controls/lighting/lighting-panel/flood-inst-pnl
+    11 fdm/jsbsim/elec/bus/batt-1
+    10 fdm/jsbsim/elec/bus/emergency-dc-1
+    10 f16/avionics/power-ufc-warm
+    10 controls/MFD[2]/button-pressed
+    10 controls/MFD[1]/button-pressed
+    10 controls/MFD/button-pressed
+     7 sim/model/f16/controls/navigation/instrument-mode-panel/mode/rotary-switch-knob
+     7 sim/current-view/name
+     6 fdm/jsbsim/elec/bus/emergency-ac-1
+     5 sim/multiplay/generic/short[5]
+     4 systems/static/serviceable
+     4 sim/multiplay/generic/int[9]
+     4 sim/current-view/internal
+     4 instrumentation/heading-indicator/heading-bug-deg
+     4 fdm/jsbsim/fcs/fly-by-wire/pitch/alpha-indicated
+     4 f16/avionics/mfd-l-brt
+     4 f16/avionics/hud-basic
+     3 sim/rendering/rembrandt/enabled
+     3 instrumentation/marker-beacon/outer
+     3 instrumentation/marker-beacon/middle
+     3 instrumentation/marker-beacon/inner
+     3 instrumentation/clock/indicated-sec
+     3 instrumentation/attitude-indicator[2]/indicated-roll-deg
+     3 fdm/jsbsim/elec/sources/epu-cmd
+     3 fdm/jsbsim/elec/bus/ess-ac
+     3 f16/fcs/le-flaps-switch
+     3 f16/fail/servo-tail-switch
+     3 f16/fail/servo-flaperon-switch
+     3 f16/ews/ew-rwr-switch
+     3 f16/ews/ew-mode-knob
+     3 f16/ejected
+     3 f16/avionics/power-mfd
+     3 controls/lighting/lighting-panel/console-primary
+     3 controls/lighting/ar-nws
+     2 sim/variant-engine
+     2 sim/multiplay/generic/int[10]
+     2 sim/multiplay/generic/bool[49]
+     2 sim/multiplay/generic/bool[47]
+     2 sim/multiplay/generic/bool[46]
+     2 sim/multiplay/generic/bool[43]
+     2 sim/multiplay/generic/bool[42]
+     2 sim/multiplay/generic/bool[41]
+     2 sim/multiplay/generic/bool[36]
+     2 sim/failure-manager/controls/flight/elevator/serviceable
+     2 sim/failure-manager/controls/flight/aileron/serviceable
+     2 instrumentation/tfs/aft-not-engaged
+     2 instrumentation/nav/radials/selected-deg-knob
+     2 instrumentation/nav/radials/selected-deg
+     2 instrumentation/nav/in-range
+     2 instrumentation/nav/gs-needle-deflection
+     2 fdm/jsbsim/systems/hydraulics/sysb-psi
+log:
+  missing model file /Aircraft/Instruments-3d/altimeter/altimeter.ac (from Models/Cockpit/Instruments/altimeter.xml)
+  n/src/f16/Models/Cockpit/Main/panels_mlu_right-console.ac: EOF before kid
+  skip external/missing submodel Models/Airport/Pushback/Military.xml
+  skip external/missing submodel Aircraft/Generic/marker.xml

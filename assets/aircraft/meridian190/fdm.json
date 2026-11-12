@@ -1,0 +1,174 @@
+{
+  "aerorp_body": [
+    -0.0,
+    0.044915661215782166,
+    -0.797082245349884
+  ],
+  "cg_structural_m": [
+    -0.797082245349884,
+    0.0,
+    -0.044915661215782166
+  ],
+  "chord_m": 5.440680027008057,
+  "contacts": [
+    {
+      "brake_group": "NONE",
+      "damping_n_s_m": 145939.0,
+      "name": "NOSE_GEAR",
+      "pos": [
+        -0.0,
+        -2.2368171215057373,
+        10.77795124053955
+      ],
+      "retractable": 1.0,
+      "spring_n_m": 364847.5,
+      "static_friction": 1.5,
+      "steer_deg": 76.0,
+      "type": "BOGEY"
+    },
+    {
+      "brake_group": "LEFT",
+      "damping_n_s_m": 350253.59375,
+      "name": "LEFT_MAIN",
+      "pos": [
+        2.571953296661377,
+        -2.336893081665039,
+        -2.069622278213501
+      ],
+      "retractable": 1.0,
+      "spring_n_m": 700507.1875,
+      "static_friction": 0.4000000059604645,
+      "steer_deg": 0.0,
+      "type": "BOGEY"
+    },
+    {
+      "brake_group": "RIGHT",
+      "damping_n_s_m": 350253.59375,
+      "name": "RIGHT_MAIN",
+      "pos": [
+        -2.571953296661377,
+        -2.336893081665039,
+        -2.069622278213501
+      ],
+      "retractable": 1.0,
+      "spring_n_m": 700507.1875,
+      "static_friction": 0.4000000059604645,
+      "steer_deg": 0.0,
+      "type": "BOGEY"
+    },
+    {
+      "brake_group": "NONE",
+      "damping_n_s_m": 145939.0,
+      "name": "LEFT_WING_TIP",
+      "pos": [
+        12.469470024108887,
+        0.31517165899276733,
+        -6.033038139343262
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 2918780.0,
+      "static_friction": 0.8999999761581421,
+      "steer_deg": 0.0,
+      "type": "STRUCTURE"
+    },
+    {
+      "brake_group": "NONE",
+      "damping_n_s_m": 145939.0,
+      "name": "RIGHT_WING_TIP",
+      "pos": [
+        -12.469470024108887,
+        0.31517165899276733,
+        -6.033038139343262
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 2918780.0,
+      "static_friction": 0.8999999761581421,
+      "steer_deg": 0.0,
+      "type": "STRUCTURE"
+    },
+    {
+      "brake_group": "NONE",
+      "damping_n_s_m": 145939.0,
+      "name": "TAIL_STRIKE",
+      "pos": [
+        -0.0,
+        1.2038958072662354,
+        -20.31088638305664
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 2918780.0,
+      "static_friction": 0.949999988079071,
+      "steer_deg": 0.0,
+      "type": "STRUCTURE"
+    },
+    {
+      "brake_group": "NONE",
+      "damping_n_s_m": 145939.0,
+      "name": "TAIL_STRIKE",
+      "pos": [
+        -0.0,
+        -0.6856390833854675,
+        15.929072380065918
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 2918780.0,
+      "static_friction": 0.949999988079071,
+      "steer_deg": 0.0,
+      "type": "STRUCTURE"
+    }
+  ],
+  "empty_cg_structural_m": [
+    -1.0667999982833862,
+    0.0,
+    0.0
+  ],
+  "empty_kg": 27837.0,
+  "engines": [
+    {
+      "file": "GE_CF34-10E-L",
+      "pos": [
+        4.003040313720703,
+        -1.0559203624725342,
+        1.62709379196167
+      ],
+      "thruster": "direct",
+      "thruster_pos": [
+        4.003040313720703,
+        -1.0559203624725342,
+        1.62709379196167
+      ]
+    },
+    {
+      "file": "GE_CF34-10E-R",
+      "pos": [
+        -4.003040313720703,
+        -1.0559203624725342,
+        1.62709379196167
+      ],
+      "thruster": "direct",
+      "thruster_pos": [
+        -4.003040313720703,
+        -1.0559203624725342,
+        1.62709379196167
+      ]
+    }
+  ],
+  "eyepoint_body": [
+    -0.0,
+    0.0738716572523117,
+    12.596083641052246
+  ],
+  "fuel_initial_kg": 4000.0,
+  "inertia_loaded_kg_m2": {
+    "pitch_iyy": 713656.3125,
+    "roll_ixx": 1036672.375,
+    "yaw_izz": 1072040.0
+  },
+  "ixx": 897551.5625,
+  "iyy": 677909.0,
+  "izz": 897551.5625,
+  "loaded_kg": 40000.29296875,
+  "pointmass_kg": 163.29312133789062,
+  "wing_area_m2": 92.52999877929688,
+  "wingspan_m": 28.727399826049805
+}

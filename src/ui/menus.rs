@@ -168,6 +168,7 @@ fn spec_lines(d: &AircraftDef) -> Vec<(&'static str, String)> {
     v.push(("Never exceed", if d.mmo > 0.0 { format!("{:.0} kt · M {:.2}", d.vne_kt, d.mmo) } else { format!("{:.0} kt", d.vne_kt) }));
     let (len, paved) = needs(d);
     v.push(("Runway", format!("{} m{}", thousands(len), if paved { " paved" } else { "" })));
+    v.push(("Model", if d.jsb.is_some() { "FlightGear · JSBSim aero".to_string() } else { "FlightGear · calibrated".to_string() }));
     v
 }
 

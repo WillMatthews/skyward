@@ -2196,7 +2196,7 @@ impl Powered {
                         } else {
                             self.ab_climb = false;
                         }
-                        spd = self.vapp + if def.category == Category::Airliner { 35.0 } else { 20.0 } * KT;
+                        spd = (self.vapp + if def.category == Category::Airliner { 35.0 } else { 20.0 } * KT).max(1.3 * def.stall_speed(ac.surfaces().flaps));
                         if self.low_pass {
                             spd = 300.0 * KT;
                             ctl.gear_down = false;
@@ -2415,7 +2415,7 @@ impl Powered {
                 let since = t - self.touch_t;
                 let tail = def.taildragger;
                 ctl.elevator = if tail {
-                    if g < 45.0 * KT { 1.0 } else { 0.4 }
+                    if g < 45.0 * KT { 1.0 } else if ias < def.vs0_kt * KT * 1.05 { 0.4 } else { 0.0 }
                 } else if def.category == Category::Airliner {
                     0.0
                 } else {

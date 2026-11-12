@@ -1,0 +1,33 @@
+{
+ "props": {},
+ "channels": [],
+ "light_models": [
+  "procedural_light",
+  "Effects/lights/",
+  "[Ll]ights?/.*(nav|beacon|strobe|landing|taxi)",
+  "/(nav|beacon|strobe)"
+ ],
+ "max_tex": 2048,
+ "interior_max_tex": 1024,
+ "id": "swift",
+ "name": "Schleicher ASK 21",
+ "fg_name": "ASK21",
+ "model": "Models/ask21.xml",
+ "fdm": {
+  "jsbsim": "ask21-jsb.xml"
+ },
+ "exclude_models": [
+  "Pilot",
+  "pilot",
+  "Human",
+  "walker",
+  "wingflex",
+  "Effects/"
+ ],
+ "interior_models": [
+  "[Cc]ockpit",
+  "Instruments",
+  "[Ii]nterior",
+  "[Pp]anel"
+ ]
+}

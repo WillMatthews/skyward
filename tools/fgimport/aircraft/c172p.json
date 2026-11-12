@@ -1,0 +1,88 @@
+{
+ "id": "kestrel",
+ "name": "Cessna 172P Skyhawk",
+ "fg_name": "c172p",
+ "model": "Models/c172p.xml",
+ "fdm": {
+  "jsbsim": "c172p.xml"
+ },
+ "eye_view": [
+  -0.21,
+  0.273,
+  0.36
+ ],
+ "props": {
+  "fdm/jsbsim/gear/gear-spin-right": 53,
+  "fdm/jsbsim/gear/gear-spin-left": 53,
+  "fdm/jsbsim/gear/gear-spin-nose": 53,
+  "sim/model/variant": 0
+ },
+ "channels": [
+  [
+   "^engines/engine\\[2\\]/rpm$",
+   "eng0_rpm"
+  ],
+  [
+   "^engines/engine\\[7\\]/rpm$",
+   "gear0_roll_ms"
+  ],
+  [
+   "^engines/engine\\[7\\]/n1$",
+   "gear1_roll_ms"
+  ],
+  [
+   "^engines/engine\\[7\\]/n2$",
+   "gear2_roll_ms"
+  ],
+  [
+   "^sim/multiplay/generic/int\\[14\\]$",
+   "nav"
+  ],
+  [
+   "^sim/multiplay/generic/int\\[4\\]$",
+   "taxi_light"
+  ],
+  [
+   "^sim/multiplay/generic/int\\[5\\]$",
+   "landing_light"
+  ],
+  [
+   "^sim/model/c172p/lighting/beacon/state$",
+   "beacon"
+  ],
+  [
+   "^sim/model/c172p/lighting/strobes/state$",
+   "strobe"
+  ],
+  [
+   "^sim/model/c172p/cockpit/yoke-aileron$",
+   "ctl_aileron"
+  ],
+  [
+   "^sim/model/c172p/cockpit/pedals-rudder$",
+   "ctl_rudder"
+  ]
+ ],
+ "exclude_models": [
+  "Effects/(damage|tyresmoke|tyrespray|propspray|pontoon|skis|bushkit|exhaust|damage-smoke)",
+  "Immat/",
+  "marker",
+  "mooring",
+  "control-lock",
+  "wooden-chock",
+  "Exterior/(tiedown|pitot-cover|chock)"
+ ],
+ "light_models": [
+  "procedural_light",
+  "Effects/lights/"
+ ],
+ "interior_models": [
+  "Interior/"
+ ],
+ "max_tex": 2048,
+ "interior_max_tex": 1024,
+ "fuel_kg": 110,
+ "pointmass_kg": {
+  "Co-Pilot": 75
+ }
+}

@@ -51,8 +51,10 @@ item lands; keep entries one line.
 - [ ] **P2** Quality presets (Low → Ultra) and dynamic resolution
 
 ## 3. Aircraft
-- [~] **P0** Real aircraft from FlightGear (GPL): C172, ASK 21, Spitfire IX, F-16, ATR 72, E190, A320 — textured models, animations, liveries (N)
-- [~] **P0** JSBSim-data flight dynamics per type, re-validated tests + bot soaks (N)
+- [x] Real aircraft from FlightGear (GPL): C172, ASK 21, Spitfire IX, F-16, ATR 72, E190, A320 — textured models, cockpits, animations, neutral liveries (N)
+- [x] JSBSim aero evaluator (C172, ASK21, F-16, E190, A320); Spitfire/ATR calibrated to YASim data (N)
+- [ ] **P1** FDM follow-ups: A320 engine-out rudder authority, A320 Mmo overshoot, E190 clean stall high, ASK21 L/D 42 vs 34, F-16 climb low; Spitfire prop-disc dome; thumbnails load ~4 s
+- [ ] **P1** Decide ATR 72 asset licence (FGAddon policy-only GPL notice)
 - [ ] **P0** Structural loads, wing flex, failures, damage model, survivable vs fatal crashes, physics debris (L)
 - [ ] **P1** Full 3D cockpits with working instruments (render gauges into cockpit textures), head look (mouse/TrackIR-style)
 - [ ] **P1** Systems depth per type: electrics, fuel (burn + CG), hydraulics, engine start procedures, failures menu
@@ -109,7 +111,7 @@ item lands; keep entries one line.
 | K | Procedural audio | ✅ |
 | J | Night & lighting | ✅ |
 | M | UI/HUD, maps, airport picker, menus, frame pacing | ✅ |
-| N | Real FlightGear aircraft + JSBSim FDM | 🟡 running |
+| N | Real FlightGear aircraft + JSBSim FDM | ✅ |
 | K2 | Sample-based audio, supersonic, crash sounds | ✅ |
 | L | Structure/flex/crashes + supersonic/atmospheric VFX | ⏳ after N |
 | G | WASM + GitHub Pages workflow (repo stays private until owner flips it) | ⏳ last of current batch |

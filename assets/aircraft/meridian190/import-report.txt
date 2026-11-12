@@ -1,0 +1,76 @@
+"meridian190": 86 nodes (85 animated out of 87), 67 materials, 39 textures (5.7 MB), 135 chunks
+triangles: exterior 73640, interior 71819; vertices 167640; model.skac 2.3 MB; radius 21.9 m
+eye: Some(Vec3(0.53, 1.4499156, 11.752853))
+lights: 5
+channels used: aileron_l aileron_r beacon_sw brakes ctl_aileron ctl_elevator ctl_flaps ctl_gear ctl_rudder ctl_spoilers eng0_n1 eng0_reverser eng1_n1 eng1_reverser flaps gear0_comp_norm gear0_roll_ms gear1_comp_norm gear1_roll_ms gear2_comp_norm gear2_roll_ms gear_pos landing_light nav rudder strobe_sw taxi_light throttle time
+animation types: [("", 14), ("alpha-test", 4), ("billboard", 4), ("dist-scale", 4), ("knob", 134), ("material", 35), ("noshadow", 1), ("pbr", 12), ("pick", 215), ("rotate", 119), ("select", 86), ("spin", 6), ("texmultiple", 2), ("textranslate", 2), ("translate", 43)]
+unmapped properties (count):
+    62 systems/electrical/outputs/pushbutton-lights
+    11 sim/model/door-positions/l2-stairs/position-norm
+    10 sim/model/door-positions/l1-stairs/position-norm
+     6 surface-positions/left-wiper-pos-norm
+     6 it-autoflight/output/lat
+     6 it-autoflight/input/vert
+     6 fdm/jsbsim/aero/coefficient/CLalpha
+     5 sim/aircraft
+     4 sim/rendering/shaders/skydome
+     4 sim/rendering/default-compositor
+     4 it-autoflight/output/vert
+     4 it-autoflight/output/fd2
+     4 it-autoflight/output/fd1
+     4 controls/flight/nav-src/side
+     3 velocities/groundspeed-kt
+     3 services/chocks
+     3 controls/switches/hud-flip-pos[1]
+     3 controls/switches/hud-flip-pos
+     2 systems/electrical/outputs/nav-lights-norm
+     2 systems/electrical/outputs/master-warn-caution[1]
+     2 systems/electrical/outputs/master-warn-caution
+     2 sim/model/lights/strobe/state
+     2 sim/model/door-positions/r2/position-norm
+     2 sim/model/door-positions/r1/position-norm
+     2 sim/model/door-positions/l2/position-norm
+     2 sim/model/door-positions/l1/position-norm
+     2 sim/model/door-positions/fcm-spoilers/position-norm
+     2 sim/model/door-positions/fcm-rudder/position-norm
+     2 sim/model/door-positions/fcm-elevator/position-norm
+     2 sim/model/door-positions/eng2-control/position-norm
+     2 sim/model/door-positions/eng1-control/position-norm
+     2 sim/model/door-positions/cockpit-door/position-norm
+     2 it-autoflight/output/athr
+     2 it-autoflight/output/appr-armed
+     2 it-autoflight/output/ap2
+     2 it-autoflight/output/ap1
+     2 it-autoflight/input/bank-limit-sw
+     2 instrumentation/eicas/master/warning
+     2 instrumentation/eicas/master/caution
+     2 fdm/jsbsim/fcs/yaw-damper-enable
+     2 fbw/spoilers/law
+     2 fbw/rudder/law
+     2 fbw/elevator/law
+     2 fadec/ignition-switch[1]
+     2 fadec/ignition-switch
+     2 fadec/engine-switch[1]
+     2 fadec/engine-switch
+     2 controls/switches/wiper-right
+     2 controls/switches/wiper-left
+     2 controls/switches/seatbelt-sign
+     2 controls/pressurization/recirc
+     2 controls/pressurization/pack[1]
+     2 controls/pressurization/pack
+     2 controls/pressurization/mode
+     2 controls/pressurization/lfe
+     2 controls/pressurization/alt
+     2 controls/pneumatic/xbleed
+     2 controls/pneumatic/engine-bleed[1]
+     2 controls/pneumatic/engine-bleed
+     2 controls/pneumatic/apu-bleed
+log:
+  skip external/missing submodel Aircraft/E-jet-family/Models/Primus-Epic/stby-ai.xml
+  skip external/missing submodel Aircraft/E-jet-family/Models/Primus-Epic/PFD0.xml
+  skip external/missing submodel Aircraft/E-jet-family/Models/Primus-Epic/PFD1.xml
+  skip external/missing submodel Aircraft/E-jet-family/Models/Primus-Epic/MFD_R.xml
+  skip external/missing submodel Aircraft/E-jet-family/Models/Primus-Epic/MFD_L.xml
+  skip external/missing submodel Aircraft/E-jet-family/Models/Primus-Epic/EICAS.xml
+  skip external/missing submodel Aircraft/E-jet-family/Models/Instruments/MCDU/mcdu-e-jets.xml
+  skip external/missing submodel Aircraft/E-jet-family/Models/Instruments/MCDU/mcdu-e-jets.xml

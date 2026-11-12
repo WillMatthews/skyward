@@ -46,6 +46,11 @@ models later.
   landings; cinematic camera; headless soak tests.
 
 ## v3 — heavies, rotorcraft and polish
+- ✅ **Real aircraft** — the seven types are now FlightGear aircraft (textured
+  models with cockpits and animations, JSBSim aerodynamics for C172 / ASK 21 /
+  F-16 / E190 / A320), GPL-2.0-or-later. Available for the heavies below:
+  FlightGear C130 (GPL v2, YASim), C-5 (FGMEMBERS/C-5, GPL v2, JSBSim),
+  Vulcan B.2 (FGUK fork, GPL v2, JSBSim).
 - **Military cargo**: C-130-class (4 turboprops, STOL-ish, short fields) and
   C-5 Galaxy-class (very heavy jet, long runways).
 - **Avro Vulcan-class delta bomber**: delta-wing aero (high-alpha lift,

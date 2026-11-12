@@ -1,0 +1,52 @@
+"swift": 52 nodes (51 animated out of 61), 22 materials, 13 textures (1.8 MB), 58 chunks
+triangles: exterior 19219, interior 67617; vertices 72456; model.skac 1.2 MB; radius 8.5 m
+eye: Some(Vec3(-0.0, 0.29992974, 1.2693566))
+lights: 0
+channels used: aileron_l alt_ft ctl_aileron ctl_elevator ctl_rudder ctl_trim elevator gear0_comp_norm gear0_roll_ms gear1_comp_norm gear1_roll_ms gear2_comp_norm gear2_roll_ms heading_deg rudder slip spoilers turn_rate
+animation types: [("", 9), ("knob", 10), ("material", 12), ("noshadow", 2), ("pick", 12), ("rotate", 76), ("select", 28), ("slider", 3), ("spin", 4), ("texmultiple", 2), ("textranslate", 31), ("translate", 19)]
+unmapped properties (count):
+    11 sim/model/instruments-light
+     9 sim/weight[2]/weight-lb
+     8 sim/systems/wingflexer/z-m
+     8 sim/model/variant
+     8 sim/model/door-positions/canopyFJ/position-norm
+     7 sim/model/door-positions/canopyF/position-norm
+     6 sim/model/livery/instruments/alt
+     5 engines/engine/prop-pos-norm
+     4 sim/model/livery/instruments/vsi
+     4 sim/model/livery/instruments/asi
+     4 sim/model/door-positions/canopyB/position-norm
+     4 instrumentation/altimeter/setting-hpa
+     4 instrumentation/airspeed-indicator/indicated-corr-speed-kt
+     2 sim/model/windows/rear
+     2 sim/model/windows/front
+     2 instrumentation/variometer/te-reading-mps
+     2 instrumentation/mc-cready/rot
+     2 instrumentation/comm/ptt
+     1 sim/multiplay/generic/int[6]
+     1 sim/model/windows/small-front
+     1 sim/model/window
+     1 sim/model/windcompass
+     1 sim/model/pitot-extension
+     1 sim/hitches/hook-open
+     1 instrumentation/turn-indicator/off-flag-pos
+     1 instrumentation/partial-panel/asi
+     1 instrumentation/partial-panel/alt
+     1 instrumentation/ilec-sc7/te-reading-mps
+     1 controls/flight/elevator-trim-jump
+     1 controls/electric/turn-slip-switch-pos
+     1 controls/electric/battery-switch-pos
+     1 controls/canopy/lock-jettison
+     1 controls/cabin/armrests
+     1 controls/cabin/airventR
+     1 controls/cabin/airvent
+     1 accelerations/pilot-gmin
+     1 accelerations/pilot-gmax
+     1 accelerations/pilot-g
+log:
+  skip external/missing submodel Aircraft/Instruments-3d/glider/wool-thread/wool-thread.xml
+  skip external/missing submodel Aircraft/Instruments-3d/glider/wool-thread/wool-thread.xml
+  skip external/missing submodel Aircraft/Instruments-3d/glider/flarm/v3_display/flarm_v3.xml
+  skip external/missing submodel Aircraft/Instruments-3d/glider/vario/ilec-sc7/ilec-sc7.xml
+  skip external/missing submodel Aircraft/Instruments-3d/ar-6201/ar-6201.xml
+  skip external/missing submodel Aircraft/Instruments-3d/glider/flarm/traditional/flarm_traditional.xml

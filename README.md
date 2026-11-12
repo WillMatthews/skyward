@@ -24,9 +24,13 @@ anywhere on Earth, for as long as you like. wgpu (Vulkan), winit, egui.
   local time and date. The weather is re-fetched as a long flight moves on.
 * **Wind** — boundary-layer gradient, gusts, mechanical and convective
   turbulence, thermals under the cumulus that drift with the wind aloft.
-* **Seven aircraft** with one data-driven flight model (lift / drag polars,
-  stall, ISA atmosphere, engines and propellers, gear, flaps, spoilers,
-  reversers, asymmetric thrust, FBW for the fighter) and procedural models.
+* **Seven real aircraft** from FlightGear's open hangar — Cessna 172P,
+  ASK 21, Spitfire Mk IX, F-16C, ATR 72-500, Embraer E190, Airbus A320 — with
+  their textured 3D models, cockpits and animations (surfaces, gear, props,
+  lights, instruments), and their **JSBSim aerodynamics** evaluated at run
+  time (C172, ASK 21, F-16, E190, A320; the YASim-based Spitfire and ATR use a
+  calibrated model) inside one 6-DoF flight model (ISA atmosphere, engines and
+  propellers, gear, spoilers, reversers, asymmetric thrust, FBW laws).
 * **Autopilot** (heading / altitude / V/S / speed with autothrottle).
 * **Auto flight bot** — an AI pilot that flies the real flight model through
   the controls: glider soaring and powered take-off → landmark tour →
@@ -80,14 +84,18 @@ runway length / surface the type needs ("All" shows every field). Without a
 chosen runway end, types that need a long runway are moved to the nearest
 suitable airfield.
 
-| id | | |
+| id (alias) | | |
 |---|---|---|
-| `kestrel` | **Kestrel C1** | 2-seat high-wing trainer. Stall 48 kt, cruise ~115 kt. |
-| `swift` | **Swift S2** | 15 m sailplane, L/D 38:1. Released near a thermal; airbrakes on F / V. |
-| `peregrine` | **Peregrine Mk IX** | V12 warbird, taildragger — swings left on take-off (right rudder), retractable gear. |
-| `lancer` | **Lancer F2** | Single-engine FBW fighter, afterburner above 90 % throttle, speed brake, supersonic. |
-| `aerolink` | **Aerolink 72** | Twin turboprop regional airliner, reverse pitch. Needs 1,800 m. |
-| `meridian190` / `meridian320` | **Meridian 190 / 320** | Twin-jet airliners: spoilers, reversers, slats/flaps, autopilot. Need 1,800 m. |
+| `kestrel` (`c172`) | **Cessna 172P Skyhawk** | 4-seat high-wing trainer, JSBSim aero. Stall 49 kt clean / 44 kt flaps 30, cruise ~105 kt. |
+| `swift` (`ask21`) | **Schleicher ASK 21** | 17 m two-seat sailplane, JSBSim aero. Released near a thermal; airbrakes on F / V. |
+| `peregrine` (`spitfire`) | **Supermarine Spitfire Mk IX** | Merlin warbird, taildragger — swings left on take-off (right rudder), retractable gear. |
+| `lancer` (`f16`) | **General Dynamics F-16C** | FBW fighter with JSBSim aero, afterburner above 90 % throttle, speed brake, supersonic. |
+| `aerolink` (`atr72`) | **ATR 72-500** | Twin turboprop regional airliner, reverse pitch. |
+| `meridian190` (`e190`) / `meridian320` (`a320`) | **Embraer E190 / Airbus A320** | Twin-jet airliners with JSBSim aero: spoilers, reversers, slats/flaps, autopilot (A320: normal-law FBW). Need 1,800 m. |
+
+The models, textures and FDM data come from FlightGear (GPL); sources,
+authors and licences per aircraft are in `assets/aircraft/<id>/CREDITS.md`,
+and `tools/fgimport/` rebuilds the assets from the FlightGear packages.
 
 Starts per type: runway, final approach (airliners: 10 nm at 3,000 ft), over
 the city (fast jets: 3,000 m), glider thermal release.
@@ -164,7 +172,7 @@ The cinematic camera cycles chase angles, fly-bys, tower, nose and wingtip shots
 | `--no-menu` | fly straight away (skip the main menu) |
 | `--vsync on\|off` | present with vsync (default on: smooth); off = mailbox / immediate |
 | `--hud full\|minimal\|off`, `--map corner\|large\|off` | instrument / map mode |
-| `--aircraft ID` | `kestrel` `swift` `peregrine` `lancer` `aerolink` `meridian190` `meridian320` |
+| `--aircraft ID` | `kestrel` `swift` `peregrine` `lancer` `aerolink` `meridian190` `meridian320` (or `c172` `ask21` `spitfire` `f16` `atr72` `e190` `a320`) |
 | `--start S` | `runway` `approach` `city` `thermal` |
 | `--bot` | hand the aircraft to the auto-flight bot |
 | `--watch` | auto flight + cinematic camera (+ glider relaunch) |
@@ -263,7 +271,11 @@ A shift costs well under 0.1 ms.
 | `src/clouds.rs` | volumetric cloud field + renderer, thermals |
 | `src/weather.rs` | METAR / Open-Meteo, weather → clouds / wind / precipitation, seasons |
 | `src/flight.rs` | flight dynamics + aircraft definitions (unit-tested) |
-| `src/models.rs`, `src/models/` | procedural aircraft meshes with animated surfaces |
+| `src/models.rs`, `src/aircraft_asset.rs` | imported aircraft models (`assets/aircraft/<id>/model.skac`): node tree, FlightGear animations → Skyward channels |
+| `src/gfx_aircraft.rs`, `src/shaders/aircraft*.wgsl` | textured aircraft renderer (main / reflection / shadow passes) |
+| `src/jsbsim.rs` | JSBSim aerodynamics evaluator (functions, tables, axes, stall hysteresis) |
+| `src/assets.rs` | asset loading (in-memory store first, then `assets/` on disk) |
+| `tools/fgimport/` | offline converter FlightGear aircraft → Skyward assets (+ neutral liveries) |
 | `src/sim.rs` | session, controls, autopilot glue, runway choice, cameras (incl. cinematic) |
 | `src/bot.rs` | auto-flight bot: glider soaring + powered take-off / tour / landing |
 | `src/autopilot.rs` | heading / altitude / V/S / speed autopilot |
@@ -287,3 +299,18 @@ domain; cached in `cache/ourairports.tsv.gz`); fallback lookup via
 [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) and
 [B612](https://github.com/polarsys/b612) (Airbus / Intactile / ENAC, designed
 for cockpit displays).
+
+Aircraft (GPL, from [FlightGear](https://www.flightgear.org/)): the
+[c172p team](https://github.com/c172p-team/c172p) (Cessna 172P); FGAddon
+ASK 21 (Heiko Schulz, Detlef Faber, Thomas Polzer, Viktor Radnai, Bea Wolf,
+Gilberto Agostinho …), Spitfire Mk IX (Detlef Faber), F-16 (Erik Hofman,
+Nikolai V. Chr. and the F-16 team), ATR 72-500 (Ryan Miller), A320-family
+(Josh Davidson, Jonathan Redpath, merspieler, Matthew Maring, Thorsten
+Herrmann, Semir Gebran); [E-jet family](https://github.com/YV3399/E-jet-family-YV)
+(Gabriel Hernandez, D-ECHO, Tobias Dammers, Semir Gebran, Stefan Frank,
+Narendran Muraleedharan …). Details: `assets/aircraft/<id>/CREDITS.md`.
+
+## Licence
+
+GPL-2.0-or-later — see `LICENSE` (it explains why: the imported FlightGear
+aircraft are GPL, the A320 package GPL v2 only).

@@ -200,6 +200,8 @@ pub struct FrameView {
     pub clock: crate::atmosphere::SkyClock,
     /// The aircraft's lights this frame (eye-relative).
     pub acl: crate::lights::AircraftLights,
+    /// The textured aircraft model for this frame (gfx_aircraft.rs).
+    pub aircraft: Option<crate::gfx_aircraft::AircraftFrame>,
 }
 
 /// Trees are drawn up to this distance (m) from the eye; detailed within TREE_LOD0.
@@ -447,6 +449,7 @@ pub struct Renderer {
     runways: Option<GpuMesh>,
     tree_meshes: TreeMeshes,
     dynamic: DynMesh,
+    aircraft: crate::gfx_aircraft::AircraftRenderer,
     targets: Option<Targets>,
     atmos: Atmosphere,
     clouds: CloudRenderer,
@@ -897,6 +900,7 @@ impl Renderer {
         clouds.set_field(&CloudField::new(7, crate::clouds::Weather::Scattered));
 
         Renderer {
+            aircraft: crate::gfx_aircraft::AircraftRenderer::new(device, queue, &globals_bgl, &shadow_bgl, IMMEDIATE_SIZE),
             globals_bgl,
             post_bgl,
             sky_main,
@@ -1279,6 +1283,7 @@ impl Renderer {
     ) {
         self.ensure_targets(device, width, height);
         self.dynamic.set(device, queue, dynamic);
+        self.aircraft.prepare(device, queue, fv.aircraft.as_ref());
         self.lights.set_aircraft(queue, &fv.acl.sprites[..fv.acl.n_sprites]);
         self.lights.set_coverage(queue, self.tiles.keys().filter(|id| !id.is_far()).copied());
         // Base ground follows the camera (snapped so the procedural pattern is stable).
@@ -1620,6 +1625,7 @@ impl Renderer {
                 pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..n, 0, 0..1);
             }
+            self.aircraft.draw_shadow(&mut pass);
             pass.set_pipeline(&self.shadow_tree);
             for t in &tiles {
                 let (lo, hi) = t.tree_box();
@@ -1682,6 +1688,7 @@ impl Renderer {
                 pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..n, 0, 0..1);
             }
+            self.aircraft.draw_refl(&mut pass);
             pass.set_pipeline(&self.tree_refl);
             for tile in &tiles {
                 let (lo, hi) = tile.tree_box();
@@ -1762,6 +1769,7 @@ impl Renderer {
                 pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..n, 0, 0..1);
             }
+            self.aircraft.draw_main(&mut pass);
             pass.set_pipeline(&self.tree_main);
             for tile in &tiles {
                 let d = tile.dist(eye2);

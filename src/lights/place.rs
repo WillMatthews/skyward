@@ -574,57 +574,30 @@ impl AircraftLightRig {
     /// in the wing roots (or the nose of a light aircraft), the taxi light on
     /// the nose gear.
     pub fn from_model(m: &crate::models::AircraftModel) -> Self {
-        use crate::models::PartKind;
-        let emissive = |v: &crate::scene::Vert| (v.mat - crate::scene::mat::EMISSIVE).abs() < 0.5 && v.uv[1] < 0.5;
-        let mut acc: [(Vec3, f32); 3] = [(Vec3::ZERO, 0.0); 3];
-        let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
-        for v in &m.body.verts {
-            let p = Vec3::from(v.pos);
-            lo = lo.min(p);
-            hi = hi.max(p);
-            if !emissive(v) {
-                continue;
-            }
-            let [r, g, b] = v.col;
-            let k = if r > 2.0 * g && r > 2.0 * b {
-                0
-            } else if g > 1.5 * r && g >= b * 0.8 {
-                1
-            } else if r > 0.5 && g > 0.5 && b > 0.5 {
-                2
-            } else {
-                continue;
-            };
-            acc[k].0 += p;
-            acc[k].1 += 1.0;
-        }
+        // Light positions come with the imported model (FlightGear light
+        // submodels / lenses; see models.rs), body frame.
+        let (lo, hi) = m.bounds;
         let mut rig = AircraftLightRig::default();
         let cols = [[1.0, 0.04, 0.02], [0.05, 1.0, 0.3], [1.0, 1.0, 1.0]];
-        for (k, (s, n)) in acc.iter().enumerate() {
-            if *n > 0.0 {
-                rig.nav.push((*s / *n, cols[k]));
+        for (kind, p) in m.lights() {
+            match kind {
+                "nav_l" => rig.nav.push((p, cols[0])),
+                "nav_r" => rig.nav.push((p, cols[1])),
+                "nav_tail" => rig.nav.push((p, cols[2])),
+                k if k.starts_with("strobe") => rig.strobes.push(p),
+                "beacon" => rig.beacons.push(p),
+                _ => {}
             }
         }
         if rig.nav.len() < 2 {
             // No lenses found: put them on the bounding box.
             rig.nav = vec![(vec3(hi.x, 0.0, 0.0), cols[0]), (vec3(lo.x, 0.0, 0.0), cols[1]), (vec3(0.0, 0.3, lo.z), cols[2])];
         }
-        let centre = |p: &crate::models::Part| {
-            let n = p.mesh.verts.len().max(1) as f32;
-            p.pivot + p.mesh.verts.iter().map(|v| Vec3::from(v.pos)).sum::<Vec3>() / n
-        };
-        for p in &m.parts {
-            match p.kind {
-                PartKind::Strobe => rig.strobes.push(centre(p)),
-                PartKind::Beacon => rig.beacons.push(centre(p)),
-                _ => {}
-            }
-        }
         let span = hi.x - lo.x;
         let tip = rig.nav.iter().find(|(_, c)| c[0] > 0.9 && c[1] < 0.5).map(|(p, _)| *p).unwrap_or(vec3(hi.x, 0.0, 0.0));
         // Beams point ahead and a little down (body frame).
         let fwd_down = vec3(0.0, -0.07, 1.0).normalize();
-        let nose_gear = m.parts.iter().find(|p| p.kind == PartKind::GearNose).map(|p| p.pivot);
+        let nose_gear = m.nose_gear;
         if let Some(ng) = nose_gear.filter(|_| span > 12.0) {
             // Airliner / fighter: lights in the wing roots, taxi light on the nose gear.
             let x = (span * 0.14).max(1.2);

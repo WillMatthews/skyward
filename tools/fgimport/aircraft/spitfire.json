@@ -1,0 +1,39 @@
+{
+ "props": {},
+ "channels": [],
+ "light_models": [
+  "procedural_light",
+  "Effects/lights/",
+  "[Ll]ights?/.*(nav|beacon|strobe|landing|taxi)",
+  "/(nav|beacon|strobe)"
+ ],
+ "max_tex": 2048,
+ "interior_max_tex": 1024,
+ "id": "peregrine",
+ "name": "Supermarine Spitfire Mk IX",
+ "fg_name": "spitfireIX",
+ "model": "Models/SpitfireIX.xml",
+ "fdm": {
+  "cg_model": [
+   3.45,
+   0,
+   0.0
+  ]
+ },
+ "exclude_models": [
+  "stores",
+  "Pilot",
+  "pilot",
+  "Effects/",
+  "Human"
+ ],
+ "interior_models": [
+  "cockpit",
+  "Instruments"
+ ],
+ "eye_model": [
+  4.6,
+  0,
+  0.7
+ ]
+}

@@ -203,7 +203,7 @@ impl Autopilot {
         let ias = ac.airspeed();
         let fbw = def.control_law != ControlLaw::Direct;
         let flap = ac.surfaces().flaps;
-        let v_min = 1.3 * def.stall_speed(flap);
+        let v_min = 1.2 * def.stall_speed(flap);
 
         // Smoothed acceleration (for the autothrottle damping).
         let a_raw = (ias - self.prev_ias) / dt;

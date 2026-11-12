@@ -1,0 +1,451 @@
+{
+  "aerorp_body": [
+    -0.0,
+    0.02357262372970581,
+    -0.04064595699310303
+  ],
+  "cg_structural_m": [
+    1.0058341026306152,
+    0.0,
+    0.7206473350524902
+  ],
+  "chord_m": 1.4935200214385986,
+  "contacts": [
+    {
+      "brake_group": "NONE",
+      "damping_n_s_m": 17512.6796875,
+      "name": "NOSE",
+      "pos": [
+        -0.0,
+        -1.236267328262329,
+        1.1912541389465332
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 52538.0390625,
+      "static_friction": 0.800000011920929,
+      "steer_deg": 30.0,
+      "type": "BOGEY"
+    },
+    {
+      "brake_group": "LEFT",
+      "damping_n_s_m": 26269.01953125,
+      "name": "LEFT_MAIN",
+      "pos": [
+        1.0922000408172607,
+        -1.1092673540115356,
+        -0.4495859146118164
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 78807.0546875,
+      "static_friction": 0.800000011920929,
+      "steer_deg": 0.0,
+      "type": "BOGEY"
+    },
+    {
+      "brake_group": "RIGHT",
+      "damping_n_s_m": 26269.01953125,
+      "name": "RIGHT_MAIN",
+      "pos": [
+        -1.0922000408172607,
+        -1.1041873693466187,
+        -0.4495859146118164
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 78807.0546875,
+      "static_friction": 0.800000011920929,
+      "steer_deg": 0.0,
+      "type": "BOGEY"
+    },
+    {
+      "brake_group": "",
+      "damping_n_s_m": 14593.8994140625,
+      "name": "TAIL_SKID",
+      "pos": [
+        -0.0,
+        -0.28884732723236084,
+        -4.752345561981201
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 29187.798828125,
+      "static_friction": 0.5,
+      "steer_deg": 0.0,
+      "type": "STRUCTURE"
+    },
+    {
+      "brake_group": "",
+      "damping_n_s_m": 5341.80517578125,
+      "name": "LEFT_TIP",
+      "pos": [
+        5.8927998542785645,
+        0.5493526458740234,
+        0.49783408641815186
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 26709.025390625,
+      "static_friction": 0.75,
+      "steer_deg": 0.0,
+      "type": "STRUCTURE"
+    },
+    {
+      "brake_group": "",
+      "damping_n_s_m": 5341.80517578125,
+      "name": "RIGHT_TIP",
+      "pos": [
+        -5.8927998542785645,
+        0.5493526458740234,
+        0.49783408641815186
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 26709.025390625,
+      "static_friction": 0.75,
+      "steer_deg": 0.0,
+      "type": "STRUCTURE"
+    },
+    {
+      "brake_group": "",
+      "damping_n_s_m": 5341.80517578125,
+      "name": "FRONT_BROKEN_GEAR",
+      "pos": [
+        -0.0,
+        -0.7206473350524902,
+        1.1785540580749512
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 26709.025390625,
+      "static_friction": 0.8999999761581421,
+      "steer_deg": 0.0,
+      "type": "STRUCTURE"
+    },
+    {
+      "brake_group": "",
+      "damping_n_s_m": 5341.80517578125,
+      "name": "LEFT_BROKEN_GEAR",
+      "pos": [
+        1.2192000150680542,
+        -0.7206473350524902,
+        -0.47244584560394287
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 26709.025390625,
+      "static_friction": 0.800000011920929,
+      "steer_deg": 0.0,
+      "type": "STRUCTURE"
+    },
+    {
+      "brake_group": "",
+      "damping_n_s_m": 5341.80517578125,
+      "name": "RIGHT_BROKEN_GEAR",
+      "pos": [
+        -1.2192000150680542,
+        -0.7206473350524902,
+        -0.47244584560394287
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 26709.025390625,
+      "static_friction": 0.800000011920929,
+      "steer_deg": 0.0,
+      "type": "STRUCTURE"
+    },
+    {
+      "brake_group": "",
+      "damping_n_s_m": 5341.80517578125,
+      "name": "NOSE_TOP",
+      "pos": [
+        -0.0,
+        0.1683526635169983,
+        4.028433799743652
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 26709.025390625,
+      "static_friction": 0.75,
+      "steer_deg": 0.0,
+      "type": "STRUCTURE"
+    },
+    {
+      "brake_group": "",
+      "damping_n_s_m": 5341.80517578125,
+      "name": "NOSE",
+      "pos": [
+        -0.0,
+        -0.5174473524093628,
+        4.028433799743652
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 26709.025390625,
+      "static_friction": 3.0,
+      "steer_deg": 0.0,
+      "type": "STRUCTURE"
+    },
+    {
+      "brake_group": "",
+      "damping_n_s_m": 5341.80517578125,
+      "name": "COCKPIT_TOP",
+      "pos": [
+        -0.0,
+        0.8033525943756104,
+        1.1252140998840332
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 26709.025390625,
+      "static_friction": 3.0,
+      "steer_deg": 0.0,
+      "type": "STRUCTURE"
+    },
+    {
+      "brake_group": "",
+      "damping_n_s_m": 5341.80517578125,
+      "name": "TOP_VS",
+      "pos": [
+        -0.0,
+        1.5653526782989502,
+        -5.433065891265869
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 26709.025390625,
+      "static_friction": 3.0,
+      "steer_deg": 0.0,
+      "type": "STRUCTURE"
+    },
+    {
+      "brake_group": "",
+      "damping_n_s_m": 5341.80517578125,
+      "name": "LFfloat",
+      "pos": [
+        1.4449806213378906,
+        0.25725263357162476,
+        0.9237921237945557
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 26709.025390625,
+      "static_friction": 0.5,
+      "steer_deg": 0.0,
+      "type": "STRUCTURE"
+    },
+    {
+      "brake_group": "",
+      "damping_n_s_m": 5341.80517578125,
+      "name": "RFfloat",
+      "pos": [
+        -1.4449806213378906,
+        0.25725263357162476,
+        0.9237921237945557
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 26709.025390625,
+      "static_friction": 0.5,
+      "steer_deg": 0.0,
+      "type": "STRUCTURE"
+    },
+    {
+      "brake_group": "",
+      "damping_n_s_m": 5341.80517578125,
+      "name": "LMfloat",
+      "pos": [
+        1.4449806213378906,
+        0.25725263357162476,
+        -0.776229977607727
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 26709.025390625,
+      "static_friction": 0.5,
+      "steer_deg": 0.0,
+      "type": "STRUCTURE"
+    },
+    {
+      "brake_group": "",
+      "damping_n_s_m": 5341.80517578125,
+      "name": "RMfloat",
+      "pos": [
+        -1.4449806213378906,
+        0.25725263357162476,
+        -0.776229977607727
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 26709.025390625,
+      "static_friction": 0.5,
+      "steer_deg": 0.0,
+      "type": "STRUCTURE"
+    },
+    {
+      "brake_group": "",
+      "damping_n_s_m": 5341.80517578125,
+      "name": "LRfloat",
+      "pos": [
+        1.4449806213378906,
+        0.25725263357162476,
+        -3.076200008392334
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 26709.025390625,
+      "static_friction": 0.5,
+      "steer_deg": 0.0,
+      "type": "STRUCTURE"
+    },
+    {
+      "brake_group": "",
+      "damping_n_s_m": 5341.80517578125,
+      "name": "RRfloat",
+      "pos": [
+        -1.4449806213378906,
+        0.25725263357162476,
+        -3.076200008392334
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 26709.025390625,
+      "static_friction": 0.5,
+      "steer_deg": 0.0,
+      "type": "STRUCTURE"
+    },
+    {
+      "brake_group": "NONE",
+      "damping_n_s_m": 23350.240234375,
+      "name": "LFFloatGear",
+      "pos": [
+        1.4449806213378906,
+        -0.7206473350524902,
+        2.143754005432129
+      ],
+      "retractable": 1.0,
+      "spring_n_m": 78807.0546875,
+      "static_friction": 0.05000000074505806,
+      "steer_deg": 360.0,
+      "type": "BOGEY"
+    },
+    {
+      "brake_group": "NONE",
+      "damping_n_s_m": 23350.240234375,
+      "name": "RFFloatGear",
+      "pos": [
+        -1.4449806213378906,
+        -0.7206473350524902,
+        2.143754005432129
+      ],
+      "retractable": 1.0,
+      "spring_n_m": 78807.0546875,
+      "static_friction": 0.05000000074505806,
+      "steer_deg": 360.0,
+      "type": "BOGEY"
+    },
+    {
+      "brake_group": "LEFT",
+      "damping_n_s_m": 23350.240234375,
+      "name": "LMFloatGear",
+      "pos": [
+        1.4449806213378906,
+        -0.7206473350524902,
+        -0.8509058952331543
+      ],
+      "retractable": 1.0,
+      "spring_n_m": 78807.0546875,
+      "static_friction": 0.800000011920929,
+      "steer_deg": 0.0,
+      "type": "BOGEY"
+    },
+    {
+      "brake_group": "RIGHT",
+      "damping_n_s_m": 23350.240234375,
+      "name": "RMFloatGear",
+      "pos": [
+        -1.4449806213378906,
+        -0.7206473350524902,
+        -0.8509058952331543
+      ],
+      "retractable": 1.0,
+      "spring_n_m": 78807.0546875,
+      "static_friction": 0.800000011920929,
+      "steer_deg": 0.0,
+      "type": "BOGEY"
+    },
+    {
+      "brake_group": "NONE",
+      "damping_n_s_m": 8756.33984375,
+      "name": "NOSE_SKI",
+      "pos": [
+        -0.0,
+        -0.9746473431587219,
+        0.537458062171936
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 26269.01953125,
+      "static_friction": 0.800000011920929,
+      "steer_deg": 10.0,
+      "type": "BOGEY"
+    },
+    {
+      "brake_group": "NONE",
+      "damping_n_s_m": 218.9084930419922,
+      "name": "LEFT_SKI",
+      "pos": [
+        1.2954000234603882,
+        -0.9746473431587219,
+        -1.1887259483337402
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 729.6950073242188,
+      "static_friction": 0.800000011920929,
+      "steer_deg": 0.0,
+      "type": "BOGEY"
+    },
+    {
+      "brake_group": "NONE",
+      "damping_n_s_m": 218.9084930419922,
+      "name": "RIGHT_SKI",
+      "pos": [
+        -1.3207999467849731,
+        -0.9746473431587219,
+        -1.1887259483337402
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 729.6950073242188,
+      "static_friction": 0.800000011920929,
+      "steer_deg": 0.0,
+      "type": "BOGEY"
+    }
+  ],
+  "empty_cg_structural_m": [
+    0.9921240210533142,
+    0.0,
+    0.6349999904632568
+  ],
+  "empty_kg": 665.4194946289062,
+  "engines": [
+    {
+      "file": "eng_io320",
+      "pos": null,
+      "thruster": "prop_75in2f",
+      "thruster_pos": [
+        -0.0,
+        0.02357262372970581,
+        1.963414192199707
+      ]
+    },
+    {
+      "file": "eng_io360",
+      "pos": null,
+      "thruster": "prop_76in2f_NACA_20deg",
+      "thruster_pos": [
+        -0.0,
+        0.02357262372970581,
+        1.963414192199707
+      ]
+    }
+  ],
+  "eyepoint_body": [
+    -0.0,
+    0.49855268001556396,
+    0.06603413820266724
+  ],
+  "fuel_initial_kg": 0.0,
+  "inertia_loaded_kg_m2": {
+    "pitch_iyy": 1805.8192138671875,
+    "roll_ixx": 1499.621337890625,
+    "yaw_izz": 2747.837890625
+  },
+  "ixx": 1285.3155517578125,
+  "iyy": 1742.2261962890625,
+  "izz": 2584.189208984375,
+  "loaded_kg": 932.0660400390625,
+  "pointmass_kg": 81.64656066894531,
+  "wing_area_m2": 16.165122985839844,
+  "wingspan_m": 10.911839485168457
+}

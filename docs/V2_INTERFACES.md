@@ -31,7 +31,9 @@ the user is working on this machine; render offscreen and inspect PNGs.
 | meridian190 | Meridian 190 | Airliner (jet) | E190 class: low wing, twin underwing turbofans |
 | meridian320 | Meridian 320 | Airliner (jet) | A320 class: low wing, twin underwing turbofans, wingtip fences/sharklets |
 
-### Shared geometry (body frame, metres) — A's contact points and B's meshes MUST agree
+### Shared geometry (body frame, metres)
+
+> **Note — superseded (v3, Track N):** the ids are now real types (Cessna 172P, ASK 21, Spitfire IX, F-16C, ATR 72-500, E190, A320) imported from FlightGear. Contact points, eye and engine positions come from the FDMs / models (see `src/flight.rs` and `assets/aircraft/<id>/fdm.json`); the table below is the v2 design record. — A's contact points and B's meshes MUST agree
 | id | span | length | gear | wheel contact points (x, y, z) | engine / prop pivots | cockpit eye |
 |---|---|---|---|---|---|---|
 | peregrine | 11.2 | 9.1 | taildragger, retractable mains, fixed tailwheel | mains (±0.90, -1.75, 0.90); tail (0, -0.55, -5.40) → rests ~10.8° nose-up | prop pivot (0, 0.10, 4.60), 4 blades, radius 1.60 | (0, 0.75, -0.40) |

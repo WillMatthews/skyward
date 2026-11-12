@@ -5,8 +5,8 @@ use crate::autopilot::Autopilot;
 use crate::bot::{self, Bot, RunwayEnd};
 use crate::flight::{self, Aircraft, AircraftDef, Category, Controls, EngineKind, KT};
 use crate::gfx::FrameView;
-use crate::models::{self, AircraftModel, PartKind};
-use crate::scene::{mat, MeshData, Runway};
+use crate::models::{self, AircraftModel, ModelInputs};
+use crate::scene::{MeshData, Runway};
 use crate::world::World;
 use glam::{vec2, vec3, Mat4, Quat, Vec2, Vec3};
 use std::collections::HashSet;
@@ -301,8 +301,6 @@ pub struct Sim {
     model: AircraftModel,
     /// Bounding radius of the model (m): drives camera distances.
     pub size: f32,
-    /// Per part: propellers split into a slow (blades) and fast (blurred disc) variant.
-    props: Vec<Option<(MeshData, MeshData)>>,
     pub last_view: Option<FrameView>,
     /// Runway used for the current start (also anchors the tower camera).
     pub runway: Option<Runway>,
@@ -390,7 +388,7 @@ impl Sim {
     pub fn new(world: &World, sel: usize, start: Start) -> Sim {
         let defs = flight::catalogue();
         let sel = sel.min(defs.len() - 1);
-        let (model, props, size) = load_model(defs[sel].id);
+        let (model, size) = load_model(&defs[sel]);
         let ac = Aircraft::airborne(&defs[sel], vec3(0.0, 500.0, 0.0), 0.0, 60.0);
         let mut s = Sim {
             defs,
@@ -418,7 +416,6 @@ impl Sim {
             acc: 0.0,
             model,
             size,
-            props,
             last_view: None,
             runway: None,
             needs_respawn: false,
@@ -453,7 +450,7 @@ impl Sim {
     pub fn select(&mut self, world: &World, sel: usize, start: Start, watch: bool) {
         self.sel = sel.min(self.defs.len() - 1);
         self.start = if start.valid_for(&self.defs[self.sel]) { start } else { Start::default_for(&self.defs[self.sel]) };
-        (self.model, self.props, self.size) = load_model(self.defs[self.sel].id);
+        (self.model, self.size) = load_model(&self.defs[self.sel]);
         self.light_rig = crate::lights::AircraftLightRig::from_model(&self.model);
         self.landing_lights = None;
         self.bot = None;
@@ -529,6 +526,17 @@ impl Sim {
         self.ap = Autopilot::new();
         self.ap_warn = 0.0;
         self.orbit_dist = self.chase_dist();
+        // Screenshot knob: SKYWARD_ORBIT="yaw_deg,pitch_deg,dist_m" sets the chase camera.
+        if let Ok(o) = std::env::var("SKYWARD_ORBIT") {
+            let v: Vec<f32> = o.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+            if v.len() == 3 {
+                self.orbit_yaw = v[0].to_radians();
+                self.orbit_pitch = v[1].to_radians();
+                if v[2] > 0.0 {
+                    self.orbit_dist = v[2];
+                }
+            }
+        }
         self.cam_heading = self.ac.heading();
         self.flyby_pos = None;
         self.cine = Cine::default();
@@ -1135,7 +1143,7 @@ impl Sim {
         let fwd = self.rrot * Vec3::Z;
         let up = self.rrot * Vec3::Y;
         let mut fov = 60f32.to_radians();
-        let mut show_aircraft = true;
+        let show_aircraft = true;
         let (eye, target, cam_up) = match self.cam {
             CamMode::Chase => {
                 let yaw = self.cam_heading + self.orbit_yaw;
@@ -1147,7 +1155,6 @@ impl Sim {
                 (eye, pos + Vec3::Y * (0.5 + self.size * 0.08), Vec3::Y)
             }
             CamMode::Cockpit => {
-                show_aircraft = false;
                 fov = 72f32.to_radians();
                 let e = pos + self.rrot * self.model.eye;
                 (e, e + fwd * 100.0, up)
@@ -1180,129 +1187,65 @@ impl Sim {
             // From the cockpit the lights shine out, but their lenses aren't seen.
             acl.n_sprites = 0;
         }
-        let fv = FrameView { eye, view, fov_y: fov, time: self.time, sun_dir: self.sun_dir(), exposure: 1.0, clock, acl };
+        let mut fv = FrameView { eye, view, fov_y: fov, time: self.time, sun_dir: self.sun_dir(), exposure: 1.0, clock, acl, aircraft: None };
         let mut dynm = MeshData::default();
         if show_aircraft {
             // Eye-relative (see gfx: rendering is camera-relative, no f32 cancellation).
-            self.aircraft_mesh(&mut dynm, eye);
+            // Close up (and from the cockpit) the interior is drawn too.
+            let interior = self.cam == CamMode::Cockpit || eye.distance(pos) < self.size * 2.5 + 4.0;
+            fv.aircraft = self.aircraft_mesh(&mut dynm, eye, interior);
         }
-        self.last_view = Some(FrameView { ..fv });
+        self.last_view = Some(FrameView { aircraft: None, ..fv });
         (fv, dynm)
     }
 
-    /// The aircraft mesh for this frame, relative to `eye`.
-    fn aircraft_mesh(&self, out: &mut MeshData, eye: Vec3) {
+    /// Animate the aircraft model for this frame and return its draw list
+    /// (eye-relative); light glows and the afterburner flame go into `out`.
+    fn aircraft_mesh(&mut self, out: &mut MeshData, eye: Vec3, interior: bool) -> Option<crate::gfx_aircraft::AircraftFrame> {
+        let def = &self.defs[self.sel];
         let ac = &self.ac;
-        let def = self.def();
-        let s = ac.surfaces();
-        let m = Mat4::from_rotation_translation(self.rrot, self.rpos - eye);
-        out.append(&self.model.body, m);
-        // Blades below ~420 propeller rpm, blurred disc above (per engine).
-        let prop_fast = |i: usize| {
-            let rpm = ac.engine_rpm_i(i);
-            let prop_rpm = if def.engine_kind == EngineKind::Piston { rpm * def.prop_gear } else { rpm };
-            prop_rpm > 420.0
-        };
-        // Beacon / strobe blink (beacon ~1 Hz red, strobes double-flash every 1.2 s).
-        let beacon_on = (self.time * 1.0).fract() < 0.12;
+        let running = (0..ac.engine_count(def)).any(|i| ac.engine_running(i)) && def.has_engine;
+        // Lights: navigation always, beacon with an engine running, strobes on the
+        // runway / in flight, landing lights with the gear down below ~1,500 ft.
+        let strobe = !ac.on_ground || self.ctl.throttle > 0.5;
+        let beacon_flash = running && (self.time * 1.0).fract() < 0.12;
         let st = (self.time / 1.2).fract();
-        let strobe_on = st < 0.05 || (0.12..0.17).contains(&st);
-        let ab = s.afterburner;
-        let mut flame = MeshData::default();
-        for (pi, part) in self.model.parts.iter().enumerate() {
-            let (amount, mesh) = match part.kind {
-                PartKind::AileronLeft | PartKind::AileronRight => (s.aileron, &part.mesh),
-                PartKind::Elevator => (s.elevator, &part.mesh),
-                PartKind::Rudder => (s.rudder, &part.mesh),
-                PartKind::FlapLeft | PartKind::FlapRight | PartKind::Airbrakes => (s.flaps, &part.mesh),
-                PartKind::Propeller(i) => {
-                    let i = i as usize;
-                    let (slow, fastm) = self.props[pi].as_ref().expect("prop split");
-                    (s.prop_angles.get(i).copied().unwrap_or(s.prop_angle), if prop_fast(i) { fastm } else { slow })
+        let strobe_flash = strobe && (st < 0.05 || (0.12..0.17).contains(&st));
+        let landing = ac.gear_pos() > 0.5 && ac.pos.y < 460.0 && running;
+        self.model.update(&ModelInputs { def, ac, ctl: &self.ctl, time: self.time, nav: true, beacon: running, strobe, landing });
+        let m = Mat4::from_rotation_translation(self.rrot, self.rpos - eye);
+        let mut local = MeshData::default();
+        // (Navigation / beacon / strobe lights: crate::lights, from the model's light positions.)
+        let _ = (beacon_flash, strobe_flash);
+        // Afterburner flame (brightness and length follow the reheat level, with a little flicker).
+        let ab = ac.surfaces().afterburner;
+        if def.has_afterburner && ab > 0.02 {
+            let flick = 1.0 + 0.06 * (self.time * 37.0).sin() * (self.time * 23.0).cos();
+            for &p in def.engine_pos {
+                let mut flame = models::flame_mesh(Vec3::ZERO, 0.42);
+                for v in &mut flame.verts {
+                    v.uv[0] *= ab * flick;
                 }
-                PartKind::GearNose | PartKind::GearMain | PartKind::GearTail | PartKind::GearDoors => (s.gear, &part.mesh),
-                PartKind::Spoilers => (s.spoilers, &part.mesh),
-                PartKind::Reverser => (s.reverser, &part.mesh),
-                PartKind::Afterburner => {
-                    if ab <= 0.02 {
-                        continue;
-                    }
-                    // Flame brightness and length follow the reheat level, with a little flicker.
-                    let flick = 1.0 + 0.06 * (self.time * 37.0).sin() * (self.time * 23.0).cos();
-                    flame.verts.clear();
-                    flame.idx.clear();
-                    flame.verts.extend(part.mesh.verts.iter().map(|v| {
-                        let mut v = *v;
-                        v.uv[0] *= ab * flick;
-                        v
-                    }));
-                    flame.idx.extend_from_slice(&part.mesh.idx);
-                    let len = 0.55 + 0.45 * ab;
-                    let pm = m * Mat4::from_translation(part.pivot) * Mat4::from_scale(vec3(1.0, 1.0, len * flick));
-                    out.append(&flame, pm);
-                    continue;
-                }
-                PartKind::Beacon if !beacon_on => continue,
-                PartKind::Strobe if !strobe_on => continue,
-                PartKind::Beacon | PartKind::Strobe => (0.0, &part.mesh),
-            };
-            let pm = m * Mat4::from_translation(part.pivot) * Mat4::from_quat(Quat::from_axis_angle(part.axis, amount * part.max_angle));
-            out.append(mesh, pm);
+                let len = 0.55 + 0.45 * ab;
+                local.append(&flame, Mat4::from_translation(p) * Mat4::from_scale(vec3(1.0, 1.0, len * flick)));
+            }
         }
-    }
-}
-
-/// Build a model, convert its linear vertex colours to the sRGB-encoded
-/// colours the scene shader expects, and split the propellers into
-/// slow (blades) / fast (disc) variants. Also returns the bounding radius.
-fn load_model(id: &str) -> (AircraftModel, Vec<Option<(MeshData, MeshData)>>, f32) {
-    let mut model = models::build(id);
-    let enc = |m: &mut MeshData| {
-        for v in &mut m.verts {
+        // Linear vertex colours → the sRGB-encoded colours the scene shader expects.
+        for v in &mut local.verts {
             for c in &mut v.col {
                 *c = c.max(0.0).powf(1.0 / 2.2);
             }
         }
-    };
-    enc(&mut model.body);
-    for p in &mut model.parts {
-        enc(&mut p.mesh);
+        out.append(&local, m);
+        self.model.frame(m, interior)
     }
-    let size = model.body.verts.iter().map(|v| Vec3::from(v.pos).length()).fold(1.0, f32::max);
-    let props = model.parts.iter().map(|p| matches!(p.kind, PartKind::Propeller(_)).then(|| split_prop(p))).collect();
-    (model, props, size)
 }
 
-/// Split a propeller part into blades-only (slow) and disc (fast) meshes.
-fn split_prop(p: &models::Part) -> (MeshData, MeshData) {
-    let mut slow = MeshData::default();
-    let mut fast = MeshData::default();
-    {
-        // PROP verts carry uv.x = 0 (blade) or 1 (disc).
-        let is = |i: u32, kind: f32| {
-            let v = &p.mesh.verts[i as usize];
-            (v.mat - mat::PROP).abs() < 0.5 && (v.uv[0] - kind).abs() < 0.5
-        };
-        for t in p.mesh.idx.chunks(3) {
-            let disc = t.iter().any(|&i| is(i, 1.0));
-            let blade = t.iter().any(|&i| is(i, 0.0));
-            let dst = if disc {
-                &mut fast
-            } else if blade {
-                &mut slow
-            } else {
-                // spinner etc. appear in both
-                for d in [&mut slow, &mut fast] {
-                    let base = d.verts.len() as u32;
-                    d.verts.extend(t.iter().map(|&i| p.mesh.verts[i as usize]));
-                    d.idx.extend([base, base + 1, base + 2]);
-                }
-                continue;
-            };
-            let base = dst.verts.len() as u32;
-            dst.verts.extend(t.iter().map(|&i| p.mesh.verts[i as usize]));
-            dst.idx.extend([base, base + 1, base + 2]);
-        }
-    }
-    (slow, fast)
+/// Load the model for an aircraft. Also returns the bounding radius.
+fn load_model(def: &AircraftDef) -> (AircraftModel, f32) {
+    let mut model = models::build(def.id, def.eye);
+    // Nose (or steerable) wheel, for the taxi light.
+    model.nose_gear = def.gear.iter().find(|g| matches!(g.kind, flight::ContactKind::Wheel { steerable: true, .. }) && g.pos.z > 0.0).map(|g| g.pos);
+    let size = model.radius.max(def.wingspan * 0.5);
+    (model, size)
 }
