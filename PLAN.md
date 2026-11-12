@@ -78,9 +78,11 @@ item lands; keep entries one line.
 - [ ] **P2** Tutorial / onboarding flights
 
 ## 6. UI / UX
-- [~] **P0** Design system, fonts, redesigned HUD, per-class instruments (PFD/ND, F-16 HUD, analogue) (M)
-- [~] **P0** Vector moving map + world-map airport picker (OurAirports, search, filters, runway/start picker, live METAR) (M)
-- [~] **P0** Menus: aircraft cards, conditions, settings, pause, loading, toasts; frame pacing fix (M)
+- [x] Design system, fonts, redesigned HUD, per-class instruments (PFD/ND, F-16 HUD, analogue) (M)
+- [x] Vector moving map + world-map airport picker (OurAirports, search, filters, runway/start picker, live METAR) (M)
+- [x] Menus: aircraft cards, conditions, settings, pause, loading, toasts; frame pacing fix (M)
+- [ ] **P1** UI follow-ups: ND label overlapping heading scale; airport-diagram backdrop detail (higher-zoom tiles); apron/parking data; UI CPU cost ~4 ms in dense ND
+- [ ] **P1** Bot uses displaced thresholds; A320 bot occasional go-around on stable final
 - [ ] **P1** Input: gamepad, joystick/HOTAS, rudder pedals, key rebinding, sensitivity/curves
 - [ ] **P1** Accessibility: UI scale, colour-blind-safe palettes, subtitles for callouts/ATC
 - [ ] **P2** Localisation-ready strings
@@ -104,7 +106,7 @@ item lands; keep entries one line.
 | A–I | v1 → v2 foundations (flight, models, clouds, streaming, graphics, bot, weather, floating origin) | ✅ |
 | K | Procedural audio | ✅ |
 | J | Night & lighting | 🟡 running |
-| M | UI/HUD, maps, airport picker, menus, frame pacing | 🟡 running |
+| M | UI/HUD, maps, airport picker, menus, frame pacing | ✅ |
 | N | Real FlightGear aircraft + JSBSim FDM | 🟡 running |
 | K2 | Sample-based audio, supersonic, crash sounds | 🟡 running |
 | L | Structure/flex/crashes + supersonic/atmospheric VFX | ⏳ after N |
