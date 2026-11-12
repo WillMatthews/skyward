@@ -17,7 +17,7 @@ const GROUND_ALBEDO: vec3<f32> = vec3<f32>(0.11, 0.12, 0.09);
 const TRANS_W: f32 = 256.0;
 const TRANS_H: f32 = 64.0;
 const MS_N: f32 = 32.0;
-const SKY_W: f32 = 192.0;
+const SKY_W: f32 = 256.0;
 const SKY_H: f32 = 108.0;
 const AP_N: f32 = 32.0;
 const AP_MAX_KM: f32 = 64.0;       // aerial perspective volume depth
@@ -103,8 +103,15 @@ fn mie_phase(c: f32, g: f32) -> f32 {
     return k * (1.0 + c * c) / pow(max(1.0 + g2 - 2.0 * g * c, 1e-4), 1.5);
 }
 
-// Sky-view LUT mapping (Hillaire): x = azimuth from the sun (sqrt-warped),
-// y = zenith angle, split at the horizon with extra resolution near it.
+// Sky-view LUT mapping (Hillaire): x = absolute azimuth (clockwise from
+// north, so the sun, the moon and light-pollution skyglow can all live in one
+// LUT), y = zenith angle, split at the horizon with extra resolution near it.
+// (`sun` is unused; kept for the callers' signature.)
+fn skyview_az(d: vec3<f32>) -> f32 {
+    // 0..1 from north through east.
+    return fract(atan2(d.x, -d.z) / (2.0 * PI) + 1.0);
+}
+
 fn skyview_uv(r: f32, d: vec3<f32>, sun: vec3<f32>) -> vec2<f32> {
     let vh = sqrt(max(r * r - RG * RG, 0.0));
     let cos_beta = vh / r;
@@ -123,16 +130,9 @@ fn skyview_uv(r: f32, d: vec3<f32>, sun: vec3<f32>) -> vec2<f32> {
         c = sqrt(clamp(c, 0.0, 1.0));
         v = c * 0.5 + 0.5;
     }
-    // azimuth between view and sun projected on the horizontal plane
-    let dh = d.xz;
-    let sh = sun.xz;
-    let ld = length(dh) * length(sh);
-    var cphi = 1.0;
-    if (ld > 1e-5) {
-        cphi = dot(dh, sh) / ld;
-    }
-    var u = sqrt(clamp(-cphi * 0.5 + 0.5, 0.0, 1.0));
-    u = 0.5 / SKY_W + u * (1.0 - 1.0 / SKY_W);
+    // Texel centres at (i + 0.5) / SKY_W cover the full circle; the seam at
+    // north is within half a texel (ClampToEdge there).
+    let u = skyview_az(d);
     v = 0.5 / SKY_H + v * (1.0 - 1.0 / SKY_H);
     return vec2<f32>(u, v);
 }

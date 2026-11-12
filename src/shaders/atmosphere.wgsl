@@ -10,8 +10,14 @@ struct AtmosU {
     eye: vec4<f32>,             // metres; w = haze
     sun: vec4<f32>,             // direction toward the sun; w = cloud cover 0..1
     sun_e: vec4<f32>,           // top-of-atmosphere sun irradiance (rgb); w = mirrored (|y|) flag
-    params: vec4<f32>,          // x reference illuminance, y cloud base (m), z unused, w exposure key
+    params: vec4<f32>,          // x reference illuminance, y cloud base (m), z LUT scale (sky-view / aerial
+                                // in-scatter are stored x this so faint night skies stay inside fp16), w exposure key
     fog: vec4<f32>,             // x ground fog extinction (/km), y fog top (km), z overcast deck transmission, w unused
+    moon: vec4<f32>,            // toward the moon; w = moon irradiance / sun irradiance (top of the atmosphere)
+    night: vec4<f32>,           // x airglow radiance, y city upward radiance (both / sun_e), z artificial metering illuminance,
+                                // w pre-exposure (sun_e above includes it; expo is divided by it)
+    glow_tint: vec4<f32>,       // skyglow colour
+    glow: array<vec4<f32>, 32>, // skyglow radiance / sun_e: 8 elevation x 16 azimuth bins
 };
 
 struct AtmosOut {
@@ -166,6 +172,14 @@ struct Scat {
 // In-scatter along a ray from planet-frame point o, direction d, length tmax (km),
 // per unit sun irradiance. `mirror`: heights are |y| of the local frame (water reflection).
 fn integrate(o: vec3<f32>, d: vec3<f32>, tmax: f32, n: i32, sun: vec3<f32>, quad: bool) -> Scat {
+    return integrate_city(o, d, tmax, n, sun, quad, 0.0);
+}
+
+// `city`: isotropic in-scatter of the lit city's upward light (radiance /
+// sun_e) added to every sample, fading with height — the orange haze over a
+// city at night (the aerial-perspective volume uses it; the sky-view LUT gets
+// the skyglow table instead).
+fn integrate_city(o: vec3<f32>, d: vec3<f32>, tmax: f32, n: i32, sun: vec3<f32>, quad: bool, city: f32) -> Scat {
     var T = vec3<f32>(1.0);
     var L = vec3<f32>(0.0);
     let c = dot(d, sun);
@@ -200,7 +214,12 @@ fn integrate(o: vec3<f32>, d: vec3<f32>, tmax: f32, n: i32, sun: vec3<f32>, quad
         let below = 1.0 - smoothstep(cb, cb + 0.3, rp - RG);
         let shade = 1.0 - 0.92 * cover * cover * below;
         let tsun = trans_at(rp, mus) * shade;
-        let iso = deck_l * (cover * below * 0.5);
+        var iso = deck_l * (cover * below * 0.5);
+        if (city > 0.0) {
+            // Ground carpet irradiance pi*L below, scattered isotropically (1/4pi), over a finite city.
+            let hk = (rp - RG) / 2.5;
+            iso += A.glow_tint.rgb * (city * 0.25 / (1.0 + hk * hk));
+        }
         let S = (m.ray * pr + vec3<f32>(m.mie * pm)) * tsun + (m.ray + vec3<f32>(m.mie)) * (ms_at(rp, mus) * mix(1.0, 0.5, cover * below) + iso);
         let Ts = exp(-m.ext * dt);
         L += T * (S - S * Ts) / max(m.ext, vec3<f32>(1e-7));
@@ -210,6 +229,43 @@ fn integrate(o: vec3<f32>, d: vec3<f32>, tmax: f32, n: i32, sun: vec3<f32>, quad
     s.L = L;
     s.T = T;
     return s;
+}
+
+// ------------------------------------------------------------------ night sky
+
+// Light-pollution skyglow from the table (radiance / sun_e).
+fn skyglow(d: vec3<f32>) -> f32 {
+    let el = asin(clamp(d.y, -1.0, 1.0));
+    // Elevation bins at 90 deg * (i / 7)^2.
+    let fe = sqrt(clamp(el / (0.5 * PI), 0.0, 1.0)) * 7.0;
+    let e0 = min(i32(fe), 6);
+    let te = fe - f32(e0);
+    let fa = skyview_az(d) * 16.0 - 0.5;
+    let a0 = i32(floor(fa));
+    let ta = fa - f32(a0);
+    let a1 = (a0 + 1 + 16) % 16;
+    let a0w = (a0 + 16) % 16;
+    let i00 = e0 * 16 + a0w;
+    let i01 = e0 * 16 + a1;
+    let i10 = (e0 + 1) * 16 + a0w;
+    let i11 = (e0 + 1) * 16 + a1;
+    let g00 = A.glow[i00 / 4][i00 % 4];
+    let g01 = A.glow[i01 / 4][i01 % 4];
+    let g10 = A.glow[i10 / 4][i10 % 4];
+    let g11 = A.glow[i11 / 4][i11 % 4];
+    var g = mix(mix(g00, g01, ta), mix(g10, g11, ta), te);
+    // Below the horizon the glow fades into the distant (dark) ground.
+    g *= smoothstep(-0.08, 0.0, d.y);
+    return g;
+}
+
+// Natural night sky (airglow + unresolved starlight, brighter toward the
+// horizon: van Rhijn) plus light-pollution skyglow, per unit sun irradiance.
+fn night_sky(d: vec3<f32>) -> vec3<f32> {
+    let z = clamp(d.y, 0.0, 1.0);
+    let vr = 1.0 / sqrt(max(1.0 - 0.96 * (1.0 - z * z), 0.05));
+    let air = A.night.x * vr * smoothstep(-0.05, 0.02, d.y);
+    return vec3<f32>(0.75, 0.85, 1.0) * air + A.glow_tint.rgb * skyglow(d);
 }
 
 // ------------------------------------------------------------------ sky-view LUT
@@ -238,13 +294,10 @@ fn cs_skyview(@builtin(global_invocation_id) id: vec3<u32>) {
         c = c * c;
         vz = zh + beta * c;
     }
-    var cu = uv.x * uv.x;
-    let cphi = -(cu * 2.0 - 1.0);
-    let sphi = sqrt(max(1.0 - cphi * cphi, 0.0));
-    // Frame: sun azimuth along +x.
-    let sun_h = length(A.sun.xz);
-    let sun = vec3<f32>(sun_h, A.sun.y, 0.0);
-    let d = vec3<f32>(sin(vz) * cphi, cos(vz), sin(vz) * sphi);
+    // Absolute azimuth (clockwise from north = -z), texel centres on the full circle.
+    let az = uv0.x * 2.0 * PI;
+    let sun = normalize(A.sun.xyz);
+    let d = vec3<f32>(sin(vz) * sin(az), cos(vz), -sin(vz) * cos(az));
     let o = vec3<f32>(0.0, r, 0.0);
     var tmax = ray_sphere(r, d.y, RT);
     let ground = hits_ground(r, d.y);
@@ -262,7 +315,21 @@ fn cs_skyview(@builtin(global_invocation_id) id: vec3<u32>) {
         let e = trans_at(RG + 0.001, mus) * max(mus, 0.0) + ms_at(RG + 0.001, mus) * 2.0 + vec3<f32>(0.04, 0.05, 0.07) * smoothstep(-0.1, 0.3, mus);
         L += s.T * e * GROUND_ALBEDO / PI;
     }
-    textureStore(sky_out, vec2<i32>(id.xy), vec4<f32>(L, 1.0));
+    // Moonlit sky: the same scattering, lit by the moon (only worth it at night).
+    let mk = A.moon.w;
+    if (mk > 0.0 && A.sun.y < 0.05) {
+        let moon = normalize(A.moon.xyz);
+        let sm = integrate(o, d, max(tmax, 0.0), 20, moon, true);
+        L += sm.L * mk;
+        if (ground) {
+            let p = o + d * tmax;
+            let mus = dot(normalize(p), moon);
+            let e = trans_at(RG + 0.001, mus) * max(mus, 0.0) + ms_at(RG + 0.001, mus) * 2.0;
+            L += sm.T * e * GROUND_ALBEDO / PI * mk;
+        }
+    }
+    L += night_sky(d) * select(vec3<f32>(1.0), s.T, ground);
+    textureStore(sky_out, vec2<i32>(id.xy), vec4<f32>(L * A.params.z, 1.0));
 }
 
 // ------------------------------------------------------------------ aerial perspective
@@ -276,8 +343,13 @@ fn cs_aerial(@builtin(global_invocation_id) id: vec3<u32>) {
     let dist = ap_slice_dist((f32(id.z) + 0.5) / AP_N);
     let o = vec3<f32>(0.0, RG + A.eye.y * 0.001, 0.0);
     let n = 6 + i32(id.z) / 2;
-    let s = integrate(o, d, dist, n, normalize(A.sun.xyz), false);
-    textureStore(ap_out, vec3<i32>(id), vec4<f32>(s.L, dot(s.T, vec3<f32>(1.0 / 3.0))));
+    let s = integrate_city(o, d, dist, n, normalize(A.sun.xyz), false, A.night.y);
+    var L = s.L;
+    let mk = A.moon.w;
+    if (mk > 0.0 && A.sun.y < 0.05) {
+        L += integrate(o, d, dist, max(n / 2, 4), normalize(A.moon.xyz), false).L * mk;
+    }
+    textureStore(ap_out, vec3<i32>(id), vec4<f32>(L * A.params.z, dot(s.T, vec3<f32>(1.0 / 3.0))));
 }
 
 // ------------------------------------------------------------------ ambient SH + exposure
@@ -286,7 +358,7 @@ var<workgroup> sh_acc: array<array<vec3<f32>, 4>, 64>;
 
 fn sky_lut(d: vec3<f32>) -> vec3<f32> {
     let h = max(A.eye.y * 0.001, 0.002);
-    return textureSampleLevel(sky_tex, lin, skyview_uv(RG + h, d, A.sun.xyz), 0.0).rgb;
+    return textureSampleLevel(sky_tex, lin, skyview_uv(RG + h, d, A.sun.xyz), 0.0).rgb / A.params.z;
 }
 
 @compute @workgroup_size(64)
@@ -299,7 +371,11 @@ fn cs_ambient(@builtin(local_invocation_index) li: u32) {
     // (+ a share of the clear-sky light so it fades properly through dusk)
     let zen = sky_lut(vec3<f32>(0.0, 1.0, 0.0));
     // fog.z: how much light a thick deck lets through (1 = typical stratocumulus).
-    let deck = (tsun0 * max(sun.y, 0.0) * 0.32 / PI + vec3<f32>(luma(zen)) * 0.8) * A.fog.z;
+    let moon = normalize(A.moon.xyz);
+    let tmoon0 = trans_at(r0, moon.y) * A.moon.w;
+    // The deck is lit from above (sun, moon) and from below by the city.
+    let deck = (tsun0 * max(sun.y, 0.0) * 0.32 / PI + tmoon0 * max(moon.y, 0.0) * 0.32 / PI + vec3<f32>(luma(zen)) * 0.8) * A.fog.z
+        + A.glow_tint.rgb * (A.night.y * 0.55);
     var acc = array<vec3<f32>, 4>(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
     for (var j = 0u; j < 4u; j++) {
         let i = f32(li * 4u + j);
@@ -313,8 +389,9 @@ fn cs_ambient(@builtin(local_invocation_index) li: u32) {
             let cl = cover * smoothstep(-0.02, 0.12, d.y);
             L = mix(L, deck * luma(L) / max(luma(L), 1e-6) * 0.0 + deck, cl);
         } else {
-            // Ground bounce: under cloud the ground is dimmer.
+            // Ground bounce: under cloud the ground is dimmer; the lit city glows.
             L *= 1.0 - 0.6 * cover;
+            L += A.glow_tint.rgb * A.night.y * smoothstep(0.0, -0.1, d.y);
         }
         let w = 4.0 * PI / 256.0;
         acc[0] += L * w * 0.282095;
@@ -351,14 +428,25 @@ fn cs_ambient(@builtin(local_invocation_index) li: u32) {
         // under heavy cloud) + sky irradiance from above.
         let e_up = max(s0 + sy, vec3<f32>(0.0));
         let e_sun = trans_at(r0, sun.y) * e * max(sun.y, 0.0) * (1.0 - 0.92 * cover);
-        let metered = luma(e_up + e_sun);
+        let e_moon = tmoon0 * e * max(moon.y, 0.0) * (1.0 - 0.92 * cover);
+        // Artificial light the eye adapts to (street-lit city in view).
+        let metered = luma(e_up + e_sun + e_moon) / A.night.w + A.night.z;
         // Exposure key: compress the range so dusk is darker than noon (but
         // still readable) — a camera with partial auto-exposure.
         // k maps a grey card under the metered light to `key` x albedo, but
         // only compensates 82% of the change from the reference illuminance.
         let ref_e = A.params.x;
-        let m = max(metered, ref_e * 0.004);
-        let k = A.params.w * PI / m * pow(m / ref_e, 0.3);
-        outb.expo = vec4<f32>(k, metered, 0.0, 0.0);
+        // Partial adaptation: a grey card under the metered light maps to
+        // key * (m / ref)^0.3 — dusk darker than noon. Below dusk the eye keeps
+        // adapting (scotopic vision) a little faster so moonlit ground stays
+        // readable; the tonemapper adds the Purkinje shift.
+        let m = max(metered, ref_e * 2.0e-8);
+        let dusk = ref_e * 0.004;
+        var k = A.params.w * PI / m * pow(m / ref_e, 0.3);
+        if (m < dusk) {
+            k *= pow(dusk / m, 0.25);
+        }
+        // (The HDR image is pre-exposed by night.w.)
+        outb.expo = vec4<f32>(k / A.night.w, metered, 0.0, 0.0);
     }
 }

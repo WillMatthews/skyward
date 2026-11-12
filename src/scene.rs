@@ -1,4 +1,4 @@
-//! Scene geometry: shared mesh types, per-tile mesh/collision/minimap
+//! Scene geometry: shared mesh types, per-tile mesh/collision
 //! builders (run on the tile workers), runway markings and thermals.
 
 use crate::osm::{point_in_ring, Airport, Area, Kind, Proj, RunwayPiece, TileFeatures, TileId};
@@ -38,6 +38,8 @@ pub mod mat {
     /// Road asphalt with lane markings: uv.x = metres along,
     /// uv.y = metres across + 1000 * round(width * 10).
     pub const ROAD: f32 = 16.0;
+    /// Self-lit only at night (floodlit crowns of towers): uv.x = luminance (cd/m²).
+    pub const NIGHT_EMISSIVE: f32 = 17.0;
 }
 
 #[repr(C)]
@@ -469,46 +471,6 @@ impl RasterXf {
     }
 }
 
-/// Simple RGBA8 image.
-pub struct Rgba {
-    pub w: u32,
-    pub h: u32,
-    pub px: Vec<u8>,
-}
-
-impl Rgba {
-    pub fn new(w: u32, h: u32, c: [f32; 3]) -> Self {
-        let mut px = Vec::with_capacity((w * h * 4) as usize);
-        for _ in 0..w * h {
-            px.extend([(c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8, 255]);
-        }
-        Rgba { w, h, px }
-    }
-    pub fn set(&mut self, x: u32, y: u32, c: [f32; 3]) {
-        let i = ((y * self.w + x) * 4) as usize;
-        self.px[i..i + 3].copy_from_slice(&[(c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8]);
-    }
-}
-
-/// Per-tile minimap image size (pixels per side, ≈ 6 m/px at z14 in the UK).
-pub const MAP_TILE_PX: u32 = 256;
-
-mod mapcol {
-    pub const BG: [f32; 3] = [0.86, 0.88, 0.78];
-    pub const URBAN: [f32; 3] = [0.88, 0.86, 0.84];
-    pub const GRASS: [f32; 3] = [0.74, 0.87, 0.62];
-    pub const WOOD: [f32; 3] = [0.52, 0.72, 0.46];
-    pub const WATER: [f32; 3] = [0.58, 0.74, 0.92];
-    pub const SAND: [f32; 3] = [0.93, 0.89, 0.74];
-    pub const AERO: [f32; 3] = [0.82, 0.84, 0.80];
-    pub const APRON: [f32; 3] = [0.72, 0.72, 0.76];
-    pub const BUILDING: [f32; 3] = [0.66, 0.62, 0.60];
-    pub const ROAD: [f32; 3] = [1.0, 1.0, 1.0];
-    pub const MAJOR: [f32; 3] = [0.98, 0.82, 0.50];
-    pub const RAIL: [f32; 3] = [0.50, 0.50, 0.52];
-    pub const TAXI: [f32; 3] = [0.62, 0.62, 0.66];
-}
-
 // ---------------------------------------------------------------- trees
 
 /// One tree instance: position, height, foliage tint, rotation about Y.
@@ -644,10 +606,11 @@ pub struct TileBuild {
     pub trees: Vec<TreeInst>,
     pub conifers: usize,
     pub collision: TileCollision,
-    pub minimap: Rgba,
     pub runways: Vec<RunwayPiece>,
     pub airports: Vec<Airport>,
     pub building_count: usize,
+    /// Street lights, traffic, warning lights, skyglow sources (lights.rs).
+    pub lights: crate::lights::TileLights,
 }
 
 const DENSITY_N: usize = 24;
@@ -663,13 +626,11 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
     let (lo, hi) = rect;
     let mut flat = MeshData::default();
     let mut bld = MeshData::default();
-    let rx_map = RasterXf::new(rect, MAP_TILE_PX);
-    let mut map = Rgba::new(MAP_TILE_PX, MAP_TILE_PX, mapcol::BG);
+    let mut lights = crate::lights::place::CityGen::new(id, proj, rect);
     let rx_mask = RasterXf::new(rect, MASK_N);
     let mut mask = vec![0u8; (MASK_N * MASK_N) as usize];
     let mut mask_set = |x: i32, y: i32| mask[(y as u32 * MASK_N + x as u32) as usize] = 1;
 
-    let paint = |map: &mut Rgba, a: &Area, c: [f32; 3]| rx_map.fill(&a.outer, &a.holes, |x, y| map.set(x as u32, y as u32, c));
 
     // --- opaque field ground over the whole tile (hides the far-field layer)
     flat.mat = mat::GROUND;
@@ -685,6 +646,30 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
         if (0..DENSITY_N as i32).contains(&cx) && (0..DENSITY_N as i32).contains(&cz) {
             density[cz as usize * DENSITY_N + cx as usize] += ring_area(&a.outer).abs() / (cell.x * cell.y);
         }
+    }
+    // Built-up cells (buildings or urban landuse, grown by one cell): only
+    // their roads get street lights — country roads stay dark.
+    {
+        let mut built = vec![false; DENSITY_N * DENSITY_N];
+        for z in 0..DENSITY_N as i32 {
+            for x in 0..DENSITY_N as i32 {
+                let mut any = false;
+                for dz in -1i32..=1 {
+                    for dx in -1i32..=1 {
+                        let (xx, zz) = (x + dx, z + dz);
+                        if (0..DENSITY_N as i32).contains(&xx) && (0..DENSITY_N as i32).contains(&zz) {
+                            any |= density[zz as usize * DENSITY_N + xx as usize] > 0.02;
+                        }
+                    }
+                }
+                built[z as usize * DENSITY_N + x as usize] = any;
+            }
+        }
+        let rx_d = RasterXf::new(rect, DENSITY_N as u32);
+        for a in sel(&f, |k| matches!(k, Kind::Urban(_))) {
+            rx_d.fill(&a.outer, &a.holes, |x, y| built[y as usize * DENSITY_N + x as usize] = true);
+        }
+        lights.set_built(built, DENSITY_N);
     }
     flat.mat = mat::GROUND;
     for z in 0..DENSITY_N {
@@ -715,12 +700,6 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
                     flat.v_uv(vec3(b.x, 0.0, b.y), Vec3::Y, URBAN_DENSE, [1.0, 0.0]);
                     flat.v_uv(vec3(a.x, 0.0, b.y), Vec3::Y, URBAN_DENSE, [1.0, 0.0]);
                     flat.idx.extend([i, i + 1, i + 2, i, i + 2, i + 3]);
-                    let (pa, pb) = (rx_map.px(a), rx_map.px(b));
-                    for py in (pa.y.round() as i32).max(0)..(pb.y.round() as i32).min(MAP_TILE_PX as i32) {
-                        for px in (pa.x.round() as i32).max(0)..(pb.x.round() as i32).min(MAP_TILE_PX as i32) {
-                            map.set(px as u32, py as u32, mapcol::URBAN);
-                        }
-                    }
                     run = None;
                 }
                 _ => {}
@@ -737,45 +716,40 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
         for v in &mut flat.verts[base..] {
             v.uv = [1.0, 0.0];
         }
-        paint(&mut map, a, mapcol::URBAN);
     }
 
     // --- natural ground cover (order: big/low first)
     flat.mat = mat::GRASS;
-    let ground_layers: [(Kind, [f32; 3], [f32; 3], f32); 7] = [
-        (Kind::Aerodrome, AERODROME, mapcol::AERO, mat::GRASS),
-        (Kind::Grass, GRASS, mapcol::GRASS, mat::GRASS),
-        (Kind::Wetland, WETLAND, mapcol::GRASS, mat::GRASS),
-        (Kind::Scrub, SCRUB, mapcol::GRASS, mat::GRASS),
-        (Kind::Park, PARK, mapcol::GRASS, mat::GRASS),
-        (Kind::Sand, SAND, mapcol::SAND, mat::DIFFUSE),
-        (Kind::Rock, ROCK, mapcol::SAND, mat::DIFFUSE),
+    let ground_layers: [(Kind, [f32; 3], f32); 7] = [
+        (Kind::Aerodrome, AERODROME, mat::GRASS),
+        (Kind::Grass, GRASS, mat::GRASS),
+        (Kind::Wetland, WETLAND, mat::GRASS),
+        (Kind::Scrub, SCRUB, mat::GRASS),
+        (Kind::Park, PARK, mat::GRASS),
+        (Kind::Sand, SAND, mat::DIFFUSE),
+        (Kind::Rock, ROCK, mat::DIFFUSE),
     ];
-    for (kind, col, mc, m) in ground_layers {
+    for (kind, col, m) in ground_layers {
         flat.mat = m;
         let pred = move |k: &Kind| *k == kind;
         for a in sel(&f, pred) {
             flat.flat_poly(&a.outer, &a.holes, 0.0, Vec3::Y, col);
-            paint(&mut map, a, mc);
         }
     }
     flat.mat = mat::GRASS;
     for a in sel(&f, |k| *k == Kind::Wood) {
         flat.flat_poly(&a.outer, &a.holes, 0.0, Vec3::Y, WOOD);
-        paint(&mut map, a, mapcol::WOOD);
     }
 
     // --- water
     flat.mat = mat::WATER;
     for a in sel(&f, |k| *k == Kind::Water) {
         flat.flat_poly(&a.outer, &a.holes, 0.0, Vec3::Y, WATER);
-        paint(&mut map, a, mapcol::WATER);
         rx_mask.fill(&a.outer, &a.holes, &mut mask_set);
     }
     for l in &f.lines {
         if let Kind::Waterway { width } = l.kind {
             flat.strip_cut(&l.pts, width, 0.0, WATER, l.cut);
-            rx_map.stroke(&l.pts, width.max(4.0), |x, y| map.set(x as u32, y as u32, mapcol::WATER));
             rx_mask.stroke(&l.pts, width + 2.0, &mut mask_set);
         }
     }
@@ -784,8 +758,10 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
     flat.mat = mat::ASPHALT;
     for a in sel(&f, |k| matches!(k, Kind::Pier | Kind::Apron | Kind::RunwayArea)) {
         let col = if a.kind == Kind::RunwayArea { RUNWAY } else { APRON };
+        if a.kind == Kind::Apron && ring_area(&a.outer).abs() > 8000.0 {
+            lights.apron(&a.outer);
+        }
         flat.flat_poly(&a.outer, &a.holes, 0.0, Vec3::Y, col);
-        paint(&mut map, a, mapcol::APRON);
         rx_mask.fill(&a.outer, &a.holes, &mut mask_set);
     }
     for a in sel(&f, |k| *k == Kind::Aerodrome) {
@@ -793,18 +769,18 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
     }
 
     // --- linear features, minor first so majors draw on top
-    let line_order = |k: &Kind| -> Option<(u8, f32, [f32; 3], [f32; 3])> {
+    let line_order = |k: &Kind| -> Option<(u8, f32, [f32; 3])> {
         Some(match *k {
-            Kind::Track { width } => (0, width, TRACK, mapcol::ROAD),
-            Kind::Rail => (1, 3.2, RAIL, mapcol::RAIL),
-            Kind::Road { width, major: false } => (2 + (width > 7.0) as u8, width, ROAD, mapcol::ROAD),
-            Kind::Road { width, major: true } => (4 + (width > 15.0) as u8, width, MAJOR_ROAD, mapcol::MAJOR),
+            Kind::Track { width } => (0, width, TRACK),
+            Kind::Rail => (1, 3.2, RAIL),
+            Kind::Road { width, major: false } => (2 + (width > 7.0) as u8, width, ROAD),
+            Kind::Road { width, major: true } => (4 + (width > 15.0) as u8, width, MAJOR_ROAD),
             _ => return None,
         })
     };
     for pass in 0..6u8 {
         for l in &f.lines {
-            let Some((order, width, col, mc)) = line_order(&l.kind) else { continue };
+            let Some((order, width, col)) = line_order(&l.kind) else { continue };
             if order != pass {
                 continue;
             }
@@ -814,17 +790,18 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
             } else {
                 flat.mat = mat::ROAD;
                 flat.strip_road(&l.pts, width, col, l.cut);
+                if let Kind::Road { width, major } = l.kind {
+                    lights.road(&l.pts, width, major);
+                }
             }
-            let map_w = if pass >= 4 { width.max(9.0) } else { width.max(3.0) };
-            rx_map.stroke(&l.pts, map_w, |x, y| map.set(x as u32, y as u32, mc));
             rx_mask.stroke(&l.pts, width + 3.0, &mut mask_set);
         }
     }
     flat.mat = mat::ASPHALT;
     for l in &f.lines {
         if let Kind::Taxiway { width } = l.kind {
+            lights.taxiway(&l.pts, width);
             flat.strip_cut(&l.pts, width, 0.0, TAXI, l.cut);
-            rx_map.stroke(&l.pts, width, |x, y| map.set(x as u32, y as u32, mapcol::TAXI));
             rx_mask.stroke(&l.pts, width + 10.0, &mut mask_set);
         }
     }
@@ -845,12 +822,12 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
             continue;
         }
         building(&mut bld, a, height, min_height, colour);
+        lights.tall_building(&a.outer, height);
         building_count += 1;
         max_h = max_h.max(height);
         let (blo, bhi) = bbox(&a.outer);
         sgrid.insert(blo, bhi, solids.len() as u32);
         solids.push(Solid { pts: a.outer.clone(), lo: blo, hi: bhi, top: height });
-        rx_map.fill(&a.outer, &a.holes, |x, y| map.set(x as u32, y as u32, mapcol::BUILDING));
         rx_mask.fill(&a.outer, &[], &mut mask_set);
     }
     let mut water = Vec::new();
@@ -920,58 +897,66 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
         trees: decid,
         conifers,
         collision: TileCollision { solids, sgrid, water, wgrid },
-        minimap: map,
         runways: f.runways,
         airports: f.airports,
         building_count,
+        lights: lights.finish(),
     }
 }
 
-/// Far-field tile (low zoom): generalised ground layers + minimap only.
+/// Far-field tile (low zoom): generalised ground layers + city lights.
 pub fn build_far_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
     let rect = id.rect(proj);
     let (lo, hi) = rect;
     let mut flat = MeshData::default();
-    const FAR_MAP_PX: u32 = 512;
-    let rx_map = RasterXf::new(rect, FAR_MAP_PX);
-    let mut map = Rgba::new(FAR_MAP_PX, FAR_MAP_PX, mapcol::BG);
-    let paint = |map: &mut Rgba, a: &Area, c: [f32; 3]| rx_map.fill(&a.outer, &a.holes, |x, y| map.set(x as u32, y as u32, c));
+    let mut lights = crate::lights::place::CityGen::new(id, proj, rect);
+    {
+        // Lit roads only in and around built-up areas.
+        const N: usize = 64;
+        let rx_u = RasterXf::new(rect, N as u32);
+        let mut built = vec![false; N * N];
+        for a in sel(&f, |k| matches!(k, Kind::Urban(_))) {
+            rx_u.fill(&a.outer, &a.holes, |x, y| built[y as usize * N + x as usize] = true);
+        }
+        lights.set_built(built, N);
+    }
     for a in sel(&f, |k| matches!(k, Kind::Urban(_))) {
         let Kind::Urban(c) = a.kind else { continue };
+        lights.far_urban(&a.outer, &a.holes, c, a.key);
         let base = flat.verts.len();
         flat.mat = mat::GROUND;
         flat.flat_poly(&a.outer, &a.holes, 0.0, Vec3::Y, URBAN[c as usize % URBAN.len()]);
         for v in &mut flat.verts[base..] {
             v.uv = [1.0, 0.0];
         }
-        paint(&mut map, a, mapcol::URBAN);
     }
-    let layers: [(Kind, [f32; 3], [f32; 3], f32); 8] = [
-        (Kind::Aerodrome, AERODROME, mapcol::AERO, mat::GRASS),
-        (Kind::Grass, GRASS, mapcol::GRASS, mat::GRASS),
-        (Kind::Park, PARK, mapcol::GRASS, mat::GRASS),
-        (Kind::Scrub, SCRUB, mapcol::GRASS, mat::GRASS),
-        (Kind::Wetland, WETLAND, mapcol::GRASS, mat::GRASS),
-        (Kind::Sand, SAND, mapcol::SAND, mat::DIFFUSE),
-        (Kind::Wood, WOOD, mapcol::WOOD, mat::GRASS),
-        (Kind::Water, WATER, mapcol::WATER, mat::WATER),
+    let layers: [(Kind, [f32; 3], f32); 8] = [
+        (Kind::Aerodrome, AERODROME, mat::GRASS),
+        (Kind::Grass, GRASS, mat::GRASS),
+        (Kind::Park, PARK, mat::GRASS),
+        (Kind::Scrub, SCRUB, mat::GRASS),
+        (Kind::Wetland, WETLAND, mat::GRASS),
+        (Kind::Sand, SAND, mat::DIFFUSE),
+        (Kind::Wood, WOOD, mat::GRASS),
+        (Kind::Water, WATER, mat::WATER),
     ];
-    for (kind, col, mc, m) in layers {
+    for (kind, col, m) in layers {
         flat.mat = m;
         for a in sel(&f, move |k| *k == kind) {
             flat.flat_poly(&a.outer, &a.holes, 0.0, Vec3::Y, col);
-            paint(&mut map, a, mc);
         }
     }
     for l in &f.lines {
-        let (w, col, mc, m) = match l.kind {
-            Kind::Waterway { width } if width >= 10.0 => (width * 1.5, WATER, mapcol::WATER, mat::WATER),
-            Kind::Road { width, major: true } => (width, MAJOR_ROAD, mapcol::MAJOR, mat::ASPHALT),
+        let (w, col, m) = match l.kind {
+            Kind::Waterway { width } if width >= 10.0 => (width * 1.5, WATER, mat::WATER),
+            Kind::Road { width, major: true } => (width, MAJOR_ROAD, mat::ASPHALT),
             _ => continue,
         };
+        if let Kind::Road { width, .. } = l.kind {
+            lights.far_road(&l.pts, width);
+        }
         flat.mat = m;
         flat.strip_cut(&l.pts, w, 0.0, col, l.cut);
-        rx_map.stroke(&l.pts, w.max(40.0), |x, y| map.set(x as u32, y as u32, mc));
     }
     TileBuild {
         id,
@@ -981,10 +966,10 @@ pub fn build_far_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
         trees: Vec::new(),
         conifers: 0,
         collision: TileCollision { solids: Vec::new(), sgrid: Grid::new(lo, hi, 1), water: Vec::new(), wgrid: Grid::new(lo, hi, 1) },
-        minimap: map,
         runways: Vec::new(),
         airports: Vec::new(),
         building_count: 0,
+        lights: lights.finish(),
     }
 }
 
@@ -1078,6 +1063,33 @@ fn building(m: &mut MeshData, a: &Area, height: f32, min_h: f32, colour: Option<
             m.v_uv(vec3(p.x, eaves, p.y), nrm, col, [u, eaves]);
             m.idx.extend([i0, i0 + 1, i0 + 2, i0, i0 + 2, i0 + 3]);
             u += len;
+        }
+    }
+    // Floodlit crown on the tallest towers: a band of light under the roof
+    // line, at night only (NIGHT_EMISSIVE: uv.x = luminance, cd/m²).
+    if height > 140.0 && pitched.is_none() {
+        const CROWN: [[f32; 3]; 4] = [[0.85, 0.92, 1.0], [0.45, 0.62, 1.0], [1.0, 0.86, 0.62], [0.72, 0.5, 1.0]];
+        let c = CROWN[(hash(a.key ^ 0xc409) % 4) as usize];
+        // (Vertex colours are sRGB-encoded; the shader linearises them.)
+        let c = [c[0].powf(1.0 / 2.2), c[1].powf(1.0 / 2.2), c[2].powf(1.0 / 2.2)];
+        let band = (height * 0.035).clamp(4.0, 9.0);
+        m.mat = mat::NIGHT_EMISSIVE;
+        let n = a.outer.len();
+        let s = if ring_area(&a.outer) > 0.0 { 1.0 } else { -1.0 };
+        for i in 0..n {
+            if a.border.get(i).copied().unwrap_or(false) {
+                continue;
+            }
+            let (p, q) = (a.outer[i], a.outer[(i + 1) % n]);
+            let e = q - p;
+            let nrm = vec3(e.y, 0.0, -e.x).normalize_or_zero() * s;
+            let o = nrm * 0.15;
+            let lum = 70.0;
+            let i0 = m.v_uv(vec3(p.x, height - band, p.y) + o, nrm, c, [lum * 0.35, 0.0]);
+            m.v_uv(vec3(q.x, height - band, q.y) + o, nrm, c, [lum * 0.35, 0.0]);
+            m.v_uv(vec3(q.x, height - 0.6, q.y) + o, nrm, c, [lum, 0.0]);
+            m.v_uv(vec3(p.x, height - 0.6, p.y) + o, nrm, c, [lum, 0.0]);
+            m.idx.extend([i0, i0 + 1, i0 + 2, i0, i0 + 2, i0 + 3]);
         }
     }
     match pitched {

@@ -22,6 +22,7 @@ mod clouds;
 mod flight;
 mod gfx;
 mod hud;
+mod lights;
 mod models;
 mod mvt;
 mod osm;
@@ -552,8 +553,6 @@ fn sync_gpu(s: &mut Session, renderer: &mut Renderer, ui: &mut Ui, gpu: &Gpu, bu
         renderer.remove_tile(id);
         ui.st.map_tiles.remove(&id);
     }
-    // The moving map draws vectors; the per-tile raster minimaps are not used.
-    let _ = w.take_minimaps();
     for (id, m) in w.take_map_vectors() {
         ui.st.map_tiles.insert(id, m);
     }
@@ -567,6 +566,7 @@ fn sync_gpu(s: &mut Session, renderer: &mut Renderer, ui: &mut Ui, gpu: &Gpu, bu
     if w.runway_version != s.runway_version {
         s.runway_version = w.runway_version;
         renderer.set_runways(device, &scene::runway_mesh(&w.runways));
+        renderer.set_airport_lights(device, &lights::airport_lights_for(w));
     }
     // Weather (weather.rs / world.rs): live data + real time, wind drift, season.
     match s.sim.as_mut() {
@@ -1874,6 +1874,7 @@ fn key_map(code: KeyCode) -> Option<Key> {
         KeyCode::Digit0 => Key::ApSpdUp,
         KeyCode::KeyK => Key::EngineFail,
         KeyCode::KeyJ => Key::AutoFlight,
+        KeyCode::KeyL => Key::LandingLights,
         _ => return None,
     })
 }
@@ -2364,7 +2365,6 @@ fn audio_render(args: Args) -> Result<(), String> {
         s.world.uploads.clear();
         s.world.gpu_pending.clear();
         let _ = s.world.take_evicted();
-        let _ = s.world.take_minimaps();
         let _ = s.world.take_map_vectors();
         if let Some(sim) = s.sim.as_mut() {
             if let Some((h, d)) = s.world.tick_weather(sim.time, (sim.hours, sim.day_of_year)) {

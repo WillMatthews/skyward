@@ -35,7 +35,9 @@ fn s(uv: vec2<f32>) -> vec3<f32> {
 }
 
 fn karis(c: vec3<f32>) -> f32 {
-    return 1.0 / (1.0 + dot(c, vec3<f32>(0.2126, 0.7152, 0.0722)) * 0.25);
+    // On the exposed brightness (the HDR image is pre-exposed at night;
+    // x 0.58 keeps the daytime weighting as it was, expo ~1.7 at noon).
+    return 1.0 / (1.0 + dot(c, vec3<f32>(0.2126, 0.7152, 0.0722)) * atmos.expo.x * 0.58 * 0.25);
 }
 
 // 13-tap downsample (Jimenez 2014).
@@ -128,12 +130,49 @@ fn agx_eotf(v: vec3<f32>) -> vec3<f32> {
     return pow(max(mi * v, vec3<f32>(0.0)), vec3<f32>(2.2));
 }
 
+// Scene radiance per cd/m² (== common.wgsl LUX).
+const LUX: f32 = 1.953125e-5;
+
+// Night vision: below a few cd/m² the rods take over from the cones — colour
+// fades and what is left shifts toward blue (Purkinje). Mesopic blend on the
+// absolute luminance: photopic above ~5 cd/m², scotopic below ~0.005.
+fn night_vision(c: vec3<f32>) -> vec3<f32> {
+    // (texel.z: 1 / pre-exposure of the HDR image.)
+    let lum = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722)) * pu.texel.z / LUX;
+    let lg = log2(max(lum, 1e-7));
+    let s = 1.0 - smoothstep(-7.6, 2.3, lg);
+    // Rod (scotopic) luminance from linear sRGB, peak ~507 nm.
+    let scot = max(dot(c, vec3<f32>(0.02, 0.58, 0.48)), 0.0);
+    let blue = vec3<f32>(0.56, 0.74, 1.0) / 0.711;
+    return mix(c, blue * scot, s * 0.78);
+}
+
 @fragment
 fn fs_tonemap(in: FsOut) -> @location(0) vec4<f32> {
     let hdr = textureSampleLevel(src, samp, in.uv, 0.0).rgb;
     let bloom = textureSampleLevel(bloom_tex, samp, in.uv, 0.0).rgb;
     let expo = atmos.expo.x * pu.params.x;
-    var c = mix(hdr, bloom, pu.params.y) * expo;
+    // Night: the eye adapts locally (lit windows don't blind it, the dark
+    // sky stays readable): compress the range around mid grey, more the
+    // darker the adaptation (exposure multiplier ~2 by day, 1e3..1e5 at
+    // night). The bloom (glare) is added afterwards, linearly, so its faint
+    // tails aren't lifted into big haloes.
+    var c = night_vision(hdr) * expo * (1.0 - pu.params.y);
+    // (Adaptation: the exposure of absolute radiance = expo x pre-exposure.)
+    let nk = smoothstep(3.9, 8.5, log(max(atmos.expo.x / pu.texel.z, 1.0)));
+    let gam = mix(1.0, 0.58, nk);
+    let l = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+    if (l > 1e-9) {
+        c *= pow(l / 0.18, gam - 1.0);
+    }
+    // Glare follows the same compression where it is bright, but faint glare
+    // is never amplified.
+    var b = night_vision(bloom) * expo * pu.params.y;
+    let lb = dot(b, vec3<f32>(0.2126, 0.7152, 0.0722));
+    if (lb > 0.05) {
+        b *= pow(lb / 0.05, gam - 1.0);
+    }
+    c += b;
     c = agx_eotf(agx_look(agx(c)));
     // subtle vignette
     let v = in.uv - 0.5;

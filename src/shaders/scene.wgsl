@@ -204,7 +204,21 @@ fn light(s: Surf, rel: vec3<f32>, V: vec3<f32>, dist: f32, px: vec2<f32>, ngeo: 
     // Horizon occlusion: reflections pointing into the ground see the ground.
     let hocc = clamp(1.0 + 1.6 * dot(R, ngeo), 0.0, 1.0);
     col += env * fe * s.env * ao * hocc * hocc;
-    col += s.emit;
+    // Street lights (ground light map).
+    col += s.albedo / PI * street_light(rel, n) * mix(1.0, ao, 0.5);
+    // The aircraft's landing / taxi lights, strobes and beacon (no shadows).
+    let na = i32(g.misc2.y);
+    for (var i = 0; i < na; i++) {
+        let al = aircraft_light(i, rel);
+        let anl = dot(n, al.l);
+        if (anl > 0.0 && max(al.e.r, max(al.e.g, al.e.b)) > 0.0) {
+            let H = normalize(al.l + V);
+            let F = f_schlick(s.f0, max(dot(V, H), 0.0));
+            let spec = d_ggx(max(dot(n, H), 0.0), a) * v_smith(nv, anl, a) * F;
+            col += (s.albedo / PI * (vec3<f32>(1.0) - F) + spec) * al.e * anl;
+        }
+    }
+    col += pre_exposed(s.emit);
     return col;
 }
 
@@ -240,6 +254,29 @@ fn rain_ripples(np: vec2<f32>, f: f32, t: f32, fade: f32) -> vec2<f32> {
         gsum += normalize(d + vec2<f32>(1e-4)) * w;
     }
     return gsum * 0.35 * (1.0 - fade * 4.0);
+}
+
+// Reflection of the scene in wet, rough paving: the planar reflection blurred
+// along the screen's vertical (anisotropic: the highlight stretches toward
+// the viewer), weighted by the Fresnel term of a water film.
+fn wet_streaks(px: vec2<f32>, n: vec3<f32>, V: vec3<f32>, dist: f32) -> vec3<f32> {
+    let nv = max(dot(n, V), 1e-3);
+    let fres = 0.02 + 0.98 * pow(1.0 - nv, 5.0);
+    let suv = px * g.screen.zw;
+    // Streak length in uv: longer at grazing angles, shorter far away.
+    let len = 0.07 * (0.35 + 0.65 * (1.0 - nv)) / (1.0 + dist * 0.0015);
+    var acc = vec3<f32>(0.0);
+    var wsum = 0.0;
+    // Jittered taps (interleaved gradient noise) so the streak is continuous.
+    let jit = fract(52.9829189 * fract(dot(px, vec2<f32>(0.06711056, 0.00583715))) + g.cam_pos.w * 0.61803) - 0.5;
+    for (var k = -6; k <= 6; k++) {
+        let f = (f32(k) + jit) / 6.0;
+        let w = exp(-f * f * 2.5);
+        let uv = clamp(suv + vec2<f32>(0.0, f * len), vec2<f32>(0.001), vec2<f32>(0.999));
+        acc += textureSampleLevel(refl_tex, lin_samp, uv, 0.0).rgb * w;
+        wsum += w;
+    }
+    return acc / wsum * fres * 0.8;
 }
 
 // Puddle mask 0..1 on flat paved ground (only when wet).
@@ -359,8 +396,21 @@ fn shade_water(in: VOut, px: vec2<f32>, fw: f32) -> vec3<f32> {
 
 // ---------------------------------------------------------------- facades
 
-// Interior light radiance (scene units: ~100 cd/m2 against a ~0.7 sunlit white wall).
-const WIN_LIGHT: f32 = 0.006;
+// Lit rooms seen from outside (scene radiance): a living room at ~150 lux
+// has ~45 cd/m² walls, behind ~75 % glass; offices are brighter inside but
+// behind tinted low-e glazing; shop windows are bright.
+const WIN_HOME: f32 = 24.0 * 1.953125e-5 * 0.75;
+const WIN_OFFICE: f32 = 45.0 * 1.953125e-5 * 0.35;
+const WIN_SHOP: f32 = 180.0 * 1.953125e-5;
+
+// Colour of a lit window: mostly warm (incandescent / warm LED), some
+// neutral, a few cool-white LED.
+fn window_colour(h: f32, h2: f32) -> vec3<f32> {
+    var c = vec3<f32>(1.0, 0.66, 0.36);
+    if (h > 0.62) { c = vec3<f32>(1.0, 0.8, 0.58); }
+    if (h > 0.88) { c = vec3<f32>(0.82, 0.9, 1.0); }
+    return c * (0.85 + 0.3 * h2);
+}
 
 fn wall_surface(in: VOut, n: vec3<f32>, base_srgb: vec3<f32>, fwuv: vec2<f32>) -> Surf {
     let u = in.uv.x;
@@ -410,7 +460,21 @@ fn wall_surface(in: VOut, n: vec3<f32>, base_srgb: vec3<f32>, fwuv: vec2<f32>) -
         }
     }
     let rw = hash12(cell + seed * 1.31);
-    let night = 1.0 - smoothstep(-0.10, 0.06, g.sun_dir.y);
+    // Windows are recessed: at grazing angles the reveals hide the room.
+    let recess = mix(0.3, 1.0, smoothstep(0.05, 0.55, abs(dot(n, normalize(-in.wpos)))));
+    let night = g.sun_true.w * recess;
+    // Who's home: per building, per floor, per window (stable hashes, so
+    // windows go dark one by one as the evening goes on).
+    // Homes follow the evening curve; a third of the buildings are offices,
+    // shops or warehouses that empty after work.
+    let commercial = hash12(vec2<f32>(seed, 9.1)) < 0.33;
+    let bfac = (0.2 + 1.5 * hash12(vec2<f32>(seed, 21.7))) * select(g.city.z, g.city.y * 0.6, commercial);
+    let ffac = 0.4 + 1.2 * hash12(vec2<f32>(seed * 3.1, cell.y + 0.5));
+    let occ = clamp(bfac * ffac, 0.0, 0.95);
+    let wcol = window_colour(hash12(cell * 1.7 + seed), hash12(cell + 1.1));
+    // Shops: lit until late evening, a few all night.
+    let hrs = g.city.w;
+    let shop_on = mix(0.2, 1.0, step(14.0, hrs) * (1.0 - smoothstep(21.5, 23.0, hrs)));
     if (win > 0.5 && lod > 0.0) {
         // Glass: dark interior + reflection; blinds / curtains vary per window.
         let blind = step(0.55, rw) * step(1.0 - 0.6 * hash12(cell * 1.7 + 3.0), fract((fy - my) / wh));
@@ -421,12 +485,17 @@ fn wall_surface(in: VOut, n: vec3<f32>, base_srgb: vec3<f32>, fwuv: vec2<f32>) -
             interior = vec3<f32>(0.03, 0.03, 0.028) + vec3<f32>(0.05, 0.04, 0.03) * hash12(cell + 9.0);
         }
         let glass = default_surf(interior, normalize(n + vec3<f32>(rw - 0.5, 0.0, hash12(cell + 4.2) - 0.5) * 0.03));
-        let lit = step(0.62, hash12(cell * 2.3 + seed)) * night;
-        let warmth = mix(vec3<f32>(1.0, 0.72, 0.42), vec3<f32>(0.85, 0.9, 1.0), hash12(cell + 1.1));
+        let lit = step(hash12(cell * 2.3 + seed), occ) * night;
+        // Curtains / blinds: dimmer, warmer, diffuse glow.
+        let level = (0.45 + 0.9 * rw) * mix(1.0, 0.45, blind);
+        // A few flickering TVs.
+        let tv = step(0.94, hash12(cell * 3.7 + seed)) * step(19.0, hrs);
+        let flick = 0.6 + 0.4 * sin(g.cam_pos.w * (3.0 + 5.0 * rw) + rw * 40.0) * sin(g.cam_pos.w * 7.3 + rw * 11.0);
+        let wc = mix(wcol, vec3<f32>(0.45, 0.6, 1.0) * flick, tv);
         var gs = glass;
         gs.rough = 0.06;
         gs.f0 = vec3<f32>(0.06);
-        gs.emit = warmth * (lit * (0.35 + 0.4 * rw) + select(0.0, 0.8 * night, is_shop)) * WIN_LIGHT;
+        gs.emit = wc * lit * level * WIN_HOME + select(vec3<f32>(0.0), vec3<f32>(1.0, 0.86, 0.66) * shop_on * night * WIN_SHOP, is_shop);
         s.albedo = mix(s.albedo, gs.albedo, lod);
         s.n = gs.n;
         s.rough = mix(s.rough, gs.rough, lod);
@@ -439,11 +508,14 @@ fn wall_surface(in: VOut, n: vec3<f32>, base_srgb: vec3<f32>, fwuv: vec2<f32>) -
         let sill = step(mx - 0.06, fx) * step(fx, 1.0 - mx + 0.06) * step(my - 0.07, fy) * step(fy, my - 0.02) * step(1.0, cy);
         s.albedo = mix(s.albedo, s.albedo * 1.35 + 0.02, sill * lod);
     }
-    // Far away: average of glass + wall.
+    // Far away: average of glass + wall (lit share per floor while the
+    // floors are resolved, per building beyond).
     let avg_win = ww * wh;
-    let far_glass = vec3<f32>(0.06) + vec3<f32>(0.25, 0.22, 0.18) * 0.1 * night;
+    let far_glass = vec3<f32>(0.05);
     s.albedo = mix(mix(s.albedo, far_glass, avg_win * 0.8), s.albedo, lod);
-    s.emit += (1.0 - lod) * night * avg_win * 0.38 * WIN_LIGHT * vec3<f32>(1.0, 0.75, 0.5);
+    let floor_lod = 1.0 - smoothstep(0.25, 0.7, fwuv.y / fl);
+    let occ_far = clamp(bfac * mix(1.0, ffac, floor_lod), 0.0, 0.95) * step(1.0, cy);
+    s.emit += (1.0 - lod) * night * avg_win * occ_far * 0.7 * WIN_HOME * vec3<f32>(1.0, 0.74, 0.47);
     s.f0 = mix(mix(s.f0, vec3<f32>(0.04), avg_win), s.f0, lod);
     s.ao = 0.7 + 0.3 * smoothstep(0.0, 5.0, y);
     return s;
@@ -473,9 +545,19 @@ fn glass_surface(in: VOut, n: vec3<f32>, tint_srgb: vec3<f32>, fwuv: vec2<f32>) 
     s.rough = 0.05 + 0.04 * r;
     s.f0 = mix(vec3<f32>(0.14), tint * 0.3 + 0.06, 0.5);
     s.albedo = tint * (0.06 + 0.06 * r);
-    let night = 1.0 - smoothstep(-0.10, 0.06, g.sun_dir.y);
-    let lit = step(0.55, hash12(cell * 1.9 + seed)) * night;
-    s.emit = vec3<f32>(0.9, 0.95, 1.0) * mix(0.45 * night, lit, lod) * WIN_LIGHT * 0.6;
+    let night = g.sun_true.w * mix(0.45, 1.0, smoothstep(0.05, 0.55, abs(dot(n, normalize(-in.wpos)))));
+    // Offices: whole floors stay lit (cleaners, late workers), the rest go dark.
+    let bfac = 0.4 + 1.2 * hash12(vec2<f32>(seed, 31.3));
+    let floor_on = step(hash12(vec2<f32>(seed * 1.7, cell.y + 0.5)), g.city.y * bfac);
+    let ph = hash12(cell * 1.9 + seed);
+    let panel = select(step(0.93, ph), step(0.18, ph) * (0.45 + 0.75 * fract(ph * 7.3)), floor_on > 0.5);
+    let tint_l = mix(vec3<f32>(0.78, 0.88, 1.0), vec3<f32>(1.0, 0.82, 0.58), step(0.6, hash12(vec2<f32>(seed, 5.5))));
+    // Far: floors resolved (bands) → per-floor share; beyond → building average.
+    let floor_lod = 1.0 - smoothstep(0.25, 0.7, fwuv.y / fl);
+    let far_share = mix(clamp(g.city.y * bfac, 0.0, 1.0) * 0.5 + 0.03, floor_on * 0.7 + (1.0 - floor_on) * 0.05, floor_lod);
+    // Unresolved, the light comes through the tinted curtain wall.
+    let far_tint = mix(tint_l * mix(vec3<f32>(1.0), normalize(tint + vec3<f32>(0.05)) * 1.6, 0.5), tint_l, lod);
+    s.emit = far_tint * mix(far_share, panel, lod) * night * WIN_OFFICE;
     // Mullions and spandrel bands fade separately (floors stay visible further).
     let mullion = mix(0.05, step(fx, 0.04), lodx);
     let band = mix(spandrel, step(1.0 - spandrel, fy), lody);
@@ -611,9 +693,15 @@ fn fs_main(in: VOut) -> FOut {
         o.col = vec4<f32>(apply_fog_px(shade_water(in, px, fwp), px, dist), 1.0);
         return o;
     }
+    if (m == 17) {
+        // Floodlit crowns of towers: luminance (cd/m²) in uv.x, at night only.
+        let c = pre_exposed(srgb_to_lin(in.col) * in.uv.x * LUX * g.sun_true.w);
+        o.col = vec4<f32>(apply_fog_px(c, px, dist), 1.0);
+        return o;
+    }
     if (m == 13) {
         // Self-lit: nav lights, strobes, flame (uv.x intensity, uv.y > 0.5 = flame).
-        let c = srgb_to_lin(in.col) * in.uv.x * 2.0;
+        let c = pre_exposed(srgb_to_lin(in.col) * in.uv.x * 2.0);
         var a = 1.0;
         if (in.uv.y > 0.5) {
             a = clamp(luma(srgb_to_lin(in.col)) * 1.6, 0.0, 1.0);
@@ -805,6 +893,12 @@ fn fs_main(in: VOut) -> FOut {
     }
     s.rough = spec_aa(s.rough, dndx, dndy);
     var col = light(s, rel, V, dist, px, ngeo);
+    // Wet paving: glossy reflections smeared toward the viewer (the long
+    // streaks of street lights and headlights on a wet road at night).
+    let paved = m == 7 || m == 15 || m == 16 || (m == 12 && in.uv.x > 0.5) || (m == 5 && ngeo.y > 0.95);
+    if (paved && g.wx.x > 0.15 && !is_refl() && wp.y < 0.5) {
+        col += wet_streaks(px, ngeo, V, dist) * smoothstep(0.15, 0.6, g.wx.x) * (1.0 - puddle);
+    }
     // Puddles: a thin sheet of water mirroring the scene (planar reflection).
     if (puddle > 0.0 && wp.y < 0.5) {
         let rip = rain_ripples(np, 2.2 * 1.7, g.cam_pos.w, fwp * 0.1);
@@ -828,6 +922,122 @@ fn fs_main(in: VOut) -> FOut {
 
 // ---------------------------------------------------------------- sky
 
+// Equatorial coordinates of a world direction.
+fn to_equatorial(d: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(dot(g.stars0.xyz, d), dot(g.stars1.xyz, d), dot(g.stars2.xyz, d));
+}
+
+fn hash33(p: vec3<f32>) -> vec3<f32> {
+    var q = fract(p * vec3<f32>(0.1031, 0.1030, 0.0973));
+    q += dot(q, q.yxz + 33.33);
+    return fract((q.xxy + q.yxx) * q.zyx);
+}
+
+// Stars too faint for the catalogue (mag 6..8.5): hashed in equatorial space,
+// energy-conserving gaussians at least ~0.75 px wide (no sparkle).
+fn faint_stars(d: vec3<f32>) -> vec3<f32> {
+    let e = to_equatorial(d);
+    let ppr = g.sky.w;
+    let sig = max(0.75 / ppr, 1e-6);
+    var acc = vec3<f32>(0.0);
+    for (var layer = 0; layer < 2; layer++) {
+        let n = select(120.0, 77.0, layer == 1);
+        let p = e * n;
+        let cell = floor(p);
+        let h = hash33(cell + f32(layer) * 71.3);
+        if (h.x < 0.42) {
+            let sp = normalize((cell + 0.3 + 0.4 * hash33(cell + 13.1)) / n);
+            let dd = length(e - sp);
+            let mag = 6.0 + 2.5 * pow(h.y, 0.6) + f32(layer) * 0.3;
+            let ev = 2.54e-6 * pow(10.0, -0.4 * mag) * LUX;
+            let r = dd / sig;
+            let col = mix(vec3<f32>(1.0, 0.85, 0.7), vec3<f32>(0.8, 0.88, 1.0), h.z);
+            acc += col * ev / (2.0 * PI * sig * sig) * exp(-0.5 * r * r);
+        }
+    }
+    return acc;
+}
+
+// The Milky Way: a band along the galactic plane, brightest toward the
+// centre (Sagittarius), cut by dust lanes. ~21 mag/arcsec² at its brightest.
+fn milky_way(d: vec3<f32>) -> vec3<f32> {
+    let e = to_equatorial(d);
+    // J2000 equatorial → galactic.
+    let gx = -0.0548756 * e.x - 0.8734371 * e.y - 0.4838350 * e.z;
+    let gy = 0.4941094 * e.x - 0.4448296 * e.y + 0.7469822 * e.z;
+    let gz = -0.8676661 * e.x - 0.1980764 * e.y + 0.4559838 * e.z;
+    let b = asin(clamp(gz, -1.0, 1.0));
+    let l = atan2(gy, gx);
+    let core = exp(-l * l / 0.9);
+    let width = 0.16 + 0.12 * core;
+    var band = exp(-(b / width) * (b / width)) * (0.3 + 0.7 * core) + 0.35 * exp(-(l * l + b * b * 6.0) / 0.12);
+    // Clumpy star clouds and dark dust lanes.
+    let q = vec2<f32>(l * 5.0, b * 9.0);
+    let clump = fbm2(q * 1.3 + vec2<f32>(3.1, 7.7));
+    let dust = smoothstep(0.45, 0.75, fbm2(q * 2.1 + vec2<f32>(11.0, 2.0))) * exp(-(b / 0.06) * (b / 0.06));
+    band *= (0.55 + 0.9 * clump) * (1.0 - 0.75 * dust);
+    return vec3<f32>(0.9, 0.92, 1.0) * band * (4.0e-4 * LUX);
+}
+
+// Approximate selenographic albedo: the near-side maria as soft patches.
+fn moon_albedo(p: vec3<f32>) -> f32 {
+    // (lat, lon, radius) in degrees.
+    var maria = array<vec3<f32>, 18>(
+        vec3<f32>(33.0, -16.0, 11.0), vec3<f32>(28.0, 17.0, 6.5), vec3<f32>(8.5, 31.0, 8.5), vec3<f32>(17.0, 59.0, 5.0),
+        vec3<f32>(-8.0, 51.0, 6.5), vec3<f32>(-15.0, 35.0, 3.5), vec3<f32>(-21.0, -17.0, 7.0), vec3<f32>(-24.0, -39.0, 4.0),
+        vec3<f32>(20.0, -55.0, 12.0), vec3<f32>(4.0, -52.0, 10.0), vec3<f32>(-6.0, -38.0, 7.0), vec3<f32>(56.0, -15.0, 4.5),
+        vec3<f32>(56.0, 12.0, 4.5), vec3<f32>(13.0, 4.0, 3.5), vec3<f32>(-10.0, -23.0, 4.5), vec3<f32>(7.0, -31.0, 5.0),
+        vec3<f32>(30.0, -35.0, 7.0), vec3<f32>(-3.0, 15.0, 4.0));
+    var dark = 0.0;
+    for (var i = 0; i < 18; i++) {
+        let m = maria[i] * (PI / 180.0);
+        let c = vec3<f32>(cos(m.x) * sin(m.y), sin(m.x), cos(m.x) * cos(m.y));
+        let ang = acos(clamp(dot(p, c), -1.0, 1.0));
+        dark = max(dark, smoothstep(m.z * 1.2, m.z * 0.7, ang));
+    }
+    let tex = fbm2(p.xy * 9.0 + p.z * 3.0);
+    var a = mix(1.15, 0.58, dark * (0.8 + 0.4 * tex)) * (0.9 + 0.2 * tex);
+    // Tycho and its rays.
+    let ty = vec3<f32>(cos(-0.75) * sin(-0.19), sin(-0.75), cos(-0.75) * cos(-0.19));
+    a += 0.5 * smoothstep(0.03, 0.0, acos(clamp(dot(p, ty), -1.0, 1.0)));
+    return a;
+}
+
+// The moon's disc: rgb radiance (before extinction), a = coverage.
+fn moon_disc(d: vec3<f32>) -> vec4<f32> {
+    let m = g.moon.xyz;
+    // Angular radius: 0.26° for real, drawn 1.8x larger — on a ~60° screen the
+    // true disc is a few pixels, far smaller than the eye perceives it.
+    let R = 0.00452 * 1.8;
+    let cm = dot(d, m);
+    if (cm < cos(R * 1.3) || g.sky.y <= 0.0) {
+        return vec4<f32>(0.0);
+    }
+    // Disc frame: up = toward the celestial pole, x = cross(m, up) (lunar east).
+    let ncp = g.stars2.xyz;
+    let up = normalize(ncp - m * dot(ncp, m));
+    let rt = cross(m, up);
+    let off = d - m * cm;
+    let x = dot(off, rt) / R;
+    let y = dot(off, up) / R;
+    let r = sqrt(x * x + y * y);
+    let aa = 1.0 - smoothstep(1.0 - 1.2 / max(R * g.sky.w, 1.0), 1.0, r);
+    if (aa <= 0.0) {
+        return vec4<f32>(0.0);
+    }
+    let z = sqrt(max(1.0 - r * r, 0.0));
+    let p = vec3<f32>(x, y, z);
+    let nw = rt * x + up * y - m * z;
+    let mu0 = dot(nw, g.sun_true.xyz);
+    let alb = moon_albedo(p);
+    var L = g.sky.z * alb;
+    if (mu0 > 0.0) {
+        L += g.sky.y * alb * 2.0 * mu0 / (mu0 + max(z, 1e-3));
+    }
+    // Regolith is slightly red.
+    return vec4<f32>(vec3<f32>(1.0, 0.93, 0.84) * L, aa);
+}
+
 struct SkyOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) ndc: vec2<f32>,
@@ -849,14 +1059,39 @@ fn fs_sky(in: SkyOut) -> FOut {
     let d = normalize(p.xyz / p.w);
     var c = sky_radiance(d);
     // Sun disc with limb darkening (radiance clamped to fit fp16).
-    let mu = dot(d, g.sun_dir.xyz);
+    let sun = g.sun_true.xyz;
+    let mu = dot(d, sun);
     let cosr = cos(0.00475);
     if (mu > cosr) {
         let x = clamp((1.0 - mu) / (1.0 - cosr), 0.0, 1.0);
         let limb = 1.0 - 0.6 * (1.0 - sqrt(1.0 - x));
-        let T = transmittance(abs(g.cam_pos.y), g.sun_dir.y);
-        let disk = g.sun_e.rgb * T * limb / (2.0 * PI * (1.0 - cosr));
-        c += min(disk * cloud_shadow(g.cam_pos.xyz), vec3<f32>(30000.0));
+        let T = transmittance(abs(g.cam_pos.y), sun.y);
+        let disk = vec3<f32>(2.5 * g.pre.x) * T * limb / (2.0 * PI * (1.0 - cosr));
+        var cs = 1.0;
+        if (g.sun_dir.y == sun.y) {
+            cs = cloud_shadow(g.cam_pos.xyz);
+        }
+        c += min(disk * cs, vec3<f32>(30000.0));
+    }
+    // Night sky: faint stars and the Milky Way (the bright catalogue stars are
+    // sprites, lights.wgsl), then the moon in front of them.
+    if (g.sun_true.w > 0.0 && d.y > -0.03) {
+        let T = transmittance(abs(g.cam_pos.y), max(d.y, 0.0));
+        c += pre_exposed(faint_stars(d) + milky_way(d)) * T * smoothstep(-0.03, 0.02, d.y) * g.sun_true.w;
+    }
+    let md = moon_disc(d);
+    if (md.a > 0.0) {
+        let T = transmittance(abs(g.cam_pos.y), g.moon.y);
+        // The moon is ~10^5 x brighter than the night landscape the eye is
+        // adapted to; we still see its maria. Hold the disc at a bright but
+        // unsaturated level (its light on the world is the key light, unchanged).
+        var mrad = pre_exposed(md.rgb * T);
+        let shown = luma(mrad) * atmos.expo.x;
+        let cap = 9.0;
+        if (shown > cap) {
+            mrad *= cap / shown;
+        }
+        c = mix(c, sky_radiance(d) + mrad, md.a);
     }
     var o: FOut;
     o.col = vec4<f32>(c, 1.0);

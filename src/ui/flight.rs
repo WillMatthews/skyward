@@ -632,6 +632,7 @@ pub fn control_rows(def: &crate::flight::AircraftDef) -> Vec<(&'static str, &'st
         v.push(("Systems", "/  \\", "Spoilers · speed brake".into()));
     }
     v.push(("Systems", "B  Space", "Wheel brakes".into()));
+    v.push(("Systems", "L", "Landing · taxi lights".into()));
     v.extend([
         ("Autopilot", "Z", "Engage · disengage".into()),
         ("Autopilot", "Ins Del", "Heading −/+ 5°".into()),

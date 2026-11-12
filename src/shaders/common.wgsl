@@ -19,7 +19,27 @@ struct Globals {
     season2: vec4<f32>,   // summer dryness, year phase 0..1, season strength, drizzle
     pattern: vec4<f32>,   // pattern space of the eye: x scale, x, z (mod NP); w = y of the real eye
                           // above this pass's eye (2 eye.y in the mirrored reflection pass, else 0)
+    // Night & lights. NB: sun_dir / sun_e above are the *key* light (the sun,
+    // or the moon at night); the real sun is sun_true.
+    sun_true: vec4<f32>,  // xyz toward the sun, w = night factor 0 (day) .. 1 (night)
+    moon: vec4<f32>,      // xyz toward the moon, w = illuminated fraction
+    sky: vec4<f32>,       // x sky-LUT scale, y moon disc radiance, z earthshine radiance, w pixels per radian
+    stars0: vec4<f32>,    // columns of the equatorial -> world rotation
+    stars1: vec4<f32>,
+    stars2: vec4<f32>,
+    city: vec4<f32>,      // x street lights on, y office windows lit, z home windows lit, w local hours
+    lmap: vec4<f32>,      // ground light map: eye-relative centre x, z, 1 / size, enabled
+    misc: vec4<f32>,      // x airport lights level, y beacons on, z ground fog extinction (/km), w fog top (m)
+    misc2: vec4<f32>,     // x traffic density, y aircraft lights count, z moon phase angle, w unused
+    alights: array<vec4<f32>, 12>, // aircraft lights: [pos, range], [dir, cos outer], [rgb cd, cos inner]
+    pre: vec4<f32>,       // x pre-exposure: every radiance written to the HDR targets is x this
+                          // (sun_e, sky.x and the SH ambient already include it), y 1 / x
 };
+
+// Absolute radiance (scene units) → what the HDR targets hold.
+fn pre_exposed(c: vec3<f32>) -> vec3<f32> {
+    return c * g.pre.x;
+}
 
 @group(0) @binding(0) var<uniform> g: Globals;
 @group(0) @binding(1) var shadow_map: texture_depth_2d_array;
@@ -37,6 +57,10 @@ struct AtmosOut {
 };
 @group(0) @binding(9) var<storage, read> atmos: AtmosOut;
 @group(0) @binding(10) var ao_tex: texture_2d<f32>;
+@group(0) @binding(11) var light_map: texture_2d<f32>;
+
+// Scene irradiance per lux (and scene radiance per cd/m²): sun_e (2.5) ≈ 128 klx.
+const LUX: f32 = 1.953125e-5;
 
 fn hash12(p: vec2<f32>) -> f32 {
     var p3 = fract(vec3<f32>(p.x, p.y, p.x) * 0.1031);
@@ -180,7 +204,7 @@ fn transmittance(h_m: f32, mu: f32) -> vec3<f32> {
 
 // Sky radiance seen from the eye in direction d (includes the far planet ground).
 fn sky_radiance(d: vec3<f32>) -> vec3<f32> {
-    return g.sun_e.rgb * textureSampleLevel(sky_tex, lin_samp, skyview_uv(eye_r(), d, g.sun_dir.xyz), 0.0).rgb;
+    return g.sky.x * textureSampleLevel(sky_tex, lin_samp, skyview_uv(eye_r(), d, g.sun_dir.xyz), 0.0).rgb;
 }
 
 // What a mirror sees of the sky in direction d: the clear sky-view LUT
@@ -221,7 +245,60 @@ fn apply_fog_px(col: vec3<f32>, px: vec2<f32>, dist: f32) -> vec3<f32> {
     let ap = textureSampleLevel(ap_tex, lin_samp, vec3<f32>(uv, s), 0.0);
     // Fade in over the first froxel slice (the volume starts ~15 m out).
     let k = smoothstep(0.0, 1.0 / AP_N, s);
-    return col * mix(1.0, ap.a, k) + ap.rgb * g.sun_e.rgb * k;
+    return col * mix(1.0, ap.a, k) + ap.rgb * g.sky.x * k;
+}
+
+// ---------------------------------------------------------------- artificial light
+
+// Street-light irradiance on a surface (ground light map, lights.rs): the
+// map holds the irradiance on the ground; walls facing a lit street see part
+// of it, fading up the facade above the lamps; roofs see none.
+fn street_light(rel: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
+    if (g.lmap.w < 0.5) {
+        return vec3<f32>(0.0);
+    }
+    let y = rel.y + g.cam_pos.y;
+    // Walls sample the street in front of them.
+    let off = n.xz * (3.5 * (1.0 - abs(n.y)));
+    let uv = (rel.xz + off - g.lmap.xy) * g.lmap.z + 0.5;
+    if (any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0))) {
+        return vec3<f32>(0.0);
+    }
+    let e = textureSampleLevel(light_map, lin_samp, uv, 0.0).rgb;
+    let edge = 1.0 - smoothstep(0.42, 0.5, max(abs(uv.x - 0.5), abs(uv.y - 0.5)));
+    // Up-facing surfaces near the ground get it all; walls ~half, fading with height.
+    let up = clamp(n.y, 0.0, 1.0);
+    let ground = up * (1.0 - smoothstep(2.0, 9.0, y));
+    let wall = (1.0 - up) * 0.55 * exp(-max(y - 3.0, 0.0) / 7.0) * step(-0.2, n.y);
+    return e * (ground + wall) * edge * g.pre.x;
+}
+
+// Irradiance-weighted direction + colour of the aircraft's lights at a point
+// (eye-relative): spot cones / point lights, inverse-square, no shadows.
+struct ALight {
+    l: vec3<f32>,   // unit vector toward the light
+    e: vec3<f32>,   // irradiance on a surface facing it (scene units)
+};
+
+fn aircraft_light(i: i32, rel: vec3<f32>) -> ALight {
+    var o: ALight;
+    let lp = g.alights[i * 3].xyz;
+    let range = g.alights[i * 3].w;
+    let ld = g.alights[i * 3 + 1].xyz;
+    let cos_o = g.alights[i * 3 + 1].w;
+    let cd = g.alights[i * 3 + 2].rgb;
+    let cos_i = g.alights[i * 3 + 2].w;
+    let v = lp - rel;
+    let d2 = max(dot(v, v), 0.04);
+    let d = sqrt(d2);
+    o.l = v / d;
+    var cone = 1.0;
+    if (cos_o > -0.99) {
+        cone = smoothstep(cos_o, cos_i, dot(-o.l, ld));
+    }
+    let fade = 1.0 - smoothstep(range * 0.7, range, d);
+    o.e = cd * (LUX * cone * fade / d2) * g.pre.x;
+    return o;
 }
 
 // ---------------------------------------------------------------- shadows

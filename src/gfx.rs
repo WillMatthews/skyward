@@ -52,6 +52,30 @@ struct Globals {
     season2: [f32; 4],
     /// Pattern space of the current frame (World::pattern_frame).
     pattern: [f32; 4],
+    // --- night & lights (lights.rs). `sun_dir` / `sun_e` above are the *key*
+    // light: the sun by day, the moon at night.
+    /// The real sun direction; w = night factor 0 (day) .. 1 (night).
+    sun_true: [f32; 4],
+    /// Moon direction; w = illuminated fraction.
+    moon: [f32; 4],
+    /// x sky-LUT scale (SUN_E), y full-moon disc radiance, z earthshine radiance, w pixels per radian.
+    sky: [f32; 4],
+    /// Columns of the equatorial → world rotation (stars).
+    stars0: [f32; 4],
+    stars1: [f32; 4],
+    stars2: [f32; 4],
+    /// x street lights on, y office windows lit, z home windows lit, w local hours.
+    city: [f32; 4],
+    /// Ground light map: eye-relative centre x, z, 1 / size, enabled.
+    lmap: [f32; 4],
+    /// x airport lights level, y aerodrome beacons on, z ground fog extinction (/km), w fog top (m).
+    misc: [f32; 4],
+    /// x traffic density, y number of aircraft spot / point lights, z moon phase angle, w unused.
+    misc2: [f32; 4],
+    /// Aircraft spot / point lights (see lights::gpu::pack_spots).
+    alights: [[f32; 4]; 3 * crate::lights::place::AC_SPOTS],
+    /// x pre-exposure (radiances written to the HDR targets are x this), y its inverse.
+    pre: [f32; 4],
 }
 
 #[repr(C)]
@@ -84,6 +108,8 @@ struct FogU {
     fog: [f32; 4],
     sun: [f32; 4],
     screen: [f32; 4],
+    /// Ground light map (street lights glowing in the fog).
+    lmap: [f32; 4],
 }
 
 #[repr(C)]
@@ -170,6 +196,10 @@ pub struct FrameView {
     pub sun_dir: Vec3,
     /// Manual exposure multiplier on top of the metered exposure.
     pub exposure: f32,
+    /// Date, time and place (moon, stars, city life).
+    pub clock: crate::atmosphere::SkyClock,
+    /// The aircraft's lights this frame (eye-relative).
+    pub acl: crate::lights::AircraftLights,
 }
 
 /// Trees are drawn up to this distance (m) from the eye; detailed within TREE_LOD0.
@@ -211,6 +241,8 @@ struct GpuTile {
     buildings: Option<GpuMesh>,
     /// Instance buffer: deciduous [0, split), conifers [split, n).
     trees: Option<(wgpu::Buffer, u32, u32)>,
+    /// Street lights, traffic, skyglow sources (lights.rs).
+    lights: Option<crate::lights::gpu::GpuTileLights>,
     bytes: u64,
 }
 
@@ -438,6 +470,8 @@ pub struct Renderer {
     wxr: crate::weather::WxRender,
     cloud_version: u64,
     wpass: WeatherPasses,
+    /// Night lighting: light sprites, light map, stars, beams (lights.rs).
+    lights: crate::lights::LightRenderer,
 }
 
 fn vertex_layout() -> wgpu::VertexBufferLayout<'static> {
@@ -516,6 +550,7 @@ impl Renderer {
         let core = include_str!("shaders/atmos_core.wgsl");
         let common = include_str!("shaders/common.wgsl");
         let scene_src = format!("{core}\n{common}\n{}", include_str!("shaders/scene.wgsl"));
+        let lights = crate::lights::LightRenderer::new(device, queue, &format!("{core}\n{common}"));
         let scene_mod = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("scene"),
             source: wgpu::ShaderSource::Wgsl(scene_src.into()),
@@ -573,6 +608,7 @@ impl Renderer {
                 bgl_tex(8, Dim::D2),
                 bgl_storage(9),
                 bgl_tex(10, Dim::D2),
+                bgl_tex(11, Dim::D2),
             ],
         });
         let shadow_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -909,7 +945,13 @@ impl Renderer {
             wxr: crate::weather::WxRender { season: crate::weather::Season::at(crate::sim::DEFAULT_DAY, 51.5), ..Default::default() },
             cloud_version: 0,
             wpass: WeatherPasses::new(device),
+            lights,
         }
+    }
+
+    /// Replace the airport lighting (world frame, `lights::place::airport_lights`).
+    pub fn set_airport_lights(&mut self, device: &wgpu::Device, l: &[crate::lights::LightInst]) {
+        self.lights.set_airport(device, l);
     }
 
     /// Queue a streamed tile for upload: its (empty) GPU buffers are created
@@ -938,10 +980,12 @@ impl Renderer {
             let b = buf("tile trees", t.trees.len() * std::mem::size_of::<TreeInst>(), wgpu::BufferUsages::VERTEX);
             (b, (t.trees.len() - t.conifers) as u32, t.trees.len() as u32)
         });
-        let bytes = flat.as_ref().map_or(0, |m| m.bytes()) + buildings.as_ref().map_or(0, |m| m.bytes()) + trees.as_ref().map_or(0, |t| t.0.size());
+        let tile_rect = t.id.rect(&Proj::tile_frame(t.id));
+        let lights = crate::lights::gpu::GpuTileLights::new(device, &t.lights, tile_rect);
+        let bytes = flat.as_ref().map_or(0, |m| m.bytes()) + buildings.as_ref().map_or(0, |m| m.bytes()) + trees.as_ref().map_or(0, |t| t.0.size()) + lights.as_ref().map_or(0, |l| l.bytes);
         let (lo, hi) = t.id.rect(&self.proj);
         let map = Proj::tile_frame(t.id).map_to(&self.proj);
-        let gt = GpuTile { id: t.id, lo, hi, map, xf: map.gpu(), max_h: t.max_h, flat, buildings, trees, bytes };
+        let gt = GpuTile { id: t.id, lo, hi, map, xf: map.gpu(), max_h: t.max_h, flat, buildings, trees, lights, bytes };
         self.pending.retain(|p| p.data.id != t.id);
         self.pending.push_back(PendingTile { tile: gt, data: t, part: 0, offset: 0 });
     }
@@ -1053,6 +1097,7 @@ impl Renderer {
             *e += delta;
         }
         self.clouds.rebase(delta);
+        self.lights.rebase();
     }
 
     /// Forget temporal history (camera cut / teleport).
@@ -1145,6 +1190,7 @@ impl Renderer {
                     wgpu::BindGroupEntry { binding: 8, resource: R::TextureView(self.clouds.shadow_view()) },
                     wgpu::BindGroupEntry { binding: 9, resource: self.atmos.out.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 10, resource: R::TextureView(ao_view) },
+                    wgpu::BindGroupEntry { binding: 11, resource: R::TextureView(self.lights.map_view()) },
                 ],
             })
         };
@@ -1178,6 +1224,19 @@ impl Renderer {
         let tonemap_bg = post_bg(&hdr, &bloom[0].0);
         self.clouds.reset_history();
         self.prev_vp = None;
+        self.lights.bind(
+            device,
+            &crate::lights::gpu::Shared {
+                globals: &self.globals_buf,
+                refl_globals: &self.refl_globals_buf,
+                samp: &self.lin_samp,
+                trans: &self.atmos.trans,
+                ap_main: &self.atmos.ap_main,
+                ap_refl: &self.atmos.ap_refl,
+                atmos_out: &self.atmos.out,
+                dist: &dist,
+            },
+        );
         self.targets = Some(Targets {
             width: w,
             height: h,
@@ -1220,6 +1279,8 @@ impl Renderer {
     ) {
         self.ensure_targets(device, width, height);
         self.dynamic.set(device, queue, dynamic);
+        self.lights.set_aircraft(queue, &fv.acl.sprites[..fv.acl.n_sprites]);
+        self.lights.set_coverage(queue, self.tiles.keys().filter(|id| !id.is_far()).copied());
         // Base ground follows the camera (snapped so the procedural pattern is stable).
         {
             let c = (Vec2::new(fv.eye.x, fv.eye.z) / 1000.0).round() * 1000.0;
@@ -1260,6 +1321,48 @@ impl Renderer {
         let wx = self.wxr;
         let haze = if wx.haze > 0.0 { wx.haze } else { haze_for(cover) };
         let fog = (wx.fog_ext, wx.fog_top * 0.001);
+        // Night: moon, stars, the city's rhythm. The *key* light (direct light,
+        // shadows, cloud lighting) is the sun, or the moon once the sun is down.
+        let night = crate::lights::sky::NightState::new(&fv.clock, sun, cover);
+        let smooth = |a: f32, b: f32, x: f32| {
+            let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
+            t * t * (3.0 - 2.0 * t)
+        };
+        let (key, key_e) = if sun.y > -0.02 {
+            (sun, Vec3::splat(atmosphere::SUN_E))
+        } else {
+            // Moonlight: a touch cooler than sunlight (the Purkinje shift in the tonemapper does the rest).
+            (night.moon_dir, vec3(0.9, 1.0, 1.12) * night.moon_e * smooth(-0.02, -0.07, sun.y))
+        };
+        let night_k = 1.0 - smooth(-0.10, 0.06, sun.y);
+        let lut_scale = atmosphere::lut_scale(sun.y);
+        let pre = atmosphere::pre_exposure(sun.y);
+        // Skyglow from the far tiles' built-up areas (cached in the light renderer).
+        let glow_src: Vec<(Vec2, f32)> = self.tiles.values().filter_map(|t| t.lights.as_ref().map(|l| (t, l))).flat_map(|(t, l)| l.glow.iter().map(move |(p, lm)| (t.map.apply(*p), *lm))).collect();
+        let (glow, city_up) = self.lights.skyglow(&glow_src, fv.eye, haze);
+        let street = night.street;
+        if std::env::var_os("SKYWARD_NIGHT_DEBUG").is_some() {
+            eprintln!(
+                "night: sun {:.3} moon {:?} e {:.3e} frac {:.2} street {:.2} office {:.2} homes {:.2} | glow src {} up {:.3e} zen {:.3e} hor {:?}",
+                sun.y, night.moon_dir, night.moon_e, night.moon_frac, night.street, night.office, night.homes, glow_src.len(), city_up, glow[7 * 16], &glow[0..16].iter().map(|g| format!("{g:.1e}")).collect::<Vec<_>>()
+            );
+            for l in &fv.acl.sprites[..fv.acl.n_sprites] {
+                eprintln!("  ac sprite kind {} cd {} pos {:?} dist {:.0}", l.kind(), l.cd, l.pos, Vec3::from(l.pos).length());
+            }
+            for sp in &fv.acl.spots[..fv.acl.n_spots] {
+                eprintln!("  ac spot {:?}", sp);
+            }
+        }
+        // Visibility (km) for the airport lighting level.
+        let vis_km = 3.0 / (atmosphere::transmittance_ext0(haze) + wx.fog_ext).max(1e-3);
+        let low_vis = smooth(5.0, 1.5, vis_km);
+        // Runway lights: full by day / in low visibility, a low step on a clear night.
+        let airport_level = 1.0 + (0.12 + 0.88 * low_vis - 1.0) * night_k;
+        let beacon = (1.0 - smooth(0.0, 0.1, sun.y)).max(low_vis);
+        let moon_frac = night.moon_frac;
+        let moon_full = atmosphere::moon_lux(0.0, 384_400.0) * atmosphere::LUX / crate::lights::sky::MOON_SOLID_ANGLE;
+        let moon_disc = night.moon_e / crate::lights::sky::MOON_SOLID_ANGLE / crate::lights::sky::moon_disc_norm(night.moon_alpha);
+        let earthshine = moon_full * 2.5e-4 * (1.0 - moon_frac).powf(1.5);
         // Thick decks (nimbostratus) let much less light through.
         let deck_trans = 1.0 - 0.75 * ((field.deck_density() - 0.3) / 0.7).clamp(0.0, 1.0);
         let cloud_base = field.base();
@@ -1270,7 +1373,7 @@ impl Renderer {
         for i in 0..CASCADES {
             let near = if i == 0 { SPLITS[0] } else { SPLITS[i] - (SPLITS[i] - SPLITS[i - 1]) * CASCADE_BLEND };
             let anchor = glam::DVec3::new(self.anchor.0 - ex, -ey, self.anchor.1 - ez);
-            let (m, radius) = cascade_matrix(view_rot, fv.fov_y, aspect, near, SPLITS[i + 1], sun, anchor);
+            let (m, radius) = cascade_matrix(view_rot, fv.fov_y, aspect, near, SPLITS[i + 1], key, anchor);
             shadow_mats[i] = m.to_cols_array_2d();
             texel[i] = radius * 2.0 / SHADOW_RES as f32;
             queue.write_buffer(&self.shadow_buf, UNIFORM_STRIDE * i as u64, bytemuck::cast_slice(&m.to_cols_array()));
@@ -1278,6 +1381,13 @@ impl Renderer {
             queue.write_buffer(&self.shadow_buf, UNIFORM_STRIDE * i as u64 + 64, bytemuck::cast_slice(&[leaf, 0.0f32, 0.0, 0.0]));
         }
 
+        let star_cols = crate::lights::gpu::star_cols(night.star_rot);
+        let (spots, n_spots) = crate::lights::gpu::pack_spots(&fv.acl.spots[..fv.acl.n_spots]);
+        // Ground light map centre, snapped to its texels (stable pools).
+        let lmap_c = {
+            let texel = crate::lights::gpu::MAP_SIZE / crate::lights::gpu::MAP_RES as f32;
+            (Vec2::new(fv.eye.x, fv.eye.z) / texel).round() * texel
+        };
         let t = self.targets.as_ref().unwrap();
         // Pattern space of the eye (f64, wrapped to the pattern period).
         let pat = {
@@ -1292,8 +1402,8 @@ impl Renderer {
             inv_view_proj: vp_rot.inverse().to_cols_array_2d(),
             shadow: shadow_mats,
             cam_pos: [fv.eye.x, fv.eye.y, fv.eye.z, fv.time],
-            sun_dir: [sun.x, sun.y, sun.z, cover],
-            sun_e: [atmosphere::SUN_E, atmosphere::SUN_E, atmosphere::SUN_E, haze],
+            sun_dir: [key.x, key.y, key.z, cover],
+            sun_e: [key_e.x * pre, key_e.y * pre, key_e.z * pre, haze],
             splits: [SPLITS[1], SPLITS[2], SPLITS[3], SPLITS[4]],
             shadow_info: [SHADOW_RES as f32, 0.0, CASCADE_BLEND, if self.prev_vp.is_some() { 1.0 } else { 0.0 }],
             screen: [width as f32, height as f32, 1.0 / width as f32, 1.0 / height as f32],
@@ -1305,6 +1415,18 @@ impl Renderer {
             season: [wx.season.leaf, wx.season.autumn, wx.season.spring, wx.season.dormant],
             season2: [wx.season.dry, wx.season.year, wx.season.strength, if wx.drizzle { 1.0 } else { 0.0 }],
             pattern: pat,
+            sun_true: [sun.x, sun.y, sun.z, night_k],
+            moon: [night.moon_dir.x, night.moon_dir.y, night.moon_dir.z, moon_frac],
+            sky: [atmosphere::SUN_E / lut_scale * pre, moon_disc, earthshine, height as f32 * 0.5 / (fv.fov_y * 0.5).tan()],
+            stars0: star_cols[0],
+            stars1: star_cols[1],
+            stars2: star_cols[2],
+            city: [street, night.office, night.homes, night.hours],
+            lmap: [lmap_c.x - fv.eye.x, lmap_c.y - fv.eye.z, 1.0 / crate::lights::gpu::MAP_SIZE, if street > 0.0 { 1.0 } else { 0.0 }],
+            misc: [airport_level, beacon, wx.fog_ext, wx.fog_top],
+            misc2: [night.traffic, n_spots as f32, night.moon_alpha, 0.0],
+            alights: spots,
+            pre: [pre, 1.0 / pre, 0.0, 0.0],
         };
         let px_per_m = height as f32 * 0.5 / (fv.fov_y * 0.5).tan();
         let aou = AoU {
@@ -1329,6 +1451,9 @@ impl Renderer {
             cam_pos: [reye.x, reye.y, reye.z, fv.time],
             shadow_info: [SHADOW_RES as f32, 1.0, CASCADE_BLEND, 0.0],
             screen: [rw as f32, rh as f32, 1.0 / rw as f32, 1.0 / rh as f32],
+            sky: [globals.sky[0], globals.sky[1], globals.sky[2], rh as f32 * 0.5 / (fv.fov_y * 0.5).tan()],
+            // (Aircraft lights are eye-relative to the real eye: not in the mirror.)
+            misc2: [globals.misc2[0], 0.0, globals.misc2[2], globals.misc2[3]],
             ..globals
         };
         queue.write_buffer(&self.refl_globals_buf, 0, bytemuck::bytes_of(&rglobals));
@@ -1345,7 +1470,8 @@ impl Renderer {
             queue.write_buffer(&self.post_buf, UNIFORM_STRIDE * (BLOOM_LEVELS + k) as u64, bytemuck::bytes_of(&u));
         }
         // Tonemap: manual exposure, bloom strength, AgX look power, saturation.
-        let tone = PostU { params: [fv.exposure, 0.04, 1.22, 1.18], texel: [0.0; 4] };
+        // (A little more bloom at night: glare around the lights.)
+        let tone = PostU { params: [fv.exposure, 0.04 + 0.035 * night_k, 1.22, 1.18], texel: [0.0, 0.0, 1.0 / pre, 0.0] };
         queue.write_buffer(&self.post_buf, UNIFORM_STRIDE * (2 * BLOOM_LEVELS) as u64, bytemuck::bytes_of(&tone));
 
         if let Some(p) = &self.prof {
@@ -1367,22 +1493,34 @@ impl Renderer {
                 fog_ext: fog.0,
                 fog_top: fog.1 * 1000.0,
                 deck_trans,
+                moon: night.moon_dir,
+                moon_e: night.moon_e,
+                airglow: crate::lights::sky::AIRGLOW,
+                // Under cloud, light bounces between the city and the deck.
+                city_up: city_up * street * (1.0 + 2.0 * cover * cover),
+                // The eye adapts to the lit city in view (≈ lit streets' illuminance x coverage).
+                art_meter: city_up * street * std::f32::consts::PI * 12.0,
+                glow: glow.map(|g| g * street),
+                glow_tint: crate::lights::sky::GLOW_TINT,
+                lut_scale,
+                pre,
             },
         );
         // Clouds: lit by the sun as it arrives at the middle of the layer.
-        let sun_cloud = atmosphere::transmittance(cloud_base + 600.0, sun.y, haze, fog) * atmosphere::SUN_E;
+        let sun_cloud = atmosphere::transmittance(cloud_base + 600.0, key.y, haze, fog) * key_e * pre;
         let cloud_frame = |view_proj: Mat4, rot_view_proj: Mat4, eye: Vec3, w: u32, h: u32| CloudFrame {
             view_proj,
             inv_view_proj: view_proj.inverse(),
             rot_view_proj,
             eye,
-            sun_dir: sun,
+            sun_dir: key,
             sun_col: sun_cloud / std::f32::consts::PI,
-            sky_intensity: 1.0,
+            // (Read as the key light's irradiance relative to `fog[0]`.)
+            sky_intensity: key_e.y * lut_scale / atmosphere::SUN_E,
             time: fv.time,
             width: w,
             height: h,
-            fog: [atmosphere::SUN_E, haze],
+            fog: [atmosphere::SUN_E / lut_scale * pre, haze],
             ground_fog: [fog.0, fog.1],
         };
         let main_cf = cloud_frame(vp, vp_rot, fv.eye, width, height);
@@ -1411,6 +1549,15 @@ impl Renderer {
         // World-space meshes (ground quad, runways) → eye-relative; the aircraft already is.
         let world_xf: [f32; 4] = [0.0, -fv.eye.x, -fv.eye.z, -fv.eye.y];
         const DYN: [f32; 4] = [0.0; 4];
+        // Light sources per tile (lights.rs), culled per pass.
+        let tile_draws: Vec<crate::lights::gpu::TileDraw> = tiles
+            .iter()
+            .filter_map(|t| {
+                let l = t.lights.as_ref()?;
+                let (lo, hi) = (vec3(t.lo.x, 0.0, t.lo.y), vec3(t.hi.x, t.max_h + 15.0, t.hi.y));
+                Some(crate::lights::gpu::TileDraw { lights: l, xf: t.xf, dist: t.dist(eye2), visible: main_f.aabb(lo, hi), visible_refl: refl_f.aabb(lo, hi) })
+            })
+            .collect();
         fn place(pass: &mut wgpu::RenderPass<'_>, xf: &[f32; 4]) {
             pass.set_immediates(0, bytemuck::cast_slice(xf));
         }
@@ -1436,7 +1583,9 @@ impl Renderer {
             *n as usize
         }
 
-        // 1. Shadow cascades.
+        // 1. Shadow cascades (cleared only when the key light is a moon too
+        // low or too thin to cast visible shadows).
+        let cast_shadows = key == sun || (night.moon_dir.y > 0.02 && night.moon_frac > 0.2);
         for i in 0..CASCADES {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("shadow"),
@@ -1450,6 +1599,9 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            if !cast_shadows {
+                continue;
+            }
             let f = &shadow_f[i];
             pass.set_bind_group(0, &self.shadow_bg, &[(UNIFORM_STRIDE * i as u64) as u32]);
             pass.set_pipeline(&self.shadow_pipe);
@@ -1478,6 +1630,9 @@ impl Renderer {
             }
         }
 
+        if street > 0.0 {
+            self.lights.draw_map(encoder, &tile_draws, world_xf);
+        }
         if let Some(p) = prof {
             p.mark(encoder, 2);
         }
@@ -1534,6 +1689,7 @@ impl Renderer {
                     draw_trees(&mut pass, tile, tm, 1);
                 }
             }
+            self.lights.draw_sprites(&mut pass, &tile_draws, world_xf, true, street > 0.0 || night_k > 0.0);
         }
         self.clouds.render(device, queue, encoder, &refl_cf, &t.refl, &t.refl_dist, 1);
         if let Some(p) = self.prof.as_ref() {
@@ -1614,6 +1770,8 @@ impl Renderer {
                     stats.tree_instances += draw_trees(&mut pass, tile, tm, if d < TREE_LOD0 { 0 } else { 1 });
                 }
             }
+            // Lights, traffic and stars (additive, depth-tested).
+            self.lights.draw_sprites(&mut pass, &tile_draws, world_xf, false, street > 0.0 || night_k > 0.0);
         }
         if let Some(p) = self.prof.as_ref() {
             p.mark(encoder, 4);
@@ -1677,9 +1835,11 @@ impl Renderer {
                 let u = FogU {
                     inv_view_proj: vp_rot.inverse().to_cols_array_2d(),
                     eye: [fv.eye.x, fv.eye.y, fv.eye.z, wx.fog_ext],
-                    fog: [wx.fog_top, cover, atmosphere::SUN_E, haze],
-                    sun: [sun.x, sun.y, sun.z, width as f32],
+                    fog: [wx.fog_top, cover, key_e.y * pre, haze],
+                    sun: [key.x, key.y, key.z, width as f32],
                     screen: [width as f32, height as f32, 1.0 / width as f32, 1.0 / height as f32],
+                    // (w: pre-exposure when the map is on.)
+                    lmap: [globals.lmap[0], globals.lmap[1], globals.lmap[2], globals.lmap[3] * pre],
                 };
                 queue.write_buffer(&wp.fog_buf, 0, bytemuck::bytes_of(&u));
                 use wgpu::BindingResource as R;
@@ -1692,6 +1852,7 @@ impl Renderer {
                         wgpu::BindGroupEntry { binding: 2, resource: R::TextureView(&self.atmos.trans) },
                         wgpu::BindGroupEntry { binding: 3, resource: R::Sampler(&self.lin_samp) },
                         wgpu::BindGroupEntry { binding: 4, resource: self.atmos.out.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 5, resource: R::TextureView(self.lights.map_view()) },
                     ],
                 });
                 let mut pass = fullscreen_pass(encoder, "fog", &t.hdr);
@@ -1708,7 +1869,7 @@ impl Renderer {
                     eye: [fv.eye.x, fv.eye.y, fv.eye.z, fv.time],
                     cam_vel: [wp.cam_vel.x, wp.cam_vel.y, wp.cam_vel.z, 1.0 / 60.0],
                     params: [precip, if snow { 1.0 } else { 0.0 }, wx.wind.x, wx.wind.y],
-                    sun: [sun.x, sun.y, sun.z, 1.0 - 0.9 * cover],
+                    sun: [key.x, key.y, key.z, (1.0 - 0.9 * cover) * (key_e.y / atmosphere::SUN_E).min(1.0)],
                     screen: [width as f32, height as f32, focal, if wx.drizzle { 1.0 } else { 0.0 }],
                 };
                 queue.write_buffer(&wp.rain_buf, 0, bytemuck::bytes_of(&u));
@@ -1727,6 +1888,13 @@ impl Renderer {
                 pass.set_bind_group(0, &bg, &[]);
                 pass.draw(0..6, 0..3 * RAIN_PER_LAYER);
             }
+        }
+        // Halos around the lights (haze, fog, rain) and the aircraft's light beams.
+        {
+            let murky = haze > 2.5 || wx.fog_ext > 0.0 || wx.rain > 0.0 || wx.snow > 0.0;
+            let halos = murky && street > 0.0;
+            let beams = n_spots > 0 && night_k > 0.0;
+            self.lights.draw_post(encoder, &t.hdr, &tile_draws, world_xf, halos, beams);
         }
         if let Some(p) = self.prof.as_ref() {
             p.mark(encoder, 6);

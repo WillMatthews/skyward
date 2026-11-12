@@ -39,7 +39,8 @@ item lands; keep entries one line.
 - [x] Hillaire atmosphere, time of day, AgX, cascaded shadows, AO, bloom (E)
 - [x] Volumetric clouds + shadows + thermals, live weather (C, H)
 - [x] Rain/snow/fog, wet surfaces, sky-shake + precision fixes (H, I)
-- [~] **P0** Night: moon/stars/skyglow, street lights, lit windows, traffic, airport lighting, PAPI, landing lights (J)
+- [x] Night: moon/stars/skyglow, street lights, lit windows, traffic, airport lighting, PAPI, landing lights (J)
+- [ ] **P2** Night follow-ups: light pools beyond 4 km, halos behind clouds, README/help for L key
 - [ ] **P0** Supersonic + atmospheric VFX: vapour cones, shock diamonds, heat haze, contrails, wingtip vortices/condensation (L)
 - [ ] **P0** Crash VFX: fire, smoke, dust, debris (L)
 - [ ] **P1** TAA/upscaling (DLSS-class quality via own TAA + sharpening) with MSAA fallback
@@ -105,7 +106,7 @@ item lands; keep entries one line.
 |---|---|---|
 | A–I | v1 → v2 foundations (flight, models, clouds, streaming, graphics, bot, weather, floating origin) | ✅ |
 | K | Procedural audio | ✅ |
-| J | Night & lighting | 🟡 running |
+| J | Night & lighting | ✅ |
 | M | UI/HUD, maps, airport picker, menus, frame pacing | ✅ |
 | N | Real FlightGear aircraft + JSBSim FDM | 🟡 running |
 | K2 | Sample-based audio, supersonic, crash sounds | 🟡 running |

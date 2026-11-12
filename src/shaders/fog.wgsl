@@ -10,6 +10,7 @@ struct FogU {
     fog: vec4<f32>,             // x fog top (m), y cloud cover, z top-of-atmosphere sun irradiance, w haze
     sun: vec4<f32>,             // xyz toward the sun, w = screen width
     screen: vec4<f32>,          // w, h, 1/w, 1/h
+    lmap: vec4<f32>,            // ground light map: eye-relative centre x, z, 1 / size, w = pre-exposure (0 = off)
 };
 
 @group(0) @binding(0) var<uniform> F: FogU;
@@ -22,6 +23,7 @@ struct AtmosOut {
     expo: vec4<f32>,
 };
 @group(0) @binding(4) var<storage, read> atmos: AtmosOut;
+@group(0) @binding(5) var light_map: texture_2d<f32>;
 
 struct FsOut {
     @builtin(position) pos: vec4<f32>,
@@ -106,5 +108,29 @@ fn fs_fog(in: FsOut) -> @location(0) vec4<f32> {
     // Mostly light from above (the bright fog / cloud top), a little from the ground.
     let e_amb = (irr(vec3<f32>(0.0, 1.0, 0.0)) * 0.85 + vec3<f32>(luma(irr(vec3<f32>(0.0, -1.0, 0.0)))) * 0.15) / PI;
     let L = e_amb * 1.05 + e_sun;
-    return vec4<f32>(L * (1.0 - T), T);
+    // Street lights glowing in the fog: the lit ground under the ray (light
+    // map) lights the low fog around it, scattered toward the eye.
+    var art = vec3<f32>(0.0);
+    if (F.lmap.w > 0.0) {
+        let ta = t0;
+        let tb = min(t1, t0 + 4000.0);
+        let ns = 8;
+        let dta = (tb - ta) / f32(ns);
+        var oda = 0.0;
+        for (var i = 0; i < ns; i++) {
+            let t = ta + (f32(i) + 0.5) * dta;
+            let q = rd * t;
+            let h = max(h0 + q.y, 0.0);
+            let sig = density(h) * 0.001;
+            oda += sig * dta * 0.5;
+            let uv = (q.xz - F.lmap.xy) * F.lmap.z + 0.5;
+            if (all(uv > vec2<f32>(0.0)) && all(uv < vec2<f32>(1.0))) {
+                let e = textureSampleLevel(light_map, lin, uv, 0.0).rgb;
+                // Lamps hang ~8 m up: the fog around and below them is lit most.
+                art += e * (sig * exp(-h / 14.0) * exp(-oda) * dta * 2.0 / (4.0 * PI));
+            }
+            oda += sig * dta * 0.5;
+        }
+    }
+    return vec4<f32>(L * (1.0 - T) + art * F.lmap.w, T);
 }

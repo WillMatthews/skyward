@@ -163,6 +163,8 @@ pub enum Key {
     ApSpdDown,
     EngineFail,
     AutoFlight,
+    /// Landing / taxi lights on / off (L).
+    LandingLights,
 }
 
 impl Key {
@@ -331,6 +333,10 @@ pub struct Sim {
     /// Interpolated pose used by this frame's cameras and aircraft mesh.
     rpos: Vec3,
     rrot: Quat,
+    /// Where the model's lights are (lights.rs).
+    light_rig: crate::lights::AircraftLightRig,
+    /// Landing / taxi lights: None = automatic (gear down / with the bot), Some = the pilot's choice (L).
+    pub landing_lights: Option<bool>,
 }
 
 /// Cinematic camera state.
@@ -431,7 +437,10 @@ impl Sim {
             prev_rot: Quat::IDENTITY,
             rpos: Vec3::ZERO,
             rrot: Quat::IDENTITY,
+            light_rig: Default::default(),
+            landing_lights: None,
         };
+        s.light_rig = crate::lights::AircraftLightRig::from_model(&s.model);
         s.reset(world);
         s
     }
@@ -445,6 +454,8 @@ impl Sim {
         self.sel = sel.min(self.defs.len() - 1);
         self.start = if start.valid_for(&self.defs[self.sel]) { start } else { Start::default_for(&self.defs[self.sel]) };
         (self.model, self.props, self.size) = load_model(self.defs[self.sel].id);
+        self.light_rig = crate::lights::AircraftLightRig::from_model(&self.model);
+        self.landing_lights = None;
         self.bot = None;
         self.watch = watch;
         if watch {
@@ -819,6 +830,11 @@ impl Sim {
                     }
                 }
                 Key::EngineFail => self.cycle_engine_failure(),
+                Key::LandingLights => {
+                    let on = !self.landing_lights_on();
+                    self.landing_lights = Some(on);
+                    self.say(if on { "Landing lights on" } else { "Landing lights off" }, 2.0);
+                }
                 Key::AutoFlight => {
                     if self.bot.is_some() {
                         self.disable_bot("you have control");
@@ -968,6 +984,20 @@ impl Sim {
         self.ctl.gear_down = self.ac.gear_pos() > 0.5;
         self.cam_heading = hdg;
         self.snap_pose();
+    }
+
+    /// Landing lights: the pilot's choice (L), else on with the gear down
+    /// (fixed gear: below ~3,000 ft) or whenever the bot flies.
+    pub fn landing_lights_on(&self) -> bool {
+        self.landing_lights.unwrap_or_else(|| {
+            if self.bot.is_some() {
+                self.ac.on_ground || self.ac.pos.y < 3000.0
+            } else if self.defs[self.sel].retractable_gear {
+                self.ac.gear_pos() > 0.5
+            } else {
+                self.ac.pos.y < 900.0
+            }
+        })
     }
 
     /// Direction toward the sun for the current date / time of day.
@@ -1142,7 +1172,15 @@ impl Sim {
         };
         let _ = aspect;
         let view = glam::camera::rh::view::look_at_mat4(eye, target, cam_up);
-        let fv = FrameView { eye, view, fov_y: fov, time: self.time, sun_dir: self.sun_dir(), exposure: 1.0 };
+        let zone = crate::atmosphere::civil_offset_h(self.home_ll.0, self.home_ll.1, self.day_of_year);
+        let clock = crate::atmosphere::SkyClock::new(self.lat_lon.0, self.lat_lon.1, zone, self.day_of_year, self.hours);
+        let on = self.landing_lights_on();
+        let mut acl = crate::lights::AircraftLights::build(&self.light_rig, self.rpos - eye, self.rrot, self.time, on, on && self.ac.on_ground);
+        if !show_aircraft {
+            // From the cockpit the lights shine out, but their lenses aren't seen.
+            acl.n_sprites = 0;
+        }
+        let fv = FrameView { eye, view, fov_y: fov, time: self.time, sun_dir: self.sun_dir(), exposure: 1.0, clock, acl };
         let mut dynm = MeshData::default();
         if show_aircraft {
             // Eye-relative (see gfx: rendering is camera-relative, no f32 cancellation).

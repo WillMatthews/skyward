@@ -7,7 +7,7 @@ use crate::clouds::{CloudField, Weather};
 use crate::weather::{self, Live, Season, WindField, Wx, WxRender};
 use crate::flight::Environment;
 use crate::osm::{Airport, Proj, RunwayPiece, TileId, Xform2, FAR_ZOOM, ZOOM};
-use crate::scene::{self, Rgba, Runway, TileCollision, TreeInst};
+use crate::scene::{self, Runway, TileCollision, TreeInst};
 use crate::ui::mapdata::MapVectors;
 use std::sync::Arc;
 use crate::tiles::Pool;
@@ -45,6 +45,8 @@ pub struct TileMeshes {
     pub buildings: scene::MeshData,
     pub trees: Vec<TreeInst>,
     pub conifers: usize,
+    /// Light sources (lights.rs), tile frame.
+    pub lights: crate::lights::TileLights,
 }
 
 struct Loaded {
@@ -110,8 +112,6 @@ pub struct World {
     pub uploads: VecDeque<TileMeshes>,
     /// Tiles the GPU / HUD must drop.
     evicted: Vec<TileId>,
-    /// New per-tile minimap images for the HUD.
-    minimaps: Vec<(TileId, Rgba)>,
     /// Runway pieces per tile, in the tile's frame.
     pieces: HashMap<TileId, Vec<RunwayPiece>>,
     /// All runways in the current frame: OurAirports runways (exact ends,
@@ -182,7 +182,6 @@ impl World {
             failed: HashMap::new(),
             uploads: VecDeque::new(),
             evicted: Vec::new(),
-            minimaps: Vec::new(),
             pieces: HashMap::new(),
             runways: Vec::new(),
             airport_db: None,
@@ -470,10 +469,9 @@ impl World {
                 self.airports.push(a.clone());
             }
         }
-        self.minimaps.push((b.id, b.minimap));
         let trees = b.trees.len();
         self.tiles.insert(b.id, Loaded { rect, xf, far: b.id.is_far(), collision: b.collision, buildings: b.building_count, trees });
-        self.uploads.push_back(TileMeshes { id: b.id, max_h: b.max_h, flat: b.flat, buildings: b.buildings, trees: b.trees, conifers: b.conifers });
+        self.uploads.push_back(TileMeshes { id: b.id, max_h: b.max_h, flat: b.flat, buildings: b.buildings, trees: b.trees, conifers: b.conifers, lights: b.lights });
     }
 
     fn keep(&self, id: TileId, rect: (Vec2, Vec2)) -> bool {
@@ -545,7 +543,6 @@ impl World {
         for id in gone {
             self.tiles.remove(&id);
             self.uploads.retain(|u| u.id != id);
-            self.minimaps.retain(|m| m.0 != id);
             self.evicted.push(id);
         }
         let now = Instant::now();
@@ -707,9 +704,6 @@ impl World {
         std::mem::take(&mut self.evicted)
     }
 
-    pub fn take_minimaps(&mut self) -> Vec<(TileId, Rgba)> {
-        std::mem::take(&mut self.minimaps)
-    }
 
     /// New vector moving-map tiles (tile frame).
     pub fn take_map_vectors(&mut self) -> Vec<(TileId, Arc<MapVectors>)> {

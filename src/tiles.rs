@@ -4,7 +4,7 @@
 //! TileJSON is fetched once per run (cached copy used when offline); tiles are
 //! cached forever under `cache/tiles/{z}/{x}/{y}.pbf`.
 //!
-//! Workers fetch → decode → extract → build meshes/collision/minimap entirely
+//! Workers fetch → decode → extract → build meshes/collision/lights entirely
 //! off the main thread; the main thread only receives finished `TileBuild`s.
 
 use crate::osm::{Proj, TileId};

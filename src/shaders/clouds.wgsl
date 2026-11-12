@@ -463,7 +463,8 @@ fn god_rays(ro: vec3<f32>, rd: vec3<f32>, tmax: f32, tc: f32, mu: f32) -> GodRay
         let t = t0 + (f32(i) + 0.5) * dt;
         let p = ro + rd * t;
         let m = medium(max(p.y, 0.0) * 0.001, U.fog.y, U.gfog.xy);
-        let sc = (m.ray * pr + vec3<f32>(m.mie * pm)) * sun_trans(p.y, sun.y) * sun_e();
+        // (U.sun_dir.w: the key light's — sun's or moon's — irradiance relative to sun_e().)
+        let sc = (m.ray * pr + vec3<f32>(m.mie * pm)) * sun_trans(p.y, sun.y) * sun_e() * U.sun_dir.w;
         let l = exp(-od) * sc * (1.0 - cloud_shadow_at(p)) * dt * 0.001;
         o.lost += l;
         if (t < tc) {

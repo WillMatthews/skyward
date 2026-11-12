@@ -21,12 +21,15 @@ const EXPOSURE_KEY: f32 = 1.15;
 pub const TRANS_W: u32 = 256;
 pub const TRANS_H: u32 = 64;
 pub const MS_N: u32 = 32;
-pub const SKY_W: u32 = 192;
+pub const SKY_W: u32 = 256;
 pub const SKY_H: u32 = 108;
 pub const AP_N: u32 = 32;
 pub const LUT_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// Size of the `AtmosOut` storage buffer (bytes).
 pub const OUT_SIZE: u64 = 4 * 16 + 16 + 16;
+/// Skyglow table: azimuth bins x elevation bins (see `atmos_core.wgsl`).
+pub const GLOW_AZ: usize = 16;
+pub const GLOW_EL: usize = 8;
 
 // ---------------------------------------------------------------- sun position
 
@@ -73,6 +76,156 @@ pub fn day_of_year(month: u32, day: u32) -> u32 {
     CUM[(month.clamp(1, 12) - 1) as usize] + day.clamp(1, 31)
 }
 
+// ---------------------------------------------------------------- night sky (moon, stars)
+
+/// Scene irradiance per lux (sun_e = SUN_E is ~128 klx at the top of the
+/// atmosphere). The same factor converts luminance (cd/m²) to scene radiance.
+pub const LUX: f32 = SUN_E / 128_000.0;
+
+/// Moment and place for the night sky (moon, stars).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SkyClock {
+    pub lat: f64,
+    pub lon: f64,
+    pub year: i32,
+    pub day_of_year: u32,
+    /// Universal time (hours, may run past 0..24).
+    pub utc_hours: f64,
+    /// Local clock time (hours) — drives city life (windows, traffic).
+    pub local_hours: f32,
+}
+
+impl Default for SkyClock {
+    fn default() -> Self {
+        SkyClock { lat: 51.5, lon: 0.0, year: 2026, day_of_year: 227, utc_hours: 14.5, local_hours: 15.5 }
+    }
+}
+
+impl SkyClock {
+    /// The clock `sun_direction_zoned` uses: local `hours` in the civil zone
+    /// `offset_h`, at `lat`/`lon`, this year.
+    pub fn new(lat: f64, lon: f64, offset_h: f32, day_of_year: u32, hours: f32) -> SkyClock {
+        SkyClock { lat, lon, year: current_year(), day_of_year, utc_hours: hours as f64 - offset_h as f64, local_hours: hours }
+    }
+
+    /// Days since 2000 Jan 0.0 UT (Schlyter's `d`).
+    pub fn days(&self) -> f64 {
+        let y = self.year;
+        let leaps = if y > 2000 { (y - 2001).div_euclid(4) + 1 } else { (y - 2000).div_euclid(4) };
+        (365 * (y - 2000) + leaps) as f64 + self.day_of_year as f64 + self.utc_hours / 24.0
+    }
+}
+
+/// The current calendar year (UTC) from the system clock.
+pub fn current_year() -> i32 {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(1.8e9);
+    // Exact enough away from New Year's Eve: 365.2425-day years.
+    1970 + (secs / (365.2425 * 86400.0)).floor() as i32
+}
+
+fn rev(x: f64) -> f64 {
+    x.rem_euclid(360.0)
+}
+
+/// Local sidereal time (degrees) for the clock.
+pub fn local_sidereal_deg(c: &SkyClock) -> f64 {
+    let d = c.days();
+    let ls = rev(282.9404 + 4.70935e-5 * d + 356.0470 + 0.9856002585 * d);
+    rev(ls + 180.0 + c.utc_hours * 15.0 + c.lon)
+}
+
+/// Rotation from equatorial coordinates (x → RA 0h, z → north celestial
+/// pole; J2000, precession ignored) to the world frame (+X east, +Y up,
+/// -Z north) at the clock's place and moment.
+pub fn star_rotation(c: &SkyClock) -> glam::Mat3 {
+    let lst = local_sidereal_deg(c).to_radians();
+    let (sl, cl) = lst.sin_cos();
+    let (sp, cp) = c.lat.to_radians().sin_cos();
+    // Hour-angle frame: x' = cos(lst) x + sin(lst) y, y' = -sin(lst) x + cos(lst) y, z.
+    // world.x (east) = y', world.y (up) = cos(lat) x' + sin(lat) z,
+    // world.z (south) = sin(lat) x' - cos(lat) z.
+    let m = |r: [f64; 3]| Vec3::new(r[0] as f32, r[1] as f32, r[2] as f32);
+    let rx = m([-sl, cl, 0.0]);
+    let ry = m([cp * cl, cp * sl, sp]);
+    let rz = m([sp * cl, sp * sl, -cp]);
+    // Columns of the matrix = images of the equatorial axes.
+    glam::Mat3::from_cols(Vec3::new(rx.x, ry.x, rz.x), Vec3::new(rx.y, ry.y, rz.y), Vec3::new(rx.z, ry.z, rz.z))
+}
+
+/// Topocentric direction toward the moon (world frame) and its distance
+/// (km). Low-precision lunar theory (P. Schlyter), good to a few arcminutes.
+pub fn moon_direction(c: &SkyClock) -> (Vec3, f64) {
+    let d = c.days();
+    let rad = std::f64::consts::PI / 180.0;
+    let n = rev(125.1228 - 0.0529538083 * d);
+    let i = 5.1454;
+    let w = rev(318.0634 + 0.1643573223 * d);
+    let a = 60.2666;
+    let e = 0.054900;
+    let m = rev(115.3654 + 13.0649929509 * d);
+    // Kepler's equation.
+    let mut ea = m + e / rad * (m * rad).sin() * (1.0 + e * (m * rad).cos());
+    for _ in 0..5 {
+        ea -= (ea - e / rad * (ea * rad).sin() - m) / (1.0 - e * (ea * rad).cos());
+    }
+    let xv = a * ((ea * rad).cos() - e);
+    let yv = a * ((1.0 - e * e).sqrt() * (ea * rad).sin());
+    let v = yv.atan2(xv) / rad;
+    let mut r = (xv * xv + yv * yv).sqrt();
+    let (nr, ir, vw) = (n * rad, i * rad, (v + w) * rad);
+    let xh = r * (nr.cos() * vw.cos() - nr.sin() * vw.sin() * ir.cos());
+    let yh = r * (nr.sin() * vw.cos() + nr.cos() * vw.sin() * ir.cos());
+    let zh = r * (vw.sin() * ir.sin());
+    let mut lon = yh.atan2(xh) / rad;
+    let mut lat = zh.atan2((xh * xh + yh * yh).sqrt()) / rad;
+    // Main perturbations.
+    let ms = rev(356.0470 + 0.9856002585 * d);
+    let ws = 282.9404 + 4.70935e-5 * d;
+    let ls = ms + ws;
+    let lm = m + w + n;
+    let dd = lm - ls;
+    let f = lm - n;
+    let s = |x: f64| (x * rad).sin();
+    let co = |x: f64| (x * rad).cos();
+    lon += -1.274 * s(m - 2.0 * dd) + 0.658 * s(2.0 * dd) - 0.186 * s(ms) - 0.059 * s(2.0 * m - 2.0 * dd) - 0.057 * s(m - 2.0 * dd + ms)
+        + 0.053 * s(m + 2.0 * dd)
+        + 0.046 * s(2.0 * dd - ms)
+        + 0.041 * s(m - ms)
+        - 0.035 * s(dd)
+        - 0.031 * s(m + ms)
+        - 0.015 * s(2.0 * f - 2.0 * dd)
+        + 0.011 * s(m - 4.0 * dd);
+    lat += -0.173 * s(f - 2.0 * dd) - 0.055 * s(m - f - 2.0 * dd) - 0.046 * s(m + f - 2.0 * dd) + 0.033 * s(f + 2.0 * dd) + 0.017 * s(2.0 * m + f);
+    r += -0.58 * co(m - 2.0 * dd) - 0.46 * co(2.0 * dd);
+    // Ecliptic → equatorial.
+    let ecl = (23.4393 - 3.563e-7 * d) * rad;
+    let (lo, la) = (lon * rad, lat * rad);
+    let xe = lo.cos() * la.cos();
+    let ye = lo.sin() * la.cos() * ecl.cos() - la.sin() * ecl.sin();
+    let ze = lo.sin() * la.cos() * ecl.sin() + la.sin() * ecl.cos();
+    let geo = star_rotation(c) * Vec3::new(xe as f32, ye as f32, ze as f32);
+    // Topocentric parallax (~1°): the observer sits one Earth radius off the centre.
+    let up = Vec3::Y;
+    let topo = (geo.as_dvec3() * r - up.as_dvec3()).normalize();
+    (topo.as_vec3(), r * 6378.14)
+}
+
+/// Moon phase quantities from the moon and sun directions: (illuminated
+/// fraction 0..1, phase angle (rad, 0 = full)).
+pub fn moon_phase(moon: Vec3, sun: Vec3) -> (f32, f32) {
+    let elong = moon.dot(sun).clamp(-1.0, 1.0).acos();
+    let alpha = std::f32::consts::PI - elong;
+    ((1.0 + alpha.cos()) * 0.5, alpha)
+}
+
+/// Moonlight illuminance (lux) at the top of the atmosphere for a phase angle
+/// (rad) and distance (km): 0.27 lux at a mean full moon (Allen's phase law).
+pub fn moon_lux(alpha: f32, dist_km: f64) -> f32 {
+    let a = alpha.abs().to_degrees();
+    let mag = 0.026 * a + 4.0e-9 * a.powi(4);
+    0.27 * 10f32.powf(-0.4 * mag) * ((384_400.0 / dist_km.max(3.0e5)) as f32).powi(2)
+}
+
 // ---------------------------------------------------------------- CPU medium (== atmos_core.wgsl)
 
 const RG: f32 = 6360.0;
@@ -96,6 +249,25 @@ fn extinction(h: f32, haze: f32, fog: (f32, f32)) -> Vec3 {
     let dm = e + (bl - e).max(0.0);
     let doz = (1.0 - (h - 25.0).abs() / 15.0).max(0.0);
     RAY_S * dr + Vec3::splat(MIE_EXT * dm + f) + OZONE_A * doz
+}
+
+/// Extinction of the air at the ground (per km, green) for a haze level.
+pub fn transmittance_ext0(haze: f32) -> f32 {
+    extinction(0.0, haze, (0.0, 0.0)).y
+}
+
+/// Scale of the stored sky-view / aerial-perspective LUTs for a sun
+/// elevation (sin): 1 by day, up to 2^16 at night so the faint night sky
+/// (radiance per unit sun irradiance ~1e-8) stays a normal fp16 number.
+/// Readers multiply by `SUN_E / lut_scale`.
+pub fn lut_scale(sun_y: f32) -> f32 {
+    2f32.powf(16.0 * smoothstep(0.02, -0.12, sun_y))
+}
+
+/// Pre-exposure of the HDR targets for a sun elevation (sin): 1 by day,
+/// 2^13 at night (see [`AtmosFrame::pre`]).
+pub fn pre_exposure(sun_y: f32) -> f32 {
+    (lut_scale(sun_y) / 8.0).max(1.0)
 }
 
 /// Transmittance from altitude `h_m` (metres) toward direction cosine `mu` to
@@ -132,6 +304,15 @@ struct AtmosU {
     sun_e: [f32; 4],
     params: [f32; 4],
     fog: [f32; 4],
+    /// Moon direction, w = moon irradiance / SUN_E (top of the atmosphere).
+    moon: [f32; 4],
+    /// x natural night-sky (airglow) radiance / SUN_E, y city upward radiance
+    /// / SUN_E, z artificial illuminance for metering (scene units), w unused.
+    night: [f32; 4],
+    /// Skyglow colour (rgb), w unused.
+    glow_tint: [f32; 4],
+    /// Skyglow radiance / SUN_E, GLOW_EL x GLOW_AZ.
+    glow: [[f32; 4]; GLOW_AZ * GLOW_EL / 4],
 }
 
 /// Per-frame atmosphere inputs.
@@ -150,6 +331,25 @@ pub struct AtmosFrame {
     pub fog_top: f32,
     /// Light let through an overcast deck (1 = typical).
     pub deck_trans: f32,
+    /// Toward the moon and its irradiance at the top of the atmosphere (scene units).
+    pub moon: Vec3,
+    pub moon_e: f32,
+    /// Natural night-sky radiance (airglow + unresolved stars, scene units).
+    pub airglow: f32,
+    /// Upward radiance of the lit city around the eye (scene units).
+    pub city_up: f32,
+    /// Artificial light the eye adapts to (scene illuminance).
+    pub art_meter: f32,
+    /// Light-pollution skyglow radiance (scene units), `GLOW_EL` x `GLOW_AZ`, and its colour.
+    pub glow: [f32; GLOW_AZ * GLOW_EL],
+    pub glow_tint: Vec3,
+    /// The sky-view and aerial-perspective LUTs hold radiance per unit sun
+    /// irradiance times this (see [`lut_scale`]).
+    pub lut_scale: f32,
+    /// Pre-exposure: every radiance written to the HDR targets (and the SH
+    /// ambient, sun_eye) is multiplied by this, so night scenes (~1e-7 scene
+    /// units) stay out of fp16 denormals; `expo` is divided by it.
+    pub pre: f32,
 }
 
 pub struct Atmosphere {
@@ -288,9 +488,13 @@ impl Atmosphere {
             inv_view_proj: ivp.to_cols_array_2d(),
             eye: [eye.x, eye.y, eye.z, f.haze],
             sun: [sun.x, sun.y, sun.z, f.cover],
-            sun_e: [SUN_E, SUN_E, SUN_E, if mirrored { 1.0 } else { 0.0 }],
-            params: [REF_E, f.cloud_base, 0.0, EXPOSURE_KEY],
+            sun_e: [SUN_E * f.pre, SUN_E * f.pre, SUN_E * f.pre, if mirrored { 1.0 } else { 0.0 }],
+            params: [REF_E, f.cloud_base, f.lut_scale, EXPOSURE_KEY],
             fog: [f.fog_ext, f.fog_top * 0.001, f.deck_trans, 0.0],
+            moon: [f.moon.x, f.moon.y, f.moon.z, f.moon_e / SUN_E],
+            night: [f.airglow / SUN_E, f.city_up / SUN_E, f.art_meter, f.pre],
+            glow_tint: [f.glow_tint.x, f.glow_tint.y, f.glow_tint.z, 0.0],
+            glow: bytemuck::cast(f.glow.map(|g| g / SUN_E)),
         };
         queue.write_buffer(&self.ubuf_main, 0, bytemuck::bytes_of(&u(f.inv_view_proj, f.eye, false)));
         queue.write_buffer(&self.ubuf_refl, 0, bytemuck::bytes_of(&u(f.refl_inv_view_proj, f.refl_eye, true)));
