@@ -1232,6 +1232,21 @@ fn headless(args: Args) -> Result<(), String> {
             ac.on_ground,
             ac.crashed
         );
+        // Spawn checks (QA smoke tests): height over the ground / any building, gear, flaps.
+        let sim = s.sim.as_ref().unwrap();
+        let xz = vec2(ac.pos.x, ac.pos.z);
+        let gh = flight::Environment::ground_height(&s.world, xz);
+        eprintln!(
+            "state+: agl {:.1} m (wheels {:.1} m) building {:?} gear {:.2} (lever {}) flaps {:.2} (lever {:.2}) start {:?}",
+            ac.pos.y - gh,
+            ac.pos.y - sim.def().gear_height - gh,
+            flight::Environment::obstacle_top(&s.world, xz).map(|t| t - gh),
+            ac.gear_pos(),
+            if sim.ctl.gear_down { "down" } else { "up" },
+            ac.surfaces().flaps,
+            sim.ctl.flaps,
+            sim.start
+        );
     }
     if args.rebase_check {
         rebase_check(&gpu, &mut renderer, &mut ui, &mut s, &tex, &view, w, h, &raw, &path, ov)?;
@@ -1696,6 +1711,8 @@ fn soak_flight(
     }
     let frame_dt = 1.0 / 30.0;
     let mut next_log = 0.0;
+    // SKYWARD_SOAK_LOG=S: log every S seconds (default a minute).
+    let log_every = std::env::var("SKYWARD_SOAK_LOG").ok().and_then(|v| v.parse::<f32>().ok()).filter(|v| *v > 0.0).unwrap_or(60.0);
     let mut next_shot = if args.shot_every > 0.0 { args.shot_every } else { f32::MAX };
     let mut seen = 0;
     let mut waited = 0.0f32;
@@ -1752,12 +1769,14 @@ fn soak_flight(
             }
         }
         if t >= next_log {
-            next_log += 60.0;
+            next_log += log_every;
             let b = sim.bot.as_ref();
             eprintln!(
-                "t {:5.0}s  alt {:5.0} m  ias {:4.0} kt  vs {:+5.1} m/s  dist {:5.1} km  {:<12} | {}",
+                "t {:5.0}s  alt {:5.0} m  agl {:5.0} m  hdg {:3.0}  ias {:4.0} kt  vs {:+5.1} m/s  dist {:5.1} km  {:<12} | {}",
                 t,
                 ac.pos.y,
+                ac.pos.y - flight::Environment::ground_height(&s.world, p),
+                ac.heading().to_degrees().rem_euclid(360.0),
                 ac.airspeed() / flight::KT,
                 ac.vertical_speed(),
                 s.world.distance_to_geo(vec2(ac.pos.x, ac.pos.z), start_geo.0, start_geo.1) / 1000.0,

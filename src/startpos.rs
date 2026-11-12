@@ -179,7 +179,7 @@ pub fn spawn(def: &AircraftDef, world: &World, cs: &CustomStart) -> Option<(Airc
             // (Above the threshold: terrain.rs runway elevation.)
             let alt = dist * 3f32.to_radians().tan() + 15.0 + rw.height_at(thr);
             let v = approach_ias(def, dist);
-            let (ac, mut ctl) = air(vec3(p.x, alt, p.y), heading_of(d), v);
+            let (mut ac, mut ctl) = air(vec3(p.x, alt, p.y), heading_of(d), v);
             let last = def.flap_detents.len().saturating_sub(1);
             let flap = match def.category {
                 Category::Airliner => {
@@ -200,6 +200,11 @@ pub fn spawn(def: &AircraftDef, world: &World, cs: &CustomStart) -> Option<(Airc
                 if def.retractable_gear && *nm <= 6.0 {
                     ctl.gear_down = true;
                 }
+            }
+            // Established: the flaps and gear already where the levers are (not still travelling).
+            ac.set_flaps_now(ctl.flaps);
+            if ctl.gear_down {
+                ac.extend_gear_now();
             }
             Some((ac, ctl, flap, Some(rw)))
         }

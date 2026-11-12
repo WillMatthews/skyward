@@ -315,6 +315,7 @@ flies a scripted structures / crash / effects test (src/scenario.rs; with
 `--shot` or `--audio-render`), `SKYWARD_NO_VFX=1` turns the effects off,
 `SKYWARD_VFX_STATS=1` prints their counts, `SKYWARD_DEBUG_DEBRIS=1` the wreck;
 `BOT_TRACE=Final,Flare` prints the controls every frame in those bot phases;
+`SKYWARD_SOAK_LOG=10` logs a soak every 10 s instead of every minute (with height above the ground);
 `SKYWARD_REBASE_LOG=1` logs every origin shift; `SKYWARD_FLAT_TERRAIN=1`
 flattens the world (sea level everywhere), `SKYWARD_NO_LANDMARKS=1` uses the
 plain OSM buildings, `SKYWARD_TERRAIN_DEBUG=1` logs per-tile terrain grids and

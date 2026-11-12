@@ -180,6 +180,9 @@ pub struct World {
     /// (reported heights are above the ground): the terrain around the focus.
     pub terrain_base: f32,
     base_check: Option<Instant>,
+    /// Resident tiles at the last check (a new tile re-checks at once, so the
+    /// result doesn't depend on wall-clock timing: deterministic headless shots).
+    base_check_tiles: usize,
 }
 
 fn rect_dist(r: (Vec2, Vec2), p: Vec2) -> f32 {
@@ -235,6 +238,7 @@ impl World {
             real_time: None,
             terrain_base: 0.0,
             base_check: None,
+            base_check_tiles: 0,
         }
     }
 
@@ -316,8 +320,9 @@ impl World {
         self.sim_time = if sim_time.is_finite() { sim_time } else { 0.0 };
         // Weather heights follow the terrain: re-place the layers when the
         // ground around the focus is well above / below what they refer to.
-        if self.base_check.is_none_or(|t| t.elapsed() > Duration::from_secs(2)) {
+        if self.base_check.is_none_or(|t| t.elapsed() > Duration::from_secs(2)) || self.tiles.len() != self.base_check_tiles {
             self.base_check = Some(Instant::now());
+            self.base_check_tiles = self.tiles.len();
             let e = self.regional_elevation();
             if (e - self.terrain_base).abs() > 250.0 {
                 let preset = self.wx.source.starts_with("preset");

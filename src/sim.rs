@@ -2,7 +2,7 @@
 //! cameras, and per-frame scene data.
 
 use crate::autopilot::Autopilot;
-use crate::bot::{self, Bot, RunwayEnd};
+use crate::bot::{self, Bot};
 use crate::flight::{self, Aircraft, AircraftDef, Category, Controls, EngineKind, KT};
 use crate::gfx::FrameView;
 use crate::models::{self, AircraftModel, ModelInputs};
@@ -623,9 +623,10 @@ impl Sim {
         match start {
             Start::Runway | Start::Approach => match &rw {
                 Some(r) => {
-                    let end = RunwayEnd::of(r, false);
                     if start == Start::Runway {
-                        end.thr
+                        // The same end `spawn` picks (wind / climb gradient), so the
+                        // tiles under the wheels are loaded before the aircraft lands on them.
+                        bot::best_takeoff_end(world, r).thr
                     } else {
                         let (end, _) = bot::best_landing_end(world, r, 200.0);
                         end.thr - end.dir * Self::approach_geometry(def).0
@@ -685,11 +686,12 @@ impl Sim {
                 let p = thr - dir * d;
                 // (Above the threshold / the terrain: terrain.rs.)
                 let base = rw.map_or_else(|| crate::flight::Environment::ground_height(world, p), |r| r.height_at(thr));
-                let (ac, mut ctl) = air(vec3(p.x, alt + base, p.y), heading_of(dir), v);
+                let (mut ac, mut ctl) = air(vec3(p.x, alt + base, p.y), heading_of(dir), v);
                 if def.has_engine {
-                    // A shallow descent with the approach flap set.
+                    // A shallow descent with the approach flap set (already extended).
                     ctl.throttle *= 0.75;
                     ctl.flaps = def.flap_detents.get(flap).copied().unwrap_or(0.0) / def.flap_detents.last().copied().unwrap_or(1.0).max(1e-3);
+                    ac.set_flaps_now(ctl.flaps);
                 }
                 (ac, ctl, flap)
             }

@@ -90,6 +90,8 @@ item lands; keep entries one line.
 - [x] Menus: aircraft cards, conditions, settings, pause, loading, toasts; frame pacing fix (M)
 - [ ] **P1** UI follow-ups: ND label overlapping heading scale; airport-diagram backdrop detail (higher-zoom tiles); apron/parking data; UI CPU cost ~4 ms in dense ND
 - [ ] **P1** Bot uses displaced thresholds; A320 bot occasional go-around on stable final
+- [x] **P1** QA: goldens re-blessed (+ terrain_alps, landmarks_city; flight scenes VFX-free), bot terrain fixes (approach/departure terrain margins, route MSA, terrain-aware gate + hold, go-around climb-out, low-pass obstacle floor), spawn fixes; soak clean at EGLC/EGKB/LOWI except below (QA)
+- [ ] **P1** Bot in mountain terrain: airliners at LOWI land on 26 but not 08 (straight-in from the hold is too high → safe go-arounds); ATR/E190 can climb into rising side valleys with a westerly (no terrain-aware departure / climb-in-hold)
 - [x] **P1** Input: gamepad, joystick/HOTAS, rudder pedals, quadrants (gilrs + evdev, hot-plug), rebinding UI, curves/deadzone/calibration, mouse yoke, head-look (P)
 - [ ] **P2** Input follow-ups: differential toe brakes + per-engine throttles need `Controls` fields; help overlay shows default keys not bindings; menu navigation by gamepad; mouse-yoke reticle; verify defaults on real X52/X56/TCA/Windows
 - [ ] **P1** Accessibility: UI scale, colour-blind-safe palettes, subtitles for callouts/ATC
@@ -100,7 +102,7 @@ item lands; keep entries one line.
 - [x] **P0** WASM/WebGPU build (Web Worker tile builds, fetch, localStorage, lazy aircraft assets, lighter web defaults) + GitHub Pages workflow (deploys once `PAGES_ENABLED`), GPL licence + credits page (G) — goes live when the owner makes the repo public (owner's call only)
 - [ ] **P1** Web follow-ups: no live METAR (aviationweather.gov has no CORS) — a CORS-friendly METAR source; aircraft-card thumbnails; Cache API for tiles beyond the HTTP cache; ship the compact airport list from CI; audio decode / aircraft texture decode still on the page's thread (one-off stalls at flight start); test Safari / Firefox / mid-range GPUs
 - [x] **P1** CI: fmt (formatted paths) + clippy -D warnings + tests + release build + wasm32 check on push; lavapipe smoke render nightly; local golden image/audio regression `scripts/regress.sh` (P)
-- [ ] **P2** CI follow-ups: one-shot `cargo fmt` of the tree when no track is active → `cargo fmt --check`; burn down the crate-wide clippy allows in Cargo.toml; regenerate goldens after N/T land
+- [ ] **P2** CI follow-ups: one-shot `cargo fmt` of the tree when no track is active → `cargo fmt --check`; burn down the crate-wide clippy allows in Cargo.toml
 - [ ] **P1** Native release packages (Linux AppImage/Flatpak, Windows, macOS)
 - [ ] **P1** Performance budgets enforced in CI (GPU timing on soak runs)
 - [ ] **P1** Licence/attribution audit for every asset and data source (OSM/OpenMapTiles, FlightGear, OurAirports, fonts, audio)

@@ -143,6 +143,12 @@ impl RunwayEnd {
     }
 }
 
+/// Clearance (m) a path keeps over the terrain `s` m from the runway: 2.5% of
+/// the distance (an obstacle-assessment surface), 15..60 m.
+fn terrain_margin(s: f32) -> f32 {
+    (s * 0.025).clamp(15.0, 60.0)
+}
+
 /// Glidepath angle (rad) needed to clear obstacles by 60 m on the approach to
 /// `end` (aiming `aim` m past the threshold), searching 8 km out in a
 /// widening funnel. At least 3°.
@@ -154,10 +160,14 @@ pub fn approach_slope(world: &World, end: &RunwayEnd, aim: f32) -> f32 {
         let mut l = -half;
         while l <= half {
             let p = end.thr - end.dir * s + end.right() * l;
-            // Buildings and the terrain itself, above the threshold.
-            let top = world.obstacle_top(p).unwrap_or(f32::MIN).max(world.ground_height(p)) - end.elev;
-            if top > -50.0 {
-                need = need.max(((top + 60.0) / (s + aim)).atan());
+            // Buildings (60 m clear) and the terrain itself, above the threshold. The
+            // ground's margin grows with distance (an approach surface): near the
+            // threshold even level ground sits only ~10-20 m under a 3° path.
+            let bld = world.obstacle_top(p).map_or(f32::MIN, |h| h - end.elev + 60.0);
+            let gnd = world.ground_height(p) - end.elev + terrain_margin(s);
+            let top = bld.max(gnd);
+            if top > 10.0 {
+                need = need.max((top / (s + aim)).atan());
             }
             l += 45.0;
         }
@@ -177,9 +187,12 @@ pub fn departure_gradient(world: &World, end: &RunwayEnd) -> f32 {
         let mut l = -half;
         while l <= half {
             let q = end.thr + end.dir * s + end.right() * l;
-            let top = world.obstacle_top(q).unwrap_or(f32::MIN).max(world.ground_height(q)) - end.elev;
-            if top > -50.0 {
-                need = need.max((top + 60.0) / (s - lift).max(50.0));
+            // (Margins as approach_slope: the ground's grows with distance.)
+            let bld = world.obstacle_top(q).map_or(f32::MIN, |h| h - end.elev + 60.0);
+            let gnd = world.ground_height(q) - end.elev + terrain_margin(s - lift);
+            let top = bld.max(gnd);
+            if top > 10.0 {
+                need = need.max(top / (s - lift).max(50.0));
             }
             l += 45.0;
         }
@@ -318,7 +331,8 @@ fn derived_landmarks(world: &World, home: Vec2, r: f32) -> Vec<Landmark> {
     for iz in -n..=n {
         for ix in -n..=n {
             let p = home + vec2(ix as f32, iz as f32) * step;
-            if let Some(t) = world.obstacle_top(p) {
+            // (Height above the ground: obstacle_top is absolute — on a hillside even a barn is "tall".)
+            if let Some(t) = world.obstacle_top(p).map(|t| t - world.ground_height(p)) {
                 if tall.is_none_or(|(h, _)| t > h) {
                     tall = Some((t, p));
                 }
@@ -1566,16 +1580,49 @@ impl Glider {
 /// Highest ground (or building) within `dist` ahead along `vel` (and a
 /// little to either side): the floor a cruise altitude must clear.
 fn terrain_floor(world: &World, p: Vec2, vel: Vec2, dist: f32) -> f32 {
+    terrain_floor_w(world, p, vel, dist, 600.0)
+}
+
+/// `terrain_floor` over a corridor `half` m either side.
+fn terrain_floor_w(world: &World, p: Vec2, vel: Vec2, dist: f32, half: f32) -> f32 {
     let d = vel.normalize_or(vec2(0.0, -1.0));
     let side = vec2(-d.y, d.x);
     let mut top = world.ground_height(p);
     let mut s = 0.0;
     while s <= dist {
-        for l in [-600.0, 0.0, 600.0] {
+        for l in [-half, 0.0, half] {
             let q = p + d * s + side * l;
             top = top.max(world.obstacle_top(q).unwrap_or(f32::MIN).max(world.ground_height(q)));
         }
         s += 300.0;
+    }
+    top
+}
+
+/// Highest ground (or building) along the straight path from `p` to `to`
+/// (at most `max_d` m of it, 600 m either side): what flying there must clear.
+fn route_floor(world: &World, p: Vec2, to: Vec2, max_d: f32) -> f32 {
+    let d = to - p;
+    let len = d.length().min(max_d);
+    if len < 1.0 {
+        return world.ground_height(p);
+    }
+    terrain_floor(world, p, d, len)
+}
+
+/// Highest ground (or building) within `r` m of `c` (a circle to orbit in).
+fn circle_floor(world: &World, c: Vec2, r: f32) -> f32 {
+    let mut top = world.ground_height(c);
+    let step = (r / 6.0).max(150.0);
+    let n = (r / step).ceil() as i32;
+    for iz in -n..=n {
+        for ix in -n..=n {
+            let o = vec2(ix as f32, iz as f32) * step;
+            if o.length() <= r {
+                let q = c + o;
+                top = top.max(world.obstacle_top(q).unwrap_or(f32::MIN).max(world.ground_height(q)));
+            }
+        }
     }
     top
 }
@@ -1586,38 +1633,47 @@ fn avoid_obstacles(world: &World, ac: &Aircraft, secs: f32, margin: f32) -> Opti
     let p = xz(ac.pos);
     let v = gs(ac).max(20.0);
     let range = (v * secs).max(1200.0);
-    let clear = |h: f32| -> bool {
+    // (A climb doesn't count: it may not be kept up.)
+    let vs = ac.vertical_speed().min(0.0);
+    // Worst clearance (m, beyond `margin`) along heading `h`.
+    let worst = |h: f32| -> f32 {
         let d = dir_of(h);
         let side = vec2(-d.y, d.x);
+        let mut w = f32::MAX;
         let mut s = 60.0;
         while s < range {
             let t = s / v;
-            let alt = ac.pos.y + ac.vertical_speed().min(0.0) * t;
+            let alt = ac.pos.y + vs * t;
             for l in [-90.0, 0.0, 90.0] {
                 let q = p + d * s + side * l;
                 // Buildings and rising ground.
                 let top = world.obstacle_top(q).unwrap_or(f32::MIN).max(world.ground_height(q));
-                if top + margin > alt {
-                    return false;
-                }
+                w = w.min(alt - top - margin);
             }
             s += 60.0;
         }
-        true
+        w
     };
     let h0 = heading_of(vec2(ac.vel.x, ac.vel.z));
-    if clear(h0) {
+    if worst(h0) >= 0.0 {
         return None;
     }
+    // The nearest clear heading; none clear: the one with the most room (in a
+    // valley, along it rather than into a slope).
+    let mut best = (wrap_pi(h0 + PI), worst(h0 + PI));
     for k in 1..=7 {
         for sgn in [1.0, -1.0] {
             let h = h0 + sgn * k as f32 * 20f32.to_radians();
-            if clear(h) {
+            let w = worst(h);
+            if w >= 0.0 {
                 return Some(wrap_pi(h));
+            }
+            if w > best.1 {
+                best = (wrap_pi(h), w);
             }
         }
     }
-    Some(wrap_pi(h0 + PI))
+    Some(best.0)
 }
 
 // ------------------------------------------------------------------ powered
@@ -1804,6 +1860,10 @@ struct Powered {
     touch_t: f32,
     turn_dir: f32,
     gate: Vec2,
+    /// Height (m) to arrive at the gate: the FAF height, or higher over terrain.
+    gate_alt: f32,
+    /// Orbiting the gate to lose height (mountain fields).
+    orbit: bool,
     low_pass_done: bool,
     /// Flying the approach as a fast low pass (no gear, no flaps, ~100 m, then pull up).
     low_pass: bool,
@@ -1867,6 +1927,8 @@ impl Powered {
             touch_t: 0.0,
             turn_dir: -1.0,
             gate: Vec2::ZERO,
+            gate_alt: 0.0,
+            orbit: false,
             low_pass_done: false,
             low_pass: false,
             lp_inbound: false,
@@ -1936,7 +1998,37 @@ impl Powered {
         // Gate on the side we are on, beyond the final approach fix.
         let p = xz(ac.pos);
         let side = if end.cross(p) >= 0.0 { 1.0 } else { -1.0 };
-        self.gate = end.thr - end.dir * (self.pf.final_dist + self.pf.turn_r * 1.5) + end.right() * side * self.pf.turn_r * 1.2;
+        let pf = &self.pf;
+        let back = pf.final_dist + pf.turn_r * 1.5;
+        let faf_h = ((pf.final_dist + pf.aim) * self.gs_angle.tan()).max(300.0);
+        // Gate on the side we are on, beyond the final approach fix — unless the
+        // terrain there is above the approach (a valley field): then the other side,
+        // or straight in down the extended centreline, further out if need be, where
+        // an orbit to lose height clears the ground.
+        let mut cands = vec![
+            end.thr - end.dir * back + end.right() * side * pf.turn_r * 1.2,
+            end.thr - end.dir * back - end.right() * side * pf.turn_r * 1.2,
+        ];
+        cands.extend((0..6).map(|k| end.thr - end.dir * (back + k as f32 * 3000.0)));
+        let r_orbit = pf.turn_r.max(600.0) * 1.3 + 300.0;
+        let need = |g: Vec2| circle_floor(world, g, r_orbit) + 300.0 - end.elev;
+        // (None clear: the one with the least height to lose below the glidepath there.)
+        let excess = |g: Vec2, h: f32| h - (-end.along(g) + pf.aim) * self.gs_angle.tan();
+        let mut best: Option<(Vec2, f32)> = None;
+        for g in cands {
+            let h = need(g);
+            if h <= faf_h + 150.0 {
+                best = Some((g, h));
+                break;
+            }
+            if best.is_none_or(|b| excess(g, h) < excess(b.0, b.1)) {
+                best = Some((g, h));
+            }
+        }
+        let (g, h) = best.unwrap();
+        self.gate = g;
+        self.gate_alt = end.elev + h.max(faf_h);
+        self.orbit = false;
         self.rw = Some(end);
         self.phase = PPhase::Position;
     }
@@ -2092,7 +2184,8 @@ impl Powered {
                     }
                     *status = format!("Climbing out — {:.0} ft", ac.pos.y / FT);
                 }
-                if wheels > pf.hand_off {
+                // (A go-around climbs away first: no hand-off while still sinking.)
+                if wheels > pf.hand_off && (self.phase != PPhase::GoAround || (ac.vertical_speed() > 2.0 && t - self.phase_t > 8.0)) {
                     ap.engage_hold_current(ac);
                     ap.hdg = Some(hdg);
                     ap.alt = Some((fe + pf.tour_alt).max(terrain_alt).max(ac.pos.y));
@@ -2133,6 +2226,8 @@ impl Powered {
                 let mut hdg;
                 let mut alt;
                 let mut spd;
+                // Lined up on a high straight-in (terrain): down at a steeper rate, speedbrake out.
+                let mut steep = false;
                 match self.phase {
                     PPhase::Enroute => {
                         if ac.vertical_speed() > 1.0 {
@@ -2172,7 +2267,12 @@ impl Powered {
                                 hdg = ac.heading();
                             }
                         }
-                        alt = (fe + pf.tour_alt).max(terrain_alt);
+                        if let Some(l) = self.tour.get(self.wp) {
+                            // (And the way to the next waypoint: in mountains it is rarely straight ahead.)
+                            alt = (fe + pf.tour_alt).max(terrain_alt).max(route_floor(world, p, l.pos, 20_000.0) + pf.tour_alt.min(450.0));
+                        } else {
+                            alt = (fe + pf.tour_alt).max(terrain_alt);
+                        }
                         // Afterburner climb for the fighter, then cruise power.
                         spd = if ac.pos.y < alt - 60.0 { pf.climb_ias } else { pf.cruise_ias };
                         if self.ab_climb && ac.pos.y > alt - 100.0 {
@@ -2189,14 +2289,15 @@ impl Powered {
                         }
                         if !self.lp_inbound {
                             hdg = crab(heading_of(self.gate - p), tas, wind);
-                            alt = fe + 450.0;
+                            alt = (fe + 450.0).max(route_floor(world, p, self.gate, 20_000.0) + 300.0);
                             spd = 300.0 * KT;
                             *status = format!("Setting up a low pass RWY {} — {:.1} km", end.name, p.distance(self.gate) / 1000.0);
                         } else {
                             // Intercept gain matched to the (large) turn radius, or it orbits.
                             hdg = crab(end.course() + (-x / r_turn.max(1200.0)).atan().clamp(-0.6, 0.6), tas, wind);
                             let lined = x.abs() < 500.0 && wrap_pi(end.course() - ac.heading()).abs() < 0.35;
-                            alt = fe + if lined && s < 6000.0 && s > -end.len - 800.0 { 120.0 } else { 350.0 };
+                            alt = (fe + if lined && s < 6000.0 && s > -end.len - 800.0 { 120.0 } else { 350.0 })
+                                .max(terrain_floor(world, p, vec2(ac.vel.x, ac.vel.z), 4000.0) + if lined { 120.0 } else { 250.0 });
                             spd = if lined { 450.0 } else { 300.0 } * KT;
                             *status = format!("Fast low pass RWY {} — {:.0} kt", end.name, ias / KT);
                             if s < -end.len - 1500.0 || (s < -end.len && x.abs() > 3000.0) {
@@ -2219,7 +2320,23 @@ impl Powered {
                         let inbound = wrap_pi(end.course() - ac.heading()).abs() < 100f32.to_radians();
                         let capture = to_gate < pf.turn_r.max(600.0) * 1.2
                             || (s > pf.final_dist * 0.5 && x.abs() < s * 0.8 && inbound && s < pf.final_dist + pf.turn_r * 1.6);
-                        if capture || self.phase_t < 0.0 {
+                        // Mountain fields: orbit the gate until down to its height.
+                        let r_orbit = pf.turn_r.max(600.0);
+                        if !self.orbit && self.phase_t >= 0.0 && to_gate < r_orbit * 1.3 && ac.pos.y > self.gate_alt + 200.0 {
+                            self.orbit = true;
+                        } else if self.orbit && ac.pos.y < self.gate_alt + 80.0 {
+                            self.orbit = false;
+                        }
+                        if self.orbit {
+                            let rad = (p - self.gate).normalize_or(vec2(1.0, 0.0));
+                            let mut tan = vec2(-rad.y, rad.x);
+                            if tan.dot(vec2(ac.vel.x, ac.vel.z)) < 0.0 {
+                                tan = -tan;
+                            }
+                            let k = ((to_gate - r_orbit) / r_orbit).clamp(-0.8, 0.8);
+                            hdg = crab(heading_of(tan - rad * k), tas, wind);
+                            *status = format!("Descending in the hold for RWY {} — {:.0} ft to lose", end.name, (ac.pos.y - self.gate_alt) / FT);
+                        } else if capture || self.phase_t < 0.0 {
                             self.phase_t = -1.0; // latched: intercepting
                             self.ab_climb = false; // (after a low pass: no more reheat)
                             let l = (pf.turn_r * 0.35).max(250.0);
@@ -2230,6 +2347,21 @@ impl Powered {
                             *status = format!("Returning to {} — RWY {} {:.1} km", self.field_name, end.name, to_gate / 1000.0);
                         }
                         alt = fe + faf_alt.max(300.0);
+                        // Terrain: to the gate at its height (an MSA over the route there); in
+                        // the hold at the gate height; intercepting, clear the final course
+                        // ahead (approach_slope checked the last 8 km of it).
+                        let vel = vec2(ac.vel.x, ac.vel.z);
+                        let aligned = x.abs() < 1500.0 && wrap_pi(end.course() - ac.heading()).abs() < 35f32.to_radians();
+                        alt = if self.orbit {
+                            self.gate_alt
+                        } else if self.phase_t < 0.0 {
+                            // (The turn onto the course at the gate height: its circle is clear.)
+                            let a = alt.max(terrain_floor_w(world, p, end.dir, s.max(0.0), 250.0) + 150.0).max(terrain_floor_w(world, p, vel, 2000.0, 150.0) + 120.0);
+                            steep = aligned && ac.pos.y > a + 150.0;
+                            if aligned { a } else { a.max(self.gate_alt.min(ac.pos.y)) }
+                        } else {
+                            self.gate_alt.max(route_floor(world, p, self.gate, 20_000.0) + 300.0).max(terrain_floor(world, p, vel, 5000.0) + 300.0)
+                        };
                         if self.ab_climb && ay < 900.0 {
                             alt = fe + 1000.0;
                         } else {
@@ -2257,14 +2389,17 @@ impl Powered {
                     }
                 }
                 if let Some((h, until)) = self.avoid {
-                    if until > t && self.phase != PPhase::Position {
+                    if until > t && (self.phase != PPhase::Position || self.phase_t >= 0.0) {
                         hdg = crab(h, tas, wind);
                         alt = alt.max(ac.pos.y);
                     }
                 }
                 ap.hdg = Some(wrap_pi(hdg));
                 ap.alt = Some(alt.max(self.alt_floor));
-                ap.vs = None;
+                ap.vs = steep.then_some(15.0);
+                if steep && def.has_spoilers {
+                    ctl.spoilers = 1.0;
+                }
                 ap.ias = Some(spd);
                 if !ap.update(def, ac, ctl, dt) {
                     ap.engage_hold_current(ac);
@@ -2285,7 +2420,9 @@ impl Powered {
                     }
                     let l = 1500.0;
                     ap.hdg = Some(crab(end.course() + (-x / l).atan().clamp(-0.4, 0.4), tas, wind));
-                    ap.alt = Some(fe + gp.max(100.0).min(ay.max(100.0)));
+                    // (Never below what lies ahead: towers past the far end, rising ground.)
+                    let ahead = terrain_floor_w(world, p, vec2(ac.vel.x, ac.vel.z), 6000.0, 300.0) + 150.0;
+                    ap.alt = Some((fe + gp.max(100.0).min(ay.max(100.0))).max(ahead));
                     ap.vs = None;
                     ap.ias = Some(420.0 * KT);
                     ctl.gear_down = false;
@@ -2319,14 +2456,19 @@ impl Powered {
                 }
                 ap.hdg = Some(hdg);
                 ap.alt = None;
-                ap.vs = Some((vs_gp + 0.12 * (gp - ay)).clamp(vs_gp * 1.8 - 1.0, 1.5));
+                // Well above the path (a high intercept over terrain): steeper, with the speedbrake.
+                let high = ay - gp > 50.0 && s > 2500.0;
+                let steepest = if high { vs_gp * 2.4 - 1.5 } else { vs_gp * 1.8 - 1.0 };
+                ap.vs = Some((vs_gp + 0.12 * (gp - ay)).clamp(steepest, 1.5));
+                ctl.spoilers = if high && def.has_spoilers { 1.0 } else { 0.0 };
                 ap.ias = Some(self.vapp);
                 if !ap.update(def, ac, ctl, dt) {
                     ap.engage_hold_current(ac);
                 }
                 *status = format!("Final approach RWY {} — {:.1} nm, {:.0} ft", end.name, s / NM, wheels / FT);
                 // Stabilised-approach gate below 500 ft.
-                if wheels < 150.0 && wheels > pf.flare_h + 5.0 {
+                // (Height above the runway: the ground under a valley approach can be higher.)
+                if ay.min(wheels + 60.0) < 150.0 && wheels > pf.flare_h + 5.0 {
                     let unstable = x.abs() > pf.stab_x
                         || (ay - gp).abs() > 35.0
                         || self.ias_f < self.vapp - 10.0 * KT
