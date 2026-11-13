@@ -684,6 +684,9 @@ pub struct CloudRenderer {
     lent_tex: wgpu::Texture,
     lent_view: wgpu::TextureView,
     lent_uploaded: u64,
+    /// Any lens on the lenticular grid (a wave field without lenses keeps
+    /// the calm trace).
+    lent_on: bool,
     flashes: [FlashLight; 2],
     bgl: wgpu::BindGroupLayout,
     shape_view: wgpu::TextureView,
@@ -699,7 +702,10 @@ pub struct CloudRenderer {
     samp_clamp: wgpu::Sampler,
     weather_pipe: wgpu::RenderPipeline,
     shadow_pipe: wgpu::RenderPipeline,
+    /// Without storms: [with lenticulars, without].
+    shadow_pipe_calm: [wgpu::RenderPipeline; 2],
     trace_pipe: wgpu::RenderPipeline,
+    trace_pipe_calm: [wgpu::RenderPipeline; 2],
     temporal_pipe: wgpu::RenderPipeline,
     composite_pipe: wgpu::RenderPipeline,
     /// Uniforms for the weather / shadow passes.
@@ -745,6 +751,16 @@ fn tex3d(device: &wgpu::Device, label: &str, n: u32) -> wgpu::Texture {
 impl CloudRenderer {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, atmos: CloudAtmos) -> Self {
         let src = format!("{}\n{}", include_str!("shaders/atmos_core.wgsl"), include_str!("shaders/clouds.wgsl"));
+        // Without storms (and lenticulars) the trace / shadow passes run
+        // copies with that code compiled out (its registers slow the
+        // fair-weather march down; a pipeline-overridable constant is not
+        // folded away).
+        let calm_src = src.replace("const WX: bool = true;", "const WX: bool = false;");
+        let module_calm = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("clouds (calm)"), source: wgpu::ShaderSource::Wgsl(calm_src.as_str().into()) });
+        let module_clear = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("clouds (clear)"),
+            source: wgpu::ShaderSource::Wgsl(calm_src.replace("const WXL: bool = true;", "const WXL: bool = false;").into()),
+        });
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("clouds"),
             source: wgpu::ShaderSource::Wgsl(src.into()),
@@ -806,23 +822,26 @@ impl CloudRenderer {
             bind_group_layouts: &[Some(&bgl)],
             immediate_size: 0,
         });
-        let pipe = |label: &str, fs_entry: &str, targets: &[Option<wgpu::ColorTargetState>]| {
+        let pipe_with = |label: &str, module: &wgpu::ShaderModule, fs_entry: &str, targets: &[Option<wgpu::ColorTargetState>]| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&layout),
-                vertex: wgpu::VertexState { module: &module, entry_point: Some("vs_full"), compilation_options: Default::default(), buffers: &[] },
+                vertex: wgpu::VertexState { module, entry_point: Some("vs_full"), compilation_options: Default::default(), buffers: &[] },
                 primitive: Default::default(),
                 depth_stencil: None,
                 multisample: Default::default(),
-                fragment: Some(wgpu::FragmentState { module: &module, entry_point: Some(fs_entry), compilation_options: Default::default(), targets }),
+                fragment: Some(wgpu::FragmentState { module, entry_point: Some(fs_entry), compilation_options: Default::default(), targets }),
                 multiview_mask: None,
                 cache: None,
             })
         };
+        let pipe = |label: &str, fs_entry: &str, targets: &[Option<wgpu::ColorTargetState>]| pipe_with(label, &module, fs_entry, targets);
         let t = |format| Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL });
         let weather_pipe = pipe("cloud weather", "fs_weather", &[t(COL_FMT), t(COL_FMT), t(COL_FMT)]);
         let shadow_pipe = pipe("cloud shadow", "fs_shadow", &[t(SHADOW_FMT)]);
+        let shadow_pipe_calm = [&module_calm, &module_clear].map(|m| pipe_with("cloud shadow (calm)", m, "fs_shadow", &[t(SHADOW_FMT)]));
         let trace_pipe = pipe("cloud trace", "fs_trace", &[t(COL_FMT), t(DEP_FMT)]);
+        let trace_pipe_calm = [&module_calm, &module_clear].map(|m| pipe_with("cloud trace (calm)", m, "fs_trace", &[t(COL_FMT), t(DEP_FMT)]));
         let temporal_pipe = pipe("cloud temporal", "fs_temporal", &[t(COL_FMT), t(DEP_FMT)]);
         // Premultiplied "over": dst = cloud.rgb + dst * transmittance.
         let composite_pipe = pipe(
@@ -963,6 +982,7 @@ impl CloudRenderer {
             lent_tex,
             lent_view,
             lent_uploaded: 0,
+            lent_on: false,
             flashes: [FlashLight::default(); 2],
             bgl,
             shape_view: shape.create_view(&Default::default()),
@@ -978,7 +998,9 @@ impl CloudRenderer {
             samp_clamp,
             weather_pipe,
             shadow_pipe,
+            shadow_pipe_calm,
             trace_pipe,
+            trace_pipe_calm,
             temporal_pipe,
             composite_pipe,
             aux_ubuf,
@@ -1057,7 +1079,7 @@ impl CloudRenderer {
             screen: [frame.width as f32, frame.height as f32, tw as f32, th as f32],
             wmap: [wo.x, wo.y, WMAP_TEXEL, WMAP_RES as f32],
             shadow: [self.shadow_origin.x, self.shadow_origin.y, 1.0 / (SHADOW_RES as f32 * SHADOW_TEXEL), SHADOW_TEXEL],
-            shape: [p.base, self.field.top().max(self.storm_top()).max(if self.lent.grid.is_empty() { 0.0 } else { self.lent.alt + self.lent.thick * 2.0 + 1500.0 }), p.sigma, p.strato_thick],
+            shape: [p.base, self.field.top().max(self.storm_top()).max(if !self.lent_on { 0.0 } else { self.lent.alt + self.lent.thick * 2.0 + 1500.0 }), p.sigma, p.strato_thick],
             cells: [p.cell, p.prob, p.r_min, p.r_max],
             cells2: [p.h_min, p.h_max, p.strato, p.cirrus],
             seed: [self.field.seed, fidx, p.visible as u32, 0],
@@ -1067,12 +1089,24 @@ impl CloudRenderer {
             storm: [self.storm.cells.len().min(MAX_STORM) as f32, self.storm.shaft_bottom, self.storm.shear.x, self.storm.shear.y],
             storm2: [self.storm.dry, self.storm_top(), 0.0, 0.0],
             lent: [self.lent.origin.x, self.lent.origin.y, self.lent.size.max(1.0), self.lent.alt],
-            lent2: [if self.lent.grid.is_empty() { 0.0 } else { 1.0 }, self.lent.thick, 0.0, 0.0],
+            lent2: [if self.lent_on { 1.0 } else { 0.0 }, self.lent.thick, 0.0, 0.0],
             flash: std::array::from_fn(|i| {
                 let f = self.flashes[i];
                 let r = f.pos - frame.eye;
                 [r.x, r.y, r.z, f.intensity]
             }),
+        }
+    }
+
+    /// The trace / shadow pipeline for the weather: with the storm (and
+    /// lenticular) code only when there are any.
+    fn pick<'a>(&self, full: &'a wgpu::RenderPipeline, calm: &'a [wgpu::RenderPipeline; 2]) -> &'a wgpu::RenderPipeline {
+        if !self.storm.cells.is_empty() {
+            full
+        } else if self.lent_on {
+            &calm[0]
+        } else {
+            &calm[1]
         }
     }
 
@@ -1117,9 +1151,10 @@ impl CloudRenderer {
             );
             self.lent_uploaded = l.version;
         }
-        let was_on = !self.lent.grid.is_empty();
+        let was_on = self.lent_on;
         self.lent = l.clone();
-        if was_on != !l.grid.is_empty() {
+        self.lent_on = l.grid.iter().any(|v| *v > 0.01);
+        if was_on != self.lent_on {
             for sl in self.slots.iter_mut().flatten() {
                 sl.valid = false;
             }
@@ -1281,7 +1316,7 @@ impl CloudRenderer {
         }
         if do_shadow {
             let bg = self.bind_group(device, &self.aux_ubuf, Some(&self.weather_view), None, None, None, false, 0);
-            fullscreen(encoder, &self.shadow_view, &self.shadow_pipe, &bg);
+            fullscreen(encoder, &self.shadow_view, self.pick(&self.shadow_pipe, &self.shadow_pipe_calm), &bg);
         }
     }
 
@@ -1354,7 +1389,7 @@ impl CloudRenderer {
             p.set_bind_group(0, bg, &[]);
             p.draw(0..3, 0..1);
         };
-        pass(encoder, "cloud trace", &[&s.trace_col, &s.trace_dep], false, &self.trace_pipe, &bg_trace);
+        pass(encoder, "cloud trace", &[&s.trace_col, &s.trace_dep], false, self.pick(&self.trace_pipe, &self.trace_pipe_calm), &bg_trace);
         pass(encoder, "cloud temporal", &[&next.0, &next.1], false, &self.temporal_pipe, &bg_temporal);
         pass(encoder, "cloud composite", &[hdr], true, &self.composite_pipe, &bg_comp);
 

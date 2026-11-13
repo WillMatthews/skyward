@@ -144,24 +144,32 @@ impl Cell {
     pub fn anvil_base(&self) -> f32 {
         self.top - (1800.0 + 1800.0 * self.intensity).min((self.top - self.base) * 0.45)
     }
+    /// Centre of the tower at height y (field xz): it leans downshear, along
+    /// the anvil (== STORM_TILT in clouds.wgsl).
+    pub fn tower_axis(&self, y: f32) -> Vec2 {
+        self.center + self.anvil_dir * TILT * (y - self.base).clamp(0.0, (self.top - self.base).max(0.0))
+    }
     /// Tower footprint radius at height y (the anvil flares out at the top).
     pub fn tower_radius(&self, y: f32) -> f32 {
         let h = ((y - self.base) / (self.top - self.base)).clamp(0.0, 1.2);
         self.radius * (0.82 + 0.25 * h)
     }
-    /// Anvil coverage 0..1 at field xz (a wedge streaming downshear).
+    /// Anvil coverage 0..1 at field xz: a plume from the (leaning) tower top
+    /// spreading downshear (the outline clouds.wgsl draws, without its ragged edge).
     pub fn anvil(&self, xz: Vec2) -> f32 {
-        let d = xz - self.center;
-        let s = d.dot(self.anvil_dir);
-        let n = d.perp_dot(self.anvil_dir).abs();
-        if s < -self.radius * 2.4 || s > self.anvil_len {
+        if self.anvil_len <= 0.0 {
             return 0.0;
         }
-        let width = self.radius * 1.6 + s.max(0.0) * 0.6;
-        let tip = 1.0 - smooth(self.anvil_len * 0.55, self.anvil_len, s);
-        let back = smooth(-self.radius * 2.4, -self.radius * 1.0, s);
-        let side = 1.0 - smooth(width * 0.6, width, n);
-        side * tip * back
+        let d = xz - self.tower_axis(self.top);
+        let s = d.dot(self.anvil_dir);
+        let n = d.perp_dot(self.anvil_dir).abs();
+        let back = self.radius * 1.15;
+        if s < -back || s > self.anvil_len {
+            return 0.0;
+        }
+        let width = self.radius * 1.15 + s.max(0.0) * 0.5;
+        let along = if s < 0.0 { -s / back } else { (s - self.anvil_len * 0.45).max(0.0) / (self.anvil_len * 0.55) };
+        1.0 - smooth(0.7, 1.0, vec2(n / width, along).length())
     }
 }
 
@@ -183,6 +191,9 @@ fn h3(seed: u32, a: i32, b: i32, k: u32) -> f32 {
     let x = lowbias32(lowbias32(lowbias32(seed ^ (a as u32)).wrapping_add(b as u32)).wrapping_add(k.wrapping_mul(0x9e37_79b9)));
     (x >> 8) as f32 * (1.0 / 16_777_216.0)
 }
+
+/// How far the towers lean downshear (m per m of height).
+pub const TILT: f32 = 0.09;
 
 /// Grid cell size (m): at most one storm per cell.
 pub const GRID: f32 = 16_000.0;
@@ -401,7 +412,7 @@ impl StormField {
 
     pub(crate) fn cell_air_pub(&self, c: &Cell, f: Vec2, y: f32, out: &mut StormAir) {
         let st = c.intensity;
-        let d_tower = f.distance(c.center);
+        let d_tower = f.distance(c.tower_axis(y));
         let rc = c.rain_center();
         let d_rain = f.distance(rc);
         let h_rel = (y - c.base) / (c.top - c.base);
@@ -708,6 +719,23 @@ mod tests {
         let home = cells.iter().find(|c| c.id == 0xffff_ffff).expect("home cell");
         assert!(home.center.length() > 4000.0 && home.center.length() < 12_000.0);
         assert!(home.top - home.base > 8000.0 && home.anvil_len > 8000.0 && home.overshoot > 0.0);
+    }
+
+    #[test]
+    fn tower_leans_into_its_anvil() {
+        let f = ts_field();
+        let c = f.cells_near(Vec2::ZERO, 20_000.0).into_iter().find(|c| c.id == 0xffff_ffff).unwrap();
+        // The tower leans downshear with height; the anvil sits on its top
+        // and streams downwind, thinning out at its tip, nothing far upwind.
+        let top = c.tower_axis(c.top);
+        assert!((c.tower_axis(c.base) - c.center).length() < 1.0);
+        assert!((top - c.center).dot(c.anvil_dir) > 500.0);
+        assert!(c.anvil(top) > 0.99 && c.anvil(top + c.anvil_dir * c.anvil_len * 0.4) > 0.99);
+        assert!(c.anvil(top + c.anvil_dir * c.anvil_len * 0.99) < 0.2);
+        assert_eq!(c.anvil(top - c.anvil_dir * c.radius * 2.0), 0.0);
+        // The updraft core follows the lean.
+        let mid = c.base + (c.top - c.base) * 0.6;
+        assert!(f.air(vec3(c.tower_axis(mid).x, mid, c.tower_axis(mid).y)).updraft > 15.0);
     }
 
     #[test]
