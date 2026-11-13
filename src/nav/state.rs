@@ -356,6 +356,8 @@ pub fn default_cruise(def: &AircraftDef) -> f32 {
         Category::Glider => 3000.0,
         Category::Warbird => 8000.0,
         Category::FastJet => 25_000.0,
+        Category::Helicopter => 1_500.0,
+        Category::Drone => 400.0,
         Category::Airliner => {
             if def.engine_kind == crate::flight::EngineKind::Jet {
                 12_000.0

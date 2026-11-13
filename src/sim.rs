@@ -81,7 +81,12 @@ impl Start {
     pub fn label_for(self, def: &AircraftDef) -> String {
         let jet = def.engine_kind == EngineKind::Jet;
         match (self, def.category) {
+            (Start::Runway, Category::Helicopter) => "Helipad, rotors turning".into(),
+            (Start::Runway, Category::Drone) => "On the ground, armed".into(),
             (Start::Runway, _) => "Runway, ready for take-off".into(),
+            (Start::Approach, Category::Helicopter) => "1 nm final at 300 ft".into(),
+            (Start::City, Category::Helicopter) => "Over the city at 1,000 ft".into(),
+            (Start::City, Category::Drone) => "Over the city, 60 m up".into(),
             (Start::Approach, Category::Airliner) => "10 nm final at 3,000 ft".into(),
             (Start::Approach, Category::FastJet) => "6 nm final at 2,000 ft".into(),
             (Start::Approach, Category::Glider) => "Final glide, 4.5 km out".into(),
@@ -187,6 +192,8 @@ pub enum Key {
     LookCenter,
     /// Mouse yoke on / off; interface toggles handled by the window layer.
     MouseYoke,
+    /// Rotorcraft: stability assist (helicopter) / flight mode (drone).
+    Assist,
     Instruments,
     WeatherPanel,
     Mute,
@@ -246,6 +253,7 @@ pub fn min_runway(def: &AircraftDef) -> f32 {
         Category::Warbird => 700.0,
         Category::Trainer => 450.0,
         Category::Glider => 300.0,
+        Category::Helicopter | Category::Drone => 25.0,
     }
 }
 
@@ -449,6 +457,8 @@ fn cruise_ias(def: &AircraftDef) -> f32 {
                 200.0
             }
         }
+        Category::Helicopter => 110.0,
+        Category::Drone => 25.0,
     }
 }
 
@@ -648,6 +658,9 @@ impl Sim {
     }
 
     fn chase_dist(&self) -> f32 {
+        if self.defs[self.sel].category == Category::Drone {
+            return 1.8;
+        }
         self.size * 2.6 + 6.0
     }
 
@@ -693,6 +706,9 @@ impl Sim {
             Category::Airliner => (18_520.0, 914.0, (def.vref_kt + 45.0) * KT, 1.min(last)),
             Category::FastJet => (11_100.0, 610.0, (def.vref_kt + 35.0) * KT, 0),
             Category::Glider => (4500.0, 300.0, def.vs1_kt * 1.4 * KT, 0),
+            // Rotorcraft: a 1 nm final at 300 ft (drone: 400 m, 30 m up).
+            Category::Helicopter => (1852.0, 91.0, def.vref_kt * KT, 0),
+            Category::Drone => (400.0, 30.0, 10.0, 0),
             Category::Warbird => (4630.0, 4630.0 * 3f32.to_radians().tan() + 30.0, def.vref_kt * 1.15 * KT, 0),
             Category::Trainer => (4630.0, 4630.0 * 3f32.to_radians().tan() + 20.0, def.vs1_kt * 1.4 * KT, 1.min(last)),
         }
@@ -706,6 +722,11 @@ impl Sim {
             (ac, ctl)
         };
         match start {
+            Start::Runway if def.rotor.is_some() => {
+                // Rotorcraft: a clear spot beside the runway (apron / grass), facing into wind.
+                let (spot, hdg) = crate::rotor::defs::ground_spot(def, world, rw);
+                (Aircraft::on_runway(def, spot, hdg, world), Controls::default(), 0)
+            }
             Start::Runway => {
                 let (thr, hdg) = match rw {
                     Some(r) => {
@@ -745,6 +766,8 @@ impl Sim {
                     Category::Warbird => 610.0,
                     Category::Glider => 900.0,
                     Category::Trainer => 400.0,
+                    Category::Helicopter => 300.0,
+                    Category::Drone => 60.0,
                 };
                 let (ac, ctl) = air(vec3(p.x, alt + crate::flight::Environment::ground_height(world, p), p.y), heading_of(vec2(-1.0, 0.0)), cruise_ias(def));
                 (ac, ctl, 0)
@@ -791,6 +814,10 @@ impl Sim {
     /// Hand the aircraft to the auto-flight bot.
     pub fn enable_bot(&mut self, world: &World) {
         let def = &self.defs[self.sel];
+        if def.rotor.is_some() {
+            // The rotorcraft bot flies through the attitude-hold / angle assist.
+            self.ac.rotor.assist = crate::rotor::Assist::Att;
+        }
         self.bot = Some(Bot::new(def, &self.ac, world, self.runway.as_ref()));
         self.ap.disengage();
         self.ap_warn = 0.0;
@@ -948,6 +975,12 @@ impl Sim {
                     self.flap_idx = (self.flap_idx + 1).min(n.saturating_sub(1));
                 }
                 Key::FlapsUp => self.flap_idx = self.flap_idx.saturating_sub(1),
+                Key::Gear | Key::Assist if def.rotor.is_some() => {
+                    let quad = def.category == Category::Drone;
+                    self.ac.rotor.assist = self.ac.rotor.assist.next(quad);
+                    let what = if quad { "Flight mode" } else { "Stability assist" };
+                    self.say(format!("{what}: {}", self.ac.rotor.assist.label(quad)), 2.5);
+                }
                 Key::Gear => {
                     if def.retractable_gear {
                         self.ctl.gear_down = !self.ctl.gear_down;
@@ -1061,7 +1094,8 @@ impl Sim {
         // Camera orbit / head-look (input/sim_glue.rs), zoom.
         self.update_look(input, dt);
         if input.zoom_delta != 0.0 {
-            self.orbit_dist = (self.orbit_dist * (1.0 - input.zoom_delta * 0.1)).clamp((self.size * 1.2).max(6.0), 600.0);
+            let min = if def.category == Category::Drone { 0.8 } else { (self.size * 1.2).max(6.0) };
+            self.orbit_dist = (self.orbit_dist * (1.0 - input.zoom_delta * 0.1)).clamp(min, 600.0);
             input.zoom_delta = 0.0;
         }
 
@@ -1082,7 +1116,7 @@ impl Sim {
             self.ctl.throttle = (self.ctl.throttle + (h(Key::ThrottleUp) - h(Key::ThrottleDown)) * 0.6 * dt).clamp(0.0, 1.0);
         }
         // Controllers: analog axes straight to the controls, levers when moved.
-        self.apply_analog(input);
+        self.apply_analog(input, dt);
         if !bot_on {
             self.ctl.brakes = h(Key::Brakes).max(pilot::toe_brakes(&input.analog));
             let det = def.flap_detents;
@@ -1122,6 +1156,12 @@ impl Sim {
                 self.ap.nav = self.nav.ap_input(&env, &self.ac, def, self.ground_y);
                 if let Some(b) = self.bot.as_mut() {
                     b.update(def, &self.ac, &mut self.ctl, &mut self.ap, world, DT);
+                } else if def.rotor.is_some() && self.ap.engaged {
+                    // Rotorcraft autopilot: collective for height, pitch for speed (src/rotor/bot.rs).
+                    if !crate::rotor::bot::autopilot(&mut self.ap, def, &self.ac, &mut self.ctl, DT) {
+                        self.ap.disengage();
+                        self.note = Some(("Autopilot disengaged".into(), 3.0));
+                    }
                 } else if self.ap.engaged && !self.ap.update(def, &self.ac, &mut self.ctl, DT) {
                     self.ap_warn = 4.0;
                     let why = if self.ap.at_minimums { "Minimums — autopilot disconnected, you have control" } else { "Autopilot disengaged" };
@@ -1400,6 +1440,10 @@ impl Sim {
     /// Landing lights: the pilot's choice (L), else on with the gear down
     /// (fixed gear: below ~3,000 ft) or whenever the bot flies.
     pub fn landing_lights_on(&self) -> bool {
+        // The FPV quad has no landing lights (only its LED bar).
+        if self.defs[self.sel].category == Category::Drone {
+            return false;
+        }
         self.landing_lights.unwrap_or_else(|| {
             if self.bot.is_some() {
                 self.ac.on_ground || self.ac.pos.y - self.ground_y < 3000.0
@@ -1552,8 +1596,10 @@ impl Sim {
                 let p = self.orbit_pitch;
                 let off = (back * p.cos() + Vec3::Y * p.sin()) * self.orbit_dist;
                 let mut eye = pos + off;
-                eye.y = eye.y.max(1.0);
-                let target = pos + Vec3::Y * (0.5 + self.size * 0.08);
+                // (A small drone is framed from just above the ground.)
+                let small = self.defs[self.sel].category == Category::Drone;
+                eye.y = if small { eye.y.max(self.ground_y + 0.12) } else { eye.y.max(1.0) };
+                let target = pos + Vec3::Y * if small { 0.02 } else { 0.5 + self.size * 0.08 };
                 match self.crash_camera() {
                     // Destroyed: a slow orbit framing the whole wreckage (blended in).
                     Some((ce, ct)) => {
@@ -1572,7 +1618,15 @@ impl Sim {
                 let e = pos + self.rrot * self.model.eye;
                 // Head-look (input/sim_glue.rs).
                 let head = self.rrot * self.pilot.look_rot();
-                (e, e + head * Vec3::Z * 100.0, head * Vec3::Y)
+                match self.defs[self.sel].rotor.as_ref().and_then(|r| r.quad()) {
+                    // FPV quad: the camera is bolted on, tilted up, wide-angle.
+                    Some(q) => {
+                        fov = 2.0 * ((q.cam_fov * 0.5).tan() / aspect.max(0.5)).atan();
+                        let cam = self.rrot * Quat::from_rotation_x(-q.cam_tilt);
+                        (e, e + cam * Vec3::Z * 100.0, cam * Vec3::Y)
+                    }
+                    None => (e, e + head * Vec3::Z * 100.0, head * Vec3::Y),
+                }
             }
             CamMode::Tower => {
                 let eye = self.tower_eye();
@@ -1601,6 +1655,11 @@ impl Sim {
         if !show_aircraft {
             // From the cockpit the lights shine out, but their lenses aren't seen.
             acl.n_sprites = 0;
+        }
+        if self.defs[self.sel].category == Category::Drone {
+            // The FPV quad has only its LED bar (an emissive part of the model).
+            acl.n_sprites = 0;
+            acl.n_spots = 0;
         }
         let mut fv = FrameView { eye, view, fov_y: fov, time: self.time, sun_dir: self.sun_dir(), exposure: 1.0, clock, acl, aircraft: None, vfx: None };
         let mut dynm = MeshData::default();

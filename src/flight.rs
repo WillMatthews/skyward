@@ -61,6 +61,10 @@
 use glam::{Quat, Vec2, Vec3};
 use std::f32::consts::{PI, TAU};
 
+/// Rotorcraft step / spawn (inside `flight` for the private airframe state).
+#[path = "rotor/glue.rs"]
+mod rotor_glue;
+
 /// Gravitational acceleration, m/s².
 pub const GRAVITY: f32 = 9.81;
 /// Sea-level ISA air density, kg/m³.
@@ -309,6 +313,10 @@ pub enum Category {
     Warbird,
     FastJet,
     Airliner,
+    /// Rotorcraft with a main rotor (src/rotor/heli.rs).
+    Helicopter,
+    /// Multirotor drone (src/rotor/quad.rs).
+    Drone,
 }
 
 /// Engine type.
@@ -319,6 +327,10 @@ pub enum EngineKind {
     Piston,
     Turboprop,
     Jet,
+    /// Free-turbine turboshaft driving a rotor (helicopters).
+    Turboshaft,
+    /// Battery-electric motors (drones).
+    Electric,
 }
 
 /// Flight-control law.
@@ -664,6 +676,11 @@ pub struct AircraftDef {
     pub min_runway_m: f32,
     /// Can use unpaved / grass strips (STOL / rough-field gear).
     pub rough_field: bool,
+
+    // ================= v3 rotorcraft =================
+    /// Rotorcraft flight model (src/rotor): replaces the fixed-wing engines,
+    /// control law and aerodynamics in [`Aircraft::step`].
+    pub rotor: Option<std::sync::Arc<crate::rotor::RotorDef>>,
 }
 
 /// A JSBSim aerodynamic model plus how Skyward's normalised surfaces map onto
@@ -851,8 +868,8 @@ impl AircraftDef {
     fn spool_for_throttle(&self, throttle: f32) -> (f32, f32) {
         let t = throttle.clamp(0.0, 1.0);
         match self.engine_kind {
-            EngineKind::None => (0.0, 0.0),
-            EngineKind::Piston | EngineKind::Turboprop => (self.power_for_throttle(t), 0.0),
+            EngineKind::None | EngineKind::Electric => (0.0, 0.0),
+            EngineKind::Piston | EngineKind::Turboprop | EngineKind::Turboshaft => (self.power_for_throttle(t), 0.0),
             EngineKind::Jet => {
                 let (dry, ab) = if self.has_afterburner { ((t / 0.9).min(1.0), ((t - 0.9) / 0.1).clamp(0.0, 1.0)) } else { (t, 0.0) };
                 (self.n1_idle + (1.0 - self.n1_idle) * dry.powf(1.0 / 1.8), ab)
@@ -890,7 +907,7 @@ impl AircraftDef {
         let qbar = 0.5 * rho * v * v;
         let disk = self.prop_disk_area / n;
         match self.engine_kind {
-            EngineKind::None => EngineOut::default(),
+            EngineKind::None | EngineKind::Turboshaft | EngineKind::Electric => EngineOut::default(),
             EngineKind::Piston | EngineKind::Turboprop => {
                 let lapse = self.power_lapse(sigma);
                 let p = spool.clamp(0.0, 1.0);
@@ -941,7 +958,7 @@ impl AircraftDef {
         }
         let v = v_fwd.max(0.0);
         match self.engine_kind {
-            EngineKind::None => 0.0,
+            EngineKind::None | EngineKind::Turboshaft | EngineKind::Electric => 0.0,
             EngineKind::Jet => spool * self.n1_rpm,
             _ => {
                 if !running {
@@ -1442,7 +1459,8 @@ const MERIDIAN320_HARD: &[HardPoint] = &[
 const MERIDIAN320_ENGINES: &[Vec3] = &[Vec3::new(5.63, -1.55, 4.03), Vec3::new(-5.63, -1.55, 4.03)];
 
 /// The aircraft roster, in contract order: kestrel, swift, peregrine, lancer,
-/// aerolink, meridian190, meridian320, then the v3 heavies hercules, galaxy, vulcan.
+/// aerolink, meridian190, meridian320, then the v3 heavies hercules, galaxy,
+/// vulcan and the rotorcraft ec130 (helicopter) and fpv (quadcopter).
 pub fn catalogue() -> Vec<AircraftDef> {
     // Built once (the JSBSim FDMs are parsed and fitted here).
     static CAT: std::sync::OnceLock<Vec<AircraftDef>> = std::sync::OnceLock::new();
@@ -1458,6 +1476,8 @@ pub fn catalogue() -> Vec<AircraftDef> {
             hercules_def(),
             galaxy_def(),
             vulcan_def(),
+            crate::rotor::ec130_def(),
+            crate::rotor::quad_def(),
         ];
         for d in &mut v {
             rig_for_cruise(d);
@@ -1493,6 +1513,13 @@ pub const ALIASES: &[(&str, &str)] = &[
     ("c5m", "galaxy"),
     ("vulcanb2", "vulcan"),
     ("avro-vulcan", "vulcan"),
+    ("heli", "ec130"),
+    ("helicopter", "ec130"),
+    ("h130", "ec130"),
+    ("ec130b4", "ec130"),
+    ("quad", "fpv"),
+    ("drone", "fpv"),
+    ("quadcopter", "fpv"),
 ];
 
 /// Canonical id for an id or alias (case-insensitive).
@@ -1522,6 +1549,9 @@ pub fn trimmed_controls(def: &AircraftDef, speed_ms: f32) -> Controls {
 
 /// [`trimmed_controls`] at altitude `alt` (m).
 pub fn trimmed_controls_at(def: &AircraftDef, speed_ms: f32, alt: f32) -> Controls {
+    if let Some(rd) = &def.rotor {
+        return crate::rotor::defs::trimmed_controls(def, rd, speed_ms, alt);
+    }
     let tp = def.trim_point_at(speed_ms, 0.0, alt, false);
     Controls { throttle: tp.throttle, trim: tp.trim, gear_down: !def.retractable_gear, ..Default::default() }
 }
@@ -3081,6 +3111,8 @@ pub struct Aircraft {
     /// [`crate::systems::step`]; only its `fx` is read here (neutral
     /// unless something has failed or been switched off).
     pub sys: crate::systems::Systems,
+    /// Rotorcraft state (rotor speed, inflow, engine, assist; src/rotor).
+    pub rotor: crate::rotor::RotorState,
 }
 
 /// Kinematic state captured when the aircraft crashed.
@@ -3099,6 +3131,7 @@ impl Aircraft {
     /// by `delta`. Velocities, attitude and forces are unchanged.
     pub fn rebase(&mut self, delta: Vec3) {
         self.pos += delta;
+        self.rotor.quad.home += delta;
         if let Some(a) = &mut self.brake_anchor {
             *a += Vec2::new(delta.x, delta.z);
         }
@@ -3139,6 +3172,7 @@ impl Aircraft {
             dmg: crate::damage::Damage::new(next_seed()),
             impact: None,
             sys: Default::default(),
+            rotor: Default::default(),
         };
         a.settle_engines(def, 0.0, 0.0, &isa(0.0));
         a
@@ -3179,8 +3213,8 @@ impl Aircraft {
             return 0.0;
         }
         match def.engine_kind {
-            EngineKind::None => 0.0,
-            EngineKind::Piston | EngineKind::Turboprop => def.sfc * out.shaft_power / 1000.0,
+            EngineKind::None | EngineKind::Electric => 0.0,
+            EngineKind::Piston | EngineKind::Turboprop | EngineKind::Turboshaft => def.sfc * out.shaft_power / 1000.0,
             EngineKind::Jet => {
                 let dry = (out.gross - out.ab_thrust).max(0.0);
                 def.sfc * (1.0 + 0.55 * mach.clamp(0.0, 2.5)) * dry + def.sfc_ab * out.ab_thrust
@@ -3229,6 +3263,9 @@ impl Aircraft {
     /// 1.15 × Vref, where it starts down; check [`Aircraft::gear_pos`] and
     /// set `Controls::gear_down` to match.
     pub fn airborne(def: &AircraftDef, pos: Vec3, heading_rad: f32, speed_ms: f32) -> Self {
+        if let Some(rd) = def.rotor.clone() {
+            return Self::airborne_rotor(&rd, def, pos, heading_rad, speed_ms);
+        }
         let mut a = Self::blank(def);
         let speed = finite_or(speed_ms, 30.0).max(1.0);
         let gear_down = !def.retractable_gear || speed < 1.15 * def.vref_kt * KT;
@@ -3464,6 +3501,10 @@ impl Aircraft {
     pub fn step(&mut self, def: &AircraftDef, ctl: &Controls, env: &dyn Environment, dt: f32) {
         if self.crashed.is_some() || !dt.is_finite() || dt <= 0.0 {
             return;
+        }
+        if let Some(rd) = def.rotor.clone() {
+            // Rotorcraft: own forces / drive train (src/rotor), shared contact and integration.
+            return self.step_rotor(&rd, def, ctl, env, dt);
         }
         let dt = dt.min(1.0 / 30.0);
         let mut c = ctl.sanitized();
@@ -3771,7 +3812,7 @@ impl Aircraft {
             let pw = fx.power[i];
             let crank = fx.crank[i];
             match def.engine_kind {
-                EngineKind::None => {}
+                EngineKind::None | EngineKind::Turboshaft | EngineKind::Electric => {}
                 EngineKind::Piston | EngineKind::Turboprop => {
                     let target = if failed { 0.0 } else { spool_t * pw };
                     e.spool += (target - e.spool) * (1.0 - (-dt / def.spool_time.max(0.05)).exp());
@@ -4622,6 +4663,11 @@ mod tests {
 
     const DT: f32 = 1.0 / 120.0;
 
+    /// The fixed-wing roster (rotorcraft have their own tests in src/rotor).
+    fn fixed_wing() -> Vec<AircraftDef> {
+        catalogue().into_iter().filter(|d| d.rotor.is_none()).collect()
+    }
+
     /// Flat ground at y = 0 with optional water rectangles, buildings and a
     /// uniform updraft.
     #[derive(Default)]
@@ -4659,7 +4705,7 @@ mod tests {
     #[ignore]
     fn jsb_diag() {
         let only = std::env::var("DIAG").ok();
-        for def in catalogue() {
+        for def in fixed_wing() {
             if only.as_deref().is_some_and(|o| o != def.id) {
                 continue;
             }
@@ -4799,10 +4845,10 @@ mod tests {
     }
 
     fn kestrel() -> AircraftDef {
-        catalogue().remove(0)
+        fixed_wing().remove(0)
     }
     fn swift() -> AircraftDef {
-        catalogue().remove(1)
+        fixed_wing().remove(1)
     }
     fn ac(id: &str) -> AircraftDef {
         find(id).unwrap()
@@ -4956,7 +5002,7 @@ mod tests {
 
     #[test]
     fn catalogue_order() {
-        let c = catalogue();
+        let c = fixed_wing();
         let ids: Vec<_> = c.iter().map(|d| d.id).collect();
         assert_eq!(ids, ["kestrel", "swift", "peregrine", "lancer", "aerolink", "meridian190", "meridian320", "hercules", "galaxy", "vulcan"]);
         assert!(c[0].has_engine && !c[1].has_engine);
@@ -4982,7 +5028,7 @@ mod tests {
         // The flight geometry (FDM contacts, eye, engines) and the imported
         // visual model must agree: wheels touch the runway, the cockpit eye is
         // the model's.
-        for def in catalogue() {
+        for def in fixed_wing() {
             let Ok(asset) = crate::aircraft_asset::AircraftAsset::load(def.id) else { continue };
             let eye = asset.eye.expect("model eye");
             assert!(eye.distance(def.eye) < 0.05, "{} eye {:?} vs model {:?}", def.id, def.eye, eye);
@@ -5050,7 +5096,7 @@ mod tests {
 
     #[test]
     fn airspeed_is_indicated_at_altitude() {
-        for def in catalogue() {
+        for def in fixed_wing() {
             let kt = ref_kt(&def);
             let alt = if def.category == Category::Airliner || def.category == Category::FastJet { 9000.0 } else { 3000.0 };
             let a = Aircraft::airborne(&def, Vec3::new(0.0, alt, 0.0), 0.0, kt * KT);
@@ -5066,7 +5112,7 @@ mod tests {
 
     #[test]
     fn static_polar_report() {
-        for def in catalogue() {
+        for def in fixed_wing() {
             eprintln!("== {} ==", def.name);
             let full = *def.flap_detents.last().unwrap();
             for &d in def.flap_detents {
@@ -5379,7 +5425,7 @@ mod tests {
 
     #[test]
     fn hands_off_trimmed_stability() {
-        for def in catalogue() {
+        for def in fixed_wing() {
             let env = TestEnv::default();
             let speed = ref_kt(&def) * KT;
             let ctl = trimmed_controls_at(&def, speed, 1500.0);
@@ -5412,7 +5458,7 @@ mod tests {
     #[test]
     fn hands_off_disturbed_recovers() {
         // A pitch-up kick and a roll disturbance: phugoid and spiral must not diverge.
-        for def in catalogue() {
+        for def in fixed_wing() {
             let env = TestEnv::default();
             let speed = ref_kt(&def) * KT;
             let ctl = trimmed_controls_at(&def, speed, 1500.0);
@@ -5444,7 +5490,7 @@ mod tests {
 
     #[test]
     fn release_controls_in_gentle_bank() {
-        for def in catalogue() {
+        for def in fixed_wing() {
             let env = TestEnv::default();
             let speed = ref_kt(&def) * KT;
             let ctl = trimmed_controls_at(&def, speed, 1500.0);
@@ -5481,7 +5527,7 @@ mod tests {
 
     #[test]
     fn bank_turn_360() {
-        for def in catalogue() {
+        for def in fixed_wing() {
             let env = TestEnv::default();
             let speed = ref_kt(&def) * KT;
             let ctl = trimmed_controls_at(&def, speed, 1500.0);
@@ -5538,7 +5584,7 @@ mod tests {
 
     #[test]
     fn roll_rates() {
-        for def in catalogue() {
+        for def in fixed_wing() {
             let env = TestEnv::default();
             let speed = ref_kt(&def) * KT;
             let ctl = trimmed_controls_at(&def, speed, 1500.0);
@@ -5561,6 +5607,7 @@ mod tests {
                 Category::Glider => 1.5..4.5,
                 Category::FastJet => 0.15..0.8,
                 Category::Airliner => 1.8..6.0,
+                Category::Helicopter | Category::Drone => unreachable!(),
             };
             assert!(range.contains(&t45), "{} t45 {t45}", def.name);
             if def.id == "lancer" {
@@ -5597,7 +5644,7 @@ mod tests {
 
     #[test]
     fn rest_on_runway() {
-        for def in catalogue() {
+        for def in fixed_wing() {
             let env = TestEnv::default();
             let mut a = Aircraft::on_runway(&def, Vec2::new(10.0, -20.0), 1.2, &env);
             let y0 = a.pos.y;
@@ -5853,7 +5900,7 @@ mod tests {
 
     #[test]
     fn landings() {
-        for def in catalogue() {
+        for def in fixed_wing() {
             let a = land(&def, 500.0, 0.0, None);
             eprintln!("{} 500 fpm: crashed {:?}, final speed {:.2}, x {:.1}", def.name, a.crashed, a.vel.length(), a.pos.x);
             assert!(a.crashed.is_none());
@@ -5879,7 +5926,7 @@ mod tests {
 
     #[test]
     fn gear_up_landing_and_transit() {
-        for def in catalogue().into_iter().filter(|d| d.retractable_gear) {
+        for def in fixed_wing().into_iter().filter(|d| d.retractable_gear) {
             let env = TestEnv::default();
             // Transit time.
             let mut a = Aircraft::airborne(&def, Vec3::new(0.0, 1500.0, 0.0), 0.0, def.vref_kt * 1.3 * KT);
@@ -6048,7 +6095,7 @@ mod tests {
 
     #[test]
     fn random_stick_stirring() {
-        for def in catalogue() {
+        for def in fixed_wing() {
             for seed in 1..=6u64 {
                 let env = TestEnv { updraft: 0.5, ..Default::default() };
                 let mut rng = Lcg(seed * 7919);
@@ -6093,7 +6140,7 @@ mod tests {
 
     #[test]
     fn ground_stirring_and_pathological_inputs() {
-        for def in catalogue() {
+        for def in fixed_wing() {
             let env = TestEnv::default();
             let mut rng = Lcg(42);
             let mut a = Aircraft::on_runway(&def, Vec2::ZERO, 0.3, &env);
@@ -6164,7 +6211,7 @@ mod tests {
     #[test]
     fn spin_entry_and_recovery() {
         // Aircraft with a conventional (unprotected) stall.
-        for def in catalogue().into_iter().filter(|d| matches!(d.category, Category::Trainer | Category::Glider | Category::Warbird)) {
+        for def in fixed_wing().into_iter().filter(|d| matches!(d.category, Category::Trainer | Category::Glider | Category::Warbird)) {
             let env = TestEnv::default();
             let speed = def.stall_speed(0.0) * 1.2;
             // (v1 ran this at sea-level density; 1,500 m ISA is close to that.)
@@ -6245,7 +6292,7 @@ mod tests {
     fn untrimmed_air_starts_are_benign() {
         // Air starts with default controls (trim 0, gear lever down) and a fixed
         // throttle, as the app does: should settle into flight, not dive.
-        for def in catalogue() {
+        for def in fixed_wing() {
             for (kt, throttle, flap) in [(def.vs1_kt * 1.65, 0.65, 0.0), (def.vs1_kt * 1.35, 0.45, 1.0 / 3.0), (def.vs1_kt * 1.4, 0.0, 0.0)] {
                 if def.has_engine && throttle == 0.0 {
                     continue; // that's an engine cut, not a benign start

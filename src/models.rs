@@ -80,6 +80,12 @@ pub fn build(id: &str, def_eye: Vec3) -> AircraftModel {
     let cached = CACHE.lock().unwrap().iter().find(|(k, _)| k == id).map(|(_, a)| a.clone());
     let loaded = match cached {
         Some(a) => Ok(a),
+        // The FPV quad is procedural (src/rotor/quad_model.rs).
+        None if id == "fpv" => {
+            let a = Arc::new(crate::rotor::quad_model::default_asset());
+            CACHE.lock().unwrap().push((id.to_string(), a.clone()));
+            Ok(a)
+        }
         None => AircraftAsset::load(id).map(|a| {
             let a = Arc::new(a);
             CACHE.lock().unwrap().push((id.to_string(), a.clone()));
@@ -171,7 +177,12 @@ pub fn channel_value(name: &str, i: &ModelInputs) -> f32 {
     let ac = i.ac;
     let idx = |pre: &str, suf: &str| -> Option<usize> { name.strip_prefix(pre)?.strip_suffix(suf)?.parse().ok() };
     let b = |x: bool| if x { 1.0 } else { 0.0 };
+    // Rotorcraft channels (src/rotor).
+    if let Some(v) = crate::rotor::channel(name, ac) {
+        return v;
+    }
     match name {
+        "agl_m" => return (ac.rotor.out.hub_agl - 3.1).max(0.0),
         "elevator" => return -s.elevator,
         "aileron_l" => return s.aileron,
         "aileron_r" => return -s.aileron,

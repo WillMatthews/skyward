@@ -69,7 +69,8 @@ item lands; keep entries one line.
 - [x] **P2** v3 heavies: C-130H Hercules (FGAddon C130, calibrated to YASim + published), C-5M Super Galaxy (FGMEMBERS C-5, patched JSBSim), Avro Vulcan B.2 (FGUK, JSBSim + delta-wing aero, Olympus howl); neutral liveries, bot / audio / per-type runway minima (H)
 - [x] **P2** Heavies polish: re-imported with live cockpits (C-130 82 / Vulcan 63 / C-5 23 live instruments), Vulcan repainted Dark Green / Dark Sea Grey camo (no white blotches), C-130 prop-disc alpha, wing-fog planform from the upper skin (no fog band under high wings), cargo ramp / visor / crew door open when parked, Hercules + Vulcan parked at air bases (HF)
 - [ ] **P1** Heavies follow-ups: C-130 bot floats ~850 m before touchdown at EGLC; C-130 / C-5 use the PW100 / CFM56 recordings (no T56 / CF6 set); C-5 cockpit is a crude FG shell with one 3D PFD (no glass mapping, no overhead / engine gauges); C-5 kneels only when parked in the fleet (flight model gear can't kneel); C-5 too big for stands (not in the parked fleet); doors open only after 8 s stopped at idle (no parking brake / door key); Vulcan brake chute; fuel burn (all flown at one weight); Vulcan paint reads glossy (AC material shininess)
-- [ ] **P2** v3 types: helicopter; quadcopter
+- [x] **P2** v3 rotorcraft: Airbus Helicopters EC130 B4 (FGAddon ec130, GPL v2+: model, B4 panel, VEMD) on an own rotor FDM (blade element + momentum, Nr state, FADEC turboshaft, Fenestron, ETL, ground effect, VRS, retreating-blade stall, dynamic rollover, autorotation + flare), stability assist, tail-rotor / hydraulic failures, rotor wash, turbine + blade-slap audio, bot (lift, tour, approach to hover, landing) and autopilot; original 5" FPV quad (motors, mixer + airmode, acro / angle, LiPo sag, prop wash, FPV camera + OSD, gamepad mode 2, orbit bot) (Q)
+- [ ] **P1** Rotorcraft follow-ups: helipads (OSM `aeroway=helipad` not yet carried through the tiles — rotorcraft start beside the runway); FPV camera is a rectilinear 120° view with a vignette (no barrel-distortion pass); autorotation descent ≈ 2,000 fpm vs ≈ 1,700 published; cruise needs ~5° of bank against the Fenestron side force (no sideslip trim); cyclic / collective / pedal cockpit animations follow the effective (assisted) inputs; no rotor brake / start sequence on the rotor (cold & dark starts the engine with the rotor at flight idle); VEMD lower page shows derived values (no oil system); quad turtle mode / crash recovery; water landings (floats) not modelled
 - [ ] **P2** Livery selector (house liveries; user-supplied)
 
 ## 4. Audio
@@ -139,4 +140,5 @@ item lands; keep entries one line.
 | HF | Heavies polish: live cockpits, liveries, doors, air-base fleet | ✅ |
 | S | Aircraft systems + realistic failures (systems/, failures panel, ECAM / EICAS, aural) | ✅ |
 | F | Navigation: navaids, radios, FMS-lite, ILS / VOR / LNAV / VNAV autopilot, autoland, nav displays (`src/nav/`) | ✅ |
-| next | rotorcraft (Q), ATC/ATIS (R) | ⏳ queued |
+| Q | Rotorcraft: EC130 B4 helicopter + FPV quad (src/rotor, rotor wash, audio, bot) | ✅ |
+| R | ATC + ATIS | ⏳ running |

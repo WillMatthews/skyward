@@ -6,6 +6,7 @@
 
 use super::capture::profile_for;
 use super::params::*;
+use super::dsp::smoothstep;
 use super::synth::Synth;
 use glam::{Quat, Vec3};
 
@@ -336,6 +337,272 @@ fn crash(pl: &Plane, cockpit: bool) -> Rec {
         r.out.extend_from_slice(&r.buf);
     }
     r
+}
+
+// ------------------------------------------------------------------ rotorcraft
+
+/// Helicopter state for the scenarios: rotor speed fraction, Ng fraction,
+/// engine lit, torque / power fraction, blade slap, rotor load.
+#[allow(clippy::too_many_arguments)]
+fn heli_state(f: &mut Frame, nr: f32, ng: f32, lit: bool, tq: f32, slap: f32, load: f32) {
+    f.rotor = RotorFrame {
+        nr_rpm: 386.0 * nr,
+        nr,
+        ng,
+        torque: tq,
+        power: tq,
+        tail_rpm: 3568.0 * nr,
+        tail_pitch: 4.0 + 14.0 * tq,
+        slap,
+        load,
+        ..RotorFrame::default()
+    };
+    f.eng[0].running = lit;
+    f.eng[0].rpm = 386.0 * nr;
+    f.eng[0].spool = ng;
+    f.stall_warn = nr < 0.93 && nr > 0.2 && (lit || tq == 0.0) && f.rotor.load > 0.1;
+}
+
+fn chase_ear(f: &mut Frame, inside: bool) {
+    let refd = f.profile.size * 2.6 + 6.0;
+    f.interior = if inside { 1.0 } else { 0.0 };
+    f.ear_pos = if inside {
+        f.ac_pos + Vec3::new(0.67, 0.16, 2.15)
+    } else {
+        f.ac_pos + Vec3::new(refd * 0.35, refd * 0.2, -refd * 0.9)
+    };
+    f.ear_fwd = (f.ac_pos - f.ear_pos).normalize_or(Vec3::Z);
+    f.ear_right = f.ear_fwd.cross(Vec3::Y).normalize_or(Vec3::X);
+}
+
+/// EC130: battery start on the ground (starter, light-off, rotor run-up,
+/// flight idle), lift into a hover. Chase view.
+pub(super) fn heli_startup() -> Vec<f32> {
+    let mut r = Rec::new();
+    let mut f = base_frame("ec130");
+    f.on_ground = true;
+    f.ac_pos = Vec3::new(0.0, 1.6, 0.0);
+    f.ac_rot = Quat::IDENTITY;
+    let total = 45.0;
+    for k in 0..(total * FPS) as usize {
+        let t = k as f32 / FPS;
+        // Starter to 15 % Ng, light-off at 5 s, idle 68 % by 18 s; the rotor
+        // follows once the free turbine has torque (8–30 s); collective at 36 s.
+        let ng = if t < 5.0 { 0.15 * t / 5.0 } else { (0.15 + 0.53 * ((t - 5.0) / 13.0).min(1.0)).min(0.68) + 0.3 * smoothstep(30.0, 34.0, t) + 0.05 * smoothstep(36.0, 40.0, t) };
+        let nr = smoothstep(7.0, 30.0, t) * 0.75 + 0.25 * smoothstep(26.0, 34.0, t);
+        let tq = 0.08 + 0.1 * smoothstep(30.0, 34.0, t) + 0.6 * smoothstep(36.0, 40.0, t);
+        let load = smoothstep(36.0, 40.0, t);
+        heli_state(&mut f, nr, ng, t >= 5.0, tq, 0.0, load);
+        f.stall_warn = false;
+        f.on_ground = t < 39.0;
+        f.ac_pos.y = 1.6 + 3.0 * smoothstep(39.0, 44.0, t);
+        chase_ear(&mut f, false);
+        f.cut = k == 0;
+        place_engines(&mut f, "ec130");
+        r.step(&f);
+    }
+    r.out
+}
+
+/// EC130 shallow approach descent past a listener on the ground ahead of it:
+/// no slap (0–6 s), blade slap building (6–14 s), slap fading as it
+/// arrives in the hover (14–20 s).
+pub(super) fn heli_approach_slap() -> Vec<f32> {
+    let mut r = Rec::new();
+    let mut f = base_frame("ec130");
+    f.on_ground = false;
+    f.ear_pos = Vec3::new(30.0, 1.7, 0.0);
+    f.ear_fwd = Vec3::NEG_Z;
+    f.ear_right = Vec3::X;
+    let secs = 20.0;
+    for k in 0..(secs * FPS) as usize {
+        let t = k as f32 / FPS;
+        // Coming towards the listener along −Z at 30 m/s, then slowing to a hover 80 m out.
+        let v = 30.0 * (1.0 - smoothstep(12.0, 19.0, t));
+        let z = 80.0 + 30.0 * (19.0 - t).max(0.0) * 0.55;
+        f.ac_pos = Vec3::new(0.0, 15.0 + 4.0 * (19.0 - t).max(0.0), z);
+        f.ac_vel = Vec3::new(0.0, -2.0, -v);
+        f.ac_rot = Quat::from_rotation_y(std::f32::consts::PI); // nose along −Z
+        f.tas = v;
+        let slap = smoothstep(6.0, 9.0, t) * (1.0 - smoothstep(14.0, 17.0, t));
+        heli_state(&mut f, 1.0, 0.86, true, 0.45 + 0.3 * smoothstep(14.0, 18.0, t), slap, 1.0);
+        f.cut = k == 0;
+        place_engines(&mut f, "ec130");
+        r.step(&f);
+    }
+    r.out
+}
+
+/// EC130 cockpit: cruise, engine failure at 5 s (turbine winds down, the
+/// rotor sound runs on, Nr dips and the low-Nr horn sounds until the
+/// collective is lowered), steady autorotation, flare with slap, cushion.
+pub(super) fn heli_autorotation(inside: bool) -> Vec<f32> {
+    let mut r = Rec::new();
+    let mut f = base_frame("ec130");
+    f.on_ground = false;
+    f.ac_pos = Vec3::new(0.0, 300.0, 0.0);
+    f.ac_rot = Quat::IDENTITY;
+    let secs = 30.0;
+    for k in 0..(secs * FPS) as usize {
+        let t = k as f32 / FPS;
+        f.tas = 33.0;
+        f.ac_vel = Vec3::new(0.0, if t > 5.0 { -10.0 } else { 0.0 }, 33.0);
+        let dead = t >= 5.0;
+        let ng = if dead { 0.88 * (-(t - 5.0) / 4.0).exp() } else { 0.88 };
+        // Nr: dips to 88 % in the ~1.3 s before the collective goes down,
+        // recovers to ~97 %, rises in the flare (22–25 s), bleeds in the cushion.
+        let nr = if t < 5.0 {
+            1.0
+        } else if t < 6.3 {
+            1.0 - 0.12 * (t - 5.0) / 1.3
+        } else if t < 22.0 {
+            0.88 + 0.09 * smoothstep(6.3, 9.0, t)
+        } else if t < 25.0 {
+            0.97 + 0.08 * smoothstep(22.0, 24.0, t)
+        } else {
+            1.05 - 0.35 * smoothstep(25.0, 27.5, t)
+        };
+        let slap = 0.25 * smoothstep(6.0, 8.0, t) * (1.0 - smoothstep(20.0, 21.0, t)) + 0.9 * smoothstep(22.0, 23.0, t) * (1.0 - smoothstep(25.0, 26.0, t));
+        let load = if t < 22.0 { 0.95 } else if t < 25.0 { 1.5 } else { 1.2 };
+        heli_state(&mut f, nr, ng, !dead, if dead { 0.0 } else { 0.55 }, slap, load);
+        f.stall_warn = nr < 0.93;
+        f.on_ground = t > 27.5;
+        if f.on_ground {
+            f.ac_vel = Vec3::ZERO;
+            f.tas = 0.0;
+        }
+        chase_ear(&mut f, inside);
+        f.cut = k == 0;
+        place_engines(&mut f, "ec130");
+        r.step(&f);
+    }
+    r.out
+}
+
+/// FPV quad: armed idle, hover, punch-out, prop-wash descent; chase view.
+pub(super) fn drone_flight() -> Vec<f32> {
+    let mut r = Rec::new();
+    let mut f = base_frame("fpv");
+    f.on_ground = false;
+    f.ac_pos = Vec3::new(0.0, 20.0, 0.0);
+    f.ac_rot = Quat::IDENTITY;
+    let secs = 12.0;
+    let wmax = 3300.0;
+    for k in 0..(secs * FPS) as usize {
+        let t = k as f32 / FPS;
+        // Motor speed fraction: idle 0.12, hover 0.34, punch 1.0, wash 0.3 ± chop.
+        let base = if t < 1.5 {
+            0.12
+        } else if t < 4.0 {
+            0.34
+        } else if t < 6.0 {
+            1.0
+        } else if t < 7.0 {
+            0.25
+        } else {
+            0.33
+        };
+        let wash = smoothstep(7.0, 7.5, t) * (1.0 - smoothstep(10.5, 11.0, t));
+        f.rotor.vrs = wash;
+        for i in 0..4 {
+            let chop = wash * 0.12 * ((t * (13.0 + i as f32 * 3.1)).sin());
+            let m = (base + 0.01 * i as f32 + chop).clamp(0.05, 1.0);
+            let w = m * wmax;
+            f.eng[i].rpm = w * 60.0 / std::f32::consts::TAU;
+            f.eng[i].spool = m;
+            f.eng[i].thrust = 1.36e-6 * w * w;
+            f.eng[i].running = true;
+        }
+        f.ac_vel = Vec3::new(0.0, if (4.0..6.0).contains(&t) { 25.0 } else if wash > 0.0 { -4.0 } else { 0.0 }, 0.0);
+        f.ac_pos += f.ac_vel / FPS;
+        chase_ear(&mut f, false);
+        f.cut = k == 0;
+        place_engines(&mut f, "fpv");
+        r.step(&f);
+    }
+    r.out
+}
+
+/// FPV quad passing 15 m from a static listener at 35 m/s, hard on the throttle.
+pub(super) fn drone_flyby() -> Vec<f32> {
+    let mut r = Rec::new();
+    let mut f = base_frame("fpv");
+    f.on_ground = false;
+    f.ear_pos = Vec3::new(0.0, 1.7, 15.0);
+    f.ear_fwd = Vec3::NEG_Z;
+    f.ear_right = Vec3::X;
+    f.ac_rot = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+    let secs = 8.0;
+    for k in 0..(secs * FPS) as usize {
+        let t = k as f32 / FPS;
+        f.ac_pos = Vec3::new(-140.0 + 35.0 * t, 5.0, 0.0);
+        f.ac_vel = Vec3::new(35.0, 0.0, 0.0);
+        f.tas = 35.0;
+        for i in 0..4 {
+            let m = 0.72 + 0.02 * i as f32;
+            let w = m * 3300.0;
+            f.eng[i].rpm = w * 60.0 / std::f32::consts::TAU;
+            f.eng[i].spool = m;
+            f.eng[i].thrust = 1.36e-6 * w * w;
+            f.eng[i].running = true;
+        }
+        f.cut = k == 0;
+        place_engines(&mut f, "fpv");
+        r.step(&f);
+    }
+    r.out
+}
+
+/// `SKYWARD_AUDIO_SCENARIOS=/dir cargo test --release rotorcraft_scenarios -- --ignored`
+#[test]
+#[ignore]
+fn rotorcraft_scenarios() {
+    let Some(dir) = std::env::var_os("SKYWARD_AUDIO_SCENARIOS") else {
+        eprintln!("set SKYWARD_AUDIO_SCENARIOS=/dir");
+        return;
+    };
+    let dir = std::path::PathBuf::from(dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let save = |name: &str, x: &[f32]| {
+        let spec = hound::WavSpec { channels: 2, sample_rate: SR as u32, bits_per_sample: 32, sample_format: hound::SampleFormat::Float };
+        let mut w = hound::WavWriter::create(dir.join(format!("{name}.wav")), spec).unwrap();
+        for v in x {
+            w.write_sample(*v).unwrap();
+        }
+        w.finalize().unwrap();
+    };
+    save("ec130_startup", &heli_startup());
+    save("ec130_approach_slap", &heli_approach_slap());
+    save("ec130_autorotation_cockpit", &heli_autorotation(true));
+    save("ec130_autorotation_chase", &heli_autorotation(false));
+    let pl = Plane { id: "ec130", rpm: (0.0, 0.0), cruise: 57.0, crash_speed: 30.0 };
+    save("ec130_flyby", &heli_flyby(&pl));
+    save("fpv_flight", &drone_flight());
+    save("fpv_flyby", &drone_flyby());
+}
+
+/// EC130 cruise fly-by (110 kt, 60 m up, 40 m to the side) of a tower listener.
+fn heli_flyby(pl: &Plane) -> Vec<f32> {
+    let mut r = Rec::new();
+    let mut f = base_frame(pl.id);
+    f.on_ground = false;
+    f.ear_pos = Vec3::new(40.0, 1.7, 0.0);
+    f.ear_fwd = Vec3::NEG_X;
+    f.ear_right = Vec3::NEG_Z;
+    f.ac_rot = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+    let secs = 16.0;
+    let x0 = -pl.cruise * secs * 0.5;
+    for k in 0..(secs * FPS) as usize {
+        let t = k as f32 / FPS;
+        f.ac_pos = Vec3::new(x0 + pl.cruise * t, 60.0, 0.0);
+        f.ac_vel = Vec3::new(pl.cruise, 0.0, 0.0);
+        f.tas = pl.cruise;
+        heli_state(&mut f, 1.0, 0.93, true, 0.7, 0.08, 1.0);
+        f.cut = k == 0;
+        place_engines(&mut f, pl.id);
+        r.step(&f);
+    }
+    r.out
 }
 
 #[test]

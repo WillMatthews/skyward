@@ -58,6 +58,11 @@ fn tune(f: Family) -> Tune {
         Family::Fighter => Tune { ext: 1.0, int_eng: 0.7, int_lp: 1100.0, int_mix: [0.35, 0.9, 0.7], wind: 0.8, wind_lp: 3200.0, whistle: 0.4 },
         Family::Airliner => Tune { ext: 1.0, int_eng: 0.5, int_lp: 650.0, int_mix: [0.6, 0.5, 0.5], wind: 0.65, wind_lp: 1500.0, whistle: 0.0 },
         Family::Glider => Tune { ext: 1.0, int_eng: 0.0, int_lp: 1000.0, int_mix: [0.0; 3], wind: 1.25, wind_lp: 3200.0, whistle: 0.9 },
+        // Helicopter cabin: rotor thump and gearbox through the roof, the
+        // turbine whine behind the bulkhead, slap muffled.
+        Family::Helicopter => Tune { ext: 1.0, int_eng: 1.2, int_lp: 3200.0, int_mix: [0.45, 0.35, 1.1], wind: 0.6, wind_lp: 2600.0, whistle: 0.2 },
+        // FPV "cockpit" = the camera on the frame: the motors right there.
+        Family::Drone => Tune { ext: 1.0, int_eng: 1.0, int_lp: 9000.0, int_mix: [1.0, 0.6, 1.0], wind: 0.35, wind_lp: 5000.0, whistle: 0.0 },
     }
 }
 
@@ -764,6 +769,12 @@ impl Synth {
             let (gf, gr, gc) = match fam {
                 Family::Airliner | Family::Fighter => (0.2 + 0.8 * smoothstep(-0.4, 0.75, c), 0.15 + 0.85 * smoothstep(0.2, -0.8, c), 0.6 + 0.4 * smoothstep(-0.5, 0.6, c)),
                 Family::Turboprop => (0.6 + 0.4 * (1.0 - c * c), 0.35 + 0.65 * smoothstep(0.1, -0.8, c), 0.8),
+                // Rotor loading / BVI noise radiates ahead and below the disc;
+                // the exhaust aft; the thump, whine and Fenestron all round.
+                Family::Helicopter => {
+                    let below = smoothstep(-0.05, 0.7, dir.y);
+                    (0.35 + 0.45 * smoothstep(-0.4, 0.8, c) + 0.45 * below, 0.4 + 0.6 * smoothstep(0.2, -0.8, c), 1.0)
+                }
                 _ => (0.65 + 0.35 * (1.0 - c * c) + 0.1 * c, 0.85 + 0.15 * (1.0 - c.abs()), 1.0),
             };
             em.dir[0].to(gf, n);
@@ -802,7 +813,7 @@ impl Synth {
         let eng_warp = if f.paused || f.menu { 0.0 } else { 1.0 };
         for i in 0..n_eng {
             if let Some(v) = &mut self.voices[i] {
-                let c = EngCtl { e: f.eng[i], tas: f.tas, reverser: f.reverser, warp: eng_warp, dist: self.emit[i].dist, crashed: f.crashed };
+                let c = EngCtl { e: f.eng[i], tas: f.tas, reverser: f.reverser, warp: eng_warp, dist: self.emit[i].dist, crashed: f.crashed, rotor: f.rotor };
                 v.control(&c, &self.profile, n);
                 self.ife[i] = v.int_from_ext();
             }
@@ -1189,6 +1200,8 @@ impl Cockpit {
             Family::Turboprop => 90.0,
             Family::Fighter => 150.0,
             Family::Airliner => 120.0,
+            Family::Helicopter => 60.0,
+            Family::Drone => 25.0,
         };
         let wa = 0.05 * tn.wind * (v / vref).powf(1.7).min(5.0) * slip;
         self.wind_amp.to(wa, n);
@@ -1219,9 +1232,11 @@ impl Cockpit {
             Family::LightPiston => 1,
             Family::Fighter => 2,
             Family::Airliner | Family::Turboprop => 3,
+            // Helicopter: low rotor-RPM horn (continuous).
+            Family::Helicopter => 4,
             _ => 0,
         };
-        let horn_on = sw && self.horn_kind == 2;
+        let horn_on = sw && matches!(self.horn_kind, 2 | 4);
         self.horn_amp.to(if horn_on { 0.09 } else { 0.0 }, n);
         self.shaker_amp.to(if sw && self.horn_kind == 3 { 0.32 } else { 0.0 }, n);
         self.gwarn_amp.to(if f.gear_warn && live { 0.07 } else { 0.0 }, n);
@@ -1346,6 +1361,13 @@ impl Cockpit {
                     let b = self.horn_ph[1].tick(f * 2.0);
                     let c = self.horn_ph[2].tick(f * 3.0);
                     sys += (sin_turns(a) + 0.5 * sin_turns(b) + 0.25 * sin_turns(c)) * ha;
+                }
+                4 => {
+                    // Low rotor RPM: a steady two-tone horn.
+                    let a = self.horn_ph[0].tick(600.0 * sr_k);
+                    let b = self.horn_ph[1].tick(1200.0 * sr_k);
+                    let c = self.horn_ph[2].tick(1800.0 * sr_k);
+                    sys += (sin_turns(a) + 0.45 * sin_turns(b) + 0.2 * sin_turns(c)) * ha * 0.8;
                 }
                 _ => {
                     // Fighter AoA warning: fast interrupted tone.

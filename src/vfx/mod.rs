@@ -21,6 +21,7 @@
 
 pub mod atmo;
 pub mod gpu;
+mod rotorwash;
 
 use crate::debris::{Debris, Fx};
 use crate::flight::{Aircraft, AircraftDef, EngineKind, GRAVITY};
@@ -526,6 +527,7 @@ impl Vfx {
 
         if ac.crashed.is_none() {
             self.flight_effects(&c, sd, dt, &gh);
+            self.rotor_wash(&c, dt, &gh);
         } else {
             self.cone = 0.0;
             self.wing_vapour = 0.0;

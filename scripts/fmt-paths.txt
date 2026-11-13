@@ -35,3 +35,14 @@ src/nav/radio.rs
 src/nav/state.rs
 src/nav/tests.rs
 src/ui/radio.rs
+src/rotor/mod.rs
+src/rotor/heli.rs
+src/rotor/quad.rs
+src/rotor/defs.rs
+src/rotor/bot.rs
+src/rotor/instruments.rs
+src/rotor/quad_model.rs
+src/rotor/tests.rs
+src/rotor/glue.rs
+src/vfx/rotorwash.rs
+src/audio/rotorcraft.rs

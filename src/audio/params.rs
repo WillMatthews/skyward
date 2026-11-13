@@ -21,6 +21,38 @@ pub enum Family {
     Fighter,
     /// High-bypass twin-jet airliner.
     Airliner,
+    /// Turboshaft helicopter: main rotor (thump / blade slap), shrouded
+    /// tail rotor, gas-generator whine, main gearbox (see `rotorcraft.rs`).
+    Helicopter,
+    /// Electric multirotor: one motor + prop whine per arm (`rotorcraft.rs`).
+    Drone,
+}
+
+/// Rotorcraft state (from `Aircraft::rotor.out`), zero for fixed wing.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RotorFrame {
+    /// Main rotor speed, rpm, and as a fraction of nominal.
+    pub nr_rpm: f32,
+    pub nr: f32,
+    /// Gas generator Ng (fraction of 100 %), engine torque (fraction), shaft
+    /// power / power available.
+    pub ng: f32,
+    pub torque: f32,
+    pub power: f32,
+    /// Tail rotor rpm and blade pitch (deg).
+    pub tail_rpm: f32,
+    pub tail_pitch: f32,
+    /// Blade-vortex-interaction "slap" strength 0..~1.2 (shallow descents,
+    /// decelerations, tight turns — derived in `capture.rs`).
+    pub slap: f32,
+    /// Main-rotor thrust / weight.
+    pub load: f32,
+    /// Vortex-ring / prop-wash roughness 0..1.
+    pub vrs: f32,
+    /// Retreating-blade stall 0..1.
+    pub stall: f32,
+    /// Main rotor azimuth (turns, 0..1) for blade-locked phase.
+    pub azimuth: f32,
 }
 
 /// Recorded engine sound set (see `soundsets.rs`); `None` = procedural only.
@@ -124,6 +156,8 @@ pub struct Frame {
     pub ac_vel: Vec3,
     pub ac_rot: Quat,
     pub eng: [EngineFrame; MAX_ENG],
+    /// Rotorcraft: rotor / turboshaft / motor state.
+    pub rotor: RotorFrame,
     pub reverser: f32,
     /// True airspeed m/s, Mach, dynamic pressure (Pa).
     pub tas: f32,

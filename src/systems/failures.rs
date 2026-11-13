@@ -36,10 +36,12 @@ pub enum Kind {
     NavRadio,
     GlideSlope,
     Adf,
+    /// Helicopters: 0 = tail-rotor drive failure, 1 = tail-rotor pitch control (pedals frozen).
+    TailRotor,
 }
 
 /// Number of failure kinds.
-pub const N_KINDS: usize = 27;
+pub const N_KINDS: usize = 28;
 
 /// Menu groups.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -112,6 +114,7 @@ impl Kind {
         Kind::NavRadio,
         Kind::GlideSlope,
         Kind::Adf,
+        Kind::TailRotor,
     ];
     pub fn bit(self) -> usize {
         Kind::ALL.iter().position(|k| *k == self).unwrap_or(0)
@@ -146,6 +149,7 @@ impl Kind {
             Kind::NavRadio => "nav",
             Kind::GlideSlope => "gs",
             Kind::Adf => "adf",
+            Kind::TailRotor => "tailrotor",
         }
     }
     pub fn group(self) -> Group {
@@ -157,7 +161,7 @@ impl Kind {
             Kind::Vacuum | Kind::PitotBlock | Kind::StaticBlock | Kind::AttitudeInd | Kind::HeadingInd | Kind::DisplayFail | Kind::NavRadio | Kind::GlideSlope | Kind::Adf => {
                 Group::Instruments
             }
-            Kind::FlapAsym | Kind::FlapJam | Kind::ControlJam => Group::Controls,
+            Kind::FlapAsym | Kind::FlapJam | Kind::ControlJam | Kind::TailRotor => Group::Controls,
             Kind::GearExtend | Kind::Brakes | Kind::TyreBurst => Group::Gear,
             Kind::BirdStrike | Kind::Icing => Group::Airframe,
         }
@@ -168,7 +172,7 @@ impl Kind {
             Kind::FuelLeak => Index::Tank,
             Kind::Hydraulic => Index::Hyd,
             Kind::ControlJam => Index::Axis,
-            Kind::TyreBurst => Index::Side,
+            Kind::TyreBurst | Kind::TailRotor => Index::Side,
             Kind::NavRadio | Kind::GlideSlope => Index::Radio,
             _ => Index::None,
         }
@@ -201,14 +205,15 @@ impl Kind {
             Kind::AttitudeInd | Kind::HeadingInd => sd.vacuum || powered_glass,
             Kind::DisplayFail => powered_glass && def.category != crate::flight::Category::FastJet,
             Kind::GearExtend => def.retractable_gear,
-            Kind::FlapAsym | Kind::FlapJam => eng && !def.flap_detents.is_empty(),
+            Kind::FlapAsym | Kind::FlapJam => eng && def.flap_max_deg > 0.0 && !def.flap_detents.is_empty(),
             Kind::Hydraulic => !sd.hyd.is_empty(),
-            Kind::ControlJam => true,
-            Kind::Brakes => true,
-            Kind::TyreBurst => def.category != crate::flight::Category::Glider,
+            Kind::ControlJam => def.rotor.is_none(),
+            Kind::Brakes => def.gear.iter().any(|g| matches!(g.kind, crate::flight::ContactKind::Wheel { braked: true, .. })),
+            Kind::TyreBurst => def.gear.iter().any(|g| matches!(g.kind, crate::flight::ContactKind::Wheel { .. })) && def.category != crate::flight::Category::Glider,
+            Kind::TailRotor => def.category == crate::flight::Category::Helicopter,
             Kind::ElecFire => sd.gens_per_engine > 0 || sd.glass,
             Kind::BirdStrike => true,
-            Kind::Icing => true,
+            Kind::Icing => def.rotor.is_none(),
             Kind::NavRadio | Kind::GlideSlope | Kind::Adf => crate::nav::state::has_radios(def),
         }
     }
@@ -250,6 +255,7 @@ impl Kind {
             Kind::NavRadio => format!("NAV {} receiver (VOR / LOC)", i + 1),
             Kind::GlideSlope => format!("NAV {} glideslope receiver", i + 1),
             Kind::Adf => "ADF receiver".into(),
+            Kind::TailRotor => (if i == 0 { "Tail rotor drive failure" } else { "Tail rotor pitch control (pedals frozen)" }).into(),
         }
     }
     /// One-line hint on the effect / what to do, for the menu.
@@ -306,6 +312,7 @@ impl Kind {
             Kind::NavRadio => "NAV flag: CDI, HSI and the coupled autopilot lose the beam",
             Kind::GlideSlope => "GS flag: localizer only (non-precision); the autopilot loses G/S",
             Kind::Adf => "ADF needle parks at 90°",
+            Kind::TailRotor => "Yaw towards the torque: keep speed (the fin works), run-on landing or autorotation",
         }
     }
     /// Parse "fire", "fire2", "eng2fire", "jam-rudder", "tyre-right"... (1-based indices).
@@ -329,6 +336,8 @@ impl Kind {
                 "leak-right" | "leakr" => (Kind::FuelLeak, 1),
                 "leak-centre" | "leak-center" | "leakc" => (Kind::FuelLeak, 2),
                 "engine" | "engfail" => (Kind::Flameout, 0),
+                "tr-drive" | "tail-drive" => (Kind::TailRotor, 0),
+                "tr-pitch" | "tail-pitch" | "tailpitch" => (Kind::TailRotor, 1),
                 _ => return None,
             })
         };

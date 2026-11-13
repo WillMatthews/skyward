@@ -114,6 +114,8 @@ pub fn cruise_ias(def: &AircraftDef) -> f32 {
                 200.0
             }
         }
+        Category::Helicopter => 110.0,
+        Category::Drone => 25.0,
     }
 }
 
@@ -129,6 +131,7 @@ fn approach_ias(def: &AircraftDef, d: f32) -> f32 {
         Category::FastJet => def.vref_kt + if far { 25.0 } else { 10.0 },
         Category::Warbird => def.vref_kt * 1.15,
         Category::Trainer | Category::Glider => def.vs1_kt * 1.45,
+        Category::Helicopter | Category::Drone => def.vref_kt,
     }
 }
 
