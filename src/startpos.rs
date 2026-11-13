@@ -192,6 +192,9 @@ pub fn spawn(def: &AircraftDef, world: &World, cs: &CustomStart) -> Option<(Airc
             let p = thr - d * dist;
             // (Above the threshold: terrain.rs runway elevation.)
             let alt = dist * 3f32.to_radians().tan() + 15.0 + rw.height_at(thr);
+            // (Mountain fields: never inside the hill — 150 m over the ground around.)
+            let ground = (0..9).map(|k| world.ground_height(p + glam::vec2((k % 3) as f32 - 1.0, (k / 3) as f32 - 1.0) * 400.0)).fold(f32::MIN, f32::max);
+            let alt = alt.max(ground + 150.0);
             let v = approach_ias(def, dist);
             let (mut ac, mut ctl) = air(vec3(p.x, alt, p.y), heading_of(d), v);
             let last = def.flap_detents.len().saturating_sub(1);
