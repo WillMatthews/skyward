@@ -194,10 +194,11 @@ fn sample(w: u32, h: u32, rgba: &[u8], uv: [f32; 2]) -> [f32; 4] {
 pub fn build(ty: u16) -> Result<Model, String> {
     let t = types::get(ty);
     let a = AircraftAsset::load(t.id)?;
-    // Rest pose: gear down, everything else neutral.
+    // Rest pose: gear down, cargo doors / ramps open (a C-5 kneels to
+    // load), everything else neutral.
     let mut ch = vec![0.0f32; a.channels.len()];
     for (i, c) in a.channels.iter().enumerate() {
-        if c == "gear_pos" {
+        if matches!(c.as_str(), "gear_pos" | "doors" | "doors_kneeled" | "kneel") {
             ch[i] = 1.0;
         }
     }
@@ -361,4 +362,23 @@ fn cluster(verts: &[PVert], cols: &[[f32; 3]], transl: &[bool], idx: &[u32], s: 
         }
     }
     m
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every parked type bakes (the air-base transports posed with their doors open).
+    #[test]
+    fn parked_types_bake() {
+        for ty in 0..types::TYPES.len() as u16 {
+            let id = types::get(ty).id;
+            if AircraftAsset::load(id).is_err() {
+                eprintln!("{id}: asset not found, skipped");
+                continue;
+            }
+            let m = build(ty).unwrap_or_else(|e| panic!("{id}: {e}"));
+            assert!(!m.idx.is_empty() && m.lod1.idx.len() < m.idx.len(), "{id}");
+        }
+    }
 }

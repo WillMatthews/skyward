@@ -1,6 +1,25 @@
 {
  "props": {},
- "channels": [],
+ "channels": [
+  [
+   "^engines/engine(?:\\[(\\d)\\])?/egt_degf$",
+   "eng{1}_egt_f",
+   1.0,
+   0.0
+  ],
+  [
+   "^gear/gear(?:\\[(\\d)\\])?/groundspeed-fps$",
+   "gear{1}_roll_ms",
+   3.28084,
+   0.0
+  ],
+  [
+   "^controls/doors/cockpit-door-pos-norm$",
+   "doors",
+   1.0,
+   0.0
+  ]
+ ],
  "light_models": [
   "procedural_light",
   "Effects/lights/",
@@ -51,5 +70,8 @@
   "^SwitchCover",
   "^Button1",
   "^blah"
+ ],
+ "fg_aliases": [
+  "vulcanb2"
  ]
 }

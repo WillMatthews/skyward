@@ -11,7 +11,18 @@ use glam::{Vec2, Vec3};
 
 /// Minimum live cockpit instruments per type (needles + flags + drums +
 /// display screens), from the current imports with some headroom.
-const MIN_LIVE: [(&str, usize); 7] = [("kestrel", 50), ("swift", 18), ("peregrine", 20), ("lancer", 40), ("aerolink", 80), ("meridian190", 40), ("meridian320", 8)];
+const MIN_LIVE: [(&str, usize); 10] = [
+    ("kestrel", 50),
+    ("swift", 18),
+    ("peregrine", 20),
+    ("lancer", 40),
+    ("aerolink", 80),
+    ("meridian190", 40),
+    ("meridian320", 8),
+    ("hercules", 70),
+    ("galaxy", 20),
+    ("vulcan", 55),
+];
 
 /// Channels computed in `models.rs` (controls, surfaces, gear, lights, engines' basics).
 fn model_channel(n: &str) -> bool {
@@ -41,6 +52,10 @@ fn model_channel(n: &str) -> bool {
             | "time"
             | "mach"
             | "alpha_deg"
+            | "doors"
+            | "doors_level"
+            | "doors_kneeled"
+            | "kneel"
     ) || n.starts_with("ctl_")
         || ["_running", "_reverser"].iter().any(|s| num("eng", s))
         || num("prop", "_rpm")

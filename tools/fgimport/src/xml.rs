@@ -62,6 +62,9 @@ pub struct Ctx {
     pub root: PathBuf,
     /// "Aircraft/<name>/" prefix used inside the files.
     pub prefix: String,
+    /// Other "Aircraft/<name>/" prefixes the files use for the same tree
+    /// (config `fg_aliases`: the aircraft's historical directory names).
+    pub aliases: Vec<String>,
 }
 
 impl Ctx {
@@ -71,7 +74,7 @@ impl Ctx {
         if r.is_empty() {
             return None;
         }
-        if let Some(rest) = r.strip_prefix(&self.prefix) {
+        if let Some(rest) = std::iter::once(&self.prefix).chain(&self.aliases).find_map(|p| r.strip_prefix(p.as_str())) {
             let p = self.root.join(rest);
             return p.exists().then_some(p);
         }

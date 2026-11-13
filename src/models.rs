@@ -47,6 +47,10 @@ pub struct AircraftModel {
     /// Live instrument state (lags, fuel, clocks).
     pub instruments: crate::cockpit::channels::Instruments,
     last_time: Option<f32>,
+    /// Cargo doors / ramps (`doors*` channels): open 0..1 and the time the
+    /// aircraft has stood parked (see [`AircraftModel::update`]).
+    doors: f32,
+    parked_s: f32,
     /// Structural parts of every vertex (wing flex, debris), see [`classify`].
     pub parts: Option<Arc<PartMap>>,
 }
@@ -101,6 +105,8 @@ pub fn build(id: &str, def_eye: Vec3) -> AircraftModel {
                 chan_src,
                 instruments: Default::default(),
                 last_time: None,
+                doors: 0.0,
+                parked_s: 0.0,
                 parts: None,
             }
         }
@@ -118,6 +124,8 @@ pub fn build(id: &str, def_eye: Vec3) -> AircraftModel {
                 chan_src: Vec::new(),
                 instruments: Default::default(),
                 last_time: None,
+                doors: 0.0,
+                parked_s: 0.0,
                 parts: None,
             }
         }
@@ -145,7 +153,17 @@ pub struct ModelInputs<'a> {
     pub daylight: f32,
 }
 
+/// Stand still (on the ground, throttles idle) this long before the cargo doors open, s.
+const DOORS_PARKED_S: f32 = 8.0;
+/// Cargo doors / ramp full travel times, s.
+const DOORS_OPEN_S: f32 = 10.0;
+const DOORS_CLOSE_S: f32 = 5.0;
+
 /// Value of one animation channel (FlightGear semantics, see `aircraft_asset.rs`).
+/// The stateful `doors*` channels (cargo doors / ramps, open 0..1; the C-5's
+/// `doors_level` / `doors_kneeled` ramps for the normal / kneeling stance)
+/// and `kneel` read 0 here: [`AircraftModel::update`] drives the doors and
+/// the parked fleet (`airport/fleet.rs`) poses them open.
 pub fn channel_value(name: &str, i: &ModelInputs) -> f32 {
     let s = i.ac.surfaces();
     let ac = i.ac;
@@ -232,16 +250,36 @@ impl AircraftModel {
     /// Evaluate the animation for this frame.
     pub fn update(&mut self, inp: &ModelInputs) {
         let Some(a) = &self.asset else { return };
+        let first = self.last_time.is_none();
         let dt = match self.last_time {
             Some(t) => (inp.time - t).clamp(0.0, 0.25),
             None => 0.0,
         };
         self.last_time = Some(inp.time);
         self.instruments.step(inp, dt);
+        // Cargo doors / ramps open once the aircraft has stood still on the
+        // ground with the throttles at idle for a while (unloading), and
+        // close as soon as it moves or the throttles come up.
+        let ac = inp.ac;
+        let parked = ac.on_ground && ac.vel.length() < 0.3 && inp.ctl.throttle < 0.02 && !inp.ctl.reverse;
+        self.parked_s = if parked { self.parked_s + dt } else { 0.0 };
+        if first && parked {
+            // First frame (e.g. a capture after a fast-forward): the aircraft
+            // has stood like this since the start.
+            self.parked_s = inp.time;
+            self.doors = ((inp.time - DOORS_PARKED_S) / DOORS_OPEN_S).clamp(0.0, 1.0);
+        }
+        let target = if self.parked_s > DOORS_PARKED_S { 1.0 } else { 0.0 };
+        let rate = if target > self.doors { 1.0 / DOORS_OPEN_S } else { 1.0 / DOORS_CLOSE_S };
+        self.doors += (target - self.doors).clamp(-rate * dt, rate * dt);
         for (k, name) in a.channels.iter().enumerate() {
             self.chan[k] = match self.chan_src.get(k).copied().flatten() {
                 Some(c) => self.instruments.value(c, inp),
-                None => channel_value(name, inp),
+                None => match name.as_str() {
+                    // The flying aircraft never kneels (the flight model's gear does not).
+                    "doors" | "doors_level" => self.doors,
+                    _ => channel_value(name, inp),
+                },
             };
         }
         if std::env::var_os("SKYWARD_CHAN_DUMP").is_some() {
@@ -480,6 +518,10 @@ fn classify_uncached(a: &AircraftAsset, def: &AircraftDef) -> PartMap {
     let mut ysum = [0.0f64; NB];
     let mut yn = [0.0f64; NB];
     let bin = |x: f32| (((x.abs() - sd.fus_r) / (semi - sd.fus_r)).clamp(0.0, 0.999) * NB as f32) as usize;
+    // Up-facing wing skin triangles (bin, centroid y, z extent) for the
+    // planform: sponsons, under-wing tanks and nacelle bellies outboard of
+    // the fuselage also classify as wing, but lie below its upper surface.
+    let mut skin: Vec<(usize, f32, f32, f32)> = Vec::new();
     for c in &a.chunks {
         let m = pose.world[c.node];
         let mut k = c.first;
@@ -488,6 +530,17 @@ fn classify_uncached(a: &AircraftAsset, def: &AircraftDef) -> PartMap {
             let ps = vis.map(|vi| m.transform_point3(Vec3::from(a.vertices[vi].pos)));
             let cen = (ps[0] + ps[1] + ps[2]) / 3.0;
             let part = classify_pt(cen, c.node, c.interior);
+            if matches!(part, Part::WingL | Part::WingR) && !c.interior {
+                let n: Vec3 = vis.iter().map(|&vi| m.transform_vector3(Vec3::from(a.vertices[vi].nrm))).sum();
+                if n.normalize_or_zero().y > 0.5 {
+                    // Coarse skins: a triangle counts in every bin it spans.
+                    let (b0, b1) = ps.iter().fold((NB, 0), |(lo, hi), p| (lo.min(bin(p.x)), hi.max(bin(p.x))));
+                    let (zhi, zlo) = ps.iter().fold((f32::MIN, f32::MAX), |(h, l), p| (h.max(p.z), l.min(p.z)));
+                    for b in b0..=b1 {
+                        skin.push((b, cen.y, zhi, zlo));
+                    }
+                }
+            }
             for j in 0..3 {
                 let vi = vis[j];
                 let p = ps[j];
@@ -559,9 +612,35 @@ fn classify_uncached(a: &AircraftAsset, def: &AircraftDef) -> PartMap {
             _ => {}
         }
     }
+    // Planform from the upper skin: per bin, the up-facing wing triangles
+    // within a slab under the highest one (the wing's top surface); y is the
+    // mid-plane, a little under the skin.
+    let mut top = [f32::MIN; NB];
+    for &(b, y, _, _) in &skin {
+        top[b] = top[b].max(y);
+    }
+    let (mut ple, mut pte, mut py, mut pn) = ([f32::MIN; NB], [f32::MAX; NB], [0.0f64; NB], [0.0f64; NB]);
+    for &(b, y, zhi, zlo) in &skin {
+        let chord = (le[b] - te[b]).max(1.0);
+        if y > top[b] - (0.25 + 0.06 * chord) {
+            ple[b] = ple[b].max(zhi);
+            pte[b] = pte[b].min(zlo);
+            py[b] += y as f64;
+            pn[b] += 1.0;
+        }
+    }
     let planform = (0..NB)
-        .filter(|&b| le[b] > te[b] && yn[b] > 0.0)
-        .map(|b| (sd.fus_r + (b as f32 + 0.5) / NB as f32 * (semi - sd.fus_r), le[b], te[b], (ysum[b] / yn[b]) as f32))
+        .filter_map(|b| {
+            let x = sd.fus_r + (b as f32 + 0.5) / NB as f32 * (semi - sd.fus_r);
+            if ple[b] > pte[b] && pn[b] > 0.0 {
+                let chord = ple[b] - pte[b];
+                Some((x, ple[b], pte[b], (py[b] / pn[b]) as f32 - 0.04 * chord))
+            } else if le[b] > te[b] && yn[b] > 0.0 {
+                Some((x, le[b], te[b], (ysum[b] / yn[b]) as f32))
+            } else {
+                None
+            }
+        })
         .collect();
     PartMap { vert, geom, vertices: out_v, indices: out_i, ranges, planform }
 }

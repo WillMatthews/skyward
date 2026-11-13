@@ -158,6 +158,16 @@ def c130():
         (995, 1245, 1060, 1290), (1265, 1245, 1330, 1290),  # fin serial / code
     ])
     im.save(out("c130", "texture-neutral.png"))
+    # Propeller sheet: the spinning disc / blur (lower-right quadrant, a 70 %
+    # transparent material) gets an alpha channel so the disc stays a faint
+    # shimmer: as see-through glass at full coverage it caught the sky's
+    # Fresnel reflection edge-on and read as a white band across the wing.
+    pr = Image.open(os.path.join(root, "c130/Models/Propellers/propeller.png")).convert("RGBA")
+    W, H = pr.size
+    al = Image.new("L", (W, H), 255)
+    al.paste(70, (int(0.555 * W), int(0.555 * H), W, H))
+    pr.putalpha(al)
+    pr.save(out("c130", "propeller-disc.png"))
 
 def c5():
     """C-5M grey scheme with the national insignia, unit titles, fin flash and serials removed."""
@@ -174,8 +184,52 @@ def c5():
     ], dev=10.0)
     im.save(out("c5", "c5-neutral.png"))
 
+def _uv_up(ac_path, texname, size):
+    """Per texel of `texname` in an AC3D model: 0 = unused, else 1 + 254·(n_up + 1)/2
+    from the up component of the face normal using it (AC3D: y up). Smaller UV
+    triangles win where islands overlap; whole-texture placeholder UVs are skipped."""
+    import numpy as np
+    from PIL import ImageDraw
+    lines = open(ac_path, errors="replace").read().split("\n")
+    tris, tex, verts, i = [], None, None, 0
+    while i < len(lines):
+        t = lines[i].split()
+        if t and t[0] == "OBJECT":
+            tex, verts = None, None
+        elif t and t[0] == "texture":
+            tex = t[1].strip('"')
+        elif t and t[0] == "numvert":
+            n = int(t[1])
+            verts = np.array([[float(v) for v in lines[i + 1 + j].split()[:3]] for j in range(n)])
+            i += n
+        elif t and t[0] == "refs":
+            n = int(t[1])
+            refs = [lines[i + 1 + j].split() for j in range(n)]
+            i += n
+            if tex and texname in tex and n >= 3 and verts is not None:
+                p = verts[[int(r[0]) for r in refs]]
+                uv = [(float(r[1]), float(r[2])) for r in refs]
+                for a in range(1, n - 1):
+                    q = p[[0, a, a + 1]]
+                    nrm = np.cross(q[1] - q[0], q[2] - q[0])
+                    ln = np.linalg.norm(nrm)
+                    tuv = [uv[0], uv[a], uv[a + 1]]
+                    area = abs((tuv[1][0] - tuv[0][0]) * (tuv[2][1] - tuv[0][1]) - (tuv[2][0] - tuv[0][0]) * (tuv[1][1] - tuv[0][1])) / 2
+                    if ln > 1e-12 and area < 0.2:
+                        tris.append((area, tuv, nrm[1] / ln))
+        i += 1
+    img = Image.new("L", (size, size), 0)
+    d = ImageDraw.Draw(img)
+    for _, tuv, up in sorted(tris, key=lambda t: -t[0]):
+        d.polygon([(u * size, (1 - v) * size) for u, v in tuv], fill=int(1 + 254 * (up + 1) / 2))
+    return np.asarray(img)
+
 def vulcan():
-    """XM607 camouflage scheme with roundels, fin flashes, serials and badges removed."""
+    """XM607 with roundels, fin flashes, serials and badges removed, repainted in the
+    1970s-80s RAF strike scheme: Dark Green / Dark Sea Grey disruptive camouflage on
+    the upper surfaces and sides (the source's light-grey camo patches read as white
+    blotches in daylight), Light Aircraft Grey undersides, a light weathering mottle."""
+    import numpy as np
     im = Image.open(os.path.join(root, "AvroVulcanB2/Models/liveries/XM607.png")).convert("RGB")
     im = scrub(im, [
         (115, 210, 200, 305), (312, 124, 352, 164),       # fin (left view): serial + flash, badge
@@ -183,7 +237,32 @@ def vulcan():
         (700, 1105, 835, 1237), (700, 1750, 835, 1883),   # wing roundels
         (1388, 1852, 1478, 1908), (1696, 1852, 1788, 1908),  # fuselage roundels
     ], flat=True)
-    im.save(out("AvroVulcanB2", "vulcan-neutral.png"))
+    a = np.asarray(im).astype(np.float64)
+    H, W, _ = a.shape
+    up = _uv_up(os.path.join(root, "AvroVulcanB2/Models/vulcanb2.ac"), "XM597", W).astype(np.float64)
+    used = up > 0
+    n_up = (up - 1) / 127.0 - 1.0
+    # Grow the islands' classification a few texels over their seams (mip / filter bleed).
+    def grow(v, m, r):
+        num, den = _box(v * m, r), _box(m.astype(np.float64), r)
+        return np.where(m, v, np.where(den > 0, num / np.maximum(den, 1e-9), 0.0)), den > 0
+    n_up, used = grow(n_up, used, 3)
+    light = (np.abs(a - [156, 160, 168]).max(2) < 18)
+    green = (np.abs(a - [76, 72, 48]).max(2) < 18)
+    upper = used & (n_up > -0.35)
+    dsg = np.array([90, 97, 101], np.float64)   # BS 381C 638 Dark Sea Grey
+    lag = np.array([166, 171, 170], np.float64) # BS 381C 627 Light Aircraft Grey
+    a[light & upper] = dsg
+    a[light & ~upper] = lag
+    # Weathering: low-frequency mottle (±4 %) + faint fine grain on the paint.
+    rng = np.random.default_rng(607)
+    mott = _box(_box(rng.standard_normal((H, W)), 24), 24)
+    mott /= max(np.abs(mott).max(), 1e-9)
+    grain = _box(rng.standard_normal((H, W)), 1)
+    k = 1.0 + 0.04 * mott + 0.012 * grain / max(np.abs(grain).max(), 1e-9)
+    paint = light | green
+    a[paint] *= k[paint][:, None]
+    Image.fromarray(a.clip(0, 255).astype("uint8")).save(out("AvroVulcanB2", "vulcan-neutral.png"))
 
 which = sys.argv[2:] or ["a320", "atr72"]
 for w in which:

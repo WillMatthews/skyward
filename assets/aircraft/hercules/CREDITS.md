@@ -6,9 +6,9 @@
 
 **Authors:** Emmanuel Baranger (3D model, FDM), Didier Fabert (textures), Jettoo (FDM); propellers, lights and flight deck from the same package.
 
-**Imported:** Exterior `Models/c130.xml` (`c130.ac`, four 4-blade propellers, gear, lights), flight deck / interior (`Interior/`), textures. FDM is YASim (`Systems/FDM/c130-yasim.xml`): reference data only. The tanker / gunship / refuelling-probe variants are not imported. The rear ramp is animated in the model (`baieB` / `baieH`) but driven by a multiplayer property; it stays closed in Skyward.
+**Imported:** Exterior `Models/c130.xml` (`c130.ac`, four 4-blade propellers, gear, lights), flight deck / interior (`Interior/`), textures. FDM is YASim (`Systems/FDM/c130-yasim.xml`): reference data only. The tanker / gunship / refuelling-probe variants are not imported. The rear ramp (`baieB` / `baieH`, a multiplayer property in FlightGear) is driven by Skyward's `doors` channel: it opens when the aircraft stands parked.
 
-**Livery:** The package's default grey scheme with the French Air Force roundels, unit codes (`G4-GE`) and fin serial painted out (`tools/fgimport/liveries/make_liveries.py`, `c130()`). No national insignia or registrations.
+**Livery:** The package's default grey scheme with the French Air Force roundels, unit codes (`G4-GE`) and fin serial painted out (`tools/fgimport/liveries/make_liveries.py`, `c130()`). No national insignia or registrations. The propeller sheet gets an alpha channel on its disc / blur area (`propeller-disc.png`).
 
 **Flight model:** Skyward parametric model calibrated to the YASim data (4 × T56-A-15, 4,590 shp, 4.11 m Hamilton Standard props, 162.1 m² wing) and published C-130H figures (stall, take-off distance, climb, 320 KTAS at 20,000 ft) at 60 t; CG estimated from the model geometry (between the tandem main wheels). See `src/flight.rs` `v3_heavies_published_numbers`.
 

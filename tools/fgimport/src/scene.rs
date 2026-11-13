@@ -905,7 +905,8 @@ pub fn run(cfg: &Value, src: &Path, out: &Path) -> Result<(), String> {
             }
         }
     }
-    let ctx = Ctx { root: src.to_path_buf(), prefix: format!("Aircraft/{fg_name}/") };
+    let aliases = cfg.get("fg_aliases").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|n| n.as_str()).map(|n| format!("Aircraft/{n}/")).collect()).unwrap_or_default();
+    let ctx = Ctx { root: src.to_path_buf(), prefix: format!("Aircraft/{fg_name}/"), aliases };
     let mut statics = HashMap::new();
     if let Some(m) = cfg.get("props").and_then(|v| v.as_object()) {
         for (k, v) in m {

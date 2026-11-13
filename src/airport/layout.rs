@@ -169,6 +169,8 @@ impl SegGrid {
 struct Ctx {
     kind: AKind,
     scheduled: bool,
+    /// An air force / naval air base (by name): transports on the big stands.
+    military: bool,
     runways: Vec<Runway>,
     aprons: Vec<Apron>,
     blds: Vec<Bld>,
@@ -261,6 +263,7 @@ pub fn build(ap: &Airport, tiles: &[(TileId, Arc<AeroTile>)], osm: Option<&OsmAi
     let mut c = Ctx {
         kind: ap.kind,
         scheduled: ap.scheduled || ap.kind == AKind::Large,
+        military: is_military(&ap.name),
         runways,
         aprons: Vec::new(),
         blds: Vec::new(),
@@ -478,8 +481,44 @@ fn facade(c: &Ctx, p: Vec2, r: f32, want_terminal: bool) -> Option<(Vec2, Vec2, 
 }
 
 /// Aircraft type for a stand of span `span` at this airport.
+/// Air force / naval air base, by its OurAirports name.
+fn is_military(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    n.starts_with("raf ")
+        || n.starts_with("rnas ")
+        || [
+            "air force base",
+            "air base",
+            "afb",
+            "naval air station",
+            "air station",
+            "army airfield",
+            "air reserve base",
+            "air national guard",
+            "fliegerhorst",
+            "base aérea",
+            "base aerea",
+            "base aérienne",
+            "militar",
+            "military",
+        ]
+        .iter()
+        .any(|k| n.contains(k))
+}
+
 fn pick_type(c: &Ctx, span: f32, k: u64) -> Option<u16> {
     let r = c.rand(k);
+    // Air bases: Hercules on the big stands, the odd Vulcan; light aircraft
+    // (flying club) elsewhere.
+    if c.military && span >= 30.0 && c.kind != AKind::Small {
+        return Some(if r < 0.07 {
+            types::VULCAN
+        } else if span >= 40.0 && r < 0.75 {
+            types::C130
+        } else {
+            types::C172
+        });
+    }
     match c.kind {
         // Business / general aviation fields (no scheduled service): light
         // aircraft, the odd warbird, a few regional jets on the big stands.
@@ -1581,6 +1620,16 @@ mod tests {
     use crate::airport::tile::{AeroBuilding, AeroPiece, Path, Poly};
     use crate::airports::{End, Rwy, Surface};
 
+    #[test]
+    fn military_fields_by_name() {
+        for n in ["RAF Brize Norton", "Ramstein Air Base", "Dover Air Force Base", "NAS Whidbey Island Naval Air Station", "RNAS Yeovilton"] {
+            assert!(is_military(n), "{n}");
+        }
+        for n in ["London Heathrow Airport", "Rafina Heliport", "Baseline Airfield", "London City Airport"] {
+            assert!(!is_military(n), "{n}");
+        }
+    }
+
     /// A synthetic airport inside one z14 tile: an E-W runway, a parallel
     /// taxiway with a link crossing the holding position, an apron with a
     /// terminal and gates north of it.
@@ -1653,6 +1702,17 @@ mod tests {
         assert!(!b.marks.idx.is_empty() && !b.solids.idx.is_empty());
         assert!(b.marks.verts.iter().all(|v| v.pos[0] >= lo.x - 0.01 && v.pos[0] <= hi.x + 0.01 && v.pos[1].abs() < 1e-3));
         assert_eq!(b.parked.len(), l.parked.len());
+    }
+
+    #[test]
+    fn air_bases_park_transports() {
+        let (mut ap, tiles, _) = synthetic();
+        let civil: Vec<u16> = build(&ap, &tiles, None).parked.iter().map(|p| p.model).collect();
+        assert!(!civil.iter().any(|&m| m == types::C130 || m == types::VULCAN), "{civil:?}");
+        ap.name = "RAF Test".into();
+        let mil: Vec<u16> = build(&ap, &tiles, None).parked.iter().map(|p| p.model).collect();
+        assert!(!mil.is_empty());
+        assert!(mil.iter().all(|m| [types::C130, types::VULCAN, types::C172].contains(m)), "{mil:?}");
     }
 
     #[test]

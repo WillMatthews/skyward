@@ -2,7 +2,32 @@
  "props": {
   "sim/current-view/internal": 1
  },
- "channels": [],
+ "channels": [
+  [
+   "^instrumentation/doors/(?:crewdoor|cargodoorfront|cargodoorrear)/position-norm$",
+   "doors",
+   1.0,
+   0.0
+  ],
+  [
+   "^instrumentation/doors/cargoramp(?:front|rear)/position-norm$",
+   "doors_level",
+   1.0,
+   0.0
+  ],
+  [
+   "^instrumentation/doors/ramp(?:front|rear)kneeled/position-norm$",
+   "doors_kneeled",
+   1.0,
+   0.0
+  ],
+  [
+   "^sim/model/kneelac/position-norm$",
+   "kneel",
+   1.0,
+   0.0
+  ]
+ ],
  "light_models": [
   "procedural_light",
   "Effects/lights/",
@@ -40,9 +65,9 @@
   4.1678
  ],
  "eye_body": [
-  0.75,
-  4.0,
-  24.0
+  0.62,
+  4.15,
+  24.35
  ],
  "pointmass_kg": {
   "payload": 30000
