@@ -115,6 +115,9 @@ src/ground/bot_taxi.rs
 src/ground/ops.rs
 src/ground/sim_glue.rs
 src/ground/tests.rs
+src/nav/procedures.rs
+src/bot/mountain.rs
+src/ridge.rs
 src/ui/worldmap/mod.rs
 src/ui/worldmap/aviation.rs
 src/ui/worldmap/decode.rs
@@ -177,3 +180,7 @@ src/wx/storm.rs
 src/wx/tests.rs
 src/wx/turbulence.rs
 src/wx/wake.rs
+src/gfx/quality.rs
+src/gfx/taa.rs
+src/gfx/perf.rs
+src/gfx/hdr_ui.rs

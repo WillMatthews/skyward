@@ -36,6 +36,10 @@ const SHADOW_CASCADES: usize = 3;
 
 pub struct TrafficRenderer {
     main: wgpu::RenderPipeline,
+    /// Velocity pass (gfx/taa.rs: TAA / motion blur) and the vehicles' world velocities.
+    vel_pipe: wgpu::RenderPipeline,
+    vel: wgpu::Buffer,
+    vel_staging: Vec<[f32; 4]>,
     shadow: wgpu::RenderPipeline,
     /// [kind][lod].
     meshes: Vec<[Option<Mesh>; mesh::LODS]>,
@@ -50,6 +54,15 @@ pub struct TrafficRenderer {
     pub prepare_ms: f32,
     /// GPU cost measurement: draw everything this many times (SKYWARD_TRAFFIC_GPU_REPEAT).
     repeat: u32,
+}
+
+fn make_vel(device: &wgpu::Device, cap: usize) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("traffic velocities"),
+        size: (cap * 16) as u64,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
 }
 
 fn make_inst(device: &wgpu::Device, cap: usize) -> wgpu::Buffer {
@@ -96,7 +109,7 @@ impl TrafficRenderer {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: wgpu::MultisampleState { count: crate::gfx::MSAA, mask: !0, alpha_to_coverage_enabled: true },
+            multisample: wgpu::MultisampleState { count: crate::gfx::msaa(), mask: !0, alpha_to_coverage_enabled: crate::gfx::msaa() > 1 },
             fragment: Some(wgpu::FragmentState {
                 module: &module,
                 entry_point: Some("fs_main"),
@@ -109,6 +122,46 @@ impl TrafficRenderer {
             multiview_mask: None,
             cache: None,
         });
+        let vel_pipe = {
+            let vel_mod = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("traffic velocity"),
+                source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/traffic_vel.wgsl").into()),
+            });
+            let vbgl = crate::gfx::taa::vel_bgl(device);
+            let vlayout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("traffic velocity"), bind_group_layouts: &[Some(&vbgl)], immediate_size: 0 });
+            const VATTR: [wgpu::VertexAttribute; 1] = [wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 0, shader_location: 10 }];
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("traffic velocity"),
+                layout: Some(&vlayout),
+                vertex: wgpu::VertexState {
+                    module: &vel_mod,
+                    entry_point: Some("vs_vel"),
+                    compilation_options: Default::default(),
+                    buffers: &[
+                        Some(shadow_vertex_layout()),
+                        Some(instance_layout()),
+                        Some(wgpu::VertexBufferLayout { array_stride: 16, step_mode: wgpu::VertexStepMode::Instance, attributes: &VATTR }),
+                    ],
+                },
+                primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: crate::gfx::DEPTH,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &vel_mod,
+                    entry_point: Some("fs_vel"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState { format: crate::gfx::taa::VEL, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
         let shadow = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("traffic shadow"),
             layout: Some(&shadow_layout),
@@ -158,6 +211,9 @@ impl TrafficRenderer {
             n: 0,
             ranges: Vec::new(),
             staging: Vec::new(),
+            vel_pipe,
+            vel: make_vel(device, cap),
+            vel_staging: Vec::new(),
             stats: Default::default(),
             prepare_ms: 0.0,
             repeat,
@@ -187,8 +243,13 @@ impl TrafficRenderer {
         if self.staging.len() > self.cap {
             self.cap = self.staging.len().next_power_of_two();
             self.inst = make_inst(device, self.cap);
+            self.vel = make_vel(device, self.cap);
         }
         queue.write_buffer(&self.inst, 0, bytemuck::cast_slice(&self.staging));
+        // World velocities (velocity pass).
+        self.vel_staging.clear();
+        self.vel_staging.extend(s.inst.iter().zip(&s.speed).map(|(i, &v)| [i.dx * v, i.grade * v, i.dz * v, 0.0]));
+        queue.write_buffer(&self.vel, 0, bytemuck::cast_slice(&self.vel_staging));
         self.n = self.staging.len() as u32;
         self.ranges.extend_from_slice(&s.ranges);
         self.stats = s.stats;
@@ -208,6 +269,28 @@ impl TrafficRenderer {
         pass.set_pipeline(&self.main);
         pass.set_vertex_buffer(1, self.inst.slice(..));
         for &(k, lod, first, n) in self.ranges.iter().cycle().take(self.ranges.len() * self.repeat as usize) {
+            if lod as usize >= mesh::LODS {
+                continue;
+            }
+            if let Some(m) = &self.meshes[k as usize][lod as usize] {
+                pass.set_vertex_buffer(0, m.vb.slice(..));
+                pass.set_index_buffer(m.ib.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..m.n, 0, first..first + n);
+            }
+        }
+    }
+
+    /// Velocity pass (group 0 = gfx/taa.rs velocity uniforms): each vehicle's
+    /// screen motion since last frame, by the box LOD's outline at range.
+    pub fn draw_velocity(&self, pass: &mut wgpu::RenderPass<'_>, vel_bg: &wgpu::BindGroup) {
+        if self.n == 0 {
+            return;
+        }
+        pass.set_pipeline(&self.vel_pipe);
+        pass.set_bind_group(0, vel_bg, &[]);
+        pass.set_vertex_buffer(1, self.inst.slice(..));
+        pass.set_vertex_buffer(2, self.vel.slice(..));
+        for &(k, lod, first, n) in &self.ranges {
             if lod as usize >= mesh::LODS {
                 continue;
             }

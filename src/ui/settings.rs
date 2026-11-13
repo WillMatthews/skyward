@@ -397,6 +397,9 @@ pub struct Settings {
     pub last: Option<LastFlight>,
     pub recents: Vec<String>,
     pub favourites: Vec<String>,
+    /// Video: quality preset and knobs, display options (gfx/quality.rs, Settings › Video).
+    /// `detail` / `vsync` above mirror its scenery detail / present mode.
+    pub video: crate::gfx::quality::VideoSettings,
     /// Airframe damage: Realistic / Forgiving (limits ×1.5, no permanent set,
     /// no flutter) / Off (indestructible; warnings still show). damage.rs.
     pub structural_damage: crate::damage::Realism,
@@ -444,6 +447,7 @@ impl Default for Settings {
             last: None,
             recents: Vec::new(),
             favourites: Vec::new(),
+            video: crate::gfx::quality::VideoSettings::default(),
             structural_damage: crate::damage::Realism::Realistic,
             crashes: crate::damage::Realism::Realistic,
             extra: Map::new(),
@@ -577,6 +581,7 @@ impl<'a> J<'a> {
 /// Top-level keys this build reads and writes (the rest is kept in `extra`).
 const KNOWN: &[&str] = &[
     "version",
+    "video",
     "live_traffic",
     "ui_scale",
     "hud",
@@ -759,6 +764,7 @@ impl Settings {
             "last": self.last.as_ref().map(|l| json!({ "aircraft": l.aircraft, "airport": l.airport, "start": l.start, "watch": l.watch })),
             "recents": self.recents,
             "favourites": self.favourites,
+            "video": self.video.to_json(),
             "structural_damage": self.structural_damage.name(),
             "crashes": self.crashes.name(),
             // owned by X (live traffic, adsb/)
@@ -799,6 +805,7 @@ impl Settings {
             let l = J(l);
             LastFlight { aircraft: l.s("aircraft").into(), airport: l.s("airport").into(), start: l.s("start").into(), watch: l.b("watch", false) }
         });
+        let video = crate::gfx::quality::VideoSettings::from_settings_json(v);
         let r = j.o("realism");
         let dr = &d.realism;
         let realism = Realism {
@@ -860,8 +867,9 @@ impl Settings {
                 "Off" => HudMode::Off,
                 _ => HudMode::Full,
             },
-            vsync: j.b("vsync", true),
-            detail: (j.f("detail", d.detail as f32).max(0.0) as u8).min(3),
+            // (Mirrors of the video settings.)
+            vsync: video.present == crate::gfx::quality::Present::Fifo,
+            detail: video.q.detail,
             speed: match j.s("speed") {
                 "kmh" => SpeedUnit::Kmh,
                 "mph" => SpeedUnit::Mph,
@@ -897,6 +905,7 @@ impl Settings {
             last,
             recents: list("recents"),
             favourites: list("favourites"),
+            video,
             structural_damage: damage_level(v, "structural_damage"),
             crashes: damage_level(v, "crashes"),
             extra,
@@ -912,6 +921,9 @@ mod tests {
     #[test]
     fn round_trip() {
         let mut s = Settings { hud: HudMode::Minimal, vsync: false, detail: 1, speed: SpeedUnit::Kmh, alt: AltUnit::Metres, ..Settings::default() };
+        // (`detail` / `vsync` mirror the video settings.)
+        s.video.apply_preset(crate::gfx::quality::Preset::Medium);
+        s.video.present = crate::gfx::quality::Present::Mailbox;
         s.push_recent("EGLL");
         s.push_recent("EGLC");
         s.push_recent("EGLL");
