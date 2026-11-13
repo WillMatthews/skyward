@@ -112,6 +112,11 @@ fn steps(ui: &mut Ui, at: Pos2, current: usize) -> Option<usize> {
     out
 }
 
+/// The menus' backdrop, for other screens (ui/missions.rs).
+pub fn backdrop_pub(p: &egui::Painter, screen: Rect, strength: f32) {
+    backdrop(p, screen, strength);
+}
+
 /// Darken the 3D scene behind a menu: strong on the left, lighter right.
 fn backdrop(p: &egui::Painter, screen: Rect, strength: f32) {
     let mut m = epaint::Mesh::default();
@@ -209,7 +214,13 @@ pub fn main_menu(ui: &mut Ui, st: &mut UiState) {
         p.text(r.min + Vec2::new(20.0, 37.0), Align2::LEFT_TOP, format!("{def} · {} · {spec}", l.airport), f_ui(13.0), Color32::from_rgb(20, 44, 70));
         by += 76.0;
     }
-    let items: [(&str, Action, &str); 4] = [("New flight", Action::Goto(Screen::Aircraft), "new"), ("Settings", Action::Goto(Screen::Settings), "settings"), ("Credits", Action::Goto(Screen::Credits), "credits"), ("Quit", Action::Quit, "quit")];
+    let items: [(&str, Action, &str); 5] = [
+        ("New flight", Action::Goto(Screen::Aircraft), "new"),
+        ("Missions", Action::Goto(Screen::Missions), "missions"),
+        ("Settings", Action::Goto(Screen::Settings), "settings"),
+        ("Credits", Action::Goto(Screen::Credits), "credits"),
+        ("Quit", Action::Quit, "quit"),
+    ];
     // (A browser tab has nothing to quit to.)
     for (i, (label, act, id)) in items.into_iter().filter(|it| !(crate::platform::WEB && matches!(it.1, Action::Quit))).enumerate() {
         let r = Rect::from_min_size(Pos2::new(x, by), Vec2::new(bw, 48.0));

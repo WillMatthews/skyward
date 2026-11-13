@@ -19,6 +19,7 @@ pub mod hudsym;
 pub mod map;
 pub mod mapdata;
 pub mod menus;
+pub mod missions;
 pub mod overview;
 pub mod radio;
 pub mod scroll;
@@ -435,6 +436,10 @@ pub enum Screen {
     Pause,
     Loading,
     Flying,
+    /// Airline-emergency missions (ui/missions.rs): cards, briefing, debrief.
+    Missions,
+    Briefing,
+    Debrief,
 }
 
 impl Screen {
@@ -448,6 +453,9 @@ impl Screen {
             "credits" => Screen::Credits,
             "pause" => Screen::Pause,
             "loading" => Screen::Loading,
+            "missions" => Screen::Missions,
+            "briefing" => Screen::Briefing,
+            "debrief" => Screen::Debrief,
             _ => return None,
         })
     }
@@ -464,6 +472,10 @@ pub enum Action {
     /// Systems & failures panel (over the flight).
     Failures,
     Quit,
+    /// Fly the mission in `missions.pending` (missions/).
+    StartMission,
+    /// Back to the mission's last checkpoint.
+    RetryCheckpoint,
 }
 
 /// What to fly: aircraft index, departure airport ident, start, auto flight.
@@ -510,6 +522,8 @@ pub struct UiState {
     pub controls_axis: Option<(crate::input::AxisAction, usize)>,
     /// Aircraft screen: the family filter (None: all).
     pub aircraft_group: Option<menus::Group>,
+    /// Missions: selection, records, the active one, the last result.
+    pub missions: missions::MissionUi,
     /// Seconds since the last frame / since start, frame counter.
     pub dt: f32,
     pub time: f32,
@@ -546,6 +560,7 @@ impl UiState {
             controls_page: 0,
             controls_axis: None,
             aircraft_group: None,
+            missions: Default::default(),
             dt: 1.0 / 60.0,
             time: 0.0,
             frame_no: 0,
@@ -575,6 +590,10 @@ pub fn draw_menus(ctx: &egui::Context, st: &mut UiState, in_flight: bool, loadin
             Screen::Conditions => menus::conditions(ui, st),
             Screen::Settings => menus::settings(ui, st, in_flight),
             Screen::Credits => menus::credits(ui, st),
+            Screen::Pause if st.missions.active.is_some() => missions::pause(ui, st),
+            Screen::Missions => missions::missions_menu(ui, st),
+            Screen::Briefing => missions::briefing(ui, st),
+            Screen::Debrief => missions::debrief(ui, st),
             Screen::Pause => {
                 let def = st.defs[st.plan.aircraft.min(st.defs.len() - 1)].name;
                 let title = format!("{def} · {}", st.plan.airport);

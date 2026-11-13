@@ -164,6 +164,16 @@ impl Sim {
             && !(self.ap.engaged && self.ap.ias.is_some())
         {
             self.ctl.throttle = v;
+            // Two engine levers on the quadrant set apart: split throttles (Track M).
+            if let (Some(a), Some(b)) = (an.get(A::Throttle1), an.get(A::Throttle2))
+                && crate::missions::throttles::can_split(&def)
+            {
+                if (a - b).abs() > 0.03 {
+                    crate::missions::throttles::set_sides(&def, &mut self.ctl, a, b);
+                } else {
+                    self.ctl.engine_throttle = None;
+                }
+            }
         }
         if let Some(v) = self.pilot.latch(A::Flaps, flaps) {
             let det = def.flap_detents;

@@ -1,0 +1,37 @@
+{
+  "id": "bellyland",
+  "title": "Wheels Up",
+  "tagline": "Three red lights — and the gravity extension jams too.",
+  "aircraft": "aerolink",
+  "difficulty": 2,
+  "minutes": 6,
+  "history": "Inspired by airliners whose landing gear would not come down, normally or by the alternate system — among them a 2011 wide-body landed on its belly in Warsaw with no injuries after the crew circled to burn fuel.",
+  "situation": "Inbound to Biggin Hill's runway 21 with 68 aboard. When you select the gear down, nothing happens. You'll try the alternate extension, but this one is going onto its belly.",
+  "failures": ["Landing gear will not extend (normal system)", "Alternate (gravity) extension jams"],
+  "tips": ["Try the alternate extension anyway (O → Systems: ALT GEAR)", "Full flap, Vref, a normal stable approach to the centreline", "Touch down gently with the wings level — props will strike", "Declare MAYDAY (F4)"],
+  "target": { "airport": "EGKB", "runway": "21", "course_deg": 205.1, "length_m": 1806, "width_m": 45, "elev_ft": 598, "lat": 51.338299, "lon": 0.038050 },
+  "start": { "x_nm": -10, "y_nm": 0, "alt_ft": 3800, "hdg_rel": 0, "kias": 170, "flaps": 1, "gear_down": false },
+  "fuel_frac": 0.35,
+  "time": "11:00",
+  "date": "03-20",
+  "metar": "EGKB 201100Z 20008KT 9999 SCT030 11/04 Q1021",
+  "pax": 68,
+  "survivable_ok": true,
+  "par_s": 330,
+  "events": [
+    { "id": "jam", "when": { "t": 1 }, "do": [ { "fail": "gear" }, { "alt_gear_fail": true } ] },
+    { "id": "lever", "when": { "after": "jam", "player": "gear_down" }, "do": [
+      { "note": "F/O: Gear down… three reds. No movement at all." }, { "checkpoint": "Gear unsafe" } ] },
+    { "id": "alt", "when": { "after": "lever", "player": "alt_gear", "delay": 6 }, "do": [
+      { "note": "F/O: Alternate extension… nothing. It's jammed. We're landing on the belly." } ] },
+    { "id": "stations", "when": { "after": "lever", "delay": 25 }, "do": [ { "pa": "crew_stations" } ] },
+    { "id": "brace", "when": { "after": "lever", "agl_below_ft": 400 }, "do": [ { "pa": "brace" } ] },
+    { "id": "heads", "when": { "after": "brace", "delay": 3 }, "do": [ { "pa": "heads_down" } ] },
+    { "id": "evac", "when": { "after": "brace", "on_ground": true, "delay": 12 }, "do": [ { "pa": "evacuate" } ] }
+  ],
+  "objectives": [
+    { "id": "alt", "text": "Try the alternate gear extension", "kind": "player", "act": "alt_gear", "after": "lever", "points": 40 },
+    { "id": "mayday", "text": "Declare MAYDAY", "kind": "player", "act": "mayday", "after": "lever", "points": 30 },
+    { "id": "land", "text": "Belly-land on the runway", "kind": "land", "required": true, "points": 40 }
+  ]
+}

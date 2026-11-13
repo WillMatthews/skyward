@@ -88,6 +88,25 @@ anywhere on Earth, for as long as you like. wgpu (Vulkan), winit, egui.
   messages whose procedure lines tick off as you fly them, and the aural
   alerts (CRC, fire bell, voice). Fail anything now or armed for a time,
   altitude, speed or random window, or random failures by MTBF (**O**).
+* **Airline-emergency missions** — main menu › **Missions**: twelve
+  fictional flights inspired by real accidents and incidents, each a
+  developing emergency to fly to a safe outcome: a dual bird strike over
+  east London (glide to a runway or **ditch** in the Thames), a fire on the
+  take-off roll at V1, rapid decompression at FL370, gear that won't come
+  down (belly landing), unreliable airspeed at night over the sea, a
+  microburst on final, smoke in the cockpit with a 16-minute clock, flaps
+  jammed on a gusty approach to London City, an uncontained engine failure
+  in a heavy C-5, fuel exhaustion at 10,500 ft, and total hydraulic loss in
+  an A320 and a C-5 (**steer with split thrust levers** alone). A briefing
+  (situation, what has failed, the clock, captain's notes), an objective
+  panel and the crew / ATC / cabin-PA lines in flight (pre-rendered Kokoro
+  voices), the airport fire service rolling out after you stop, retry from
+  the last checkpoint, and a debrief: outcome, occupants, score (survival,
+  landing quality — sink rate, centreline, touchdown zone, speed, load
+  factor — procedures, time), grades and medals; your best results are kept
+  on this machine. Missions are data (`assets/missions/*.json`): aircraft,
+  target runway, start, weather, a timeline of triggered events, objectives
+  (`src/missions/`).
 * **Effects** — fireballs, burning fuel with wind-blown smoke columns, dust,
   spray, sparks, tyre and engine smoke; contrails by the Schmidt–Appleman
   criterion (persisting in ice-supersaturated air), vortex and wing-surface
@@ -279,6 +298,7 @@ the city (fast jets: 3,000 m), glider thermal release.
 | F / V | flaps (glider: airbrakes) out / in |
 | G | landing gear up / down (3 green = down and locked, red = in transit) |
 | / and \ (or ') | spoilers / speed brake out / in one step |
+| F7 / F8 (Num 1 / 7), F9 / F10 (Num 3 / 9), F5 (Num .) | **split thrust levers**: left engine(s) − / +, right engine(s) − / +, levers together again (differential thrust; the common throttle keys move both) |
 | T | thrust reverse on / off (ground only; throttle then sets reverse power) |
 | B or Space (hold) | brakes |
 | [ / ] | trim nose down / up |
@@ -371,6 +391,8 @@ The cinematic camera cycles chase angles, fly-bys, tower, nose and wingtip shots
 | `--hud full\|minimal\|off`, `--map corner\|large\|off` | instrument / map mode |
 | `--aircraft ID` | `kestrel` `swift` `peregrine` `lancer` `aerolink` `meridian190` `meridian320` `hercules` `galaxy` `vulcan` `ec130` `fpv` (or `c172` `ask21` `spitfire` `f16` `atr72` `e190` `a320` `c130` `c5` `heli` `quad` `drone`) |
 | `--start S` | `runway` `approach` `city` `thermal` |
+| `--mission ID` | fly an airline-emergency mission: `v1` `decompression` `bellyland` `pitot` `microburst` `uncontained` `river` `smoke` `flapjam` `deadstick` `hydraulics` `hydraulics4` (its aircraft, start, weather; with `--shot`, `--seconds S` is mission time) |
+| `--mission-bot` | the mission's scripted pilot flies it (headless stills / tests; it flies through the controls only) |
 | `--bot` | hand the aircraft to the auto-flight bot |
 | `--watch` | auto flight + cinematic camera (+ glider relaunch) |
 | `--live` / `--no-live` | follow the real weather and time (default on) / don't |
@@ -400,7 +422,7 @@ Headless (no window) — renders offscreen and writes a PNG:
 | `--route LAM,BIG,EGLL/27R[/rnav]` | flight plan: navaids / airports / `lat:lon`, the last item an approach (ILS auto-tunes NAV 1) |
 | `--eye x,y,z --look x,y,z` | fixed camera |
 | `--eye-ll lat,lon,h --look-ll lat,lon,h` | fixed camera by geography (heights above the ground) |
-| `--menu-screen S` | capture a menu: `main` `aircraft` `airport` `conditions` `settings` `pause` `loading` `credits` |
+| `--menu-screen S` | capture a menu: `main` `aircraft` `airport` `conditions` `settings` `pause` `loading` `credits` `missions` `briefing` `debrief` (after `--mission ID --mission-bot --seconds S`) |
 | `--menu`, `--no-hud`, `--stats` | show the aircraft menu, hide the HUD, print the final state |
 | `--realtime [--fps HZ]` | stream + render in real time flying straight and level; reports frame times, streaming gaps, camera smoothness and origin shifts (`--fps`: fixed sim step) |
 | `--then-reset` | after `--realtime`: press R and time the scenery catch-up at the start |
@@ -505,6 +527,7 @@ A shift costs well under 0.1 ms.
 | `src/flight.rs` | flight dynamics + aircraft definitions (unit-tested) |
 | `src/rotor/` | rotorcraft: helicopter rotor / engine / Fenestron model and stability assist (`heli.rs`), FPV quad motors / flight controller / battery (`quad.rs`), definitions (`defs.rs`), the step inside the airframe (`glue.rs`), bot + autopilot (`bot.rs`), VEMD / OSD / panel (`instruments.rs`), the quad's procedural model (`quad_model.rs`), published-numbers tests (`tests.rs`); rotor wash in `src/vfx/rotorwash.rs`, sound in `src/audio/rotorcraft.rs` |
 | `src/systems/` | aircraft systems per type (`defs.rs`), failures + schedule (`failures.rs`), warnings / ECAM / EICAS (`alerts.rs`), session glue; `src/ui/failures.rs` the panel |
+| `src/missions/` | airline-emergency missions: definitions + validation (`defs.rs`, data in `assets/missions/`), runtime — triggers, objectives, touchdown / ditching, outcome (`mod.rs`), scoring (`score.rs`), ditching survivability (`ditching.rs`), microburst (`wind.rs`), split thrust levers (`throttles.rs`), scripted pilot (`pilot.rs`), best results (`records.rs`), fire tenders (`tenders.rs`), the sim side (`sim_glue.rs`), headless tests (`tests.rs`); `src/ui/missions.rs` cards / briefing / HUD / debrief; cabin pressure and oxygen masks in `src/systems/cabin.rs`; PA lines in `assets/audio/pa/` (`assets/audio/tools/gen_pa.py`) |
 | `src/damage.rs` | structural data per type, loads, wing bending mode, damage / failures, aero of lost surfaces |
 | `src/debris.rs` | wreckage: rigid-body debris (terrain, buildings, water), crash break-up, fires, sound / effect events |
 | `src/vfx/`, `src/shaders/vfx*.wgsl` | particles, trails, vapour, shock diamonds, heat haze; condensation physics (`atmo.rs`) |

@@ -232,6 +232,9 @@ pub struct Controls {
     pub reverse: bool,
     /// Bit `i` set = engine `i` failed (fuel cut; props windmill or feather).
     pub failed_engines: u8,
+    /// Split throttles (Track M): per-engine lever positions 0..1, used only
+    /// when `Some` (differential thrust); `None` = every engine on `throttle`.
+    pub engine_throttle: Option<[f32; MAX_ENGINES]>,
 }
 
 impl Default for Controls {
@@ -248,6 +251,7 @@ impl Default for Controls {
             spoilers: 0.0,
             reverse: false,
             failed_engines: 0,
+            engine_throttle: None,
         }
     }
 }
@@ -270,7 +274,25 @@ impl Controls {
             spoilers: finite_or(self.spoilers, 0.0).clamp(0.0, 1.0),
             reverse: self.reverse,
             failed_engines: self.failed_engines,
+            engine_throttle: self.engine_throttle.map(|t| t.map(|x| finite_or(x, 0.0).clamp(0.0, 1.0))),
         }
+    }
+
+    /// Thrust lever of engine `i` (its split lever, else the common one).
+    pub fn lever(&self, i: usize) -> f32 {
+        match self.engine_throttle {
+            Some(t) => t.get(i).copied().unwrap_or(self.throttle),
+            None => self.throttle,
+        }
+    }
+
+    /// Move engine `i`'s lever by `d` (splitting the throttles if they are not yet).
+    pub fn nudge_lever(&mut self, i: usize, d: f32) {
+        let mut t = self.engine_throttle.unwrap_or([self.throttle; MAX_ENGINES]);
+        if let Some(x) = t.get_mut(i) {
+            *x = (*x + d).clamp(0.0, 1.0);
+        }
+        self.engine_throttle = Some(t);
     }
 }
 
@@ -3800,11 +3822,13 @@ impl Aircraft {
         let rev = self.surf.reverser;
         // Reverse selected: forward thrust held at idle until deployed, then the
         // lever sets reverse power.
-        let thr = if def.has_reverser && c.reverse { if rev > 0.9 { c.throttle } else { 0.0 } } else { c.throttle };
-        let (spool_t, ab_t) = def.spool_for_throttle(thr);
         let mut ab_max = 0.0f32;
         let fx = self.sys.fx;
         for i in 0..def.engines() {
+            // Each engine on its own lever when the throttles are split.
+            let lever = c.lever(i);
+            let thr = if def.has_reverser && c.reverse { if rev > 0.9 { lever } else { 0.0 } } else { lever };
+            let (spool_t, ab_t) = def.spool_for_throttle(thr);
             let failed = c.failed_engines & (1 << i) != 0;
             let e = &mut self.eng[i];
             e.running = !failed;
@@ -6117,6 +6141,7 @@ mod tests {
                             spoilers: rng.next().max(0.0),
                             reverse: rng.next() > 0.8,
                             failed_engines: if rng.next() > 0.7 { 1 } else { 0 },
+                            engine_throttle: None,
                         };
                         if seed % 2 == 0 {
                             // Bang-bang extremes.
@@ -6159,6 +6184,7 @@ mod tests {
                         spoilers: rng.next().max(0.0),
                         reverse: rng.next() > 0.5,
                         failed_engines: (rng.next().abs() * 4.0) as u8,
+                        engine_throttle: None,
                     };
                 }
                 a.step(&def, &c, &env, DT);

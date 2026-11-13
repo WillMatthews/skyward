@@ -1,0 +1,110 @@
+{
+  "id": "v1",
+  "title": "Go or No-Go",
+  "tagline": "Fire warning on the take-off roll at Heathrow.",
+  "aircraft": "meridian320",
+  "difficulty": 1,
+  "minutes": 3,
+  "history": "Inspired by the many take-offs where an engine fire or failure struck on the roll: the rule — reject before V1, continue after it — is drilled in every simulator check because a late or hesitant decision is what turns them into accidents.",
+  "situation": "Heavy, full of fuel and 174 passengers, you are rolling on Heathrow's runway 27R. V1 today is 140 kt. Somewhere on the roll the fire bell is going to ring.",
+  "failures": [
+    "Engine 1 fire during the take-off roll",
+    "V1 = 140 kt, VR = 145 kt"
+  ],
+  "tips": [
+    "Below V1: thrust levers idle, reversers (T), maximum braking (B), speed brakes",
+    "Above V1: continue, fly the aircraft, then the fire drill (O → Systems: fire handle, agent)",
+    "Keep it on the centreline with the rudder"
+  ],
+  "target": {
+    "airport": "EGLL",
+    "runway": "27R",
+    "course_deg": 269.7,
+    "length_m": 3901,
+    "width_m": 50,
+    "elev_ft": 83,
+    "lat": 51.477681,
+    "lon": -0.433227
+  },
+  "start": {
+    "on_runway": true,
+    "x_m": 60,
+    "throttle": 1.0,
+    "flaps": 1
+  },
+  "fuel_frac": 0.95,
+  "time": "14:00",
+  "date": "05-10",
+  "metar": "EGLL 101400Z 27012KT 9999 SCT030 14/08 Q1012",
+  "pax": 174,
+  "par_s": 75,
+  "events": [
+    {
+      "id": "fire",
+      "when": {
+        "ias_above_kt": 122,
+        "on_ground": true
+      },
+      "do": [
+        {
+          "fail": "fire1"
+        },
+        {
+          "checkpoint": "Fire warning"
+        }
+      ]
+    },
+    {
+      "id": "stop",
+      "when": {
+        "after": "fire",
+        "on_ground": true,
+        "ias_below_kt": 30,
+        "player": "brakes"
+      },
+      "do": [
+        {
+          "pa": "remain_seated"
+        },
+        {
+          "note": "ATC: Fire service on the way to you."
+        }
+      ]
+    }
+  ],
+  "objectives": [
+    {
+      "id": "decide",
+      "text": "Below V1: thrust idle within 3 s",
+      "kind": "player",
+      "act": "throttle_idle",
+      "after": "fire",
+      "within_s": 3,
+      "points": 70
+    },
+    {
+      "id": "handle",
+      "text": "Fire handle within 30 s",
+      "kind": "player",
+      "act": "fire_handle",
+      "after": "fire",
+      "within_s": 30,
+      "points": 50
+    },
+    {
+      "id": "out",
+      "text": "Fire out",
+      "kind": "fire_out",
+      "engine": 0,
+      "after": "fire",
+      "points": 40
+    },
+    {
+      "id": "stop",
+      "text": "Bring it to a stop on the runway",
+      "kind": "stop_on_runway",
+      "after": "fire",
+      "required": true
+    }
+  ]
+}

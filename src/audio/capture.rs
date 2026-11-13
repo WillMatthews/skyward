@@ -191,6 +191,9 @@ pub struct Director {
     /// Systems alerts (systems/): last one-shot seen, last continuous chime.
     prev_aural: u32,
     last_loop: f64,
+    /// Mission cabin PA / windshear warning sequence numbers (missions/).
+    prev_pa: u32,
+    prev_shear: u32,
     g_slow: f32,
     shake: f32,
     last_thump: f64,
@@ -235,6 +238,8 @@ impl Default for Director {
             prev_ap_warn: 0.0,
             prev_aural: 0,
             last_loop: -10.0,
+            prev_pa: 0,
+            prev_shear: 0,
             g_slow: 1.0,
             shake: 0.0,
             last_thump: -10.0,
@@ -532,6 +537,22 @@ impl Director {
                     crate::systems::Aural::Caution => self.say(Clip::Caution, Prio::Warning),
                     crate::systems::Aural::Smoke => self.say(Clip::Smoke, Prio::Warning),
                     _ => {}
+                }
+            }
+            // Missions: the cabin PA (its own channel) and the windshear warning.
+            if let Some(m) = sim.mission.as_ref() {
+                if m.pa_seq != self.prev_pa {
+                    self.prev_pa = m.pa_seq;
+                    if let Some(c) = Clip::pa(&m.pa) {
+                        events.push(Event::Speak(c));
+                    }
+                }
+                if m.shear_seq != self.prev_shear {
+                    self.prev_shear = m.shear_seq;
+                    self.say(Clip::Windshear, Prio::Warning);
+                }
+                if m.shear && !crashed {
+                    self.warn(7, 4.0, Clip::Windshear);
                 }
             }
             if !crashed && self.now - self.last_loop >= 1.0 {
