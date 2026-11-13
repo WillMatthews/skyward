@@ -26,3 +26,12 @@ src/systems/failures.rs
 src/systems/session.rs
 src/systems/tests.rs
 src/ui/failures.rs
+src/nav/db.rs
+src/nav/fms.rs
+src/nav/geo.rs
+src/nav/mod.rs
+src/nav/morse.rs
+src/nav/radio.rs
+src/nav/state.rs
+src/nav/tests.rs
+src/ui/radio.rs

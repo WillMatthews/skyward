@@ -77,7 +77,11 @@ pub fn draw(ctx: &egui::Context, st: &mut UiState, sim: &mut Sim, world: &World,
     let screen = ctx.content_rect();
     let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Background, egui::Id::new("flight")));
     let mode = st.settings.hud;
-    let route: Vec<(String, glam::Vec2)> = sim.bot.as_ref().map(|b| b.route()).unwrap_or_default();
+    // The bot's route, else the flight plan's (nav/).
+    let route: Vec<(String, glam::Vec2)> = match &sim.bot {
+        Some(b) => b.route(),
+        None => sim.nav.plan.route_world(&crate::nav::state::WorldEnv(world)),
+    };
     let mut bottom = screen.max.y;
     cockpit_hazards(&p, screen, sim);
     // ---- instruments
@@ -164,6 +168,8 @@ pub fn draw(ctx: &egui::Context, st: &mut UiState, sim: &mut Sim, world: &World,
     }
     // ---- systems & failures panel (O / F2)
     super::failures::panel(ctx, st, sim);
+    // ---- radios & flight plan (F3)
+    super::radio::panel(ctx, st, sim, world);
 }
 
 /// Smoke in the cockpit (electrical / engine fire) and a cracked windscreen (systems/).
@@ -390,7 +396,7 @@ fn minimal_strip(p: &egui::Painter, screen: Rect, sim: &Sim, st: &UiState) -> f3
 }
 
 #[allow(clippy::too_many_arguments)]
-fn moving_map(ctx: &egui::Context, p: &egui::Painter, st: &mut UiState, sim: &Sim, world: &World, ppp: f32, screen: Rect, bottom: f32) {
+fn moving_map(ctx: &egui::Context, p: &egui::Painter, st: &mut UiState, sim: &mut Sim, world: &World, ppp: f32, screen: Rect, bottom: f32) {
     let large = st.map.mode == MapMode::Large;
     let size = if large { Vec2::new((screen.width() * 0.46).min(900.0), (bottom - 90.0).min(screen.height() * 0.62)) } else { Vec2::splat(300.0) };
     let rect = Rect::from_min_size(Pos2::new(screen.max.x - size.x - sp::L, sp::M), size);
@@ -415,7 +421,22 @@ fn moving_map(ctx: &egui::Context, p: &egui::Painter, st: &mut UiState, sim: &Si
     let s = rect.width().min(rect.height()) * 0.5 / st.map.range;
     let anchor = if st.settings.north_up || st.map.pan.is_some() { rect.center() } else { Pos2::new(rect.center().x, rect.min.y + rect.height() * 0.68) };
     let mut view = View { rect, anchor, centre: pos + st.map.pan.unwrap_or_default(), s, up };
-    if resp.dragged() {
+    let edit = large && st.radio.edit_route;
+    let env = crate::nav::state::WorldEnv(world);
+    // Route editing (F3 › Edit on the map): drag a waypoint, click to add, right-click to delete.
+    let legs_w = sim.nav.plan.legs.iter().map(|w| world.proj.to_world(w.ll.0, w.ll.1)).collect::<Vec<_>>();
+    let hit = |q: Pos2, view: &View| legs_w.iter().enumerate().map(|(i, w)| (i, view.to_screen(*w).distance(q))).filter(|x| x.1 < 12.0).min_by(|a, b| a.1.total_cmp(&b.1)).map(|x| x.0);
+    let pointer = ctx.input(|i| i.pointer.interact_pos());
+    if edit && resp.drag_started() {
+        st.radio.drag = pointer.and_then(|q| hit(q, &view));
+    }
+    if !resp.dragged() && !resp.drag_started() {
+        st.radio.drag = None;
+    }
+    if let (true, Some(i), Some(q)) = (edit, st.radio.drag, pointer) {
+        let ll = world.proj.to_latlon(view.to_world(q));
+        sim.nav.plan.move_to(i, ll);
+    } else if resp.dragged() {
         let d = resp.drag_delta();
         let w0 = view.to_world(anchor);
         let w1 = view.to_world(anchor - d);
@@ -425,6 +446,32 @@ fn moving_map(ctx: &egui::Context, p: &egui::Painter, st: &mut UiState, sim: &Si
     if resp.double_clicked() {
         st.map.pan = None;
         st.map_zoom_override = false;
+    }
+    let nb_hit = |q: Pos2| Rect::from_center_size(Pos2::new(rect.max.x - 20.0, rect.min.y + 20.0), Vec2::splat(28.0)).contains(q);
+    if edit && resp.clicked() && !resp.double_clicked() {
+        if let Some(q) = pointer.filter(|q| !nb_hit(*q) && hit(*q, &view).is_none()) {
+            let w = view.to_world(q);
+            let ll = world.proj.to_latlon(w);
+            // Into the en-route leg it lengthens least (else before the approach).
+            let n = sim.nav.plan.enroute_len();
+            let start = sim.nav.plan.active.min(n);
+            let mut best = (n, f32::MAX);
+            let mut prev = pos;
+            for (i, lw) in legs_w.iter().enumerate().take(n + 1).skip(start) {
+                let add = prev.distance(w) + w.distance(*lw) - prev.distance(*lw);
+                if add < best.1 {
+                    best = (i, add);
+                }
+                prev = *lw;
+            }
+            let k = sim.nav.plan.legs.iter().filter(|x| x.kind == crate::nav::fms::WptKind::User).count() + 1;
+            sim.nav.plan.insert(best.0, crate::nav::fms::Wpt::new(format!("WP{k:02}"), ll, crate::nav::fms::WptKind::User));
+        }
+    }
+    if edit && resp.secondary_clicked() {
+        if let Some(i) = pointer.and_then(|q| hit(q, &view)) {
+            sim.nav.plan.remove(i);
+        }
     }
     p.add(egui::epaint::Shadow { offset: [0, 6], blur: 22, spread: 0, color: Color32::from_black_alpha(100) }.as_shape(rect, sp::R_PANEL));
     let mp = p.with_clip_rect(rect);
@@ -448,8 +495,23 @@ fn moving_map(ctx: &egui::Context, p: &egui::Painter, st: &mut UiState, sim: &Si
             }
         }
     }
-    let route: Vec<(String, glam::Vec2)> = sim.bot.as_ref().map(|b| b.route()).unwrap_or_default();
-    map::route(&mp, &view, pos, &route, pal::MAGENTA);
+    // Navaids around (VOR / DME / NDB, localizers) and the route: the bot's, or the flight plan.
+    if sim.nav.equipped && sim.nav.show_navaids {
+        let near = sim.nav.navaids_near(&env, view.centre, view.reach().min(150_000.0));
+        let col = if dark { Color32::from_rgb(120, 200, 255) } else { Color32::from_rgb(30, 90, 170) };
+        map::navaids(&mp, &view, world, &near, col, &mut taken);
+    }
+    match &sim.bot {
+        Some(b) => map::route(&mp, &view, pos, &b.route(), pal::MAGENTA),
+        None => {
+            let all = sim.nav.plan.all_world(&env);
+            let off = usize::from(sim.nav.plan.origin.is_some());
+            map::flight_plan(&mp, &view, pos, &all, sim.nav.plan.active + off, pal::MAGENTA, if dark { Color32::from_white_alpha(90) } else { Color32::from_black_alpha(90) });
+        }
+    }
+    if edit {
+        mp.text(Pos2::new(rect.min.x + 10.0, rect.max.y - 34.0), Align2::LEFT_BOTTOM, "EDIT ROUTE · click add · drag move · right-click delete", f_inst_b(10.5), pal::MAGENTA);
+    }
     map::range_rings(&mp, &view, st.map.range, true, ring_col);
     let me = view.to_screen(pos);
     map::trend(&mp, &view, pos, v, sim.ac.turn_rate(), if dark { pal::GREEN } else { Color32::from_rgb(20, 140, 70) });
@@ -571,6 +633,12 @@ fn ap_panel(ctx: &egui::Context, st: &mut UiState, sim: &mut Sim, at: Pos2) {
     }
     let has_engine = sim.def().has_engine;
     let vs1 = sim.def().vs1_kt;
+    let radios = sim.nav.equipped;
+    let loc_tuned = crate::nav::db::is_ils_freq(sim.nav.radios.nav[0].active);
+    let has_plan = !sim.nav.plan.legs.is_empty();
+    let has_appr = sim.nav.plan.approach.is_some();
+    let def = sim.def().clone();
+    let ac = sim.ac.clone();
     let (hdg_now, alt_now, ias_now) = (sim.ac.heading(), sim.ac.pos.y, sim.ac.airspeed());
     let open = st.ap_open;
     egui::Area::new(egui::Id::new("ap_panel")).pivot(Align2::RIGHT_BOTTOM).fixed_pos(at).order(egui::Order::Middle).show(ctx, |ui| {
@@ -619,6 +687,39 @@ fn ap_panel(ctx: &egui::Context, st: &mut UiState, sim: &mut Sim, at: Pos2) {
                 if m || p {
                     ap.ias = Some((v + if p { 5.0 } else { -5.0 } * KT).max(vs1 * KT));
                 }
+            }
+            // Navigation modes (nav/): LOC / VOR, APPR, NAV (LNAV), VNAV; armed in cyan, active in green.
+            if radios {
+                ui.add_space(2.0);
+                ui.horizontal(|ui| {
+                    use crate::autopilot::{Lat, Vert};
+                    let chip = |ui: &mut egui::Ui, t: &str, active: bool, armed: bool| -> bool {
+                        let col = if active { pal::GREEN } else if armed { pal::CYAN } else { pal::TEXT2 };
+                        ui.add_sized([50.0, 24.0], egui::Button::new(RichText::new(t).font(f_inst_b(11.0)).color(col)).stroke(Stroke::new(1.0, if active || armed { col } else { pal::HAIRLINE_HI }))).clicked()
+                    };
+                    let locmode = if loc_tuned { Lat::Loc } else { Lat::Vor };
+                    if chip(ui, if loc_tuned { "LOC" } else { "VOR" }, ap.lat == locmode, ap.arm_lat == Some(locmode)) {
+                        ap.toggle_lat(locmode);
+                    }
+                    if chip(ui, "APPR", ap.appr && ap.vert == Vert::Gs, ap.appr) {
+                        ap.toggle_appr();
+                    }
+                    if chip(ui, "NAV", ap.lat == Lat::Lnav, ap.arm_lat == Some(Lat::Lnav)) && has_plan {
+                        ap.toggle_lat(Lat::Lnav);
+                    }
+                    if chip(ui, "VNAV", ap.vert == Vert::Vnav, ap.arm_vnav) && has_appr {
+                        ap.toggle_vnav();
+                    }
+                });
+                let f = ap.fma(&def, &ac);
+                let line = [f[0].as_str(), f[1].as_str(), f[3].as_str()].into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join("  ");
+                let arm = [f[2].as_str(), f[4].as_str()].into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join(" ");
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(line).font(f_inst_b(11.5)).color(pal::GREEN));
+                    if !arm.is_empty() {
+                        ui.label(RichText::new(arm).font(f_inst_b(11.5)).color(pal::CYAN));
+                    }
+                });
             }
             ui.add_space(2.0);
             ui.horizontal(|ui| {
@@ -712,7 +813,10 @@ pub fn control_rows(def: &crate::flight::AircraftDef) -> Vec<(&'static str, &'st
         ("Autopilot", "Ins Del", "Heading −/+ 5°".into()),
         ("Autopilot", "Home End", "Altitude +/− 100 ft".into()),
         ("Autopilot", "9 0", "Speed −/+ 5 kt".into()),
+        ("Autopilot", "1 2 3 4", "LOC · APPR · LNAV · VNAV".into()),
         ("Autopilot", "J", "Auto flight".into()),
+        ("Radios", "5 · 6 7 · 8", "NAV 1 swap · course −/+ · ident".into()),
+        ("Radios", "F3 · ;", "Radios & flight plan · ND mode".into()),
         ("View", "C", "Camera".into()),
         ("View", "Right drag · wheel", "Orbit · zoom".into()),
         ("View", "M", "Map: corner · large · off".into()),

@@ -22,6 +22,7 @@ mod aircraft_asset;
 mod assets;
 mod audio;
 mod autopilot;
+mod nav;
 mod bot;
 mod clouds;
 mod cockpit;
@@ -120,6 +121,12 @@ struct Args {
     fail_names: Vec<String>,
     cold_dark: bool,
     panel: Option<usize>,
+    /// Radios & flight-plan panel tab to open (headless captures).
+    radio_panel: Option<usize>,
+    /// Keys to press after the spawn (`--press ap,ap_appr`; input/ ids).
+    press: Vec<Key>,
+    /// Flight plan (`--route BIG,LAM,EGLL/27R`, nav/).
+    route: Option<String>,
     frame_dt: Option<f32>,
     ap: bool,
     no_hud: bool,
@@ -225,6 +232,9 @@ fn parse_args_from(argv: Vec<String>) -> Args {
         fail_names: Vec::new(),
         cold_dark: false,
         panel: None,
+        radio_panel: None,
+        press: Vec::new(),
+        route: None,
         frame_dt: None,
         ap: false,
         no_hud: false,
@@ -292,6 +302,9 @@ fn parse_args_from(argv: Vec<String>) -> Args {
                 }
             }
             "--cold-dark" => a.cold_dark = true,
+            "--route" => a.route = Some(next(&mut i)),
+            "--press" => a.press.extend(next(&mut i).split(',').filter_map(|k| input::key_from_id(k.trim()))),
+            "--panel" if argv.get(i + 1).is_some_and(|v| v == "radios" || v == "fms") => a.radio_panel = Some(if next(&mut i) == "fms" { 1 } else { 0 }),
             "--panel" => {
                 a.panel = Some(match next(&mut i).as_str() {
                     "armed" | "schedule" | "random" => 1,
@@ -1086,6 +1099,18 @@ fn remember_plan(st: &mut UiState) {
 
 // ---------------------------------------------------------------- headless
 
+/// `--route`: the flight plan (nav/).
+fn apply_route(args: &Args, sim: &mut sim::Sim, world: &world::World) {
+    if let Some(spec) = &args.route {
+        let here = world.proj.to_latlon(glam::vec2(sim.ac.pos.x, sim.ac.pos.z));
+        let ndb = nav::db::db();
+        match sim.nav.route_from_spec(spec, here, ndb.as_deref(), world.airport_db.as_deref()) {
+            Ok(r) => eprintln!("route: {r}"),
+            Err(e) => eprintln!("route: {e}"),
+        }
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn headless(args: Args) -> Result<(), String> {
     let mut args = args;
@@ -1097,6 +1122,10 @@ fn headless(args: Args) -> Result<(), String> {
         eprintln!("airports: database unavailable — tile runways only");
     }
     resolve_airport(&mut args, db.as_deref());
+    // Navaids (nav/): VOR / DME / NDB around the flight.
+    if nav::db::wait(Duration::from_secs(60)).is_none() {
+        eprintln!("navaids: database unavailable — ILS only");
+    }
     let gpu = Gpu::new(None, Gpu::instance())?;
     eprintln!("GPU: {}", gpu.adapter_name());
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -1140,6 +1169,10 @@ fn headless(args: Args) -> Result<(), String> {
     if let Some(t) = args.panel {
         ui.st.fail.open = true;
         ui.st.fail.tab = t;
+    }
+    if let Some(t) = args.radio_panel {
+        ui.st.radio.open = true;
+        ui.st.radio.tab = t;
     }
     if let Ok(t) = std::env::var("SKYWARD_SETTINGS_TAB") {
         let mut it = t.split(':');
@@ -1243,6 +1276,7 @@ fn headless(args: Args) -> Result<(), String> {
             sim.ctl.failed_engines = args.fail;
         }
         apply_systems_args(&args, sim);
+        apply_route(&args, sim, &s.world);
         if args.ap && !sim.ac.on_ground {
             sim.ap.engage_hold_current(&sim.ac);
         }
@@ -1254,6 +1288,7 @@ fn headless(args: Args) -> Result<(), String> {
         sim.warp = args.warp;
     }
     let mut input = Input::default();
+    input.pressed.extend(args.press.iter().copied());
 
     if args.soak {
         return soak_flight(&args, &gpu, &mut renderer, &mut ui, &mut s, &tex, &view, w, h, &raw, &mut input);
@@ -2076,6 +2111,7 @@ fn ui_action(r: &mut Running, k: Key, flying: bool) -> bool {
         }
         Key::WeatherPanel => st.show_wx = !st.show_wx,
         Key::Failures => st.fail.open = !st.fail.open,
+        Key::RadioPanel => st.radio.open = !st.radio.open,
         Key::MouseYoke => {
             if !st.settings.controls.mouse.yoke {
                 st.toasts.push(ui::toast::Kind::Info, "Mouse yoke is off", "Turn it on in Settings › Controls › Mouse & view", 3.0);
@@ -2764,6 +2800,7 @@ fn audio_render(args: Args) -> Result<(), String> {
     let mut args = args;
     let db = airports::Loader::start().wait(Duration::from_secs(120));
     resolve_airport(&mut args, db.as_deref());
+    let _ = nav::db::wait(Duration::from_secs(60));
     let mut s = Session::new(&args, db, None);
     let t0 = Instant::now();
     fn pump(s: &mut Session) {
@@ -2817,6 +2854,7 @@ fn audio_render(args: Args) -> Result<(), String> {
             sim.ap.engage_hold_current(&sim.ac);
         }
         apply_systems_args(&args, sim);
+        apply_route(&args, sim, &s.world);
         sim.warp = args.warp;
     }
     // Optional silent fast-forward to a bot phase (e.g. "Final").
@@ -2847,6 +2885,7 @@ fn audio_render(args: Args) -> Result<(), String> {
     let mut cues = audio::render::parse_script(&args.audio_script);
     let mut rec = audio::render::Recorder::new(48_000);
     let mut input = Input::default();
+    input.pressed.extend(args.press.iter().copied());
     let dt = 1.0 / 60.0;
     for i in 0..(args.seconds.max(1.0) * 60.0) as usize {
         let t = i as f32 * dt;

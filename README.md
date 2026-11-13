@@ -80,7 +80,27 @@ anywhere on Earth, for as long as you like. wgpu (Vulkan), winit, egui.
   criterion (persisting in ice-supersaturated air), vortex and wing-surface
   condensation in humid air, the transonic vapour cone, afterburner shock
   diamonds and heat haze.
-* **Autopilot** (heading / altitude / V/S / speed with autothrottle).
+* **Autopilot** — heading / altitude / V/S / speed with autothrottle, and
+  the navigation modes: LOC / VOR track with a no-overshoot capture (30° /
+  45° intercepts), LNAV along the flight plan (fly-by turns), approach
+  (LOC + G/S capture from below), VNAV descent path, flight-director bars;
+  the airliners **autoland** (FLARE, RETARD, ROLL OUT on the localizer with
+  autobrake / reversers), other types disconnect at 200 ft. Airbus-style FMA
+  on the PFD, KAP 140 annunciators in the Cessna.
+* **Navigation** (`src/nav/`) — VOR / VOR-DME / VORTAC / DME / NDB from
+  OurAirports, and an ILS (localizer + glideslope + DME) for every instrument
+  runway (synthetic from the runway data; real frequencies / idents for a few
+  London airports, EGLC's 5.5° glidepath). Radios: NAV 1 / 2, ADF, COM 1 / 2
+  with active / standby, transponder; stations are received by range, radio
+  horizon and terrain line of sight, need bus power and can fail; Morse
+  idents in the headset. CDI / HSI / glideslope needles, TO / FROM and flags,
+  radio drums and the DME in the Cessna's 3D panel, a NAV 1 indicator on the
+  2D panel; PFD localizer / glideslope diamonds with ILS ident / DME; ND in
+  ROSE ILS / ROSE VOR / ROSE NAV / ARC / PLAN with the route and navaids.
+  **FMS-lite**: origin → waypoints → destination + ILS or RNAV approach
+  (auto-tunes NAV 1), edited in the radio panel (F3) or on the large map
+  (click / drag / right-click), with distance / ETA / fuel predictions and an
+  MCDU F-PLN page. The bot couples to the ILS on its finals.
 * **Auto flight bot** — an AI pilot that flies the real flight model through
   the controls: glider soaring and powered take-off → landmark tour →
   approach → landing cycles, wind-aware (see below).
@@ -227,6 +247,10 @@ the city (fast jets: 3,000 m), glider thermal release.
 | [ / ] | trim nose down / up |
 | Z | autopilot on (holds heading, altitude, speed) / off; a mouse AP panel appears |
 | Ins / Del, Home / End, 9 / 0 | autopilot heading ∓5°, altitude ±100 ft, speed ∓5 kt |
+| 1 / 2 / 3 / 4 | autopilot LOC (VOR) track on NAV 1 / **APPR** (LOC + G/S, autoland on airliners) / LNAV (flight plan) / VNAV — arm, again to cancel |
+| 5, 6 / 7, 8 | NAV 1: swap active ↔ standby, course (OBS) −/+ 1°, Morse ident audio |
+| F3 | **radios & flight plan** panel: COM / NAV / ADF frequencies, course, ident, transponder; route, destination + approach, direct-to, predictions |
+| ; | navigation display: ROSE ILS → ROSE VOR → ROSE NAV → ARC → PLAN |
 | K | engine-failure practice (fails engine 1, then 2, then restores) |
 | O / F2 | **systems & failures** panel: fail / arm / random failures, repair; systems (battery, generators, fuel, engine start, APU, hydraulics, anti-ice, alternate gear, fire handles) |
 | ` | master warning / caution reset (silences the chime) |
@@ -333,6 +357,8 @@ Headless (no window) — renders offscreen and writes a PNG:
 | `--gear up\|down`, `--flaps N`, `--spoilers F`, `--reverse`, `--fail BITS` | aircraft setup |
 | `--fail pitot,vacuum,fire2@30` | systems failures by id (`fire` `flameout` `partial` `overspeed` `carbice` `leak` `pump` `gen` `vacuum` `pitot` `static` `ai` `dg` `pfd` `gear` `flapasym` `flapjam` `hyd` `jam` `brakes` `tyre` `smoke` `bird` `icing`; a digit = engine / tank / system, `jam-rudder`, `tyre-right`; `@S` arms it S seconds in) |
 | `--cold-dark`, `--panel failures\|armed\|systems` | start cold and dark; show the systems & failures panel |
+| `--panel radios\|fms`, `--press ap,ap_appr,nd_mode` | show the radios & flight-plan panel; press keys (Settings › Controls ids) after the spawn |
+| `--route LAM,BIG,EGLL/27R[/rnav]` | flight plan: navaids / airports / `lat:lon`, the last item an approach (ILS auto-tunes NAV 1) |
 | `--eye x,y,z --look x,y,z` | fixed camera |
 | `--eye-ll lat,lon,h --look-ll lat,lon,h` | fixed camera by geography (heights above the ground) |
 | `--menu-screen S` | capture a menu: `main` `aircraft` `airport` `conditions` `settings` `pause` `loading` `credits` |
@@ -455,6 +481,7 @@ A shift costs well under 0.1 ms.
 | `src/ui/` | interface: design system (`mod.rs`), instruments (`gauges.rs`, `glass.rs`, `hudsym.rs`), moving map (`mapdata.rs` worker side, `map.rs`, MSAA `canvas.rs`), menus (`menus.rs`, `overview.rs` world map), in-flight UI (`flight.rs`), settings (`controls.rs`: bindings / devices), toasts |
 | `src/input/` | game controllers (gilrs + Linux evdev), bindings, default layouts, curves, head-look / analog glue (`sim_glue.rs`) |
 | `src/airports.rs` | OurAirports download / cache / search, runways in the world frame, METAR lookup |
+| `src/nav/` | navaid database (OurAirports navaids + synthetic ILS), radios with reception / Morse, FMS-lite flight plan, the autopilot's nav inputs; radio panel `src/ui/radio.rs` |
 | `src/airport/`, `src/shaders/airport*.wgsl` | airport detail: tile-side airside styles + summaries (`tile.rs`), layout (`layout.rs`: markings, stands, signs, lights, vehicles), Overpass client (`overpass.rs`), procedural models + sign font (`mesh.rs`, `font.rs`), parked-aircraft LODs (`fleet.rs`), renderer (`gfx.rs`) |
 | `src/startpos.rs` | departure-screen starts (runway end, final, apron, air) |
 
@@ -486,7 +513,10 @@ vector tiles served by [OpenFreeMap](https://openfreemap.org/). Weather:
 METARs from the [aviationweather.gov](https://aviationweather.gov/) data API
 (NOAA), forecasts from [Open-Meteo](https://open-meteo.com/) (CC BY 4.0).
 Airports and runways: [OurAirports](https://ourairports.com/data/) (public
-domain; cached in `cache/ourairports.tsv.gz`); airport detail from
+domain; cached in `cache/ourairports.tsv.gz`); navaids (VOR, DME, NDB) from
+OurAirports' `navaids.csv` (public domain; cached in `cache/navaids.tsv.gz`),
+ILS synthetic from the runway data (a few London ILS frequencies / idents /
+glidepaths from public charts); airport detail from
 OpenStreetMap through the [Overpass API](https://overpass-api.de/) (©
 OpenStreetMap contributors, ODbL; cached in `cache/airports/`); fallback lookup via
 [Nominatim](https://nominatim.org/). Fonts (SIL Open Font License 1.1, see

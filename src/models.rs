@@ -143,6 +143,8 @@ pub struct ModelInputs<'a> {
     pub hours: f32,
     /// Ambient daylight 0 (night) .. 1 (day): panel lighting / display brightness.
     pub daylight: f32,
+    /// Radios (nav/): frequency drums, CDI / glideslope needles, flags, DME, transponder.
+    pub radios: Option<&'a crate::nav::radio::Radios>,
 }
 
 /// Value of one animation channel (FlightGear semantics, see `aircraft_asset.rs`).

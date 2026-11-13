@@ -62,7 +62,7 @@ item lands; keep entries one line.
 - [x] Structural loads, wing flex (modal), limit/ultimate damage, flutter, flap/gear overspeed, separations with asymmetric aero, survivable vs fatal crashes, rigid-body debris (L)
 - [ ] **P1** Structure follow-ups: body-body debris collisions; fuselage crush/deform; cracks along split seams; fuel model (mass/CG/fire size from actual fuel)
 - [x] **P1** Full 3D cockpits with working instruments: FG instrument animations (needles, drums/`textranslate`, `texrotate`/`texmultiple` attitude balls, flags) bound to live sim values with real instrument lag (src/cockpit), glass PFD/ND/EWD/SD/ISIS/MCDU rendered offscreen onto the A320/E190/F-16 screens (mip-mapped, auto-dimmed), night backlighting, auto-dimmed displays; mouse head look (C)
-- [ ] **P2** Cockpit follow-ups: hide the 2D glass/gauge overlay in cockpit view by default; radio/transponder frequency drums (no nav radios yet); clickable knobs; F-16 combiner HUD as a collimated texture; ATR glass EFIS pages
+- [ ] **P2** Cockpit follow-ups: hide the 2D glass/gauge overlay in cockpit view by default; clickable knobs; F-16 combiner HUD as a collimated texture; ATR glass EFIS pages
 - [x] **P1** Systems depth per type (src/systems, data-driven with category defaults): electrics (battery / gens / APU / RAT / EPU, ammeter), fuel (tanks, selector / crossfeed, burn → mass + lateral CG, leaks, starvation), hydraulics (PTU; gear, flaps, spoilers, brakes, NWS, powered controls), vacuum + pitot-static instruments, engine starts (cold & dark / auto-start / ready), oil, carb ice, fire detection + bottles, anti-ice / airframe icing; 24 failures with flags / red X, master warning / caution, ECAM / EICAS procedures, CRC / fire bell / voice; failures panel (now / armed by time-alt-speed / random window / MTBF), `--fail`, `--cold-dark` (S)
 - [ ] **P2** Systems follow-ups: per-engine throttles (single lever today, so "THR LEVER 1 IDLE" means all), cockpit switch / fire-handle animations, F-16 HUD + ND ignore AHRS flags, engine-fire VFX (flames / smoke trail), captain vs F/O display units (red X shows on both PFDs), settings persistence of cold & dark / random failures, `--fail` in windowed mode
 - [ ] **P1** Ground handling: taxiing with tillers, pushback, chocks, wheel friction by surface
@@ -83,8 +83,9 @@ item lands; keep entries one line.
 ## 5. Gameplay & modes
 - [x] Auto-fly bot (glider soaring, powered tours, wind-aware) + watch mode (F, I)
 - [ ] **P1** Missions/challenges: landing challenges (crosswind, short field), glider task racing, tours with scoring
-- [ ] **P1** Flight planning: route on map, waypoints, FMS-lite, ND route
-- [ ] **P1** ILS/VOR/GPS approaches + autopilot APPR/NAV/LNAV/VNAV modes
+- [x] **P1** Flight planning: FMS-lite (origin → waypoints → destination + ILS / RNAV approach with IF / FAF, VNAV path), edited in the F3 panel and on the map (click / drag / right-click), ND / map route, distance / ETA / fuel predictions, MCDU F-PLN (F)
+- [x] **P1** ILS/VOR/NDB navigation (OurAirports navaids, synthetic ILS per instrument runway), radios with range / horizon / terrain LOS, power and failures, Morse idents; autopilot LOC / VOR / LNAV / APPR (G/S) / VNAV with no-overshoot captures, FD, Airbus FMA, KAP 140 annunciators, airliner autoland; PFD LS diamonds, ND ROSE / ARC / PLAN; Cessna 3D radios / VOR heads live; bot couples to the ILS (F)
+- [ ] **P1** Nav follow-ups: no magnetic variation (all courses true); no airways / SIDs / STARs / published procedures (RNAV = ILS geometry); no marker beacons / back courses / GS false lobes; ILS synthetic outside London (frequency clashes possible); MCDU is display-only (editing in the F3 panel); KAP 140 buttons not clickable; ADF needle (KI-227) / E190 / ATR cockpit radios not bound; LOWI 08 still not landed by the airliners (synthetic ILS there is LOC-only by terrain; bot uses its own path)
 - [ ] **P1** Replay / flight recorder with cinematic cameras
 - [ ] **P2** Live real traffic (ADS-B feed) as AI aircraft
 - [ ] **P2** Multiplayer (shared sky)
@@ -135,4 +136,5 @@ item lands; keep entries one line.
 | C (v3) | Live 3D cockpit instruments (steam gauges + glass displays) | ✅ |
 | H | v3 heavies: C-130H, C-5M, Vulcan B.2 | ✅ |
 | S | Aircraft systems + realistic failures (systems/, failures panel, ECAM / EICAS, aural) | ✅ |
-| next | ILS/FMS (F), rotorcraft (Q), ATC/ATIS (R) | ⏳ queued |
+| F | Navigation: navaids, radios, FMS-lite, ILS / VOR / LNAV / VNAV autopilot, autoland, nav displays (`src/nav/`) | ✅ |
+| next | rotorcraft (Q), ATC/ATIS (R) | ⏳ queued |

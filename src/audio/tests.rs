@@ -530,3 +530,66 @@ fn debris_event_api_is_positional() {
     assert!(near > 3.0 * far, "near {near} far {far}");
     assert!(t_far - t_near > 1.5, "delay near {t_near} far {t_far}");
 }
+
+/// The navaid Morse ident (nav/morse.rs) in the headset: a 1020 Hz tone
+/// keyed at 7 wpm that decodes back to the station ident; silent without one.
+#[test]
+fn navaid_ident_is_keyed_morse() {
+    let render = |ident: [u8; 4]| {
+        let mut f = frame_for("kestrel");
+        f.interior = 1.0;
+        for e in f.eng.iter_mut() {
+            *e = EngineFrame::default();
+        }
+        f.ident = ident;
+        f.ident_gain = 1.0;
+        let mut s = Synth::new(SR);
+        let mut out = Vec::new();
+        let mut buf = vec![0.0f32; 1600];
+        for k in 0..(6.0 * 60.0) as usize {
+            f.cut = k == 0;
+            s.push_frame(&f);
+            s.render(&mut buf);
+            out.extend(buf.chunks(2).map(|c| 0.5 * (c[0] + c[1])));
+        }
+        out
+    };
+    // Goertzel power at the ident tone in 4 ms windows.
+    let tone = |x: &[f32]| -> Vec<f32> {
+        let n = (SR * 0.004) as usize;
+        let w = 2.0 * (std::f32::consts::TAU * crate::nav::morse::TONE_HZ / SR).cos();
+        x.chunks(n)
+            .map(|c| {
+                let (mut s1, mut s2) = (0.0f32, 0.0f32);
+                for v in c {
+                    let s0 = v + w * s1 - s2;
+                    s2 = s1;
+                    s1 = s0;
+                }
+                (s1 * s1 + s2 * s2 - w * s1 * s2).max(0.0).sqrt() / n as f32
+            })
+            .collect()
+    };
+    let on = render(*b"IRR\0");
+    save("ident_irr.wav", &on);
+    let p = tone(&on);
+    let peak = p.iter().cloned().fold(0.0, f32::max);
+    assert!(peak > 0.005, "ident tone too quiet: {peak}");
+    let mut keys = Vec::new();
+    let mut start = None;
+    for (k, v) in p.iter().enumerate() {
+        let t = k as f32 * 0.004;
+        match (*v > 0.4 * peak, start) {
+            (true, None) => start = Some(t),
+            (false, Some(s)) => {
+                keys.push((s, t));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    let first: Vec<(f32, f32)> = keys.iter().copied().take_while(|k| k.0 < 5.0).collect();
+    assert_eq!(crate::nav::morse::decode(&first, crate::nav::morse::DOT), "IRR", "{first:?}");
+    let off = tone(&render([0; 4]));
+    assert!(off.iter().cloned().fold(0.0, f32::max) < 0.05 * peak);
+}

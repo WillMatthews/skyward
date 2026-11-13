@@ -190,12 +190,26 @@ pub enum Key {
     Instruments,
     WeatherPanel,
     Mute,
+    /// Autopilot: LOC / VOR track (NAV 1), approach (LOC + G/S), LNAV, VNAV.
+    ApLoc,
+    ApAppr,
+    ApLnav,
+    ApVnav,
+    /// NAV 1: swap active / standby, course (OBS) −/+, ident audio.
+    Nav1Swap,
+    ObsDec,
+    ObsInc,
+    Nav1Ident,
+    /// Radio & flight-plan panel (interface).
+    RadioPanel,
+    /// Navigation display mode (ROSE ILS / VOR / NAV, ARC, PLAN).
+    NdMode,
 }
 
 impl Key {
     /// Keys whose auto-repeat should register as repeated presses.
     pub fn repeats(self) -> bool {
-        matches!(self, Key::ApHdgLeft | Key::ApHdgRight | Key::ApAltUp | Key::ApAltDown | Key::ApSpdUp | Key::ApSpdDown)
+        matches!(self, Key::ApHdgLeft | Key::ApHdgRight | Key::ApAltUp | Key::ApAltDown | Key::ApSpdUp | Key::ApSpdDown | Key::ObsDec | Key::ObsInc)
     }
 }
 
@@ -387,6 +401,8 @@ pub struct Sim {
     pub failures: crate::systems::failures::Schedule,
     /// Start cold and dark (engines off, battery off) instead of ready to go.
     pub cold_dark: bool,
+    /// Radios, flight plan and the guidance the autopilot couples to (nav/).
+    pub nav: crate::nav::NavState,
 }
 
 /// Cinematic camera state.
@@ -500,7 +516,9 @@ impl Sim {
             vfx: crate::vfx::Vfx::default(),
             failures: Default::default(),
             cold_dark: false,
+            nav: Default::default(),
         };
+        s.nav = crate::nav::NavState::new(&s.defs[sel]);
         s.light_rig = crate::lights::AircraftLightRig::from_model(&s.model);
         s.reset(world);
         s
@@ -518,6 +536,7 @@ impl Sim {
         self.light_rig = crate::lights::AircraftLightRig::from_model(&self.model);
         self.landing_lights = None;
         self.bot = None;
+        self.nav = crate::nav::NavState::new(&self.defs[self.sel]);
         self.watch = watch;
         if watch {
             self.cam = CamMode::Cinematic;
@@ -595,6 +614,7 @@ impl Sim {
         self.fail_step = 0;
         self.ap = Autopilot::new();
         self.ap_warn = 0.0;
+        self.setup_nav(world);
         self.orbit_dist = self.chase_dist();
         // Screenshot knob: SKYWARD_ORBIT="yaw_deg,pitch_deg,dist_m" sets the chase camera.
         if let Ok(o) = std::env::var("SKYWARD_ORBIT") {
@@ -792,6 +812,74 @@ impl Sim {
         }
     }
 
+    /// Origin / arrival for the flight plan at a (re)start: the airport at
+    /// the start; on an approach start the runway being flown to, as an ILS
+    /// approach (auto-tuning NAV 1).
+    fn setup_nav(&mut self, world: &World) {
+        use crate::nav::fms::{ApprKind, Wpt, WptKind};
+        self.nav.plan.active = 0;
+        self.nav.plan.from = None;
+        let Some(adb) = world.airport_db.clone() else { return };
+        let p = vec2(self.ac.pos.x, self.ac.pos.z);
+        let ll = world.proj.to_latlon(p);
+        if let Some(a) = adb.near(ll.0, ll.1, 20.0).into_iter().map(|(i, _)| &adb.airports[i]).find(|a| a.kind != crate::airports::Kind::Seaplane) {
+            if self.nav.plan.origin.is_none() || self.ac.on_ground {
+                self.nav.plan.set_origin(Some(Wpt::new(a.code(), (a.lat, a.lon), WptKind::Airport)));
+            }
+        }
+        if self.ac.on_ground || self.nav.plan.approach.is_some() {
+            return;
+        }
+        let Some(rw) = self.runway.clone().filter(|r| !r.airport.is_empty()) else { return };
+        // The end being flown to: the one the aircraft points along.
+        let ha = bot::heading_of(rw.b - rw.a);
+        let ident = if bot::wrap_pi(ha - self.ac.heading()).abs() < PI / 2.0 { rw.ident_a.clone() } else { rw.ident_b.clone() };
+        if let Ok(msg) = self.nav.plan_approach(&adb, &rw.airport, &ident, ApprKind::Ils) {
+            if self.def().category == Category::Airliner || self.nav.equipped {
+                eprintln!("nav: {msg}");
+            }
+        }
+    }
+
+    /// Autopilot mode keys: LOC / APPR / LNAV / VNAV.
+    fn ap_mode_key(&mut self, k: Key) {
+        use crate::autopilot::Lat;
+        if !self.nav.equipped {
+            self.say("No navigation radios on this aircraft", 2.0);
+            return;
+        }
+        if !self.ap.engaged && !self.ac.on_ground && self.bot.is_none() {
+            self.ap.engage_hold_current(&self.ac);
+            if !self.def().has_engine {
+                self.ap.ias = Some(self.ac.airspeed());
+            }
+        }
+        match k {
+            Key::ApLoc => {
+                let loc = self.nav.radios.nav[0].out.loc;
+                self.ap.toggle_lat(if loc { Lat::Loc } else { Lat::Vor });
+            }
+            Key::ApAppr => self.ap.toggle_appr(),
+            Key::ApLnav => {
+                if self.nav.plan.legs.is_empty() {
+                    self.say("LNAV: no flight plan (F3)", 2.5);
+                } else {
+                    self.ap.toggle_lat(Lat::Lnav);
+                }
+            }
+            _ => {
+                if self.nav.plan.approach.is_none() {
+                    self.say("VNAV: needs an approach in the flight plan (F3)", 2.5);
+                } else {
+                    self.ap.toggle_vnav();
+                }
+            }
+        }
+        let f = self.ap.fma(self.def(), &self.ac);
+        let txt: Vec<&str> = [f[3].as_str(), f[4].as_str(), f[1].as_str(), f[2].as_str()].into_iter().filter(|x| !x.is_empty()).collect();
+        self.say(txt.join("  ·  "), 2.5);
+    }
+
     /// Advance the simulation by real time `dt` (seconds).
     pub fn update(&mut self, world: &World, input: &mut Input, dt: f32) {
         let dt = dt.min(0.1);
@@ -927,6 +1015,24 @@ impl Sim {
                         self.ap.ias = Some((v + step).max(def.vs1_kt * KT));
                     }
                 }
+                Key::ApLoc | Key::ApAppr | Key::ApLnav | Key::ApVnav => self.ap_mode_key(k),
+                Key::Nav1Swap => {
+                    self.nav.radios.nav[0].swap();
+                    let f = self.nav.radios.nav[0].active;
+                    self.say(format!("NAV 1 {}", crate::nav::db::freq_label(f, false)), 2.0);
+                }
+                Key::ObsDec | Key::ObsInc => {
+                    let step = if k == Key::ObsInc { 1f32 } else { -1f32 }.to_radians();
+                    let rx = &mut self.nav.radios.nav[0];
+                    rx.obs = crate::nav::geo::wrap_2pi((rx.obs.to_degrees().round()).to_radians() + step);
+                }
+                Key::Nav1Ident => {
+                    let rx = &mut self.nav.radios.nav[0];
+                    rx.ident_audio = !rx.ident_audio;
+                    let on = rx.ident_audio;
+                    self.say(if on { "NAV 1 ident audio on" } else { "NAV 1 ident audio off" }, 2.0);
+                }
+                Key::NdMode => self.nav.nd_mode = self.nav.nd_mode.next(),
                 Key::EngineFail => self.cycle_engine_failure(),
                 Key::MasterAck => self.ac.sys.acknowledge(),
                 Key::LandingLights => {
@@ -1007,13 +1113,20 @@ impl Sim {
         if !self.paused && self.ac.crashed.is_none() && !self.needs_respawn {
             self.acc += dt * self.warp as f32;
             let mut steps = 0;
+            let ndb = crate::nav::db::db();
+            let env = crate::nav::state::WorldEnv(world);
             while self.acc >= DT && steps < 256 {
                 let def = &self.defs[self.sel];
+                // Radios and flight plan, then the autopilot's nav inputs (nav/).
+                self.nav.step(&env, &self.ac, def, ndb.as_deref(), world.airport_db.as_deref(), DT);
+                self.ap.nav = self.nav.ap_input(&env, &self.ac, def, self.ground_y);
                 if let Some(b) = self.bot.as_mut() {
                     b.update(def, &self.ac, &mut self.ctl, &mut self.ap, world, DT);
                 } else if self.ap.engaged && !self.ap.update(def, &self.ac, &mut self.ctl, DT) {
                     self.ap_warn = 4.0;
-                    self.note = Some(("Autopilot disengaged".into(), 3.0));
+                    let why = if self.ap.at_minimums { "Minimums — autopilot disconnected, you have control" } else { "Autopilot disengaged" };
+                    self.note = Some((why.into(), 3.0));
+                    self.ap.at_minimums = false;
                 }
                 if self.ctl.reverse && !self.ac.on_ground && self.bot.is_none() {
                     self.ctl.reverse = false;
@@ -1036,6 +1149,13 @@ impl Sim {
             self.time += dt * self.warp as f32;
         }
         self.systems_frame();
+        // The bot's runway: NAV 1 on its ILS (it couples to it on final, bot.rs).
+        if let Some(end) = self.bot.as_ref().and_then(|b| b.focus_runway()) {
+            if let Some(rw) = world.runways.iter().find(|r| end.same_runway(r) && !r.airport.is_empty()) {
+                let ident = if rw.a.distance(end.thr) < rw.b.distance(end.thr) { &rw.ident_a } else { &rw.ident_b };
+                self.nav.tune_runway(&rw.airport, ident);
+            }
+        }
         // Watch mode: a landed glider is relaunched (as if by winch) after a pause.
         if self.watch && self.bot.as_ref().is_some_and(|b| b.wants_relaunch) {
             self.start = Start::default_for(&def);
@@ -1542,6 +1662,7 @@ impl Sim {
             qnh_hpa: self.qnh_hpa,
             hours: self.hours,
             daylight,
+            radios: self.nav.equipped.then_some(&self.nav.radios),
         });
         let m = Mat4::from_rotation_translation(self.rrot, self.rpos - eye);
         let mut local = MeshData::default();

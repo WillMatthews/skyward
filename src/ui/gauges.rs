@@ -473,6 +473,77 @@ fn heading(p: &egui::Painter, c: Pos2, r: f32, sim: &Sim, ink: Color32) {
     glass(p, c, r);
 }
 
+/// NAV 1 indicator (KI-206 style): OBS card, CDI and glideslope needles
+/// (5 dots each), TO / FROM flag, red NAV / GS flags (nav/).
+fn nav_cdi(p: &egui::Painter, c: Pos2, r: f32, sim: &Sim, ink: Color32) {
+    case(p, c, r);
+    let rx = &sim.nav.radios.nav[0];
+    let o = &rx.out;
+    let obs = rx.obs;
+    // OBS card: the selected course at the top index.
+    for i in 0..72 {
+        let deg = i as f32 * 5.0;
+        let a = deg.to_radians() - obs;
+        let major = i % 2 == 0;
+        p.line_segment([polar(c, r * 0.97, a), polar(c, r * if major { 0.87 } else { 0.92 }, a)], Stroke::new(if major { 1.8 } else { 1.0 }, ink));
+        if i % 6 == 0 {
+            label_b(p, polar(c, r * 0.76, a), &format!("{}", i / 2), r * 0.15, ink);
+        }
+    }
+    p.add(Shape::convex_polygon(vec![polar(c, r * 0.99, 0.0) + Vec2::new(-5.0, -1.0), polar(c, r * 0.99, 0.0) + Vec2::new(5.0, -1.0), polar(c, r * 0.87, 0.0)], ink, Stroke::NONE));
+    p.add(Shape::convex_polygon(vec![polar(c, r * 0.99, PI) + Vec2::new(-4.0, 1.0), polar(c, r * 0.99, PI) + Vec2::new(4.0, 1.0), polar(c, r * 0.88, PI)], INK_DIM, Stroke::NONE));
+    // inner face with the dots
+    let face = r * 0.6;
+    p.circle_filled(c, face, Color32::from_rgb(12, 12, 13));
+    let dot = face * 0.17;
+    for k in 1..=5 {
+        for sg in [-1.0, 1.0] {
+            p.circle_stroke(c + Vec2::new(sg * k as f32 * dot, 0.0), r * 0.025, Stroke::new(1.2, ink));
+            p.circle_stroke(c + Vec2::new(-face * 0.82, sg * k as f32 * dot * 0.62), r * 0.02, Stroke::new(1.0, INK_DIM));
+        }
+    }
+    p.circle_stroke(c, dot * 0.5, Stroke::new(1.2, ink));
+    let valid = o.valid;
+    let cdi = if valid { o.cdi } else { 0.0 };
+    let x = c.x + cdi.clamp(-1.0, 1.0) * 5.0 * dot;
+    let clip = p.with_clip_rect(egui::Rect::from_center_size(c, Vec2::splat(face * 1.9)));
+    clip.line_segment([Pos2::new(x, c.y - face * 0.82), Pos2::new(x, c.y + face * 0.82)], Stroke::new(r * 0.035, ink));
+    let ils = o.loc;
+    if ils {
+        let gs = if o.gs_valid { o.gs } else { 0.0 };
+        let y = c.y - gs.clamp(-1.0, 1.0) * 5.0 * dot * 0.62;
+        clip.line_segment([Pos2::new(c.x - face * 0.82, y), Pos2::new(c.x + face * 0.82, y)], Stroke::new(r * 0.035, ink));
+    }
+    // TO / FROM
+    let tf = Pos2::new(c.x + face * 0.55, c.y - face * 0.45);
+    match o.to.filter(|_| valid && !ils) {
+        Some(true) => {
+            p.add(Shape::convex_polygon(vec![tf + Vec2::new(0.0, -r * 0.09), tf + Vec2::new(r * 0.08, r * 0.04), tf + Vec2::new(-r * 0.08, r * 0.04)], ink, Stroke::NONE));
+            label(p, tf + Vec2::new(0.0, r * 0.13), "TO", r * 0.11, ink);
+        }
+        Some(false) => {
+            p.add(Shape::convex_polygon(vec![tf + Vec2::new(0.0, r * 0.09), tf + Vec2::new(-r * 0.08, -r * 0.04), tf + Vec2::new(r * 0.08, -r * 0.04)], ink, Stroke::NONE));
+            label(p, tf + Vec2::new(0.0, -r * 0.13), "FR", r * 0.11, ink);
+        }
+        None => {}
+    }
+    let flag = |at: Pos2, t: &str| {
+        let fr = egui::Rect::from_center_size(at, Vec2::new(r * 0.36, r * 0.17));
+        p.rect_filled(fr, 2, ARC_RED);
+        label_b(p, fr.center(), t, r * 0.12, Color32::WHITE);
+    };
+    if !valid {
+        flag(Pos2::new(c.x - face * 0.45, c.y - face * 0.45), "NAV");
+    }
+    if ils && !o.gs_valid {
+        flag(Pos2::new(c.x - face * 0.45, c.y + face * 0.48), "GS");
+    }
+    let id = if valid { o.ident.clone() } else { crate::nav::db::freq_label(rx.active, false) };
+    label(p, Pos2::new(c.x, c.y + face * 0.55), &id, r * 0.12, if valid { pal::GREEN } else { INK_DIM });
+    label(p, Pos2::new(c.x + face * 0.5, c.y + face * 0.8), "NAV 1", r * 0.09, INK_DIM);
+    glass(p, c, r);
+}
+
 /// Tachometer: RPM ×100 with green arc; for supercharged engines `boost` draws a boost gauge instead.
 fn tach(p: &egui::Painter, c: Pos2, r: f32, sim: &Sim, ink: Color32) {
     case(p, c, r);
@@ -593,13 +664,18 @@ fn gmeter(p: &egui::Painter, c: Pos2, r: f32, sim: &Sim) {
 pub fn draw_panel(p: &egui::Painter, screen: Rect, sim: &Sim, qnh_hpa: f32, compact: bool) -> Rect {
     let def = sim.def();
     let kind = panel_for(def);
-    let r = if compact { 48.0 } else { 64.0 };
-    let gap = r * 2.0 + 32.0;
+    let radios = kind == Panel::Trainer && sim.nav.equipped;
     let n = match kind {
+        Panel::Trainer if radios => 8,
         Panel::Trainer => 7,
         Panel::Warbird => 8,
         Panel::Glider => 5,
     };
+    // Dials as large as fit the screen (a narrow window shrinks them).
+    let r = if compact { 48.0f32 } else { 64.0 };
+    let fit = ((screen.width() * 0.9 - 24.0) / n as f32 - 32.0) * 0.5;
+    let r = r.min(fit.max(28.0));
+    let gap = r * 2.0 + 32.0;
     let w = gap * n as f32 + 24.0;
     let h = r * 2.0 + 34.0;
     let rect = Rect::from_center_size(Pos2::new(screen.center().x, screen.max.y - h * 0.5 - 12.0), Vec2::new(w, h));
@@ -626,6 +702,9 @@ pub fn draw_panel(p: &egui::Painter, screen: Rect, sim: &Sim, qnh_hpa: f32, comp
             heading(p, at(4), r, sim, INK);
             vsi(p, at(5), r, sim, None, INK);
             tach(p, at(6), r, sim, INK);
+            if radios {
+                nav_cdi(p, at(7), r, sim, INK);
+            }
         }
         Panel::Warbird => {
             asi(p, at(0), r, sim, 1, RADIUM);

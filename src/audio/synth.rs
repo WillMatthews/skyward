@@ -199,6 +199,13 @@ struct Cockpit {
     vario_amp: Ramp,
     vario_beep: bool,
     vario_env: f32,
+    // navaid Morse ident (nav/morse.rs), keyed sample-accurately
+    ident: [u8; 4],
+    ident_keyer: crate::nav::morse::Keyer,
+    ident_t: f32,
+    ident_ph: Phasor,
+    ident_amp: Ramp,
+    ident_env: f32,
     // motors
     gear_m_ph: [Phasor; 2],
     gear_m_amp: Ramp,
@@ -1135,6 +1142,12 @@ impl Cockpit {
             vario_amp: Ramp::new(0.0),
             vario_beep: true,
             vario_env: 0.0,
+            ident: [0; 4],
+            ident_keyer: crate::nav::morse::Keyer::default(),
+            ident_t: 0.0,
+            ident_ph: Phasor::default(),
+            ident_amp: Ramp::new(0.0),
+            ident_env: 0.0,
             gear_m_ph: [Phasor::default(); 2],
             gear_m_amp: Ramp::new(0.0),
             gear_m_f: Ramp::new(400.0 / sr),
@@ -1157,6 +1170,15 @@ impl Cockpit {
 
     fn control(&mut self, f: &Frame, fam: Family, tn: &Tune, sr: f32, n: u32, _dt: f32) {
         let live = f.active && !f.crashed;
+        // Navaid ident: a new station restarts the Morse sequence.
+        if f.ident != self.ident {
+            self.ident = f.ident;
+            let s: String = f.ident.iter().filter(|b| **b != 0).map(|b| *b as char).collect();
+            self.ident_keyer = crate::nav::morse::Keyer::new(&s);
+            // (Half a second of silence first: the station "comes in".)
+            self.ident_t = -0.5;
+        }
+        self.ident_amp.to(if f.active && !f.paused && f.ident[0] != 0 { 0.05 * f.ident_gain } else { 0.0 }, n);
         let v = if live { f.tas } else { 0.0 };
         // Wind over the cockpit: level and brightness rise with speed;
         // sideslip makes it louder.
@@ -1375,6 +1397,17 @@ impl Cockpit {
             sys += tone * va * self.vario_env;
         } else {
             self.vario_env *= 0.99;
+        }
+        let ia = self.ident_amp.tick();
+        if ia > 1e-5 {
+            self.ident_t += sr_k;
+            let key = if self.ident_keyer.key(self.ident_t) { 1.0 } else { 0.0 };
+            // ~4 ms attack / release: no key clicks.
+            self.ident_env += (key - self.ident_env) * (sr_k / 0.004).min(1.0);
+            let p = self.ident_ph.tick(crate::nav::morse::TONE_HZ * sr_k);
+            sys += sin_turns(p) * ia * self.ident_env;
+        } else {
+            self.ident_env = 0.0;
         }
         let gma = self.gear_m_amp.tick();
         let gmf = self.gear_m_f.tick();

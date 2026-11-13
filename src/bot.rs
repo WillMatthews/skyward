@@ -2516,6 +2516,15 @@ impl Powered {
                     ctl.gear_down = true;
                 }
                 self.set_flaps(def, ctl, if s < pf.final_dist * 0.8 { pf.land_flap } else { pf.app_flap }, t);
+                // The runway's ILS (nav/; NAV 1 is tuned to it by the sim): coupled
+                // LOC + G/S when it serves this runway end and its glidepath is
+                // no lower than the obstacle-clear one planned (and flyable).
+                let ils = ap
+                    .nav
+                    .loc
+                    .as_ref()
+                    .filter(|b| b.valid && wrap_pi(b.course - end.course()).abs() < 3f32.to_radians() && (b.to_thr - s).abs() < 500.0 && x.abs() < 300.0)
+                    .and(ap.nav.gs.clone().filter(|g| g.valid && g.angle >= self.gs_angle - 0.25f32.to_radians() && g.angle <= pf.max_gs + 0.1f32.to_radians()));
                 // Descent rate for the glidepath from the ground speed along the runway (headwind → less).
                 let g_along = vec2(ac.vel.x, ac.vel.z).dot(end.dir).max(20.0);
                 let vs_gp = -g_along * self.gs_angle.tan();
@@ -2535,15 +2544,33 @@ impl Powered {
                 // Never below 1.3 Vs of the flaps actually out (they may still be
                 // running when the final starts: the C-130's clean stall is ~1.1 Vref).
                 ap.ias = Some(self.vapp.max(1.3 * def.stall_speed(ac.surfaces().flaps)));
+                let mut gp_err = ay - gp;
+                if let Some(g) = &ils {
+                    use crate::autopilot::{Lat, Vert};
+                    ap.appr = false;
+                    ap.arm_lat = None;
+                    ap.arm_gs = false;
+                    ap.lat = Lat::Loc;
+                    if ap.vert == Vert::Gs || g.err.abs() < 25.0 {
+                        ap.vert = Vert::Gs;
+                        ctl.spoilers = 0.0;
+                    }
+                    self.gs_angle = g.angle;
+                    gp_err = g.err;
+                } else if ap.lat == crate::autopilot::Lat::Loc {
+                    ap.lat = crate::autopilot::Lat::Hdg;
+                    ap.vert = crate::autopilot::Vert::Basic;
+                }
                 if !ap.update(def, ac, ctl, dt) {
                     ap.engage_hold_current(ac);
                 }
-                *status = format!("Final approach RWY {} — {:.1} nm, {:.0} ft", end.name, s / NM, wheels / FT);
+                let coupled = if ils.is_some() { " · ILS" } else { "" };
+                *status = format!("Final approach RWY {}{coupled} — {:.1} nm, {:.0} ft", end.name, s / NM, wheels / FT);
                 // Stabilised-approach gate below 500 ft.
                 // (Height above the runway: the ground under a valley approach can be higher.)
                 if ay.min(wheels + 60.0) < 150.0 && wheels > pf.flare_h + 5.0 {
                     let unstable = x.abs() > pf.stab_x
-                        || (ay - gp).abs() > 35.0
+                        || gp_err.abs() > 35.0
                         || self.ias_f < self.vapp - 10.0 * KT
                         || self.ias_f > self.vapp + 25.0 * KT
                         || ac.gear_pos() < 0.99;

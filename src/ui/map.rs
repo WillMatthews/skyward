@@ -712,3 +712,89 @@ pub fn draw_map(
     let _ = alpha;
     taken
 }
+
+// ---------------------------------------------------------------- navigation (nav/)
+
+/// Navaid symbols: VOR hexagon (with a DME box), VORTAC / TACAN, NDB dotted
+/// disc, DME square, localizer feather on the front course; ident labels.
+pub fn navaids(p: &egui::Painter, view: &View, world: &World, list: &[&crate::nav::db::Navaid], col: Color32, taken: &mut Vec<Rect>) {
+    use crate::nav::db::Kind;
+    for n in list {
+        let w = world.proj.to_world(n.lat, n.lon);
+        let q = view.to_screen(w);
+        if !view.rect.shrink(8.0).contains(q) {
+            continue;
+        }
+        let st = Stroke::new(1.5, col);
+        let r = 6.0;
+        match n.kind {
+            Kind::Vor | Kind::VorDme | Kind::Vortac | Kind::Tacan => {
+                let hex: Vec<Pos2> = (0..6).map(|k| q + EVec2::angled(k as f32 * std::f32::consts::FRAC_PI_3) * r).collect();
+                p.add(Shape::closed_line(hex, st));
+                if n.kind != Kind::Vor {
+                    p.rect_stroke(Rect::from_center_size(q, EVec2::splat(r * 2.2)), 0, Stroke::new(1.0, col), egui::StrokeKind::Middle);
+                }
+                p.circle_filled(q, 1.4, col);
+            }
+            Kind::Ndb | Kind::NdbDme => {
+                for ring in [3.0, 5.5, 8.0] {
+                    let m = (ring * 1.6) as usize;
+                    for k in 0..m {
+                        p.circle_filled(q + EVec2::angled(k as f32 / m as f32 * std::f32::consts::TAU) * ring, 0.9, col);
+                    }
+                }
+                p.circle_filled(q, 1.8, col);
+            }
+            Kind::Dme => {
+                p.rect_stroke(Rect::from_center_size(q, EVec2::splat(r * 1.8)), 0, st, egui::StrokeKind::Middle);
+            }
+            Kind::Ils | Kind::Loc => {
+                // Localizer feather: from the antenna back along the approach.
+                if let Some(i) = &n.ils {
+                    let thr = world.proj.to_world(i.thr.0, i.thr.1);
+                    let dir = (w - thr).normalize_or(glam::vec2(0.0, -1.0));
+                    let back = view.to_screen(thr - dir * 9.0 * 1852.0);
+                    let side = glam::vec2(-dir.y, dir.x) * 600.0;
+                    let a = view.to_screen(thr - dir * 8.0 * 1852.0 + side);
+                    let b = view.to_screen(thr - dir * 8.0 * 1852.0 - side);
+                    let t = view.to_screen(thr);
+                    p.add(Shape::line(vec![a, back, b], Stroke::new(1.2, col)));
+                    p.line_segment([back, t], Stroke::new(1.0, alpha(col, 0.6)));
+                }
+                continue;
+            }
+        }
+        let lab = Rect::from_min_size(q + EVec2::new(r + 3.0, -7.0), EVec2::new(8.0 * n.ident.len() as f32, 14.0));
+        if taken.iter().any(|t| t.intersects(lab)) {
+            continue;
+        }
+        taken.push(lab);
+        text_halo(p, q + EVec2::new(r + 4.0, 0.0), Align2::LEFT_CENTER, &n.ident, f_semi(10.5), col);
+    }
+}
+
+/// The flight plan: legs already flown dim, the active leg (to the magenta
+/// TO waypoint) and the rest of the route; approach fixes with their altitudes.
+pub fn flight_plan(p: &egui::Painter, view: &View, from: Vec2, legs: &[(String, Vec2)], active: usize, col: Color32, dim: Color32) {
+    if legs.is_empty() {
+        return;
+    }
+    let pts: Vec<Pos2> = legs.iter().map(|(_, w)| view.to_screen(*w)).collect();
+    for (i, w) in pts.windows(2).enumerate() {
+        let flown = i + 1 < active;
+        p.line_segment([w[0], w[1]], Stroke::new(if flown { 1.4 } else { 2.4 }, if flown { dim } else { col }));
+    }
+    if let Some(t) = pts.get(active) {
+        // Present position to the TO waypoint.
+        p.line_segment([view.to_screen(from), *t], Stroke::new(2.4, col));
+    }
+    for (i, ((name, _), q)) in legs.iter().zip(&pts).enumerate() {
+        if !view.rect.expand(-4.0).contains(*q) {
+            continue;
+        }
+        let c = if i < active { dim } else { col };
+        let d = if i == active { 7.0 } else { 5.5 };
+        p.add(Shape::convex_polygon(vec![*q + EVec2::new(0.0, -d), *q + EVec2::new(d, 0.0), *q + EVec2::new(0.0, d), *q + EVec2::new(-d, 0.0)], if i == active { c } else { Color32::TRANSPARENT }, Stroke::new(1.8, c)));
+        text_halo(p, *q + EVec2::new(d + 4.0, 0.0), Align2::LEFT_CENTER, name, f_semi(11.0), if i == active { Color32::WHITE } else { c });
+    }
+}
