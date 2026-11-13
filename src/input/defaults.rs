@@ -90,6 +90,9 @@ pub fn keyboard() -> Vec<(Key, Vec<K>)> {
         (Key::Countermeasures, vec![K::F8]),
         (Key::SightMode, vec![K::F9]),
         (Key::Eject, vec![K::F10]),
+        // Wipers (airliners); the radar tilt shares Num / with weapon release (armed types).
+        (Key::Wipers, vec![K::CapsLock]),
+        (Key::RadarTilt, vec![K::NumpadDivide]),
     ]
 }
 

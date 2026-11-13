@@ -64,6 +64,7 @@ mod weapons;
 mod ui;
 mod weather;
 mod world;
+mod wx;
 mod platform;
 
 use gfx::{FrameView, Gpu, Renderer};
@@ -892,6 +893,32 @@ fn sync_gpu(s: &mut Session, renderer: &mut Renderer, ui: &mut Ui, gpu: &Gpu, bu
             w.tick_weather(0.0, (s.args.hours.unwrap_or(sim::DEFAULT_HOURS), s.args.day_of_year.unwrap_or(sim::DEFAULT_DAY)));
         }
     }
+    // Turbulence setting, cockpit head shake, the aircraft's own wake (wx/).
+    w.set_turbulence(ui.st.settings.wx.turbulence);
+    if let Some(sim) = s.sim.as_mut() {
+        let (span, mass) = (sim.def().wingspan, sim.def().mass);
+        let gh = flight::Environment::ground_height(w, vec2(sim.ac.pos.x, sim.ac.pos.z));
+        let airborne = !sim.ac.on_ground && sim.ac.crashed.is_none();
+        w.wxs.wakes.push(wx::wake::OWN_AIRCRAFT, w.to_field(sim.ac.pos), sim.ac.vel, mass, span, airborne, gh, sim.time);
+        w.wxs.wakes.wind = vec3(w.wind.aloft.x, 0.0, w.wind.aloft.y);
+        // Other aircraft's wakes: multiplayer players and live ADS-B traffic.
+        let t = sim.time;
+        let mut gens: Vec<(u64, Vec3, Vec3, f32, f32)> = Vec::new();
+        for (id, r) in &ui.st.mp.remotes {
+            if let Some(d) = sim.defs.get(r.def).filter(|_| !r.crashed && !r.spectating) {
+                gens.push((wx::wake::MP_BASE + *id as u64, r.pos, r.vel, d.mass, d.wingspan));
+            }
+        }
+        for g in ui.st.adsb.wake_sources().into_iter().filter(|g| !g.on_ground) {
+            let cat = format!("{:?}", g.wake).chars().next().unwrap_or('M');
+            gens.push((wx::wake::ADSB_BASE + g.id as u64, g.pos, g.vel, wx::wake::mass_for_category(cat), g.span));
+        }
+        for (id, pos, vel, mass, span) in gens {
+            let gh = flight::Environment::ground_height(w, vec2(pos.x, pos.z));
+            let pf = w.to_field(pos);
+            w.wxs.wakes.push(id, pf, vel, mass, span, pos.y - gh > 8.0, gh, t);
+        }
+    }
     renderer.set_weather(&w.render_weather(), &w.clouds);
     spent
 }
@@ -1152,6 +1179,9 @@ fn render_frame(
                 let snap = wd.traffic.frame(traffic_frame(&fv, sim.time as f64, w, h, wd.traffic.level()));
                 renderer.road_traffic.prepare(device, queue, snap, sim.time as f64, fv.eye);
             }
+            // Storms, lightning, lenticulars, windscreen rain and wipers (wx/).
+            let cockpit = sim.cam == sim::CamMode::Cockpit && view_override.is_none();
+            fv.wx = Some(std::sync::Arc::new(wx::gpu::prepare(&s.world, sim, fv.eye, cockpit, fv.aircraft.as_ref(), &mut dynm)));
             renderer.render(device, queue, &mut enc, target, w, h, &fv, &dynm);
         }
         _ => {

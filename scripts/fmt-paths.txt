@@ -157,3 +157,13 @@ src/audio/weapons.rs
 src/ui/weapons.rs
 src/vfx/weapons.rs
 src/net/combat.rs
+src/wx/mod.rs
+src/wx/cockpit.rs
+src/wx/glass.rs
+src/wx/gpu.rs
+src/wx/mountain.rs
+src/wx/radar.rs
+src/wx/storm.rs
+src/wx/tests.rs
+src/wx/turbulence.rs
+src/wx/wake.rs

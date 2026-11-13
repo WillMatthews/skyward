@@ -525,7 +525,7 @@ fn build() -> Vec<Item> {
             &[Cat::Camera, Cat::Accessibility],
             "Head-look",
             "Cockpit head motion",
-            "Your head moves with g in turns, bumps and touchdowns",
+            "Your head moves with g in turns, turbulence, bumps and touchdowns",
             "g head bob shake camera motion sickness",
             |s| s.camera.head_motion
         ),
@@ -688,22 +688,17 @@ fn build() -> Vec<Item> {
             },
             ..BASE
         },
-        Item {
-            pending: Some("WX"),
-            ..slider!(
-                "turbulence",
-                WEATHER,
-                "Air",
-                "Turbulence",
-                "Strength of bumps in cloud, wind and thermals (50 % = as reported)",
-                "turbulence bumps gusts wind shear",
-                0.0,
-                1.0,
-                0.05,
-                pct,
-                |s| s.wx.turbulence
-            )
-        },
+        choice!(
+            "turbulence",
+            WEATHER,
+            "Air",
+            "Turbulence",
+            "Gusts, convective bumps, storm, rotor, clear-air and wake turbulence (Reduced halves them, Off is smooth air)",
+            "turbulence bumps gusts wind shear wake rotor chop",
+            &["Realistic", "Reduced", "Off"],
+            crate::wx::turbulence::Mode::ALL,
+            |s| s.wx.turbulence
+        ),
         choice!(
             "max_warp",
             WEATHER,

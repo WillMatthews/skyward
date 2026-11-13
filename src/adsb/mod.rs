@@ -77,6 +77,8 @@ pub const BUDGETS: [usize; 4] = [50, 100, 150, 250];
 /// One aircraft's wake for the weather / wake-turbulence model.
 #[derive(Clone, Copy, Debug)]
 pub struct WakeSource {
+    /// ICAO 24-bit address (a stable id for the wake trail).
+    pub id: u32,
     /// Current world frame, m.
     pub pos: Vec3,
     pub vel: Vec3,
@@ -695,7 +697,11 @@ impl LiveTraffic {
 
     /// Wake-turbulence generators (hook for the weather track's wake model).
     pub fn wake_sources(&self) -> Vec<WakeSource> {
-        self.aircraft.values().filter(|a| a.shown).map(|a| WakeSource { pos: a.pos, vel: a.vel, span: a.stand.span, wake: a.stand.wake, on_ground: a.on_ground }).collect()
+        self.aircraft
+            .values()
+            .filter(|a| a.shown)
+            .map(|a| WakeSource { id: a.hex, pos: a.pos, vel: a.vel, span: a.stand.span, wake: a.stand.wake, on_ground: a.on_ground })
+            .collect()
     }
 
     /// Draw lists for the renderer (eye-relative): models for the nearest

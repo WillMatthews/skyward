@@ -20,6 +20,11 @@ struct CloudU {
     layers: vec4<f32>,   // stratus base, mid-layer coverage param, mid base, mid thickness
     drift: vec4<f32>,    // field drift x, z (m: clouds move with the wind), lowest base, 0
     gfog: vec4<f32>,     // ground fog extinction (/km), fog top (km), cirrus extra drift x, z (m)
+    storm: vec4<f32>,    // storm cells, rain-shaft bottom (world y), shaft slant x, z (m per m of fall)
+    storm2: vec4<f32>,   // under-base dryness, storm top (world y), 0, 0
+    lent: vec4<f32>,     // lenticular grid origin x, z (world), size (m), lens level (world y)
+    lent2: vec4<f32>,    // on, half thickness (m), 0, 0
+    flash: array<vec4<f32>, 2>, // lightning: eye-relative position, intensity
 };
 
 @group(0) @binding(0) var<uniform> U: CloudU;
@@ -43,6 +48,17 @@ struct AtmosOut {
     expo: vec4<f32>,
 };
 @group(0) @binding(16) var<storage, read> atmos: AtmosOut;
+// Thunderstorm cells (wx/storm.rs, == clouds.rs StormCellsU): per cell
+// (centre x, z, tower radius, base), (top, overshoot, intensity, anvil length),
+// (anvil dir x, z, rain offset x, z), (rain radius, rain 0..1, shaft bottom, anvil base).
+const MAX_CELLS: u32 = 24u;
+struct StormCells {
+    c: array<vec4<f32>, 96>,
+};
+@group(0) @binding(17) var<uniform> SC: StormCells;
+@group(0) @binding(18) var storm_a_tex: texture_2d<f32>;
+@group(0) @binding(19) var storm_b_tex: texture_2d<f32>;
+@group(0) @binding(20) var lent_tex: texture_2d<f32>;
 
 const MAX_T: f32 = 42000.0;
 const FAR_DEPTH: f32 = 60000.0;
@@ -245,10 +261,78 @@ fn fbm2(p0: vec2<f32>) -> f32 {
     return s / 0.96875;
 }
 
+struct WeatherOut {
+    @location(0) w: vec4<f32>,
+    // Storms: (tower cover, tower top km, anvil cover, rain 0..1) and
+    // (anvil base km, anvil top km, rain-shaft bottom km, cloud base km).
+    @location(1) sa: vec4<f32>,
+    @location(2) sb: vec4<f32>,
+};
+
+// The storm maps at field xz (wx/storm.rs Cell: the same shapes the CPU uses
+// for winds, turbulence and radar).
+fn storm_bake(xz: vec2<f32>) -> array<vec4<f32>, 2> {
+    var a = vec4<f32>(0.0);
+    var b = vec4<f32>(0.0);
+    let n = u32(U.storm.x);
+    for (var i = 0u; i < min(n, MAX_CELLS); i++) {
+        let c0 = SC.c[i * 4u];
+        let c1 = SC.c[i * 4u + 1u];
+        let c2 = SC.c[i * 4u + 2u];
+        let c3 = SC.c[i * 4u + 3u];
+        let d = xz - c0.xy;
+        let r = length(d);
+        let R = c0.z;
+        if (r > R * 4.0 + c1.w + 2000.0) {
+            continue;
+        }
+        // Cauliflower footprint: lobes around the tower.
+        let ang = atan2(d.y, d.x);
+        let ph = fract(c0.x * 0.000173 + c0.y * 0.000291) * 6.2832;
+        let lobe = 1.0 + 0.14 * sin(5.0 * ang + ph) + 0.07 * sin(11.0 * ang + ph * 2.3) + 0.05 * (fbm2(xz / 1800.0 + vec2<f32>(f32(i) * 13.1)) - 0.5);
+        let tower = bump(r / (R * 1.05 * lobe));
+        let dome = c1.y * bump(r / (R * 0.55));
+        // Anvil: a wedge streaming downshear, ragged at the edges.
+        var anv = 0.0;
+        if (c1.w > 0.0) {
+            let s = dot(d, c2.xy);
+            let nn = abs(d.x * c2.y - d.y * c2.x);
+            let width = R * 1.6 + max(s, 0.0) * 0.6;
+            let tip = 1.0 - smoothstep(c1.w * 0.55, c1.w, s);
+            let back = smoothstep(-R * 2.4, -R * 1.0, s);
+            let rag = (fbm2(xz / 3500.0 + vec2<f32>(f32(i) * 7.7, 3.1)) - 0.5) * 0.5;
+            let side = 1.0 - smoothstep(width * 0.6, width * (1.0 + rag), nn);
+            anv = clamp(side * tip * back * (1.0 + rag * 0.6), 0.0, 1.0);
+        }
+        // Rain core (offset downshear), streaky.
+        let rc = c0.xy + c2.zw;
+        let rd = length(xz - rc);
+        let rain = c3.y * exp(-pow(rd / (c3.x * 0.75), 2.0)) * (0.7 + 0.6 * fbm2(xz / 1300.0 + vec2<f32>(f32(i) * 3.3)));
+        if (tower > a.x) {
+            a.x = tower;
+            a.y = (c1.x + dome) * 0.001;
+            b.w = c0.w * 0.001;
+        }
+        if (anv > a.z) {
+            a.z = anv;
+            b.x = c3.w * 0.001;
+            b.y = c1.x * 0.001;
+        }
+        if (rain > a.w) {
+            a.w = rain;
+            b.z = c3.z * 0.001;
+            if (a.x < 0.05) {
+                b.w = c0.w * 0.001;
+            }
+        }
+    }
+    return array<vec4<f32>, 2>(a, b);
+}
+
 // RGBA: cumulus coverage, cumulus height (km), stratus coverage, mid-layer
-// coverage. Baked in field space (world xz - drift).
+// coverage. Baked in field space (world xz - drift). Plus the storm maps.
 @fragment
-fn fs_weather(in: FsOut) -> @location(0) vec4<f32> {
+fn fs_weather(in: FsOut) -> WeatherOut {
     let res = U.wmap.w;
     let xz = U.wmap.xy + (floor(in.pos.xy) + 0.5 - res * 0.5) * U.wmap.z;
     let cell = U.cells.x;
@@ -309,7 +393,96 @@ fn fs_weather(in: FsOut) -> @location(0) vec4<f32> {
     // Fade toward the map border (circular, so no square edge is visible).
     let r = length(xz - U.wmap.xy) / (U.wmap.z * res * 0.5);
     let fade = 1.0 - smoothstep(0.80, 0.98, r);
-    return vec4<f32>(cov * fade, h / 1000.0, strato * fade, mid * fade);
+    var o: WeatherOut;
+    o.w = vec4<f32>(cov * fade, h / 1000.0, strato * fade, mid * fade);
+    o.sa = vec4<f32>(0.0);
+    o.sb = vec4<f32>(0.0);
+    if (U.storm.x > 0.5) {
+        // The storm maps cover STORM_SPAN x the weather map (CBs are seen from far away).
+        let sxz = U.wmap.xy + (floor(in.pos.xy) + 0.5 - res * 0.5) * U.wmap.z * STORM_SPAN;
+        let st = storm_bake(sxz);
+        let rs = length(sxz - U.wmap.xy) / (U.wmap.z * STORM_SPAN * res * 0.5);
+        let sfade = 1.0 - smoothstep(0.85, 0.98, rs);
+        o.sa = vec4<f32>(st[0].x * sfade, st[0].y, st[0].z * sfade, st[0].w * sfade);
+        o.sb = st[1];
+    }
+    return o;
+}
+
+// Storm maps at world xz (field space like the weather map).
+const STORM_SPAN: f32 = 5.0;
+fn storm_uv(xz: vec2<f32>) -> vec2<f32> {
+    return (xz - U.drift.xy - U.wmap.xy) / (U.wmap.z * STORM_SPAN * U.wmap.w) + 0.5;
+}
+fn storm_a(xz: vec2<f32>) -> vec4<f32> {
+    return textureSampleLevel(storm_a_tex, samp_clamp, storm_uv(xz), 0.0);
+}
+fn storm_b(xz: vec2<f32>) -> vec4<f32> {
+    return textureSampleLevel(storm_b_tex, samp_clamp, storm_uv(xz), 0.0);
+}
+
+// Lenticular cover at world xz (fixed to the ground: no drift).
+fn lent_at(xz: vec2<f32>) -> f32 {
+    if (U.lent2.x < 0.5) {
+        return 0.0;
+    }
+    let uv = (xz - U.lent.xy) / U.lent.z;
+    if (any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0))) {
+        return 0.0;
+    }
+    return textureSampleLevel(lent_tex, samp_clamp, uv, 0.0).x;
+}
+
+// Storm cloud envelope at p: x = tower, y = anvil. The tower's normalised
+// radius comes back from the baked footprint (cover = (1 - r²)²); it bulges
+// at mid levels, narrows into the overshooting dome (the baked local top) and
+// flares into the anvil; the anvil is thick near the tower, thinning
+// downstream, flat-topped, with a lumpy (mammatus) underside.
+fn storm_env(p: vec3<f32>, sa: vec4<f32>, sb: vec4<f32>) -> vec2<f32> {
+    var o = vec2<f32>(0.0);
+    if (sa.x > 0.003) {
+        let base = sb.w * 1000.0;
+        let top = sa.y * 1000.0;
+        let hc = (p.y - base) / max(top - base, 100.0);
+        if (hc > -0.02 && hc < 1.0) {
+            let rn = sqrt(max(1.0 - sqrt(sa.x), 0.0));
+            let prof = 0.72 + 0.3 * sin(3.1416 * clamp(hc * 1.1, 0.0, 1.0)) + 0.18 * smoothstep(0.8, 0.97, hc);
+            let tuck = 1.0 - smoothstep(0.0, 0.03, hc);
+            let dome = 1.0 - smoothstep(0.86, 1.0, hc);
+            o.x = clamp((prof - rn) * 1.8 - tuck * 0.4, 0.0, 1.0) * dome + clamp((0.5 - rn) * 3.0, 0.0, 1.0) * (1.0 - dome) * step(hc, 0.995);
+        }
+    }
+    if (sa.z > 0.003) {
+        let at = sb.y * 1000.0;
+        let ab0 = sb.x * 1000.0;
+        let ab = at - (at - ab0) * (0.35 + 0.75 * sqrt(sa.z));
+        let ha = (p.y - ab) / max(at - ab, 50.0);
+        if (ha > -0.3 && ha < 1.0) {
+            o.y = sa.z * clamp(ha * 3.0 + 0.25, 0.0, 1.0) * clamp((1.0 - ha) * 16.0, 0.0, 1.0);
+        }
+    }
+    return o;
+}
+
+// Lenticular lens envelope: smooth lenses stacked like plates on the wave crests.
+fn lent_env(p: vec3<f32>) -> f32 {
+    let c = lent_at(p.xz);
+    if (c < 0.02) {
+        return 0.0;
+    }
+    var e = 0.0;
+    for (var k = 0; k < 3; k++) {
+        let kk = f32(k);
+        let need = 0.25 + 0.25 * kk;
+        if (c < need) {
+            continue;
+        }
+        let cc = (c - need) / (1.0 - need);
+        let zc = U.lent.w + kk * 620.0;
+        let h = U.lent2.y * sqrt(cc) * (1.0 - 0.25 * kk) + 1.0;
+        e = max(e, clamp((1.0 - abs(p.y - zc) / h) * 3.0, 0.0, 1.0));
+    }
+    return e;
 }
 
 // Weather at world xz (the map is in field space: subtract the wind drift).
@@ -346,6 +519,48 @@ fn density(p: vec3<f32>, w: vec4<f32>, lod: i32) -> f32 {
     if (p.y < U.drift.z - 40.0 || p.y > U.shape.y) {
         return 0.0;
     }
+    // Thunderstorms and lenticulars (wx/): their own envelopes and erosion.
+    var dx = 0.0;
+    if (U.storm.x > 0.5) {
+        let sa = storm_a(p.xz);
+        if (sa.x + sa.z > 0.003) {
+            let sb = storm_b(p.xz);
+            let se = storm_env(p, sa, sb);
+            let es = max(se.x, se.y);
+            if (es > 0.002) {
+                // Cauliflower billows on two scales on the towers (eroding
+                // the envelope like the cumulus), smoother anvils.
+                let q = p - wind_shape();
+                let n = textureSampleLevel(shape_tex, samp_rep, q * SHAPE_SCALE * 0.22, 0.0);
+                let n2 = textureSampleLevel(shape_tex, samp_rep, q * SHAPE_SCALE * 0.55 + vec3<f32>(0.37, 0.11, 0.73), 0.0);
+                let b1 = clamp(remap(n.x, (n.y * 0.8 + n.z * 0.2) - 1.0, 1.0, 0.0, 1.0), 0.0, 1.0);
+                let b2 = clamp(remap(n2.x, (n2.y * 0.8 + n2.z * 0.2) - 1.0, 1.0, 0.0, 1.0), 0.0, 1.0);
+                let bn = b1 * 0.6 + b2 * 0.4;
+                let anvil = se.y / max(es, 1e-3);
+                var dd = clamp(remap(mix(bn, mix(1.0, bn, 0.35), anvil), 1.0 - es * 1.2, 1.0, 0.0, 1.0), 0.0, 1.0);
+                if (lod == 0 && dd > 0.0) {
+                    let dn = textureSampleLevel(detail_tex, samp_rep, (q + vec3<f32>(0.0, U.eye.w * 2.0, 0.0)) * DETAIL_SCALE * 0.5, 0.0);
+                    let df = dn.x * 0.625 + dn.y * 0.25 + dn.z * 0.125;
+                    dd = clamp(remap(dd, (1.0 - df) * 0.1, 1.0, 0.0, 1.0), 0.0, 1.0);
+                }
+                // Flat, slightly ragged base.
+                if (se.x >= se.y) {
+                    dd *= clamp((p.y - sb.w * 1000.0 + 15.0 + (n.y - 0.5) * 60.0) / 40.0, 0.0, 1.0);
+                }
+                dx = smoothstep(0.0, 0.3, dd) * (0.8 + 0.8 * dd);
+            }
+        }
+    }
+    if (U.lent2.x > 0.5) {
+        let le = lent_env(p);
+        if (le > 0.002) {
+            // Smooth lenses; the air streams through them (noise drifts, lens stays).
+            let q = p - wind_shape() * 3.0;
+            let dn = textureSampleLevel(detail_tex, samp_rep, q * DETAIL_SCALE * 0.35, 0.0);
+            let dd = clamp(le - (1.0 - dn.x) * 0.12, 0.0, 1.0);
+            dx = max(dx, smoothstep(0.0, 0.35, dd) * 0.8);
+        }
+    }
     // Cumulus envelope: flat base, dome whose height follows the footprint.
     var env = 0.0;
     var hc = 1.0;
@@ -355,7 +570,7 @@ fn density(p: vec3<f32>, w: vec4<f32>, lod: i32) -> f32 {
         // Rounded dome on top, near-vertical sides, flat base with tucked-in edges.
         // Widest a little above the base, base edges tucked in, rounded top.
         let tuck = (1.0 - smoothstep(0.0, 0.22, hc)) * 0.2;
-        let dome = sqrt(w.x) - pow(hc, 1.6) - tuck;
+        let dome = sqrt(w.x) - pow(max(hc, 0.0), 1.6) - tuck;
         env = clamp(dome * 1.25, 0.0, 1.0);
     }
     // Stratocumulus / stratus deck.
@@ -371,7 +586,7 @@ fn density(p: vec3<f32>, w: vec4<f32>, lod: i32) -> f32 {
     }
     let e = max(env, es);
     if (e <= 0.002) {
-        return 0.0;
+        return dx;
     }
     let q = p - wind_shape();
     let n = textureSampleLevel(shape_tex, samp_rep, q * SHAPE_SCALE, 0.0);
@@ -394,7 +609,36 @@ fn density(p: vec3<f32>, w: vec4<f32>, lod: i32) -> f32 {
         d *= clamp(base_y / 24.0, 0.0, 1.0);
     }
     // Steep edge: real cumulus go from clear to opaque within metres.
-    return smoothstep(0.0, 0.4, d) * (0.5 + 0.5 * d);
+    return max(smoothstep(0.0, 0.4, d) * (0.5 + 0.5 * d), dx);
+}
+
+// Rain shafts / virga under the storms: falling rain (0..1) at p.
+fn rain_at(p: vec3<f32>) -> f32 {
+    if (U.storm.x < 0.5 || U.fog.w > 0.5) {
+        return 0.0;
+    }
+    // The rain left the cloud upwind of here: the shafts slant with the shear.
+    let sb0 = storm_b(p.xz);
+    let top = sb0.w * 1000.0;
+    let fall = max(top - p.y, 0.0);
+    let xz = p.xz - U.storm.zw * fall;
+    let sa = storm_a(xz);
+    if (sa.w < 0.003) {
+        return 0.0;
+    }
+    let sb = storm_b(xz);
+    let t = sb.w * 1000.0;
+    let bot = sb.z * 1000.0;
+    if (p.y > t + 50.0 || p.y < bot) {
+        return 0.0;
+    }
+    // Curtains: streaky columns that sway and fall.
+    let q = vec3<f32>(xz.x - U.drift.x, p.y + U.eye.w * 9.0, xz.y - U.drift.y);
+    let n = textureSampleLevel(shape_tex, samp_rep, vec3<f32>(q.x / 2600.0, q.y / 9000.0, q.z / 2600.0), 0.0);
+    let curtain = smoothstep(0.15, 0.8, n.x * 0.7 + n.y * 0.3);
+    // Virga thins out as it evaporates; rain fills in from the base.
+    let taper = smoothstep(bot, bot + max(t - bot, 1.0) * select(0.08, 0.6, U.storm2.x > 0.3), p.y) * (1.0 - smoothstep(t - 80.0, t + 50.0, p.y) * 0.5);
+    return sa.w * (0.3 + 0.7 * curtain) * taper;
 }
 
 // Is p in a stratiform layer rather than a cumulus? (for the ambient term)
@@ -572,7 +816,9 @@ fn fs_trace(in: FsOut) -> TraceOut {
     let d3 = textureLoad(dist_tex, min(fp + vec2<i32>(1, 1), dims - 1), 0).x;
     let checker = ((px.x + px.y) & 1) == 0;
     var limit = select(min(min(d0, d1), min(d2, d3)), max(max(d0, d1), max(d2, d3)), checker);
-    limit = min(limit, MAX_T);
+    // (Thunderstorms are seen from much further than fair-weather cloud.)
+    // (Not in the water reflection: it stays cheap.)
+    limit = min(limit, select(MAX_T, 75000.0, U.storm.x > 0.5 && U.fog.w < 0.5));
 
     var o: TraceOut;
     var T = 1.0;
@@ -580,7 +826,10 @@ fn fs_trace(in: FsOut) -> TraceOut {
     var tsum = 0.0;
     var wsum = 0.0;
 
-    let ylo = U.drift.z - 40.0;
+    var ylo = U.drift.z - 40.0;
+    if (U.storm.x > 0.5 && U.fog.w < 0.5) {
+        ylo = min(ylo, U.storm.y);
+    }
     let yhi = U.shape.y;
     var t0 = 0.0;
     var t1 = limit;
@@ -615,7 +864,10 @@ fn fs_trace(in: FsOut) -> TraceOut {
         var fine = false;
         var empty = 0;
         // Two decks + cumulus can need more steps than one layer.
-        let max_it = select(220, 300, U.cells2.z + U.layers.y > 0.0);
+        var max_it = select(220, 300, U.cells2.z + U.layers.y > 0.0);
+        if (U.storm.x > 0.5 && U.fog.w < 0.5) {
+            max_it += 100;
+        }
         for (var i = 0; i < max_it; i++) {
             if (t >= t1 || T < 0.008) {
                 break;
@@ -624,11 +876,21 @@ fn fs_trace(in: FsOut) -> TraceOut {
             let p = ro + rd * t;
             let w = weather(p.xz);
             if (!fine) {
-                if (w.x + w.z + w.w < 0.003) {
-                    t += base_dt * 2.5;
+                var occ = w.x + w.z + w.w;
+                if (U.storm.x > 0.5) {
+                    let sa = storm_a(p.xz);
+                    occ += sa.x + sa.z + sa.w;
+                }
+                if (U.lent2.x > 0.5) {
+                    occ += lent_at(p.xz);
+                }
+                if (occ < 0.003) {
+                    // (Under the cloud with storms about, the march starts at the
+                    // eye: empty air is crossed in big strides.)
+                    t += select(base_dt * 2.5, max(base_dt * 2.5, 250.0), U.storm.x > 0.5);
                     continue;
                 }
-                if (density(p, w, 1) > 0.0) {
+                if (density(p, w, 1) > 0.0 || rain_at(p) > 0.002) {
                     fine = true;
                     empty = 0;
                     t = max(t - base_dt * 1.5, t0);
@@ -646,9 +908,27 @@ fn fs_trace(in: FsOut) -> TraceOut {
                 dt *= 2.4;
             }
             let d = density(p, w, 0);
+            let rr = rain_at(p);
+            if (d <= 0.002 && rr > 0.002) {
+                // Rain shaft / virga only: grey curtains, lit by the dim light
+                // under the storm and the sun from the side (forward scattering).
+                empty = 0;
+                let sig = rr * 3.2e-3;
+                let sun_vis = cloud_shadow_at(p) * smoothstep(-0.02, 0.05, sun.y);
+                let amb_r = (amb_bot * 0.12 + vec3<f32>(0.78, 0.85, 1.0) * luma(amb_top) * 0.1) * mix(1.0, 0.6, rr);
+                let S = E * sun_vis * 0.1 * hg(mu, 0.65) + amb_r;
+                let tr = exp(-sig * dt * 1.8);
+                let wgt = T * (1.0 - tr);
+                L += S * wgt;
+                tsum += t * wgt;
+                wsum += wgt;
+                T *= tr;
+                t += dt * 1.8;
+                continue;
+            }
             if (d > 0.002) {
                 empty = 0;
-                let sig = d * U.shape.z;
+                let sig = d * U.shape.z + rr * 3.2e-3;
                 // Smooth decks need fewer light samples than billowy cumulus.
                 let od = light_od(p, select(6, 4, deck_only));
                 // Single scattering + multiple-scattering octaves (Wrenninge):
@@ -689,7 +969,23 @@ fn fs_trace(in: FsOut) -> TraceOut {
                 let pu = p + vec3<f32>(0.0, 80.0, 0.0);
                 let occ = density(pu, w, 1) * 160.0;
                 let sky_vis = exp(-occ * U.shape.z * 0.12);
-                var amb = mix(amb_bot, amb_top * (0.35 + 0.65 * sky_vis), smoothstep(-0.05, 0.7, hf));
+                // Inside a thunderstorm: height within the tower, and the
+                // kilometres of cloud overhead darken it (the dark base).
+                var storm_dark = 1.0;
+                if (U.storm.x > 0.5) {
+                    let sa = storm_a(p.xz);
+                    if (sa.x + sa.z > 0.02) {
+                        let sb = storm_b(p.xz);
+                        let base_s = sb.w * 1000.0;
+                        let top_s = max(sa.y, sb.y) * 1000.0;
+                        if (p.y > base_s - 60.0 && p.y < top_s + 300.0 && max(sa.x, sa.z) > max(w.x, w.z)) {
+                            hf = clamp((p.y - base_s) / max(top_s - base_s, 100.0), 0.0, 1.0);
+                            storm_dark = 1.0 / (1.0 + 0.0005 * max(top_s - p.y, 0.0) * max(sa.x, sa.z * 0.6));
+                            sunL *= mix(1.0, storm_dark, 0.5);
+                        }
+                    }
+                }
+                var amb = mix(amb_bot, amb_top * (0.35 + 0.65 * sky_vis), smoothstep(-0.05, 0.7, hf)) * storm_dark;
                 if (in_deck) {
                     // Inside a deck the light is diffuse and grey, fading with
                     // depth below the top (diffusion through optical depth tau).
@@ -850,27 +1146,58 @@ fn fs_temporal(in: FsOut) -> TraceOut {
 @fragment
 fn fs_composite(in: FsOut) -> @location(0) vec4<f32> {
     let px = vec2<i32>(in.pos.xy);
-    let d = min(textureLoad(dist_tex, px, 0).x, MAX_T);
+    let d = min(textureLoad(dist_tex, px, 0).x, select(MAX_T, 90000.0, U.storm.x > 0.5));
     let hdims = vec2<i32>(textureDimensions(hist_col));
     let hp = (vec2<f32>(px) + 0.5) * 0.5 - 0.5;
     let b = vec2<i32>(floor(hp));
     let f = hp - floor(hp);
     var acc = vec4<f32>(0.0);
     var wsum = 0.0;
+    var dsum = 0.0;
     for (var k = 0; k < 4; k++) {
         let o = vec2<i32>(k & 1, k >> 1);
         let tc = clamp(b + o, vec2<i32>(0), hdims - 1);
         let c = textureLoad(hist_col, tc, 0);
-        let l = textureLoad(hist_dep, tc, 0).x;
+        let hd = textureLoad(hist_dep, tc, 0);
+        let l = hd.x;
         let bw = select(1.0 - f.x, f.x, o.x == 1) * select(1.0 - f.y, f.y, o.y == 1);
         let rel = abs(l - d) / max(d, 1.0);
         let dw = 1.0 / (1.0 + rel * rel * 4000.0);
         let w = bw * dw + 1e-5;
         acc += c * w;
+        dsum += hd.y * w;
         wsum += w;
     }
     let c = acc / wsum;
-    return vec4<f32>(c.rgb, clamp(c.a, 0.0, 1.0));
+    var rgb = c.rgb;
+    let T = clamp(c.a, 0.0, 1.0);
+    // Lightning: the flash lights the cloud from inside (diffusing out over
+    // kilometres) and the air / rain between (single scattering along the
+    // ray). Added after the temporal filter: no smearing, no ghosts.
+    if (U.flash[0].w > 0.0 || U.flash[1].w > 0.0) {
+        let uv = (vec2<f32>(px) + 0.5) / U.screen.xy;
+        let rd = ray_dir(uv);
+        let cd = min(dsum / wsum, d);
+        let col = vec3<f32>(0.82, 0.88, 1.0);
+        for (var k = 0; k < 2; k++) {
+            let fl = U.flash[k];
+            if (fl.w <= 0.0) {
+                continue;
+            }
+            let cp = rd * cd;
+            let dc = distance(cp, fl.xyz);
+            let glow = fl.w / (PI * (dc * dc + 1.0e6)) * exp(-dc / 6000.0);
+            rgb += col * glow * (1.0 - T) * 2.5;
+            // Air glow up to the cloud / scene: ∫ dt / (r² + h²) along the ray.
+            let lim = min(d, 40000.0);
+            let t0 = dot(fl.xyz, rd);
+            let h = max(length(fl.xyz - rd * t0), 200.0);
+            let I = (atan((lim - t0) / h) - atan(-t0 / h)) / h;
+            let sig = 3.0e-6 * U.fog.y + 3.0e-5 * clamp(U.storm.x, 0.0, 1.0);
+            rgb += col * fl.w * sig * I / (4.0 * PI);
+        }
+    }
+    return vec4<f32>(rgb, T);
 }
 
 // ------------------------------------------------------------------ cloud shadow map

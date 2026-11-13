@@ -4,7 +4,7 @@
 struct AcDyn {
     up: vec4<f32>,                  // body up (eye-relative), w = time
     flex: vec4<f32>,                // tip deflection L, R (m), twist per m, 1 / flexing half-span (m)
-    vib: vec4<f32>,                 // amplitude (m), frequency (Hz)
+    vib: vec4<f32>,                 // amplitude (m), frequency (Hz), airframe ice 0..1 (wx/)
     part_flex: array<vec4<f32>, 4>, // 1 = part bends with the wing
     parts: array<mat4x4<f32>, 16>,  // intact → part (eye-relative)
 };

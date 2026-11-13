@@ -569,6 +569,47 @@ const DETAIL_RES: u32 = 32;
 const DEP_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rg32Float;
 const COL_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const SHADOW_FMT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
+/// Storm cells the weather map takes (== MAX_CELLS in clouds.wgsl).
+const MAX_STORM: usize = crate::wx::storm::MAX_GPU_CELLS;
+
+/// Thunderstorms for the clouds (wx/storm.rs): the cells near the eye (field
+/// space, like the cumulus), where the rain shafts end and the shear that
+/// slants them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct StormInput {
+    pub cells: Vec<crate::wx::storm::Cell>,
+    /// Bumped when the cells change (the weather map is re-baked).
+    pub version: u64,
+    /// Lowest rain-shaft bottom (world y, the ground) and the slant of the
+    /// shafts (m of horizontal drift per m of fall, world xz).
+    pub shaft_bottom: f32,
+    pub shear: Vec2,
+    /// 0..1: how dry the air under the base is (virga), for the shaft colour.
+    pub dry: f32,
+}
+
+/// Standing lenticular clouds over mountain waves (wx/mountain.rs): cover on a
+/// ground-fixed grid, its placement in the current frame, the lens level.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LentInput {
+    pub grid: Vec<f32>,
+    pub res: u32,
+    /// World xz (current frame) of the grid's corner, and its size (m).
+    pub origin: Vec2,
+    pub size: f32,
+    /// Lens level (world y) and maximum half thickness (m).
+    pub alt: f32,
+    pub thick: f32,
+    pub version: u64,
+}
+
+/// A lightning flash lighting the clouds from inside: world position and
+/// radiant intensity (scene radiance units x m², pre-exposed).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FlashLight {
+    pub pos: Vec3,
+    pub intensity: f32,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -590,6 +631,17 @@ struct Uniforms {
     layers: [f32; 4],   // strato base, mid coverage param, mid base, mid thickness
     drift: [f32; 4],    // field drift x, z (m), lowest base, 0
     gfog: [f32; 4],     // ground fog extinction (/km), top (km), 0, 0
+    storm: [f32; 4],    // storm cells, rain-shaft bottom (world y), shaft slant x, z
+    storm2: [f32; 4],   // dryness, storm top (world y), 0, 0
+    lent: [f32; 4],     // lenticular grid origin x, z (world), size (m), lens level (world y)
+    lent2: [f32; 4],    // on, half thickness (m), 0, 0
+    flash: [[f32; 4]; 2], // eye-relative position, intensity
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct StormCellsU {
+    cells: [[f32; 4]; MAX_STORM * 4],
 }
 
 struct Slot {
@@ -622,6 +674,17 @@ pub struct CloudAtmos {
 
 pub struct CloudRenderer {
     atmos: CloudAtmos,
+    /// Thunderstorms (wx/): cells uniform, storm maps (tower / anvil / rain;
+    /// anvil levels / shaft bottom / base), lenticular grid.
+    storm: StormInput,
+    storm_buf: wgpu::Buffer,
+    storm_a: wgpu::TextureView,
+    storm_b: wgpu::TextureView,
+    lent: LentInput,
+    lent_tex: wgpu::Texture,
+    lent_view: wgpu::TextureView,
+    lent_uploaded: u64,
+    flashes: [FlashLight; 2],
     bgl: wgpu::BindGroupLayout,
     shape_view: wgpu::TextureView,
     detail_view: wgpu::TextureView,
@@ -727,6 +790,15 @@ impl CloudRenderer {
                     ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 17,
+                    visibility: fs,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                    count: None,
+                },
+                float_tex(18, D::D2, true), // storm map A: tower cover, top (km), anvil cover, rain
+                float_tex(19, D::D2, true), // storm map B: anvil base, anvil top, shaft bottom, base (km)
+                float_tex(20, D::D2, true), // lenticular cover
             ],
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -748,7 +820,7 @@ impl CloudRenderer {
             })
         };
         let t = |format| Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL });
-        let weather_pipe = pipe("cloud weather", "fs_weather", &[t(COL_FMT)]);
+        let weather_pipe = pipe("cloud weather", "fs_weather", &[t(COL_FMT), t(COL_FMT), t(COL_FMT)]);
         let shadow_pipe = pipe("cloud shadow", "fs_shadow", &[t(SHADOW_FMT)]);
         let trace_pipe = pipe("cloud trace", "fs_trace", &[t(COL_FMT), t(DEP_FMT)]);
         let temporal_pipe = pipe("cloud temporal", "fs_temporal", &[t(COL_FMT), t(DEP_FMT)]);
@@ -855,6 +927,25 @@ impl CloudRenderer {
         };
         let samp_rep = samp(wgpu::AddressMode::Repeat);
         let samp_clamp = samp(wgpu::AddressMode::ClampToEdge);
+        let storm_a = tex2d(device, "storm map a", WMAP_RES, WMAP_RES, COL_FMT, rt);
+        let storm_b = tex2d(device, "storm map b", WMAP_RES, WMAP_RES, COL_FMT, rt);
+        let storm_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("storm cells"),
+            size: std::mem::size_of::<StormCellsU>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let lent_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("lenticulars"),
+            size: wgpu::Extent3d { width: crate::wx::mountain::RES as u32, height: crate::wx::mountain::RES as u32, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let lent_view = lent_tex.create_view(&Default::default());
         let aux_ubuf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("cloud aux u"),
             size: std::mem::size_of::<Uniforms>() as u64,
@@ -864,6 +955,15 @@ impl CloudRenderer {
 
         CloudRenderer {
             atmos,
+            storm: StormInput::default(),
+            storm_buf,
+            storm_a,
+            storm_b,
+            lent: LentInput::default(),
+            lent_tex,
+            lent_view,
+            lent_uploaded: 0,
+            flashes: [FlashLight::default(); 2],
             bgl,
             shape_view: shape.create_view(&Default::default()),
             detail_view: detail.create_view(&Default::default()),
@@ -957,14 +1057,79 @@ impl CloudRenderer {
             screen: [frame.width as f32, frame.height as f32, tw as f32, th as f32],
             wmap: [wo.x, wo.y, WMAP_TEXEL, WMAP_RES as f32],
             shadow: [self.shadow_origin.x, self.shadow_origin.y, 1.0 / (SHADOW_RES as f32 * SHADOW_TEXEL), SHADOW_TEXEL],
-            shape: [p.base, self.field.top(), p.sigma, p.strato_thick],
+            shape: [p.base, self.field.top().max(self.storm_top()).max(if self.lent.grid.is_empty() { 0.0 } else { self.lent.alt + self.lent.thick * 2.0 + 1500.0 }), p.sigma, p.strato_thick],
             cells: [p.cell, p.prob, p.r_min, p.r_max],
             cells2: [p.h_min, p.h_max, p.strato, p.cirrus],
             seed: [self.field.seed, fidx, p.visible as u32, 0],
             layers: [p.strato_base, p.mid, p.mid_base, p.mid_thick],
-            drift: [self.field.drift.x, self.field.drift.y, self.field.base(), 0.0],
+            drift: [self.field.drift.x, self.field.drift.y, self.storm.cells.iter().take(MAX_STORM).map(|c| c.base).fold(self.field.base(), f32::min), 0.0],
             gfog: [frame.ground_fog[0], frame.ground_fog[1], self.cirrus_drift.x, self.cirrus_drift.y],
+            storm: [self.storm.cells.len().min(MAX_STORM) as f32, self.storm.shaft_bottom, self.storm.shear.x, self.storm.shear.y],
+            storm2: [self.storm.dry, self.storm_top(), 0.0, 0.0],
+            lent: [self.lent.origin.x, self.lent.origin.y, self.lent.size.max(1.0), self.lent.alt],
+            lent2: [if self.lent.grid.is_empty() { 0.0 } else { 1.0 }, self.lent.thick, 0.0, 0.0],
+            flash: std::array::from_fn(|i| {
+                let f = self.flashes[i];
+                let r = f.pos - frame.eye;
+                [r.x, r.y, r.z, f.intensity]
+            }),
         }
+    }
+
+    /// Highest storm top (world y), 0 without storms.
+    fn storm_top(&self) -> f32 {
+        self.storm.cells.iter().take(MAX_STORM).map(|c| c.top + c.overshoot + 200.0).fold(0.0, f32::max)
+    }
+
+    /// Thunderstorm cells (wx/storm.rs) — re-bakes the weather map when they change.
+    pub fn set_storms(&mut self, queue: &wgpu::Queue, s: &StormInput) {
+        if s.version == self.storm.version && s.cells.len() == self.storm.cells.len() {
+            self.storm.shaft_bottom = s.shaft_bottom;
+            self.storm.shear = s.shear;
+            return;
+        }
+        self.storm = s.clone();
+        let mut u = StormCellsU { cells: [[0.0; 4]; MAX_STORM * 4] };
+        for (i, c) in s.cells.iter().take(MAX_STORM).enumerate() {
+            let rn = (c.rain_mmh / 120.0).clamp(0.0, 1.0);
+            u.cells[i * 4] = [c.center.x, c.center.y, c.radius, c.base];
+            u.cells[i * 4 + 1] = [c.top, c.overshoot, c.intensity, c.anvil_len];
+            u.cells[i * 4 + 2] = [c.anvil_dir.x, c.anvil_dir.y, c.rain_off.x, c.rain_off.y];
+            u.cells[i * 4 + 3] = [c.rain_r, rn, c.virga_bottom, c.anvil_base()];
+        }
+        queue.write_buffer(&self.storm_buf, 0, bytemuck::bytes_of(&u));
+        self.wmap_origin = None;
+        for sl in self.slots.iter_mut().flatten() {
+            sl.valid = false;
+        }
+    }
+
+    /// Lenticular clouds over mountain waves (wx/mountain.rs).
+    pub fn set_lenticular(&mut self, queue: &wgpu::Queue, l: &LentInput) {
+        if l.version != self.lent_uploaded && !l.grid.is_empty() && l.res as usize == crate::wx::mountain::RES {
+            let n = l.res;
+            let bytes: Vec<u8> = l.grid.iter().map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8).collect();
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo { texture: &self.lent_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                &bytes,
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(n), rows_per_image: Some(n) },
+                wgpu::Extent3d { width: n, height: n, depth_or_array_layers: 1 },
+            );
+            self.lent_uploaded = l.version;
+        }
+        let was_on = !self.lent.grid.is_empty();
+        self.lent = l.clone();
+        if was_on != !l.grid.is_empty() {
+            for sl in self.slots.iter_mut().flatten() {
+                sl.valid = false;
+            }
+        }
+    }
+
+    /// Lightning lighting the clouds this frame (applied after the temporal
+    /// filter, so a flash neither smears into the history nor ghosts).
+    pub fn set_flashes(&mut self, f: [FlashLight; 2]) {
+        self.flashes = f;
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1002,6 +1167,10 @@ impl CloudRenderer {
                 wgpu::BindGroupEntry { binding: 14, resource: R::TextureView(&self.atmos.sky) },
                 wgpu::BindGroupEntry { binding: 15, resource: R::TextureView(if slot == 1 { &self.atmos.ap_refl } else { &self.atmos.ap_main }) },
                 wgpu::BindGroupEntry { binding: 16, resource: self.atmos.out.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 17, resource: self.storm_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 18, resource: R::TextureView(if weather.is_some() { &self.storm_a } else { &self.dummy_col }) },
+                wgpu::BindGroupEntry { binding: 19, resource: R::TextureView(if weather.is_some() { &self.storm_b } else { &self.dummy_col }) },
+                wgpu::BindGroupEntry { binding: 20, resource: R::TextureView(&self.lent_view) },
             ],
         })
     }
@@ -1090,7 +1259,25 @@ impl CloudRenderer {
         };
         if regen_weather {
             let bg = self.bind_group(device, &self.aux_ubuf, None, None, None, None, false, 0);
-            fullscreen(encoder, &self.weather_view, &self.weather_pipe, &bg);
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("clouds weather"),
+                color_attachments: &[&self.weather_view, &self.storm_a, &self.storm_b]
+                    .map(|view| {
+                        Some(wgpu::RenderPassColorAttachment {
+                            view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                        })
+                    }),
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.weather_pipe);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.draw(0..3, 0..1);
         }
         if do_shadow {
             let bg = self.bind_group(device, &self.aux_ubuf, Some(&self.weather_view), None, None, None, false, 0);
