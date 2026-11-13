@@ -281,6 +281,47 @@ def ec130():
         d.rectangle((x0, y0, x1, y1), fill=im.getpixel(probe))
     im.save(out("ec130", "default-neutral.png"))
 
+def concorde():
+    """Concorde (FGAddon, G-BOAC scheme): airline titles, speedmarques, tail
+    flag, registration and fleet letters painted out — a plain white
+    Concorde. The paint swatches and wheel / intake details are kept."""
+    from PIL import ImageDraw
+    im = Image.open(os.path.join(root, "concorde/Models/concorde.png")).convert("RGB")
+    W, H = im.size
+    k = W / 1024.0
+    box = lambda x0, y0, x1, y1: tuple(int(v * k) for v in (x0, y0, x1, y1))
+    d = ImageDraw.Draw(im)
+    # Registration, fleet letters and the small flag / serial plate: flat white.
+    for b in [(55, 0, 225, 50), (290, 5, 340, 40), (412, 5, 515, 45)]:
+        d.rectangle(box(*b), fill=(255, 255, 255))
+    # Tail flag (the fin's own island, white base): flat white.
+    d.rectangle(box(15, 430, 350, 610), fill=(255, 255, 255))
+    # Titles and speedmarques (with their grey drop shadows) on the fuselage
+    # sides: repainted white, except the door outlines (light grey, kept
+    # where the paint is not saturated) and the black door sills.
+    import numpy as np
+    a = np.asarray(im).astype(np.float64)
+    mx, mn = a.max(2), a.min(2)
+    sat = (mx - mn) / np.maximum(mx, 1.0)
+    doors = np.zeros(mx.shape, bool)
+    for (x0, y0, x1, y1) in [box(462, 102, 513, 188), box(575, 270, 626, 384)]:
+        doors[y0:y1, x0:x1] = True
+    paint = np.zeros(mx.shape, bool)
+    for (x0, y0, x1, y1) in [box(130, 118, 415, 166), box(612, 316, 902, 366), box(348, 88, 608, 180), box(412, 286, 672, 376)]:
+        paint[y0:y1, x0:x1] = True
+    sill = mx < 60
+    marked = paint & ~sill & np.where(doors, sat > 0.12, (mx < 254) | (sat > 0.02))
+    a[marked] = 255.0
+    # Door interiors: the speedmarque shadow crossed them; clear them and
+    # redraw the outlines (the first door's top edge was under the band).
+    for (x0, y0, x1, y1) in [box(468, 108, 506, 180), box(581, 277, 620, 377)]:
+        a[y0:y1, x0:x1] = 255.0
+    im = Image.fromarray(a.astype("uint8"))
+    d = ImageDraw.Draw(im)
+    for b in [(464, 104, 510, 184), (577, 273, 623, 381)]:
+        d.rounded_rectangle(box(*b), radius=int(6 * k), outline=(168, 168, 170), width=max(2, int(3 * k)))
+    im.save(out("concorde", "concorde-neutral.png"))
+
 def dc3():
     """DC-3 default texture (a 1950s airline scheme): the airline titles and the
     emblems on the nose and fin are painted out (scanline fill between the

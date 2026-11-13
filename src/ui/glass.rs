@@ -470,7 +470,7 @@ fn speed_tape(p: &egui::Painter, r: Rect, sim: &Sim, ias: f32, u: f32) {
     // Mach below the tape.
     let m = sim.ac.mach();
     if m > 0.45 {
-        digits(p, Pos2::new(r.center().x, r.max.y + 3.4 * u), Align2::CENTER_CENTER, format!(".{:02.0}", (m * 100.0).round().min(99.0)), 3.0 * u, GREEN);
+        digits(p, Pos2::new(r.center().x, r.max.y + 3.4 * u), Align2::CENTER_CENTER, mach_readout(m), 3.0 * u, GREEN);
     }
     if let Some(t) = sim.ap.ias.filter(|_| sim.ap.engaged) {
         txt(p, Pos2::new(r.center().x, r.min.y - 3.0 * u), Align2::CENTER_CENTER, format!("{:.0}", t / KT), 3.0 * u, if sim.bot.is_some() { MAG } else { CYAN });
@@ -1043,7 +1043,7 @@ pub fn ewd(p: &egui::Painter, r: Rect, sim: &Sim) {
     // flaps: slat / flap track with the lever target
     let fy = rows_y + 7.0 * u;
     let flaps = ac.surfaces().flaps.clamp(0.0, 1.0);
-    txt(p, Pos2::new(s.min.x + 4.0 * u, fy), Align2::LEFT_CENTER, "FLAP", 3.0 * u, WHITE);
+    txt(p, Pos2::new(s.min.x + 4.0 * u, fy), Align2::LEFT_CENTER, if sim.def().flap_label == "Nose" { "NOSE" } else { "FLAP" }, 3.0 * u, WHITE);
     let track = [Pos2::new(s.min.x + 22.0 * u, fy - 1.5 * u), Pos2::new(s.max.x - 20.0 * u, fy + 2.5 * u)];
     let d = track[1] - track[0];
     for k in 0..=4 {
@@ -1125,4 +1125,23 @@ pub fn ewd(p: &egui::Painter, r: Rect, sim: &Sim) {
         txt(p, Pos2::new(s.min.x + 4.0 * u, my + 4.4 * u + i as f32 * 4.6 * u), Align2::LEFT_CENTER, m, 3.0 * u, *col);
     }
     let _ = (gradient_rect, CornerRadius::ZERO);
+}
+
+/// PFD Mach readout: Airbus-style ".78" below Mach 1, "1.99" from Mach 1 up
+/// (Concorde, the F-16).
+pub fn mach_readout(m: f32) -> String {
+    let h = (m.max(0.0) * 100.0).round();
+    if h >= 100.0 { format!("{:.2}", h / 100.0) } else { format!(".{h:02.0}") }
+}
+
+#[cfg(test)]
+mod mach_tests {
+    #[test]
+    fn mach_readout_keeps_the_units_digit_above_mach_1() {
+        assert_eq!(super::mach_readout(0.78), ".78");
+        assert_eq!(super::mach_readout(0.05), ".05");
+        assert_eq!(super::mach_readout(0.996), "1.00");
+        assert_eq!(super::mach_readout(1.99), "1.99");
+        assert_eq!(super::mach_readout(2.04), "2.04");
+    }
 }

@@ -1,0 +1,144 @@
+{
+  "aerorp_body": [
+    -0.0,
+    0.8077197670936584,
+    -0.0
+  ],
+  "cg_structural_m": [
+    17.769838333129883,
+    0.0,
+    -0.8077197670936584
+  ],
+  "chord_m": 2.490216016769409,
+  "contacts": [
+    {
+      "brake_group": "NONE",
+      "damping_n_s_m": 159255.9375,
+      "name": "NOSE",
+      "pos": [
+        -0.0,
+        -3.069336175918579,
+        13.569694519042969
+      ],
+      "retractable": 1.0,
+      "spring_n_m": 318511.875,
+      "static_friction": 0.800000011920929,
+      "steer_deg": 5.0,
+      "type": "BOGEY"
+    },
+    {
+      "brake_group": "LEFT",
+      "damping_n_s_m": 530853.125,
+      "name": "LEFT_MAIN",
+      "pos": [
+        2.084831953048706,
+        -3.069336175918579,
+        -0.710693359375
+      ],
+      "retractable": 1.0,
+      "spring_n_m": 1061706.25,
+      "static_friction": 0.800000011920929,
+      "steer_deg": 0.0,
+      "type": "BOGEY"
+    },
+    {
+      "brake_group": "RIGHT",
+      "damping_n_s_m": 530853.125,
+      "name": "RIGHT_MAIN",
+      "pos": [
+        -2.084831953048706,
+        -3.069336175918579,
+        -0.710693359375
+      ],
+      "retractable": 1.0,
+      "spring_n_m": 1061706.25,
+      "static_friction": 0.800000011920929,
+      "steer_deg": 0.0,
+      "type": "BOGEY"
+    },
+    {
+      "brake_group": "",
+      "damping_n_s_m": 1061706.25,
+      "name": "LEFT_WING",
+      "pos": [
+        0.9652000069618225,
+        -1.7881393432617188e-7,
+        -0.0
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 1061706.25,
+      "static_friction": 1.0,
+      "steer_deg": 0.0,
+      "type": "STRUCTURE"
+    },
+    {
+      "brake_group": "",
+      "damping_n_s_m": 1061706.25,
+      "name": "RIGHT_WING",
+      "pos": [
+        -0.9652000069618225,
+        -1.7881393432617188e-7,
+        -0.0
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 1061706.25,
+      "static_friction": 1.0,
+      "steer_deg": 0.0,
+      "type": "STRUCTURE"
+    }
+  ],
+  "empty_cg_structural_m": [
+    17.769838333129883,
+    0.0,
+    -0.8077199459075928
+  ],
+  "empty_kg": 19730.798828125,
+  "engines": [
+    {
+      "file": "cf34-8",
+      "pos": [
+        0.5080000162124634,
+        0.8077197670936584,
+        -13.014961242675781
+      ],
+      "thruster": "direct",
+      "thruster_pos": [
+        0.5080000162124634,
+        0.8077197670936584,
+        -13.014961242675781
+      ]
+    },
+    {
+      "file": "cf34-8",
+      "pos": [
+        -0.5080000162124634,
+        0.8077197670936584,
+        -13.014961242675781
+      ],
+      "thruster": "direct",
+      "thruster_pos": [
+        -0.5080000162124634,
+        0.8077197670936584,
+        -13.014961242675781
+      ]
+    }
+  ],
+  "eyepoint_body": [
+    0.7619999647140503,
+    2.5857198238372803,
+    15.508222579956055
+  ],
+  "fuel_initial_kg": 4570.32958984375,
+  "inertia_loaded_kg_m2": {
+    "pitch_iyy": 742922.875,
+    "roll_ixx": 165299.6875,
+    "yaw_izz": 802348.9375
+  },
+  "ixx": 165299.6875,
+  "iyy": 742922.875,
+  "izz": 802348.9375,
+  "loaded_kg": 29730.80078125,
+  "pointmass_kg": 2063.67138671875,
+  "wing_area_m2": 70.60628509521484,
+  "wingspan_m": 23.1648006439209
+}

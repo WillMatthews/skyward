@@ -157,7 +157,7 @@ painted over or composited.
 
 ## Aircraft
 
-Twelve flyable types. The FlightGear models, cockpits and flight-dynamics data are GPL, credited per
+Twenty-one flyable types. The FlightGear models, cockpits and flight-dynamics data are GPL, credited per
 aircraft in [`assets/aircraft/<id>/CREDITS.md`](assets/aircraft) and rebuilt by
 [`tools/fgimport/`](tools/fgimport).
 
@@ -197,6 +197,34 @@ aircraft in [`assets/aircraft/<id>/CREDITS.md`](assets/aircraft) and rebuilt by
     <td valign="top"><b>Airbus Helicopters EC130 B4</b><br><code>ec130</code> <sub>(<code>heli</code>)</sub><br><sub><i>Skyward rotor flight model</i></sub><br><sub>Collective, cyclic, pedals. VEMD, autorotation, stability assist.</sub></td>
     <td width="190" valign="top"><img src="docs/media/aircraft/fpv.jpg" width="190" alt="5-inch FPV quadcopter"></td>
     <td valign="top"><b>5″ FPV quadcopter</b><br><code>fpv</code> <sub>(<code>quad</code>, <code>drone</code>)</sub><br><sub><i>Skyward quad flight model</i></sub><br><sub>Acro / angle modes, Betaflight-style rates, 6S sag, OSD.</sub></td>
+  </tr>
+  <tr>
+    <td width="190" valign="top"><img src="docs/media/aircraft/extra500.jpg" width="190" alt="Extra EA-500"></td>
+    <td valign="top"><b>Extra EA-500</b><br><code>extra500</code> <sub>(<code>ea500</code>)</sub><br><sub><i>Calibrated flight model</i></sub><br><sub>Six-seat turboprop tourer with glass IFDs.</sub></td>
+    <td width="190" valign="top"><img src="docs/media/aircraft/cub.jpg" width="190" alt="PA-18 Super Cub"></td>
+    <td valign="top"><b>Piper PA-18 Super Cub</b><br><code>cub</code> <sub>(<code>pa18</code>)</sub><br><sub><i>Calibrated flight model</i></sub><br><sub>Tube-and-fabric bush taildragger.</sub></td>
+  </tr>
+  <tr>
+    <td width="190" valign="top"><img src="docs/media/aircraft/zlin.jpg" width="190" alt="Zlin Z-50 LX"></td>
+    <td valign="top"><b>Zlin Z-50 LX</b><br><code>zlin</code> <sub>(<code>z50</code>)</sub><br><sub><i>Calibrated flight model</i></sub><br><sub>Unlimited aerobat: snap rolls, spins, inverted systems, airshow smoke.</sub></td>
+    <td width="190" valign="top"><img src="docs/media/aircraft/otter.jpg" width="190" alt="DHC-3 Otter on floats"></td>
+    <td valign="top"><b>DHC-3 Otter (floats)</b><br><code>otter</code> <sub>(<code>dhc3</code>, <code>floatplane</code>)</sub><br><sub><i>Calibrated flight model</i></sub><br><sub>Radial bush plane on floats: planing, step, water rudders; starts on the water.</sub></td>
+  </tr>
+  <tr>
+    <td width="190" valign="top"><img src="docs/media/aircraft/dc3.jpg" width="190" alt="DC-3 / C-47"></td>
+    <td valign="top"><b>Douglas DC-3 / C-47</b><br><code>dc3</code> <sub>(<code>dc-3</code>)</sub><br><sub><i>Calibrated flight model</i></sub><br><sub>The classic twin-radial airliner, tail-wheel handling.</sub></td>
+    <td width="190" valign="top"><img src="docs/media/aircraft/triple7.jpg" width="190" alt="Boeing 777-300ER"></td>
+    <td valign="top"><b>Boeing 777-300ER</b><br><code>triple7</code> <sub>(<code>777</code>)</sub><br><sub><i>Calibrated flight model</i></sub><br><sub>Widebody twin, 513 kN GE90s, FBW, live PFD / ND / EICAS / MFD / CDUs.</sub></td>
+  </tr>
+  <tr>
+    <td width="190" valign="top"><img src="docs/media/aircraft/crj700.jpg" width="190" alt="Bombardier CRJ700"></td>
+    <td valign="top"><b>Bombardier CRJ700</b><br><code>crj700</code> <sub>(<code>crj</code>)</sub><br><sub><i>JSBSim + patches flight model</i></sub><br><sub>Regional jet: rear-mounted CF34s, T-tail, live glass displays.</sub></td>
+    <td width="190" valign="top"><img src="docs/media/aircraft/citationx.jpg" width="190" alt="Cessna Citation X"></td>
+    <td valign="top"><b>Cessna Citation X</b><br><code>citationx</code> <sub>(<code>citation</code>)</sub><br><sub><i>Calibrated flight model</i></sub><br><sub>Mach 0.92 business jet with its live Primus 2000 panel.</sub></td>
+  </tr>
+  <tr>
+    <td width="190" valign="top"><img src="docs/media/aircraft/concorde.jpg" width="190" alt="Concorde"></td>
+    <td valign="top"><b>Aerospatiale/BAC Concorde</b><br><code>concorde</code> <sub>(<code>sst</code>)</sub><br><sub><i>JSBSim + delta aero flight model</i></sub><br><sub>Mach 2 at FL550, reheat, vortex lift, trim-fuel CG transfer, droop nose / visor, live analogue cockpit.</sub></td>
   </tr>
 </table>
 
@@ -408,7 +436,7 @@ the real flight model through the controls and autopilot. Nothing is scripted or
 | `--airport CODE` | start at an airport (OurAirports ident / ICAO / IATA / name; Nominatim fallback) |
 | `--start-at SPEC` | `runway:27L`, `final:27L:5` (NM), `apron`, `air:LAT:LON:ALT_M:HDG`, `thermal` |
 | `--start S` | `runway` `approach` `city` `thermal` |
-| `--aircraft ID` | `kestrel` `swift` `peregrine` `lancer` `aerolink` `meridian190` `meridian320` `hercules` `galaxy` `vulcan` `ec130` `fpv` (or `c172` `ask21` `spitfire` `f16` `atr72` `e190` `a320` `c130` `c5` `heli` `quad` `drone`) |
+| `--aircraft ID` | `kestrel` `swift` `peregrine` `lancer` `aerolink` `meridian190` `meridian320` `hercules` `galaxy` `vulcan` `ec130` `fpv` `extra500` `cub` `zlin` `otter` `dc3` `triple7` `crj700` `citationx` `concorde` (or `c172` `ask21` `spitfire` `f16` `atr72` `e190` `a320` `c130` `c5` `heli` `quad` `drone` `ea500` `pa18` `z50` `dhc3` `777` `crj` `citation` `sst`) |
 | `--no-menu` | fly straight away (skip the main menu) |
 | `--bot` / `--watch` | hand the aircraft to the auto-flight bot / + cinematic camera (+ glider relaunch) |
 | `--live` / `--no-live` | follow the real weather and time (default on) / don't |

@@ -386,6 +386,8 @@ impl Callsign {
             "lancer" => Callsign::flight("Viper", 11),
             "hercules" | "vulcan" => Callsign::flight("Ascot", 412),
             "galaxy" => Callsign::flight("Reach", 471),
+            // A bizjet files with its registration (neutral, fictional).
+            "citationx" => Callsign::registration("G-SKYX"),
             _ => match category {
                 crate::flight::Category::Airliner => Callsign::flight("Skyward", 247),
                 crate::flight::Category::FastJet => Callsign::flight("Viper", 11),

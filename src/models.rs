@@ -14,6 +14,10 @@
 //! | `hercules` | Lockheed C-130H Hercules | FGAddon C130 |
 //! | `galaxy` | Lockheed C-5M Super Galaxy | FGMEMBERS/C-5 |
 //! | `vulcan` | Avro Vulcan B.2 | FGMEMBERS/AvroVulcanB2 (FGUK) |
+//! | `triple7` | Boeing 777-300ER | FGAddon 777 |
+//! | `crj700` | Bombardier CRJ700 | FGMEMBERS/CRJ700-family (2016) + FGAddon JSBSim FDM |
+//! | `citationx` | Cessna Citation X | FGMEMBERS/CitationX |
+//! | `concorde` | Aerospatiale/BAC Concorde | FGAddon Concorde |
 //! | `extra500` | Extra EA-500 | FGAddon extra500 |
 //! | `cub` | Piper PA-18 Super Cub | FGAddon Piper-PA-18 |
 //! | `zlin` | Zlin Z-50 LX | FGAddon Zlin-50lx |

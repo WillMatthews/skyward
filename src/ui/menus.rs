@@ -175,11 +175,13 @@ fn spec_lines(d: &AircraftDef) -> Vec<(&'static str, String)> {
         EngineKind::Electric => format!("{n} × brushless motor, 6S LiPo"),
         EngineKind::Jet => {
             let dry = d.static_thrust / n.max(1) as f32 / 1000.0;
+            // (The Vulcan's Olympus 301s and Concorde's 593s are pure turbojets.)
+            let kind = if matches!(d.id, "vulcan" | "concorde") { "turbojet" } else { "turbofan" };
             if d.has_afterburner {
-                format!("{n} × turbofan, {:.0} kN · {:.0} kN reheat", dry, (d.static_thrust + d.ab_static_thrust) / 1000.0)
+                // Thrust per engine, dry and with reheat.
+                format!("{n} × {kind}, {:.0} kN · {:.0} kN reheat", dry, (d.static_thrust + d.ab_static_thrust) / n.max(1) as f32 / 1000.0)
             } else {
-                // (The Vulcan's Olympus 301s are pure turbojets.)
-                format!("{n} × {}, {:.0} kN", if d.id == "vulcan" { "turbojet" } else { "turbofan" }, dry)
+                format!("{n} × {kind}, {:.0} kN", dry)
             }
         }
     };
@@ -1898,6 +1900,9 @@ mod tests {
         assert_eq!(of("hercules"), Group::Military);
         assert_eq!(of("galaxy"), Group::Military);
         assert_eq!(of("vulcan"), Group::Military);
+        for id in ["triple7", "crj700", "citationx", "concorde"] {
+            assert_eq!(of(id), Group::Airliner, "{id}");
+        }
         assert_eq!(of("ec130"), Group::Rotor);
         assert_eq!(of("fpv"), Group::Rotor);
         for id in ["extra500", "cub", "zlin", "otter"] {

@@ -85,6 +85,7 @@ src/net/remote.rs
 src/ui/browser.rs
 src/ui/mp.rs
 src/audio/traffic.rs
+src/flight/jets.rs
 src/systems/cabin.rs
 src/missions/mod.rs
 src/missions/defs.rs
