@@ -327,3 +327,55 @@ fn kick_ban_and_names() {
     }
     assert!(net.nodes[a].events.iter().any(|e| matches!(e, ClientEvent::Closed { reason: RejectReason::ServerShutdown, .. })));
 }
+
+/// Air combat: hit claims are relayed only when combat is on, the target is
+/// within the weapon's reach of the shooter, and kills are scored.
+#[test]
+fn combat_hits_are_arbitrated() {
+    let mut net = Net::new(ServerConfig::default());
+    let a = net.join("Ace", "", LinkParams::default());
+    let b = net.join("Bandit", "", LinkParams::default());
+    let c = net.join("Far", "", LinkParams::default());
+    connect_all(&mut net);
+    let id = |net: &Net, i: usize| net.nodes[i].events.iter().find_map(|e| if let ClientEvent::Connected { player, .. } = e { Some(*player) } else { None }).unwrap();
+    let (ia, ib, ic) = (id(&net, a), id(&net, b), id(&net, c));
+    // A and B 300 m apart; C 50 km away.
+    for _ in 0..30 {
+        let t = net.now;
+        let s = truth(t);
+        net.nodes[a].client.set_state(s, t);
+        net.nodes[b].client.set_state(AcState { lat: s.lat + 300.0 / M_PER_DEG_LAT, ..s }, t);
+        net.nodes[c].client.set_state(AcState { lat: s.lat + 0.45, ..s }, t);
+        net.step(1.0 / 60.0);
+    }
+    let hit = |target| Msg::Combat { from: 0, msg: CombatMsg::Hit { target, weapon: 0, part: 7, pos: [1.0, 0.0, 0.0], normal: [0.0, 1.0, 0.0], damage: 55.0, he: true } };
+    net.nodes[a].client.send(hit(ib));
+    net.nodes[a].client.send(hit(ic));
+    for _ in 0..30 {
+        net.step(1.0 / 60.0);
+    }
+    let got = |net: &Net, i: usize| -> Vec<(u16, CombatMsg)> {
+        net.nodes[i].events.iter().filter_map(|e| if let ClientEvent::Msg(Msg::Combat { from, msg }) = e { Some((*from, msg.clone())) } else { None }).collect()
+    };
+    let rb = got(&net, b);
+    assert!(rb.iter().any(|(f, m)| *f == ia && matches!(m, CombatMsg::Hit { target, .. } if *target == ib)), "{rb:?}");
+    assert!(!rb.iter().any(|(_, m)| matches!(m, CombatMsg::Hit { target, .. } if *target == ic)), "out-of-range claim relayed");
+    assert!(got(&net, a).is_empty(), "no echo to the shooter");
+    // B is shot down by A: scored.
+    net.nodes[b].client.send(Msg::Combat { from: 0, msg: CombatMsg::Kill { killer: ia, weapon: 0 } });
+    for _ in 0..30 {
+        net.step(1.0 / 60.0);
+    }
+    let pa = net.server.peers.values().find(|p| p.id == ia).unwrap();
+    assert_eq!(pa.kills, 1);
+    // Combat off: weapons are no longer relayed, and everyone is told.
+    let now = net.now;
+    net.server.set_combat(false, now);
+    net.nodes[a].client.send(Msg::Combat { from: 0, msg: CombatMsg::Fire { gun: 0, rounds: 10, seed: 1 } });
+    for _ in 0..30 {
+        net.step(1.0 / 60.0);
+    }
+    assert!(!got(&net, b).iter().any(|(_, m)| matches!(m, CombatMsg::Fire { .. })));
+    assert!(net.nodes[b].events.iter().any(|e| matches!(e, ClientEvent::Msg(Msg::World(w)) if !w.combat)));
+    assert!(!net.server.cfg.world.combat);
+}
