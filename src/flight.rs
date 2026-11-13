@@ -3076,6 +3076,11 @@ pub struct Aircraft {
     /// The state at the moment of a crash (before it was frozen): the
     /// wreck / debris simulation continues from here.
     pub impact: Option<Impact>,
+    /// Aircraft systems and failures (src/systems): electrics, fuel,
+    /// hydraulics, engines' accessories, instruments. Stepped by
+    /// [`crate::systems::step`]; only its `fx` is read here (neutral
+    /// unless something has failed or been switched off).
+    pub sys: crate::systems::Systems,
 }
 
 /// Kinematic state captured when the aircraft crashed.
@@ -3133,6 +3138,7 @@ impl Aircraft {
             bank_hold: None,
             dmg: crate::damage::Damage::new(next_seed()),
             impact: None,
+            sys: Default::default(),
         };
         a.settle_engines(def, 0.0, 0.0, &isa(0.0));
         a
@@ -3463,6 +3469,10 @@ impl Aircraft {
         let mut c = ctl.sanitized();
         // Separated engines are gone for good.
         c.failed_engines |= self.dmg.failed_engine_bits();
+        // Systems (fuel starvation, shut-down / failed engines, brakes; systems/).
+        let fx = self.sys.fx;
+        c.failed_engines |= fx.engine_cut;
+        c.brakes *= fx.brakes;
         let sd = crate::damage::struct_def(def.id);
         let gear_before = self.gear_pos;
         let saved = self.clone();
@@ -3498,7 +3508,9 @@ impl Aircraft {
             // Weight-on-wheels interlock: no retraction on the ground.
             let target = if c.gear_down || self.on_ground { 1.0 } else { 0.0 };
             if !self.dmg.gear_jam {
-                self.gear_pos = move_toward(self.gear_pos, target, dt / def.gear_time.max(0.5));
+                // Hydraulics / uplocks / alternate extension (systems/).
+                let k = if target > self.gear_pos { fx.gear_down } else { fx.gear_up };
+                self.gear_pos = move_toward(self.gear_pos, target, dt / def.gear_time.max(0.5) * k);
             }
         } else {
             self.gear_pos = 1.0;
@@ -3512,7 +3524,7 @@ impl Aircraft {
             1.0
         } else {
             c.spoilers * def.spoiler_flight_max
-        };
+        } * fx.spoilers;
         self.surf.spoilers = move_toward(self.surf.spoilers, sp_target, 1.5 * dt);
 
         // ---- engines ------------------------------------------------------
@@ -3540,11 +3552,20 @@ impl Aircraft {
         let q_slip = def.slipstream_q(thrust_total);
 
         // ---- control law & actuators --------------------------------------
+        let surf_before = self.surf;
         self.actuate(def, &c, vb, agl, &atm, q_slip, m_eng, dt);
+        crate::systems::apply_actuators(&fx, &surf_before, &mut self.surf);
         self.dmg.apply_jams(&mut self.surf);
 
         // ---- aerodynamics -------------------------------------------------
         let mut aero = self.aero(def, vb, agl, &atm, q_slip);
+        if fx.ice > 0.0 || fx.flap_asym != 0.0 {
+            // Airframe ice (lift loss growing towards the stall, drag) and split flaps (systems/).
+            let q_s = 0.5 * atm.density * vb.length_squared() * def.wing_area;
+            let (f, m) = crate::systems::airframe_forces(&fx, def, vb, aero.force, aero.alpha, self.surf.flaps, q_s);
+            aero.force += f;
+            aero.moment += m;
+        }
         self.jsb = aero.jsb;
         self.alpha = aero.alpha;
         self.beta = aero.beta;
@@ -3564,6 +3585,11 @@ impl Aircraft {
         let load_roll = aero.moment.z - aero.damping.z * self.omega.z;
         let f_body = aero.force + f_eng;
         let mut m_body = aero.moment + m_eng;
+        if fx.cg != Vec3::ZERO {
+            // Fuel imbalance: the weight acts off the centre of gravity (systems/).
+            let w_body = inv * Vec3::new(0.0, -(self.dmg.mass(def) + fx.mass_delta) * GRAVITY, 0.0);
+            m_body += fx.cg.cross(w_body);
+        }
 
         // ---- ground -------------------------------------------------------
         let gnd = self.ground(def, env, &c, dt);
@@ -3634,7 +3660,8 @@ impl Aircraft {
         self.on_ground = gnd.contact;
 
         // ---- load factor ----------------------------------------------------
-        let mass = self.dmg.mass(def);
+        // (Fuel burnt / airframe ice change the mass: systems/.)
+        let mass = self.dmg.mass(def) + fx.mass_delta;
         let weight = mass * GRAVITY;
         // Forces now act about the shifted centre of gravity.
         let f_world = self.rot * f_body + f_ground;
@@ -3735,21 +3762,34 @@ impl Aircraft {
         let thr = if def.has_reverser && c.reverse { if rev > 0.9 { c.throttle } else { 0.0 } } else { c.throttle };
         let (spool_t, ab_t) = def.spool_for_throttle(thr);
         let mut ab_max = 0.0f32;
+        let fx = self.sys.fx;
         for i in 0..def.engines() {
             let failed = c.failed_engines & (1 << i) != 0;
             let e = &mut self.eng[i];
             e.running = !failed;
+            // Systems: partial power, starter cranking, governor overspeed (systems/).
+            let pw = fx.power[i];
+            let crank = fx.crank[i];
             match def.engine_kind {
                 EngineKind::None => {}
                 EngineKind::Piston | EngineKind::Turboprop => {
-                    let target = if failed { 0.0 } else { spool_t };
+                    let target = if failed { 0.0 } else { spool_t * pw };
                     e.spool += (target - e.spool) * (1.0 - (-dt / def.spool_time.max(0.05)).exp());
-                    let rpm_t = def.target_rpm(e.spool, v_fwd, !failed);
+                    let mut rpm_t = def.target_rpm(e.spool, v_fwd, !failed) * (1.0 + fx.rpm_over[i]);
+                    if failed && crank > 0.0 {
+                        rpm_t = rpm_t.max(crank * def.rpm_idle);
+                    }
                     e.rpm += (rpm_t - e.rpm) * (1.0 - (-dt / 0.3f32).exp());
                 }
                 EngineKind::Jet => {
                     let idle = def.n1_idle;
-                    let n1_t = if failed { (0.04 + 0.12 * self.mach.min(1.0)).min(idle) } else { spool_t };
+                    let n1_t = if failed {
+                        (0.04 + 0.12 * self.mach.min(1.0)).min(idle).max(crank * idle)
+                    } else if pw < 1.0 {
+                        idle + (spool_t - idle).max(0.0) * pw
+                    } else {
+                        spool_t
+                    };
                     let x = ((e.spool - idle) / (1.0 - idle)).clamp(0.0, 1.0);
                     // Acceleration is slow at low N1 (≈ spool_time from idle to max).
                     let r0 = 1.848 / def.spool_time.max(0.3) * (1.0 - idle);
@@ -3780,7 +3820,9 @@ impl Aircraft {
             }
             e.thrust = out.thrust;
             e.shaft_power = out.shaft_power;
-            let egt_t = Self::egt_target(def, e.spool, oat, !failed);
+            let lit = fx.lit & (1 << i) != 0;
+            let egt_spool = if lit { e.spool.max(def.n1_idle.max(def.idle_power)) } else { e.spool };
+            let egt_t = Self::egt_target(def, egt_spool, oat, !failed || lit) + fx.egt_add[i];
             e.egt += (egt_t - e.egt) * (1.0 - (-dt / 2.5f32).exp());
             e.fuel_flow = Self::fuel_flow_for(def, &out, self.mach, !failed);
             e.prop_angle = (e.prop_angle + e.rpm * def.prop_gear * (TAU / 60.0) * dt).rem_euclid(TAU);
@@ -4146,9 +4188,13 @@ impl Aircraft {
             } else {
                 c.brakes
             };
-            // A tail wheel steers the opposite way to a nose wheel.
-            let s = if gp.pos.z < 0.0 { -steer } else { steer };
-            let f = contact_force(self, def, gp.pos, pen, gp.spring, gp.damping, gp.kind, s, brake, dt);
+            // A tail wheel steers the opposite way to a nose wheel (nose-wheel
+            // steering needs hydraulics: systems/).
+            let s = if gp.pos.z < 0.0 { -steer } else { steer * self.sys.fx.steering };
+            // A burst tyre runs on its rim: high drag, little grip, no braking.
+            let burst = self.sys.fx.tyre_burst(gp.pos.x);
+            let (kind, brake) = if burst { (ContactKind::Skid { friction: 0.35 }, 0.0) } else { (gp.kind, brake) };
+            let f = contact_force(self, def, gp.pos, pen, gp.spring, gp.damping, kind, s, brake, dt);
             out.force_world += f;
             torque_world += r.cross(f);
         }

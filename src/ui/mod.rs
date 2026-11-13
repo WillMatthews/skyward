@@ -10,6 +10,7 @@
 
 pub mod canvas;
 pub mod controls;
+pub mod failures;
 pub mod flight;
 pub mod gauges;
 pub mod glass;
@@ -457,6 +458,8 @@ pub enum Action {
     FlyLast,
     Resume,
     Restart,
+    /// Systems & failures panel (over the flight).
+    Failures,
     Quit,
 }
 
@@ -490,6 +493,8 @@ pub struct UiState {
     pub thumbs: std::collections::HashMap<&'static str, egui::TextureId>,
     pub show_wx: bool,
     pub ap_open: bool,
+    /// Systems & failures panel (ui/failures.rs).
+    pub fail: failures::FailUi,
     pub audio_status: String,
     /// Game controllers, rebinding and the mouse yoke (input/).
     pub input: crate::input::InputSystem,
@@ -524,6 +529,7 @@ impl UiState {
             thumbs: Default::default(),
             show_wx: true,
             ap_open: true,
+            fail: Default::default(),
             audio_status: String::new(),
             input: crate::input::InputSystem::new(),
             controls_page: 0,

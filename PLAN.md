@@ -63,7 +63,8 @@ item lands; keep entries one line.
 - [ ] **P1** Structure follow-ups: body-body debris collisions; fuselage crush/deform; cracks along split seams; fuel model (mass/CG/fire size from actual fuel)
 - [x] **P1** Full 3D cockpits with working instruments: FG instrument animations (needles, drums/`textranslate`, `texrotate`/`texmultiple` attitude balls, flags) bound to live sim values with real instrument lag (src/cockpit), glass PFD/ND/EWD/SD/ISIS/MCDU rendered offscreen onto the A320/E190/F-16 screens (mip-mapped, auto-dimmed), night backlighting, auto-dimmed displays; mouse head look (C)
 - [ ] **P2** Cockpit follow-ups: hide the 2D glass/gauge overlay in cockpit view by default; radio/transponder frequency drums (no nav radios yet); clickable knobs; F-16 combiner HUD as a collimated texture; ATR glass EFIS pages
-- [ ] **P1** Systems depth per type: electrics, fuel (burn + CG), hydraulics, engine start procedures, failures menu
+- [x] **P1** Systems depth per type (src/systems, data-driven with category defaults): electrics (battery / gens / APU / RAT / EPU, ammeter), fuel (tanks, selector / crossfeed, burn → mass + lateral CG, leaks, starvation), hydraulics (PTU; gear, flaps, spoilers, brakes, NWS, powered controls), vacuum + pitot-static instruments, engine starts (cold & dark / auto-start / ready), oil, carb ice, fire detection + bottles, anti-ice / airframe icing; 24 failures with flags / red X, master warning / caution, ECAM / EICAS procedures, CRC / fire bell / voice; failures panel (now / armed by time-alt-speed / random window / MTBF), `--fail`, `--cold-dark` (S)
+- [ ] **P2** Systems follow-ups: per-engine throttles (single lever today, so "THR LEVER 1 IDLE" means all), cockpit switch / fire-handle animations, F-16 HUD + ND ignore AHRS flags, engine-fire VFX (flames / smoke trail), captain vs F/O display units (red X shows on both PFDs), settings persistence of cold & dark / random failures, `--fail` in windowed mode
 - [ ] **P1** Ground handling: taxiing with tillers, pushback, chocks, wheel friction by surface
 - [x] **P2** v3 heavies: C-130H Hercules (FGAddon C130, calibrated to YASim + published), C-5M Super Galaxy (FGMEMBERS C-5, patched JSBSim), Avro Vulcan B.2 (FGUK, JSBSim + delta-wing aero, Olympus howl); neutral liveries, bot / audio / per-type runway minima (H)
 - [ ] **P1** Heavies follow-ups: C-130 bot floats ~850 m before touchdown at EGLC; C-130 / C-5 use the PW100 / CFM56 recordings (no T56 / CF6 set); C-130 ramp and C-5 kneeling / visor not driven; C-5 & Vulcan cockpits are basic FG models (no working gauges); Vulcan brake chute; fuel burn (all flown at one weight)
@@ -133,5 +134,5 @@ item lands; keep entries one line.
 | A (v3) | Airport detail: markings, buildings, stands, jet bridges, parked aircraft, vehicles, signs, windsocks, airfield lights, airfield grading (`src/airport/`) | ✅ |
 | C (v3) | Live 3D cockpit instruments (steam gauges + glass displays) | ✅ |
 | H | v3 heavies: C-130H, C-5M, Vulcan B.2 | ✅ |
-| S | Systems + realistic failures | ⏳ running |
+| S | Aircraft systems + realistic failures (systems/, failures panel, ECAM / EICAS, aural) | ✅ |
 | next | ILS/FMS (F), rotorcraft (Q), ATC/ATIS (R) | ⏳ queued |

@@ -175,6 +175,10 @@ pub enum Key {
     AutoFlight,
     /// Landing / taxi lights on / off (L).
     LandingLights,
+    /// Acknowledge the master warning / caution (silence the chime).
+    MasterAck,
+    /// Systems & failures panel (interface).
+    Failures,
     /// Glance while held (hat / keypad), centre the view (input/).
     LookLeft,
     LookRight,
@@ -379,6 +383,10 @@ pub struct Sim {
     pub scenario: Option<crate::scenario::Scenario>,
     /// Particles and atmospheric effects (vfx/).
     pub vfx: crate::vfx::Vfx,
+    /// Armed / random failures (systems/failures.rs); the active ones live in `ac.sys`.
+    pub failures: crate::systems::failures::Schedule,
+    /// Start cold and dark (engines off, battery off) instead of ready to go.
+    pub cold_dark: bool,
 }
 
 /// Cinematic camera state.
@@ -490,6 +498,8 @@ impl Sim {
             crash_clock: 0.0,
             scenario: crate::scenario::Scenario::from_env(),
             vfx: crate::vfx::Vfx::default(),
+            failures: Default::default(),
+            cold_dark: false,
         };
         s.light_rig = crate::lights::AircraftLightRig::from_model(&s.model);
         s.reset(world);
@@ -575,6 +585,12 @@ impl Sim {
         self.ac = ac;
         self.ctl = ctl;
         self.flap_idx = flap_idx;
+        // Systems (systems/): ready to go, or cold and dark; armed failures are cleared.
+        self.failures.clear();
+        if self.cold_dark {
+            self.ac.sys = crate::systems::Systems::new(&def, true);
+            self.ctl.throttle = 0.0;
+        }
         self.spoiler_idx = 0;
         self.fail_step = 0;
         self.ap = Autopilot::new();
@@ -912,6 +928,7 @@ impl Sim {
                     }
                 }
                 Key::EngineFail => self.cycle_engine_failure(),
+                Key::MasterAck => self.ac.sys.acknowledge(),
                 Key::LandingLights => {
                     let on = !self.landing_lights_on();
                     self.landing_lights = Some(on);
@@ -986,6 +1003,7 @@ impl Sim {
             crate::scenario::control(self, world, dt);
         }
         self.audio_events.clear();
+        let amb = crate::systems::ambient(world, &self.ac, self.ground_y);
         if !self.paused && self.ac.crashed.is_none() && !self.needs_respawn {
             self.acc += dt * self.warp as f32;
             let mut steps = 0;
@@ -1002,6 +1020,9 @@ impl Sim {
                 }
                 self.prev_pos = self.ac.pos;
                 self.prev_rot = self.ac.rot;
+                // Aircraft systems and failures (systems/), then the flight model.
+                self.systems_step(&amb, DT);
+                let def = &self.defs[self.sel];
                 self.ac.step(def, &self.ctl, world, DT);
                 self.acc -= DT;
                 steps += 1;
@@ -1014,6 +1035,7 @@ impl Sim {
             }
             self.time += dt * self.warp as f32;
         }
+        self.systems_frame();
         // Watch mode: a landed glider is relaunched (as if by winch) after a pause.
         if self.watch && self.bot.as_ref().is_some_and(|b| b.wants_relaunch) {
             self.start = Start::default_for(&def);

@@ -19,3 +19,10 @@ src/airport/mesh.rs
 src/airport/overpass.rs
 src/airport/tile.rs
 src/airport/types.rs
+src/systems/mod.rs
+src/systems/alerts.rs
+src/systems/defs.rs
+src/systems/failures.rs
+src/systems/session.rs
+src/systems/tests.rs
+src/ui/failures.rs

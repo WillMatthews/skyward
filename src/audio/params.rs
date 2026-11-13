@@ -198,10 +198,14 @@ pub enum Clip {
     V1,
     Overspeed,
     EngineFailure,
+    EngineFire,
+    Warning,
+    Caution,
+    Smoke,
 }
 
 impl Clip {
-    pub const ALL: [Clip; 26] = [
+    pub const ALL: [Clip; 30] = [
         Clip::Ft2500,
         Clip::Ft1000,
         Clip::Ft500,
@@ -228,6 +232,10 @@ impl Clip {
         Clip::V1,
         Clip::Overspeed,
         Clip::EngineFailure,
+        Clip::EngineFire,
+        Clip::Warning,
+        Clip::Caution,
+        Clip::Smoke,
     ];
     pub fn index(self) -> usize {
         Clip::ALL.iter().position(|c| *c == self).unwrap_or(0)
@@ -280,6 +288,10 @@ pub enum Event {
     /// Autopilot disconnect warning.
     ApDisconnect,
     MasterCaution,
+    /// One second of the continuous repetitive chime (master warning, Airbus / ATR).
+    Crc,
+    /// One second of the fire bell (Embraer).
+    FireBell,
     /// Afterburner light-off on engine i.
     AbLight(usize),
     /// Sonic boom reached the listener (strength 0..1).

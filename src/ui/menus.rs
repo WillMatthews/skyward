@@ -1489,9 +1489,10 @@ pub fn pause(ui: &mut Ui, st: &mut UiState, title: &str, sub: &str) {
     let p = ui.painter().clone();
     p.rect_filled(screen, 0, Color32::from_rgba_premultiplied(4, 6, 9, 150));
     let w = 380.0;
-    let items: [(&str, Action, Btn); 7] = [
+    let items: [(&str, Action, Btn); 8] = [
         ("Resume", Action::Resume, Btn::Primary),
         ("Restart", Action::Restart, Btn::Secondary),
+        ("Systems & failures", Action::Failures, Btn::Secondary),
         ("Change aircraft", Action::Goto(Screen::Aircraft), Btn::Secondary),
         ("Change airport", Action::Goto(Screen::Departure), Btn::Secondary),
         ("Settings", Action::Goto(Screen::Settings), Btn::Secondary),

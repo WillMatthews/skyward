@@ -513,6 +513,20 @@ impl Synth {
                 let notes = [1180.0, 0.0, 1180.0, 0.0, 0.0, 0.0, 0.0, 0.0];
                 add(Shot::new(Kind::Chime { notes, n: 3, note: 0.32, ph: [0.0; 3], bright: 0.4 }, Route::Cockpit, 0.2, 0.96), rng);
             }
+            Event::Crc => {
+                // Continuous repetitive chime: four bright dings a second.
+                let f = 1046.5;
+                let notes = [f, 0.0, f, 0.0, f, 0.0, f, 0.0];
+                add(Shot::new(Kind::Chime { notes, n: 8, note: 0.125, ph: [0.0; 3], bright: 0.7 }, Route::Cockpit, 0.22, 1.0), rng);
+            }
+            Event::FireBell => {
+                // Electric fire bell: a clapper striking ~16 times a second.
+                let f = 1320.0;
+                let notes = [f; 8];
+                for k in 0..2 {
+                    add(Shot::new(Kind::Chime { notes, n: 8, note: 0.0625, ph: [0.0; 3], bright: 1.0 }, Route::Cockpit, 0.16, 0.5).delayed(0.5 * k as f32, sr), rng);
+                }
+            }
             Event::AbLight(_) => {
                 add(Shot::new(Kind::Thud { f0: 70.0, f1: 32.0, ph: 0.0, decay: 0.25, noise: 2.2 }, Route::Airframe, 0.9, 1.0), rng);
                 add(Shot::new(Kind::Rumble { attack: 0.02, crackle: 0.6 }, Route::Airframe, 0.4, 0.8), rng);
