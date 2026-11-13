@@ -123,11 +123,9 @@ fn fit(p: &egui::Painter, text: &str, font: egui::FontId, max_w: f32) -> String 
 }
 
 fn scroll(ui: &mut Ui, area: Rect, id: &str, f: impl FnOnce(&mut Ui)) {
-    ui.scope_builder(UiBuilder::new().max_rect(area), |ui| {
-        egui::ScrollArea::vertical().id_salt(id).auto_shrink([false, false]).show(ui, |ui| {
-            ui.spacing_mut().item_spacing = Vec2::new(0.0, 6.0);
-            f(ui)
-        });
+    super::scroll::area(ui, area, id, pal::PANEL_SOLID, |ui| {
+        ui.spacing_mut().item_spacing = Vec2::new(0.0, 6.0);
+        f(ui)
     });
 }
 

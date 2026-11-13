@@ -55,3 +55,4 @@ src/atc/vectors.rs
 src/atc/tests.rs
 src/audio/radio.rs
 src/ui/comms.rs
+src/ui/scroll.rs

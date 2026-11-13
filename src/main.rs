@@ -1148,6 +1148,10 @@ fn headless(args: Args) -> Result<(), String> {
     let mut renderer = Renderer::new(&gpu.device, &gpu.queue, format);
     // Headless captures use default settings (reproducible), plus the flags.
     let mut ui = Ui::new(&gpu.device, format, ui::settings::Settings::default());
+    // Layout checks at a larger interface scale: SKYWARD_UI_SCALE=1.3.
+    if let Some(v) = std::env::var("SKYWARD_UI_SCALE").ok().and_then(|v| v.parse::<f32>().ok()) {
+        ui.st.settings.ui_scale = v.clamp(0.7, 1.6);
+    }
     ui.hide_hud = args.no_hud;
     ui.st.db = db.clone();
     ui.st.plan = plan_from_args(&args, db.as_deref());
@@ -1197,6 +1201,8 @@ fn headless(args: Args) -> Result<(), String> {
         ui.st.controls_page = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
         ui.st.controls_axis = it.next().and_then(input::AxisAction::from_id).map(|a| (a, 0));
     }
+    // Aircraft-screen screenshots: SKYWARD_AIRCRAFT_GROUP=light|warbird|jet|airliner|military|rotor.
+    ui.st.aircraft_group = std::env::var("SKYWARD_AIRCRAFT_GROUP").ok().and_then(|g| ui::menus::Group::parse(&g));
     let custom = args.start_at.clone().map(|spec| startpos::CustomStart { airport: ui.st.plan.airport.clone(), spec });
 
     // Load the start area + spawn.

@@ -54,7 +54,7 @@ pub fn panel(ctx: &egui::Context, st: &mut UiState, sim: &mut Sim) {
                     st.fail.tab = t;
                 }
                 ui.add_space(sp::M);
-                egui::ScrollArea::vertical().auto_shrink([false, false]).max_height(h - 170.0).show(ui, |ui| match st.fail.tab {
+                super::scroll::vertical(ui, "failures_body", h - 170.0, |ui| match st.fail.tab {
                     0 => failures_tab(ui, st, sim),
                     1 => schedule_tab(ui, sim),
                     _ => systems_tab(ui, sim),

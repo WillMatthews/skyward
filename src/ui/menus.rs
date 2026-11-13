@@ -260,11 +260,22 @@ pub fn credits(ui: &mut Ui, st: &mut UiState) {
         ("Fonts", "Inter (Rasmus Andersson), JetBrains Mono, B612 (Airbus / Intactile / ENAC) — SIL Open Font License 1.1"),
         ("Licence", "Skyward is free software: GNU GPL v2 · github.com/WillMatthews/skyward"),
     ];
-    for (k, v) in rows {
-        p.text(Pos2::new(x, y), Align2::LEFT_TOP, k, f_semi(14.0), pal::TEXT);
-        p.text(Pos2::new(x + 200.0, y), Align2::LEFT_TOP, v, f_ui(14.0), pal::TEXT2);
-        y += 32.0;
-    }
+    // Rows wrap to the window and scroll when it is short.
+    let rows_r = Rect::from_min_max(Pos2::new(x, y), Pos2::new(screen.max.x - (screen.width() * 0.07).max(48.0) + super::scroll::GUTTER, screen.max.y - 100.0));
+    let out = super::scroll::page(ui, rows_r, "credits", Color32::from_rgba_premultiplied(5, 7, 10, 235), |ui, o, w| {
+        let p = ui.painter().clone();
+        let kw = 200.0;
+        let mut yy = o.y;
+        for (k, v) in rows {
+            p.text(Pos2::new(o.x, yy), Align2::LEFT_TOP, k, f_semi(14.0), pal::TEXT);
+            let g = p.layout(v.to_string(), f_ui(14.0), pal::TEXT2, (w - kw - super::scroll::GUTTER).max(160.0));
+            let gh = g.size().y;
+            p.galley(Pos2::new(o.x + kw, yy), g, pal::TEXT2);
+            yy += gh.max(18.0) + 14.0;
+        }
+        yy - o.y
+    });
+    y += out.content_size.y.min(rows_r.height());
     if button(ui, Rect::from_min_size(Pos2::new(x, y + 24.0), Vec2::new(140.0, 44.0)), "back", "Back", Btn::Secondary, true).clicked() || esc(ui) {
         st.actions.push(Action::Back);
     }
@@ -281,101 +292,340 @@ fn esc(ui: &Ui) -> bool {
 
 // ---------------------------------------------------------------- aircraft
 
+/// Families on the aircraft screen (filter chips; the grid is in this order).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Group {
+    Light,
+    Warbird,
+    Jet,
+    Airliner,
+    Military,
+    Rotor,
+}
+
+impl Group {
+    pub const ALL: [Group; 6] = [Group::Light, Group::Warbird, Group::Jet, Group::Airliner, Group::Military, Group::Rotor];
+
+    pub fn of(d: &AircraftDef) -> Group {
+        match d.category {
+            Category::Trainer | Category::Glider => Group::Light,
+            Category::Warbird => Group::Warbird,
+            Category::FastJet => Group::Jet,
+            Category::Helicopter | Category::Drone => Group::Rotor,
+            Category::Airliner => {
+                // Military heavies fly airliner-class models; their role says what they are.
+                let r = d.role.to_ascii_lowercase();
+                if ["military", "airlift", "bomber", "tanker", "maritime"].iter().any(|k| r.contains(k)) { Group::Military } else { Group::Airliner }
+            }
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Group::Light => "Light & gliders",
+            Group::Warbird => "Warbirds",
+            Group::Jet => "Fast jets",
+            Group::Airliner => "Airliners",
+            Group::Military => "Military heavies",
+            Group::Rotor => "Rotorcraft & drones",
+        }
+    }
+
+    /// For `SKYWARD_AIRCRAFT_GROUP` (screenshots).
+    pub fn parse(s: &str) -> Option<Group> {
+        Some(match s {
+            "light" => Group::Light,
+            "warbird" => Group::Warbird,
+            "jet" => Group::Jet,
+            "airliner" => Group::Airliner,
+            "military" => Group::Military,
+            "rotor" => Group::Rotor,
+            _ => return None,
+        })
+    }
+}
+
+/// A filter chip with a count; returns true when clicked.
+fn count_chip(ui: &mut Ui, r: Rect, id: impl std::hash::Hash + std::fmt::Debug, label: &str, n: usize, on: bool) -> bool {
+    let resp = ui.interact(r, ui.id().with(id), Sense::click());
+    let p = ui.painter();
+    let fill = if on { pal::ACCENT_DEEP } else if resp.hovered() { pal::RAISED_HI } else { pal::RAISED };
+    p.rect_filled(r, r.height() * 0.5, fill);
+    if on {
+        p.rect_stroke(r, r.height() * 0.5, Stroke::new(1.0, pal::ACCENT), egui::StrokeKind::Inside);
+    }
+    p.text(Pos2::new(r.min.x + 14.0, r.center().y), Align2::LEFT_CENTER, label, f_semi(13.0), if on { pal::WHITE } else { pal::TEXT2 });
+    p.text(Pos2::new(r.max.x - 13.0, r.center().y), Align2::RIGHT_CENTER, n.to_string(), f_mono(12.0), if on { Color32::from_rgb(190, 222, 255) } else { pal::TEXT3 });
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    resp.clicked()
+}
+
+/// Card grid geometry for a width: (columns, card width, card height).
+fn card_grid(w: f32) -> (usize, f32, f32) {
+    const MIN_W: f32 = 228.0;
+    let cols = (((w + CARD_GAP) / (MIN_W + CARD_GAP)).floor() as usize).max(1);
+    let cw = (w - CARD_GAP * (cols as f32 - 1.0)) / cols as f32;
+    (cols, cw, cw * 0.62 + 64.0)
+}
+
+const CARD_GAP: f32 = 16.0;
+
 pub fn aircraft(ui: &mut Ui, st: &mut UiState) {
     let screen = ui.ctx().content_rect();
     let p = ui.painter().clone();
     backdrop(&p, screen, 1.0);
-    let margin = (screen.width() * 0.05).max(40.0);
+    let margin = (screen.width() * 0.05).clamp(24.0, 96.0);
     let content = Rect::from_min_max(Pos2::new(screen.min.x + margin, screen.min.y + 36.0), Pos2::new(screen.max.x - margin, screen.max.y - 36.0));
     if let Some(s) = steps(ui, content.min, 0) {
         st.actions.push(Action::Goto([Screen::Aircraft, Screen::Departure, Screen::Conditions][s]));
     }
     let y = heading(&p, content.min + Vec2::new(0.0, 56.0), "Choose an aircraft", "Each type flies its own flight model and has its own instruments.");
-    // cards grid (left) + detail (right)
-    let detail_w = (content.width() * 0.34).clamp(380.0, 560.0);
-    let grid = Rect::from_min_max(Pos2::new(content.min.x, y + 8.0), Pos2::new(content.max.x - detail_w - 24.0, content.max.y - 70.0));
-    let n = st.defs.len();
-    let cols = if grid.width() > 1100.0 { 4 } else { 3 };
-    let gap = 16.0;
-    let cw = (grid.width() - gap * (cols as f32 - 1.0)) / cols as f32;
-    let ch = cw * 0.62 + 64.0;
-    for i in 0..n {
-        let (row, col) = (i / cols, i % cols);
-        let r = Rect::from_min_size(grid.min + Vec2::new(col as f32 * (cw + gap), row as f32 * (ch + gap)), Vec2::new(cw, ch));
-        let resp = ui.interact(r, ui.id().with(("ac", i)), Sense::click());
-        let sel = st.plan.aircraft == i;
-        let d = &st.defs[i];
-        let p = ui.painter();
-        panel_with(p, r, sp::R_CARD, if resp.hovered() { pal::RAISED } else { pal::PANEL_SOLID });
-        let img = Rect::from_min_size(r.min + Vec2::splat(6.0), Vec2::new(cw - 12.0, cw * 0.62 - 6.0));
-        match st.thumbs.get(d.id) {
-            Some(t) => {
-                p.add(Shape::Rect(epaint::RectShape::filled(img, 10, Color32::WHITE).with_texture(*t, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)))));
+    let n_all = st.defs.len();
+    let sel_now = st.plan.aircraft.min(n_all - 1);
+    // ---- families: filter chips (only families that have types)
+    let mut order: Vec<usize> = (0..n_all).collect();
+    order.sort_by_key(|&i| (Group::of(&st.defs[i]), i));
+    let count = |g: Group| order.iter().filter(|&&i| Group::of(&st.defs[i]) == g).count();
+    let groups: Vec<(Group, usize)> = Group::ALL.iter().map(|&g| (g, count(g))).filter(|e| e.1 > 0).collect();
+    if st.aircraft_group.is_some_and(|g| Group::of(&st.defs[sel_now]) != g || count(g) == 0) {
+        // The selection always shows (it may have been chosen elsewhere).
+        st.aircraft_group = None;
+    }
+    let chip_w = |label: &str, n: usize| p.layout_no_wrap(label.to_string(), f_semi(13.0), pal::TEXT).size().x + p.layout_no_wrap(n.to_string(), f_mono(12.0), pal::TEXT).size().x + 40.0;
+    let (mut cx, mut cy) = (content.min.x, y + 2.0);
+    let mut picked: Option<Option<Group>> = None;
+    let entries: Vec<(Option<Group>, &str, usize)> = std::iter::once((None, "All aircraft", n_all)).chain(groups.iter().map(|&(g, n)| (Some(g), g.name(), n))).collect();
+    for (k, (g, label, n)) in entries.iter().enumerate() {
+        let w = chip_w(label, *n);
+        if cx + w > content.max.x && cx > content.min.x {
+            cx = content.min.x;
+            cy += 40.0;
+        }
+        if count_chip(ui, Rect::from_min_size(Pos2::new(cx, cy), Vec2::new(w, 32.0)), ("acgroup", k), label, *n, st.aircraft_group == *g) {
+            picked = Some(*g);
+        }
+        cx += w + 8.0;
+    }
+    let top = cy + 32.0 + 18.0;
+    // ---- input: chips, arrows / d-pad, bumpers, Enter / A, Esc / B
+    let nav = super::scroll::nav(ui, &st.input, st.frame_no);
+    if nav.tab != 0 {
+        let k = entries.iter().position(|e| e.0 == st.aircraft_group).unwrap_or(0) as i32;
+        picked = Some(entries[(k + nav.tab).rem_euclid(entries.len() as i32) as usize].0);
+    }
+    // Scroll the selection into view: (alignment, animated).
+    let mut reveal: Option<(Option<egui::Align>, bool)> = None;
+    if let Some(g) = picked {
+        if g != st.aircraft_group {
+            st.aircraft_group = g;
+            // A new family: select its first type, from the top.
+            if let Some(&i) = order.iter().find(|&&i| g.is_none_or(|g| Group::of(&st.defs[i]) == g)) {
+                if g.is_some() {
+                    select_aircraft(st, i);
+                }
             }
-            None => {
-                gradient_rect(p, img, Color32::from_rgb(70, 120, 180), Color32::from_rgb(170, 200, 230));
-            }
-        }
-        p.text(Pos2::new(r.min.x + 16.0, img.max.y + 12.0), Align2::LEFT_TOP, d.name, f_semi(16.0), pal::TEXT);
-        p.text(Pos2::new(r.min.x + 16.0, img.max.y + 34.0), Align2::LEFT_TOP, class_name(d), f_ui(12.5), pal::TEXT3);
-        if sel {
-            p.rect_stroke(r, sp::R_CARD, Stroke::new(2.0, pal::ACCENT), egui::StrokeKind::Inside);
-        }
-        if resp.clicked() {
-            st.plan.aircraft = i;
-            if !st.plan.spec.valid_for(d) {
-                st.plan.spec = if d.has_engine { Spec::Runway(String::new()) } else { Spec::Thermal };
-            }
-        }
-        if resp.double_clicked() {
-            st.actions.push(Action::Goto(Screen::Departure));
-        }
-        if resp.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            reveal = Some((Some(egui::Align::Center), false));
         }
     }
-    // detail panel
-    let dr = Rect::from_min_max(Pos2::new(content.max.x - detail_w, y + 8.0), Pos2::new(content.max.x, content.max.y - 70.0));
-    panel(&p, dr, sp::R_CARD);
-    let d = st.defs[st.plan.aircraft.min(n - 1)].clone();
-    let img = Rect::from_min_size(dr.min + Vec2::splat(8.0), Vec2::new(dr.width() - 16.0, (dr.width() - 16.0) * 0.56));
-    if let Some(t) = st.thumbs.get(d.id) {
-        p.add(Shape::Rect(epaint::RectShape::filled(img, 10, Color32::WHITE).with_texture(*t, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)))));
+    let vis: Vec<usize> = order.iter().copied().filter(|&i| st.aircraft_group.is_none_or(|g| Group::of(&st.defs[i]) == g)).collect();
+    // ---- layout: card grid (left, scrolls) + details (right); narrow windows drop the details
+    let wide = content.width() >= 980.0;
+    let detail_w = if wide { (content.width() * 0.34).clamp(360.0, 560.0) } else { 0.0 };
+    let bottom = content.max.y - 70.0;
+    let grid_r = Rect::from_min_max(Pos2::new(content.min.x, top), Pos2::new(content.max.x - if wide { detail_w + 24.0 } else { 0.0 }, bottom));
+    // The bar floats in the gutter right of the cards.
+    let (cols, cw, ch) = card_grid(grid_r.width() - super::scroll::GUTTER);
+    let pos = vis.iter().position(|&i| i == st.plan.aircraft).unwrap_or(0) as i32;
+    let (n, c) = (vis.len() as i32, cols as i32);
+    let mut to = pos;
+    if nav.dx != 0 {
+        to = (to + nav.dx).rem_euclid(n);
     }
-    let mut yy = img.max.y + 18.0;
-    p.text(Pos2::new(dr.min.x + 22.0, yy), Align2::LEFT_TOP, d.name, f_display(26.0), pal::TEXT);
-    yy += 36.0;
-    p.text(Pos2::new(dr.min.x + 22.0, yy), Align2::LEFT_TOP, class_name(&d).to_uppercase(), f_inst_b(11.5), pal::ACCENT);
-    yy += 24.0;
-    let g = p.layout(d.description.to_string(), f_ui(14.0), pal::TEXT2, dr.width() - 44.0);
-    let gh = g.size().y;
-    p.galley(Pos2::new(dr.min.x + 22.0, yy), g, pal::TEXT2);
-    yy += gh + 16.0;
-    for (k, v) in spec_lines(&d) {
-        p.text(Pos2::new(dr.min.x + 22.0, yy), Align2::LEFT_TOP, k, f_ui(13.0), pal::TEXT3);
-        p.text(Pos2::new(dr.min.x + 170.0, yy), Align2::LEFT_TOP, v, f_ui(13.0), pal::TEXT);
-        yy += 22.0;
+    if nav.dy != 0 {
+        to = (to + nav.dy * c).clamp(0, n - 1);
+        // Down from the row above a short last row lands on its last card.
+        if nav.dy > 0 && to == pos && pos / c != (n - 1) / c {
+            to = n - 1;
+        }
     }
-    yy += 12.0;
-    let wr = Rect::from_min_size(Pos2::new(dr.min.x + 22.0, yy), Vec2::new(dr.width() - 44.0, 40.0));
-    let label = if d.has_engine { "Auto flight: take-off, tour, landing" } else { "Auto flight: soar thermal to thermal" };
-    toggle_row(ui, wr, "watch", label, &mut st.plan.watch);
-    // footer
+    if nav.ends != 0 {
+        to = if nav.ends < 0 { 0 } else { n - 1 };
+    }
+    if to != pos {
+        select_aircraft(st, vis[to as usize]);
+        reveal = reveal.or(Some((None, true)));
+    }
+    // Opening the screen: the selection in view, without animating. (For a
+    // few frames: the first is egui's sizing pass for the new menu area.)
+    let entry_id = Id::new("aircraft_screen_entry");
+    let (mut first, last) = ui.data(|d| d.get_temp::<(u64, u64)>(entry_id)).unwrap_or((0, 0));
+    if last + 1 < st.frame_no || first == 0 {
+        first = st.frame_no;
+    }
+    if st.frame_no < first + 3 {
+        reveal = Some((Some(egui::Align::Center), false));
+    }
+    ui.data_mut(|d| d.insert_temp(entry_id, (first, st.frame_no)));
+    // ---- the grid
+    let sel = st.plan.aircraft;
+    let mut clicked = None;
+    let mut open = false;
+    let fade = Color32::from_rgba_premultiplied(5, 7, 10, 250);
+    super::scroll::area(ui, grid_r, "aircraft_grid", fade, |ui| {
+        let rows = vis.len().div_ceil(cols);
+        let total = Vec2::new(grid_r.width(), rows as f32 * (ch + CARD_GAP) - CARD_GAP + 4.0);
+        let (area, _) = ui.allocate_exact_size(total, Sense::hover());
+        for (k, &i) in vis.iter().enumerate() {
+            let (row, col) = (k / cols, k % cols);
+            let r = Rect::from_min_size(area.min + Vec2::new(col as f32 * (cw + CARD_GAP), row as f32 * (ch + CARD_GAP)), Vec2::new(cw, ch));
+            let resp = ui.interact(r, ui.id().with(("ac", i)), Sense::click());
+            let d = &st.defs[i];
+            let p = ui.painter();
+            let is_sel = sel == i;
+            panel_with(p, r, sp::R_CARD, if resp.hovered() { pal::RAISED } else { pal::PANEL_SOLID });
+            let img = Rect::from_min_size(r.min + Vec2::splat(6.0), Vec2::new(cw - 12.0, cw * 0.62 - 6.0));
+            match st.thumbs.get(d.id) {
+                Some(t) => {
+                    p.add(Shape::Rect(epaint::RectShape::filled(img, 10, Color32::WHITE).with_texture(*t, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)))));
+                }
+                None => {
+                    gradient_rect(p, img, Color32::from_rgb(70, 120, 180), Color32::from_rgb(170, 200, 230));
+                }
+            }
+            let tw = cw - 32.0;
+            // Long names step down a size before they are shortened.
+            let font = [16.0, 15.0, 14.0].into_iter().map(f_semi).find(|f| p.layout_no_wrap(d.name.into(), f.clone(), pal::TEXT).size().x <= tw).unwrap_or(f_semi(14.0));
+            p.text(Pos2::new(r.min.x + 16.0, img.max.y + 12.0 + (16.0 - font.size) * 0.5), Align2::LEFT_TOP, fit_text(p, d.name, font.clone(), tw), font, pal::TEXT);
+            p.text(Pos2::new(r.min.x + 16.0, img.max.y + 34.0), Align2::LEFT_TOP, fit_text(p, class_name(d), f_ui(12.5), tw), f_ui(12.5), pal::TEXT3);
+            if is_sel {
+                p.rect_stroke(r, sp::R_CARD, Stroke::new(2.0, pal::ACCENT), egui::StrokeKind::Inside);
+                if let Some((align, animate)) = reveal {
+                    // (The margin keeps the outline and a sliver of the neighbours in view.)
+                    let a = if animate { ui.style().scroll_animation } else { egui::style::ScrollAnimation::none() };
+                    ui.scroll_to_rect_animation(r.expand(12.0), align, a);
+                }
+            }
+            if resp.clicked() {
+                clicked = Some(i);
+                ui.scroll_to_rect(r.expand(12.0), None);
+            }
+            if resp.double_clicked() {
+                open = true;
+            }
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+        }
+    });
+    if let Some(i) = clicked {
+        select_aircraft(st, i);
+    }
+    // ---- details (scrolls when the window is short)
+    let d = st.defs[st.plan.aircraft.min(n_all - 1)].clone();
+    if wide {
+        let dr = Rect::from_min_max(Pos2::new(content.max.x - detail_w, top), Pos2::new(content.max.x, bottom));
+        panel(&p, dr, sp::R_CARD);
+        let watch = &mut st.plan.watch;
+        let thumb = st.thumbs.get(d.id).copied();
+        super::scroll::page(ui, dr.shrink(2.0), "aircraft_detail", pal::PANEL_SOLID, |ui, o, w| {
+            let p = ui.painter().clone();
+            let x = o.x + 20.0;
+            let tw = w - 40.0 - super::scroll::GUTTER * 0.5;
+            let img = Rect::from_min_size(o + Vec2::splat(6.0), Vec2::new(w - 12.0, ((w - 12.0) * 0.56).min(dr.height() * 0.42)));
+            if let Some(t) = thumb {
+                // Crop to the box's aspect (the thumbnail is 16:10).
+                let a = img.width() / img.height() / 1.786;
+                let uv = if a >= 1.0 { Rect::from_min_max(Pos2::new(0.0, 0.5 - 0.5 / a), Pos2::new(1.0, 0.5 + 0.5 / a)) } else { Rect::from_min_max(Pos2::new(0.5 - 0.5 * a, 0.0), Pos2::new(0.5 + 0.5 * a, 1.0)) };
+                p.add(Shape::Rect(epaint::RectShape::filled(img, 10, Color32::WHITE).with_texture(t, uv)));
+            }
+            let mut yy = img.max.y + 18.0;
+            let g = p.layout(d.name.to_string(), f_display(26.0), pal::TEXT, tw);
+            let gh = g.size().y;
+            p.galley(Pos2::new(x, yy), g, pal::TEXT);
+            yy += gh + 6.0;
+            p.text(Pos2::new(x, yy), Align2::LEFT_TOP, class_name(&d).to_uppercase(), f_inst_b(11.5), pal::ACCENT);
+            yy += 24.0;
+            let g = p.layout(d.description.to_string(), f_ui(14.0), pal::TEXT2, tw);
+            let gh = g.size().y;
+            p.galley(Pos2::new(x, yy), g, pal::TEXT2);
+            yy += gh + 16.0;
+            let kw = (tw * 0.36).clamp(110.0, 148.0);
+            for (k, v) in spec_lines(&d) {
+                p.text(Pos2::new(x, yy), Align2::LEFT_TOP, k, f_ui(13.0), pal::TEXT3);
+                let g = p.layout(v, f_ui(13.0), pal::TEXT, tw - kw);
+                let gh = g.size().y;
+                p.galley(Pos2::new(x + kw, yy), g, pal::TEXT);
+                yy += gh.max(16.0) + 6.0;
+            }
+            yy += 12.0;
+            let wr = Rect::from_min_size(Pos2::new(x, yy), Vec2::new(tw, 40.0));
+            let label = if d.has_engine { "Auto flight: take-off, tour, landing" } else { "Auto flight: soar thermal to thermal" };
+            toggle_row(ui, wr, "watch", label, watch);
+            wr.max.y + 20.0 - o.y
+        });
+    }
+    // ---- footer
     let fy = content.max.y - 52.0;
-    if button(ui, Rect::from_min_size(Pos2::new(content.min.x, fy), Vec2::new(140.0, 48.0)), "back", "Back", Btn::Secondary, true).clicked() || esc(ui) {
+    if button(ui, Rect::from_min_size(Pos2::new(content.min.x, fy), Vec2::new(140.0, 48.0)), "back", "Back", Btn::Secondary, true).clicked() || nav.back {
         st.actions.push(Action::Goto(Screen::Main));
     }
-    if button(ui, Rect::from_min_size(Pos2::new(content.max.x - 220.0, fy), Vec2::new(220.0, 48.0)), "next", "Choose departure  ›", Btn::Primary, true).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+    let next_r = Rect::from_min_size(Pos2::new(content.max.x - 220.0, fy), Vec2::new(220.0, 48.0));
+    if button(ui, next_r, "next", "Choose departure  ›", Btn::Primary, true).clicked() || nav.ok || open {
         st.actions.push(Action::Goto(Screen::Departure));
     }
-    // keyboard: arrows move the selection
-    let (l, r) = ui.input(|i| (i.key_pressed(egui::Key::ArrowLeft), i.key_pressed(egui::Key::ArrowRight)));
-    if l {
-        st.plan.aircraft = (st.plan.aircraft + n - 1) % n;
+    // Between the buttons: the selection (narrow windows), else the keys.
+    let mid = Rect::from_min_max(Pos2::new(content.min.x + 160.0, fy), Pos2::new(next_r.min.x - 20.0, fy + 48.0));
+    if !wide {
+        p.text(Pos2::new(mid.max.x, mid.center().y - 9.0), Align2::RIGHT_CENTER, fit_text(&p, d.name, f_semi(15.0), mid.width()), f_semi(15.0), pal::TEXT);
+        p.text(Pos2::new(mid.max.x, mid.center().y + 11.0), Align2::RIGHT_CENTER, fit_text(&p, class_name(&d), f_ui(12.5), mid.width()), f_ui(12.5), pal::TEXT3);
+    } else {
+        let pad = st.input.devices.iter().any(|d| d.info.kind == crate::input::DevKind::Gamepad);
+        let hints: &[(&str, &str)] = if pad { &[("D-pad", "Browse"), ("LB  RB", "Family"), ("A", "Continue")] } else { &[("← → ↑ ↓", "Browse"), ("Tab", "Family"), ("Enter", "Continue")] };
+        key_hints(&p, mid, hints);
     }
-    if r {
-        st.plan.aircraft = (st.plan.aircraft + 1) % n;
+}
+
+/// Key hints ("[Tab] Family") centred in `r`, if they fit.
+fn key_hints(p: &egui::Painter, r: Rect, hints: &[(&str, &str)]) {
+    let items: Vec<_> = hints.iter().map(|(k, l)| (p.layout_no_wrap(k.to_string(), f_semi(11.5), pal::TEXT2), p.layout_no_wrap(l.to_string(), f_ui(12.5), pal::TEXT3))).collect();
+    let w: f32 = items.iter().map(|(k, l)| k.size().x + 14.0 + 8.0 + l.size().x).sum::<f32>() + 24.0 * (items.len() as f32 - 1.0);
+    if w > r.width() {
+        return;
     }
+    let mut x = r.center().x - w * 0.5;
+    for (k, l) in items {
+        let kr = Rect::from_min_size(Pos2::new(x, r.center().y - 11.0), Vec2::new(k.size().x + 14.0, 22.0));
+        p.rect_filled(kr, 5, pal::RAISED);
+        p.rect_stroke(kr, 5, Stroke::new(1.0, pal::HAIRLINE_HI), egui::StrokeKind::Inside);
+        p.galley(kr.center() - k.size() * 0.5, k, pal::TEXT2);
+        x = kr.max.x + 8.0;
+        p.galley(Pos2::new(x, r.center().y - l.size().y * 0.5), l.clone(), pal::TEXT3);
+        x += l.size().x + 24.0;
+    }
+}
+
+/// Select a type (and drop a start position it cannot use).
+fn select_aircraft(st: &mut UiState, i: usize) {
+    st.plan.aircraft = i;
+    let d = &st.defs[i];
+    if !st.plan.spec.valid_for(d) {
+        st.plan.spec = if d.has_engine { Spec::Runway(String::new()) } else { Spec::Thermal };
+    }
+}
+
+/// `text` shortened with an ellipsis to fit `max_w` points.
+fn fit_text(p: &egui::Painter, text: &str, font: egui::FontId, max_w: f32) -> String {
+    let w = |t: &str| p.layout_no_wrap(t.to_string(), font.clone(), pal::TEXT).size().x;
+    if w(text) <= max_w {
+        return text.to_string();
+    }
+    let mut chars: Vec<char> = text.chars().collect();
+    while !chars.is_empty() && w(&format!("{}…", chars.iter().collect::<String>())) > max_w {
+        chars.pop();
+    }
+    format!("{}…", chars.iter().collect::<String>().trim_end())
 }
 
 /// A row with a label and a switch.
@@ -889,37 +1139,35 @@ fn list_panel(ui: &mut Ui, st: &mut UiState, db: &Arc<Db>, def: &AircraftDef, r:
     if enter {
         clicked = list.first().copied();
     }
-    ui.scope_builder(UiBuilder::new().max_rect(lr), |ui| {
-        egui::ScrollArea::vertical().id_salt("airport_list").auto_shrink([false, false]).show(ui, |ui| {
-            for &i in &list {
-                let a = &db.airports[i];
-                let (row, resp) = ui.allocate_exact_size(Vec2::new(lr.width(), 62.0), Sense::click());
-                let p = ui.painter();
-                let sel = st.picker.selected == Some(i);
-                if sel {
-                    p.rect_filled(row.shrink2(Vec2::new(10.0, 2.0)), 8, pal::ACCENT_BG);
-                    p.rect_filled(Rect::from_min_size(row.min + Vec2::new(10.0, 10.0), Vec2::new(3.0, 42.0)), 2, pal::ACCENT);
-                } else if resp.hovered() {
-                    p.rect_filled(row.shrink2(Vec2::new(10.0, 2.0)), 8, Color32::from_white_alpha(7));
-                }
-                let ok = suitable(a, def);
-                p.text(Pos2::new(row.min.x + 24.0, row.min.y + 11.0), Align2::LEFT_TOP, a.code(), f_inst_b(14.0), if ok { pal::ACCENT } else { pal::TEXT3 });
-                if !a.iata.is_empty() {
-                    p.text(Pos2::new(row.min.x + 82.0, row.min.y + 12.0), Align2::LEFT_TOP, &a.iata, f_inst(12.0), pal::TEXT3);
-                }
-                let name = clip_text(&a.name, 34);
-                p.text(Pos2::new(row.min.x + 120.0, row.min.y + 10.0), Align2::LEFT_TOP, name, f_semi(14.0), pal::TEXT);
-                let place = if a.city.is_empty() { a.country.clone() } else { format!("{}, {}", clip_text(&a.city, 22), a.country) };
-                p.text(Pos2::new(row.min.x + 24.0, row.min.y + 36.0), Align2::LEFT_TOP, place, f_ui(12.5), pal::TEXT2);
-                p.text(Pos2::new(row.max.x - 22.0, row.min.y + 36.0), Align2::RIGHT_TOP, format!("{} m", thousands(a.longest_m())), f_mono(12.0), if ok { pal::TEXT2 } else { pal::AMBER });
-                if st.settings.is_favourite(&a.ident) {
-                    p.text(Pos2::new(row.max.x - 22.0, row.min.y + 10.0), Align2::RIGHT_TOP, "★", f_ui(13.0), pal::AMBER);
-                }
-                if resp.clicked() {
-                    clicked = Some(i);
-                }
+    super::scroll::area(ui, lr, "airport_list", pal::PANEL_SOLID, |ui| {
+        for &i in &list {
+            let a = &db.airports[i];
+            let (row, resp) = ui.allocate_exact_size(Vec2::new(lr.width(), 62.0), Sense::click());
+            let p = ui.painter();
+            let sel = st.picker.selected == Some(i);
+            if sel {
+                p.rect_filled(row.shrink2(Vec2::new(10.0, 2.0)), 8, pal::ACCENT_BG);
+                p.rect_filled(Rect::from_min_size(row.min + Vec2::new(10.0, 10.0), Vec2::new(3.0, 42.0)), 2, pal::ACCENT);
+            } else if resp.hovered() {
+                p.rect_filled(row.shrink2(Vec2::new(10.0, 2.0)), 8, Color32::from_white_alpha(7));
             }
-        });
+            let ok = suitable(a, def);
+            p.text(Pos2::new(row.min.x + 24.0, row.min.y + 11.0), Align2::LEFT_TOP, a.code(), f_inst_b(14.0), if ok { pal::ACCENT } else { pal::TEXT3 });
+            if !a.iata.is_empty() {
+                p.text(Pos2::new(row.min.x + 82.0, row.min.y + 12.0), Align2::LEFT_TOP, &a.iata, f_inst(12.0), pal::TEXT3);
+            }
+            let name = clip_text(&a.name, 34);
+            p.text(Pos2::new(row.min.x + 120.0, row.min.y + 10.0), Align2::LEFT_TOP, name, f_semi(14.0), pal::TEXT);
+            let place = if a.city.is_empty() { a.country.clone() } else { format!("{}, {}", clip_text(&a.city, 22), a.country) };
+            p.text(Pos2::new(row.min.x + 24.0, row.min.y + 36.0), Align2::LEFT_TOP, place, f_ui(12.5), pal::TEXT2);
+            p.text(Pos2::new(row.max.x - 22.0, row.min.y + 36.0), Align2::RIGHT_TOP, format!("{} m", thousands(a.longest_m())), f_mono(12.0), if ok { pal::TEXT2 } else { pal::AMBER });
+            if st.settings.is_favourite(&a.ident) {
+                p.text(Pos2::new(row.max.x - 22.0, row.min.y + 10.0), Align2::RIGHT_TOP, "★", f_ui(13.0), pal::AMBER);
+            }
+            if resp.clicked() {
+                clicked = Some(i);
+            }
+        }
     });
     if let Some(i) = clicked {
         st.picker.select(db, i, 12.5);
@@ -966,191 +1214,196 @@ fn details_panel(ui: &mut Ui, st: &mut UiState, db: &Arc<Db>, def: &AircraftDef,
     if st.picker.auto_end.as_deref() == Some(a.ident.as_str()) && picker_wind(&st.picker).is_some() && st.plan.airport == a.ident {
         pick_default_spec(st, db, si);
     }
-    let mut y = r.min.y + 22.0;
-    p.text(Pos2::new(x, y), Align2::LEFT_TOP, a.code(), f_inst_b(14.0), pal::ACCENT);
-    p.text(Pos2::new(x + 60.0, y + 1.0), Align2::LEFT_TOP, a.kind.label().to_uppercase(), f_inst(11.5), pal::TEXT3);
-    // favourite star
-    let star = Rect::from_min_size(Pos2::new(r.max.x - 54.0, y - 6.0), Vec2::splat(34.0));
-    let fav = st.settings.is_favourite(&a.ident);
-    let sresp = ui.interact(star, ui.id().with("star"), Sense::click());
-    p.text(star.center(), Align2::CENTER_CENTER, if fav { "★" } else { "☆" }, f_ui(22.0), if fav { pal::AMBER } else if sresp.hovered() { pal::TEXT } else { pal::TEXT3 });
-    if sresp.clicked() {
-        st.settings.toggle_favourite(&a.ident);
-        st.settings_dirty = true;
-    }
-    y += 26.0;
-    let g = p.layout(a.name.clone(), f_display(22.0), pal::TEXT, w - 30.0);
-    let gh = g.size().y;
-    p.galley(Pos2::new(x, y), g, pal::TEXT);
-    y += gh + 4.0;
-    let place = [a.city.as_str(), a.region.as_str(), a.country.as_str()].iter().filter(|s| !s.is_empty()).cloned().collect::<Vec<_>>().join(" · ");
-    p.text(Pos2::new(x, y), Align2::LEFT_TOP, format!("{place} · {} ft", thousands(a.elev_ft)), f_ui(13.0), pal::TEXT2);
-    y += 28.0;
-    // local time + daylight
-    let now = crate::weather::unix_now();
-    let rt = crate::weather::real_time(a.lat, a.lon, now, None);
-    let sun = airports::sun_times(a.lat, a.lon, rt.day_of_year);
-    let el = crate::atmosphere::sun_direction(a.lat, a.lon, rt.day_of_year, rt.local_hours).y.asin().to_degrees();
-    let daylight = if el > 0.0 { "Daylight" } else if el > -6.0 { "Twilight" } else { "Night" };
-    let card = Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, 54.0));
-    p.rect_filled(card, 8, pal::RAISED);
-    p.text(card.min + Vec2::new(14.0, 9.0), Align2::LEFT_TOP, "LOCAL TIME", f_inst(10.5), pal::TEXT3);
-    p.text(card.min + Vec2::new(14.0, 24.0), Align2::LEFT_TOP, hhmm(rt.local_hours), f_semi(19.0), pal::TEXT);
-    p.text(card.min + Vec2::new(90.0, 28.0), Align2::LEFT_TOP, daylight, f_ui(12.5), if el > 0.0 { pal::AMBER } else { pal::ACCENT });
-    if let Some((rise, set)) = sun {
-        let off = rt.local_hours - crate::atmosphere::civil_offset_h(a.lat, a.lon, rt.day_of_year) * 0.0;
-        let _ = off;
-        p.text(Pos2::new(card.max.x - 14.0, card.min.y + 9.0), Align2::RIGHT_TOP, "SUNRISE · SUNSET", f_inst(10.5), pal::TEXT3);
-        p.text(Pos2::new(card.max.x - 14.0, card.min.y + 26.0), Align2::RIGHT_TOP, format!("{}  –  {}", hhmm(rise), hhmm(set)), f_semi(15.0), pal::TEXT);
-    }
-    y = card.max.y + 10.0;
-    // METAR
-    let mc = Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, 82.0));
-    p.rect_filled(mc, 8, pal::RAISED);
-    match st.picker.metar.as_ref().and_then(|m| m.result.clone()) {
-        Some(Ok((m, km))) => {
-            let wx = crate::weather::Wx::from_metar_str(&m.raw);
-            let cat = wx.as_ref().map(|w| w.category()).unwrap_or("—");
-            let catc = match cat {
-                "VFR" => pal::GREEN,
-                "MVFR" => pal::ACCENT,
-                "IFR" => pal::RED,
-                "LIFR" => pal::MAGENTA,
-                _ => pal::TEXT2,
-            };
-            super::chip(&p, mc.min + Vec2::new(12.0, 10.0), Align2::LEFT_TOP, cat, f_inst_b(11.0), Color32::from_rgb(6, 10, 14), catc);
-            let wind = match m.wind_dir {
-                Some(d) if m.wind_kt >= 1.0 => format!("{:03.0}° {:.0}{} kt", d, m.wind_kt, m.gust_kt.map(|g| format!("G{g:.0}")).unwrap_or_default()),
-                None if m.wind_kt >= 1.0 => format!("VRB {:.0} kt", m.wind_kt),
-                _ => "Calm".into(),
-            };
-            p.text(mc.min + Vec2::new(70.0, 10.0), Align2::LEFT_TOP, wind, f_semi(14.0), pal::TEXT);
-            let extra = format!("{}{}{}", m.temp_c.map(|t| format!("{t:.0}°C  ")).unwrap_or_default(), m.qnh_hpa.map(|q| format!("Q{q:.0}  ")).unwrap_or_default(), if km > 3.0 { format!("{} · {km:.0} km", m.station) } else { m.station.clone() });
-            p.text(Pos2::new(mc.max.x - 12.0, mc.min.y + 12.0), Align2::RIGHT_TOP, extra, f_ui(12.0), pal::TEXT2);
-            let g = p.layout(m.raw.clone(), f_mono(11.0), pal::TEXT3, w - 24.0);
-            p.galley(mc.min + Vec2::new(12.0, 38.0), g, pal::TEXT3);
-        }
-        Some(Err(e)) => {
-            p.text(mc.min + Vec2::new(12.0, 12.0), Align2::LEFT_TOP, "No METAR", f_semi(14.0), pal::TEXT2);
-            p.text(mc.min + Vec2::new(12.0, 34.0), Align2::LEFT_TOP, clip_text(&e, 50), f_ui(12.0), pal::TEXT3);
-        }
-        None => {
-            p.text(mc.min + Vec2::new(12.0, 12.0), Align2::LEFT_TOP, "Fetching weather…", f_ui(13.0), pal::TEXT3);
-        }
-    }
-    y = mc.max.y + 18.0;
-    // runways with per-end wind
-    p.text(Pos2::new(x, y), Align2::LEFT_TOP, "RUNWAYS", f_inst_b(11.0), pal::TEXT3);
-    y += 22.0;
-    let wind = picker_wind(&st.picker);
-    let (need, need_paved) = needs(def);
-    let mut rows = 0;
-    for rw in a.runways.iter().filter(|r| r.length_m >= 100.0 && !r.ends[0].ident.starts_with('H')) {
-        if rows >= 4 {
-            break;
-        }
-        rows += 1;
-        let ok = rw.length_m >= need * 0.95 && (!need_paved || rw.surface.paved());
-        let rr = Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, 56.0));
-        p.rect_filled(rr, 8, pal::RAISED);
-        p.text(rr.min + Vec2::new(12.0, 8.0), Align2::LEFT_TOP, rw.name(), f_inst_b(14.0), pal::TEXT);
-        let info = format!("{} × {} m · {}{}", thousands(rw.length_m), rw.width_m.round(), rw.surface.name(), if rw.lighted { " · lit" } else { "" });
-        p.text(rr.min + Vec2::new(12.0, 31.0), Align2::LEFT_TOP, info, f_ui(12.0), if ok { pal::TEXT2 } else { pal::AMBER });
-        // end buttons with head/cross components
-        for end in 0..2 {
-            let e = &rw.ends[end];
-            let b = Rect::from_min_size(Pos2::new(rr.max.x - 168.0 + end as f32 * 82.0, rr.min.y + 8.0), Vec2::new(76.0, 40.0));
-            let selected = matches!(&st.plan.spec, Spec::Runway(x) | Spec::Final(x, _) if *x == e.ident) && st.plan.airport == a.ident;
-            let resp = ui.interact(b, ui.id().with(("end", rw.name(), end)), Sense::click());
-            p.rect_filled(b, 6, if selected { pal::ACCENT_DEEP } else if resp.hovered() { pal::RAISED_HI } else { Color32::from_rgb(20, 25, 33) });
-            if selected {
-                p.rect_stroke(b, 6, Stroke::new(1.5, pal::ACCENT), egui::StrokeKind::Inside);
-            }
-            p.text(b.min + Vec2::new(8.0, 5.0), Align2::LEFT_TOP, &e.ident, f_inst_b(13.0), pal::TEXT);
-            if let (Some((from, kt, gust, _)), Some(h)) = (wind.as_ref(), rw.heading(end)) {
-                let (hw, xw) = airports::wind_components(h, *from, *kt);
-                let col = if hw < -3.0 { pal::RED } else if xw.abs() > 15.0 { pal::AMBER } else { pal::GREEN };
-                let gx = gust.map(|g| airports::wind_components(h, *from, g).1.abs()).unwrap_or(0.0);
-                let _ = gx;
-                p.text(b.min + Vec2::new(8.0, 22.0), Align2::LEFT_TOP, format!("{}{:.0} X{:.0}", if hw >= 0.0 { "H" } else { "T" }, hw.abs(), xw.abs()), f_mono(11.0), col);
-            }
-            if resp.clicked() {
-                st.plan.airport = a.ident.clone();
-                st.picker.air_point = None;
-                st.picker.auto_end = None;
-                st.plan.spec = match &st.plan.spec {
-                    Spec::Final(_, nm) => Spec::Final(e.ident.clone(), *nm),
-                    _ => Spec::Runway(e.ident.clone()),
-                };
-            }
-        }
-        y = rr.max.y + 8.0;
-    }
-    if rows == 0 {
-        p.text(Pos2::new(x, y), Align2::LEFT_TOP, "No runway data", f_ui(13.0), pal::TEXT3);
-        y += 24.0;
-    }
-    // start position
-    y += 10.0;
-    p.text(Pos2::new(x, y), Align2::LEFT_TOP, "START", f_inst_b(11.0), pal::TEXT3);
-    y += 22.0;
-    let end_ident = match &st.plan.spec {
-        Spec::Runway(e) | Spec::Final(e, _) => Some(e.clone()),
-        _ => a.runways.first().map(|r| r.ends[0].ident.clone()),
-    };
-    let mut opts: Vec<(String, Spec)> = Vec::new();
-    if let Some(e) = &end_ident {
-        if def.has_engine {
-            opts.push((format!("Runway {e}"), Spec::Runway(e.clone())));
-        }
-        for nm in [3.0, 5.0, 10.0] {
-            opts.push((format!("{nm:.0} NM final"), Spec::Final(e.clone(), nm)));
-        }
-    }
-    if def.has_engine {
-        opts.push(("Apron".into(), Spec::Apron));
-    } else {
-        opts.push(("Thermal".into(), Spec::Thermal));
-    }
-    let cw = (w - 8.0 * 2.0) / 3.0;
-    for (k, (label, spec)) in opts.iter().enumerate() {
-        let (row, col) = (k / 3, k % 3);
-        let b = Rect::from_min_size(Pos2::new(x + col as f32 * (cw + 8.0), y + row as f32 * 40.0), Vec2::new(cw, 32.0));
-        let on = st.plan.spec == *spec && st.plan.airport == a.ident && st.picker.air_point.is_none();
-        if chip_btn(ui, b, ("start", k), label, on) {
-            st.plan.airport = a.ident.clone();
-            st.plan.spec = spec.clone();
-            st.picker.air_point = None;
-        }
-    }
-    y += ((opts.len() + 2) / 3) as f32 * 40.0 + 4.0;
-    // air start
-    let air_on = matches!(st.plan.spec, Spec::Air { .. });
-    let ar = Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, if air_on { 92.0 } else { 40.0 }));
-    p.rect_filled(ar, 8, if air_on { pal::ACCENT_BG } else { pal::RAISED });
-    p.text(ar.min + Vec2::new(12.0, 11.0), Align2::LEFT_TOP, if air_on { "Airborne at the marker" } else { "Airborne: click the map" }, f_semi(13.0), if air_on { pal::TEXT } else { pal::TEXT2 });
-    if air_on {
-        let mut changed = false;
-        ui.scope_builder(UiBuilder::new().max_rect(Rect::from_min_size(ar.min + Vec2::new(12.0, 38.0), Vec2::new(w - 24.0, 46.0))), |ui| {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("ALT").font(f_inst(11.0)).color(pal::TEXT3));
-                changed |= ui.add(egui::DragValue::new(&mut st.picker.air_alt_ft).range(500.0..=40_000.0).speed(50.0).suffix(" ft")).changed();
-                ui.add_space(12.0);
-                ui.label(RichText::new("HDG").font(f_inst(11.0)).color(pal::TEXT3));
-                changed |= ui.add(egui::DragValue::new(&mut st.picker.air_hdg).range(0.0..=359.0).speed(1.0).suffix("°")).changed();
-            });
-        });
-        if changed {
-            if let Spec::Air { alt_m, hdg, .. } = &mut st.plan.spec {
-                *alt_m = st.picker.air_alt_ft / 3.280_84;
-                *hdg = st.picker.air_hdg;
-            }
-        }
-    }
-    let _ = y;
-    // suitability warning + next
+    // Everything above the footer scrolls when the window is short (big
+    // airports list all their runways).
     let fy = r.max.y - 60.0;
-    if !suitable(&a, def) {
+    let warn = !suitable(&a, def);
+    let body = Rect::from_min_max(Pos2::new(r.min.x + 1.0, r.min.y), Pos2::new(r.max.x, fy - if warn { 40.0 } else { 14.0 }));
+    super::scroll::page(ui, body, "airport_details", pal::PANEL_SOLID, |ui, o, pw| {
+        let p = ui.painter().clone();
+        let x = o.x + 21.0;
+        let mut y = o.y + 22.0;
+        p.text(Pos2::new(x, y), Align2::LEFT_TOP, a.code(), f_inst_b(14.0), pal::ACCENT);
+        p.text(Pos2::new(x + 60.0, y + 1.0), Align2::LEFT_TOP, a.kind.label().to_uppercase(), f_inst(11.5), pal::TEXT3);
+        // favourite star
+        let star = Rect::from_min_size(Pos2::new(o.x + pw - 54.0, y - 6.0), Vec2::splat(34.0));
+        let fav = st.settings.is_favourite(&a.ident);
+        let sresp = ui.interact(star, ui.id().with("star"), Sense::click());
+        p.text(star.center(), Align2::CENTER_CENTER, if fav { "★" } else { "☆" }, f_ui(22.0), if fav { pal::AMBER } else if sresp.hovered() { pal::TEXT } else { pal::TEXT3 });
+        if sresp.clicked() {
+            st.settings.toggle_favourite(&a.ident);
+            st.settings_dirty = true;
+        }
+        y += 26.0;
+        let g = p.layout(a.name.clone(), f_display(22.0), pal::TEXT, w - 30.0);
+        let gh = g.size().y;
+        p.galley(Pos2::new(x, y), g, pal::TEXT);
+        y += gh + 4.0;
+        let place = [a.city.as_str(), a.region.as_str(), a.country.as_str()].iter().filter(|s| !s.is_empty()).cloned().collect::<Vec<_>>().join(" · ");
+        p.text(Pos2::new(x, y), Align2::LEFT_TOP, format!("{place} · {} ft", thousands(a.elev_ft)), f_ui(13.0), pal::TEXT2);
+        y += 28.0;
+        // local time + daylight
+        let now = crate::weather::unix_now();
+        let rt = crate::weather::real_time(a.lat, a.lon, now, None);
+        let sun = airports::sun_times(a.lat, a.lon, rt.day_of_year);
+        let el = crate::atmosphere::sun_direction(a.lat, a.lon, rt.day_of_year, rt.local_hours).y.asin().to_degrees();
+        let daylight = if el > 0.0 { "Daylight" } else if el > -6.0 { "Twilight" } else { "Night" };
+        let card = Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, 54.0));
+        p.rect_filled(card, 8, pal::RAISED);
+        p.text(card.min + Vec2::new(14.0, 9.0), Align2::LEFT_TOP, "LOCAL TIME", f_inst(10.5), pal::TEXT3);
+        p.text(card.min + Vec2::new(14.0, 24.0), Align2::LEFT_TOP, hhmm(rt.local_hours), f_semi(19.0), pal::TEXT);
+        p.text(card.min + Vec2::new(90.0, 28.0), Align2::LEFT_TOP, daylight, f_ui(12.5), if el > 0.0 { pal::AMBER } else { pal::ACCENT });
+        if let Some((rise, set)) = sun {
+            let off = rt.local_hours - crate::atmosphere::civil_offset_h(a.lat, a.lon, rt.day_of_year) * 0.0;
+            let _ = off;
+            p.text(Pos2::new(card.max.x - 14.0, card.min.y + 9.0), Align2::RIGHT_TOP, "SUNRISE · SUNSET", f_inst(10.5), pal::TEXT3);
+            p.text(Pos2::new(card.max.x - 14.0, card.min.y + 26.0), Align2::RIGHT_TOP, format!("{}  –  {}", hhmm(rise), hhmm(set)), f_semi(15.0), pal::TEXT);
+        }
+        y = card.max.y + 10.0;
+        // METAR
+        let mc = Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, 82.0));
+        p.rect_filled(mc, 8, pal::RAISED);
+        match st.picker.metar.as_ref().and_then(|m| m.result.clone()) {
+            Some(Ok((m, km))) => {
+                let wx = crate::weather::Wx::from_metar_str(&m.raw);
+                let cat = wx.as_ref().map(|w| w.category()).unwrap_or("—");
+                let catc = match cat {
+                    "VFR" => pal::GREEN,
+                    "MVFR" => pal::ACCENT,
+                    "IFR" => pal::RED,
+                    "LIFR" => pal::MAGENTA,
+                    _ => pal::TEXT2,
+                };
+                super::chip(&p, mc.min + Vec2::new(12.0, 10.0), Align2::LEFT_TOP, cat, f_inst_b(11.0), Color32::from_rgb(6, 10, 14), catc);
+                let wind = match m.wind_dir {
+                    Some(d) if m.wind_kt >= 1.0 => format!("{:03.0}° {:.0}{} kt", d, m.wind_kt, m.gust_kt.map(|g| format!("G{g:.0}")).unwrap_or_default()),
+                    None if m.wind_kt >= 1.0 => format!("VRB {:.0} kt", m.wind_kt),
+                    _ => "Calm".into(),
+                };
+                p.text(mc.min + Vec2::new(70.0, 10.0), Align2::LEFT_TOP, wind, f_semi(14.0), pal::TEXT);
+                let extra = format!("{}{}{}", m.temp_c.map(|t| format!("{t:.0}°C  ")).unwrap_or_default(), m.qnh_hpa.map(|q| format!("Q{q:.0}  ")).unwrap_or_default(), if km > 3.0 { format!("{} · {km:.0} km", m.station) } else { m.station.clone() });
+                p.text(Pos2::new(mc.max.x - 12.0, mc.min.y + 12.0), Align2::RIGHT_TOP, extra, f_ui(12.0), pal::TEXT2);
+                let g = p.layout(m.raw.clone(), f_mono(11.0), pal::TEXT3, w - 24.0);
+                p.galley(mc.min + Vec2::new(12.0, 38.0), g, pal::TEXT3);
+            }
+            Some(Err(e)) => {
+                p.text(mc.min + Vec2::new(12.0, 12.0), Align2::LEFT_TOP, "No METAR", f_semi(14.0), pal::TEXT2);
+                p.text(mc.min + Vec2::new(12.0, 34.0), Align2::LEFT_TOP, clip_text(&e, 50), f_ui(12.0), pal::TEXT3);
+            }
+            None => {
+                p.text(mc.min + Vec2::new(12.0, 12.0), Align2::LEFT_TOP, "Fetching weather…", f_ui(13.0), pal::TEXT3);
+            }
+        }
+        y = mc.max.y + 18.0;
+        // runways with per-end wind
+        p.text(Pos2::new(x, y), Align2::LEFT_TOP, "RUNWAYS", f_inst_b(11.0), pal::TEXT3);
+        y += 22.0;
+        let wind = picker_wind(&st.picker);
+        let (need, need_paved) = needs(def);
+        let mut rows = 0;
+        for rw in a.runways.iter().filter(|r| r.length_m >= 100.0 && !r.ends[0].ident.starts_with('H')) {
+            rows += 1;
+            let ok = rw.length_m >= need * 0.95 && (!need_paved || rw.surface.paved());
+            let rr = Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, 56.0));
+            p.rect_filled(rr, 8, pal::RAISED);
+            p.text(rr.min + Vec2::new(12.0, 8.0), Align2::LEFT_TOP, rw.name(), f_inst_b(14.0), pal::TEXT);
+            let info = format!("{} × {} m · {}{}", thousands(rw.length_m), rw.width_m.round(), rw.surface.name(), if rw.lighted { " · lit" } else { "" });
+            p.text(rr.min + Vec2::new(12.0, 31.0), Align2::LEFT_TOP, info, f_ui(12.0), if ok { pal::TEXT2 } else { pal::AMBER });
+            // end buttons with head/cross components
+            for end in 0..2 {
+                let e = &rw.ends[end];
+                let b = Rect::from_min_size(Pos2::new(rr.max.x - 168.0 + end as f32 * 82.0, rr.min.y + 8.0), Vec2::new(76.0, 40.0));
+                let selected = matches!(&st.plan.spec, Spec::Runway(x) | Spec::Final(x, _) if *x == e.ident) && st.plan.airport == a.ident;
+                let resp = ui.interact(b, ui.id().with(("end", rw.name(), end)), Sense::click());
+                p.rect_filled(b, 6, if selected { pal::ACCENT_DEEP } else if resp.hovered() { pal::RAISED_HI } else { Color32::from_rgb(20, 25, 33) });
+                if selected {
+                    p.rect_stroke(b, 6, Stroke::new(1.5, pal::ACCENT), egui::StrokeKind::Inside);
+                }
+                p.text(b.min + Vec2::new(8.0, 5.0), Align2::LEFT_TOP, &e.ident, f_inst_b(13.0), pal::TEXT);
+                if let (Some((from, kt, gust, _)), Some(h)) = (wind.as_ref(), rw.heading(end)) {
+                    let (hw, xw) = airports::wind_components(h, *from, *kt);
+                    let col = if hw < -3.0 { pal::RED } else if xw.abs() > 15.0 { pal::AMBER } else { pal::GREEN };
+                    let gx = gust.map(|g| airports::wind_components(h, *from, g).1.abs()).unwrap_or(0.0);
+                    let _ = gx;
+                    p.text(b.min + Vec2::new(8.0, 22.0), Align2::LEFT_TOP, format!("{}{:.0} X{:.0}", if hw >= 0.0 { "H" } else { "T" }, hw.abs(), xw.abs()), f_mono(11.0), col);
+                }
+                if resp.clicked() {
+                    st.plan.airport = a.ident.clone();
+                    st.picker.air_point = None;
+                    st.picker.auto_end = None;
+                    st.plan.spec = match &st.plan.spec {
+                        Spec::Final(_, nm) => Spec::Final(e.ident.clone(), *nm),
+                        _ => Spec::Runway(e.ident.clone()),
+                    };
+                }
+            }
+            y = rr.max.y + 8.0;
+        }
+        if rows == 0 {
+            p.text(Pos2::new(x, y), Align2::LEFT_TOP, "No runway data", f_ui(13.0), pal::TEXT3);
+            y += 24.0;
+        }
+        // start position
+        y += 10.0;
+        p.text(Pos2::new(x, y), Align2::LEFT_TOP, "START", f_inst_b(11.0), pal::TEXT3);
+        y += 22.0;
+        let end_ident = match &st.plan.spec {
+            Spec::Runway(e) | Spec::Final(e, _) => Some(e.clone()),
+            _ => a.runways.first().map(|r| r.ends[0].ident.clone()),
+        };
+        let mut opts: Vec<(String, Spec)> = Vec::new();
+        if let Some(e) = &end_ident {
+            if def.has_engine {
+                opts.push((format!("Runway {e}"), Spec::Runway(e.clone())));
+            }
+            for nm in [3.0, 5.0, 10.0] {
+                opts.push((format!("{nm:.0} NM final"), Spec::Final(e.clone(), nm)));
+            }
+        }
+        if def.has_engine {
+            opts.push(("Apron".into(), Spec::Apron));
+        } else {
+            opts.push(("Thermal".into(), Spec::Thermal));
+        }
+        let cw = (w - 8.0 * 2.0) / 3.0;
+        for (k, (label, spec)) in opts.iter().enumerate() {
+            let (row, col) = (k / 3, k % 3);
+            let b = Rect::from_min_size(Pos2::new(x + col as f32 * (cw + 8.0), y + row as f32 * 40.0), Vec2::new(cw, 32.0));
+            let on = st.plan.spec == *spec && st.plan.airport == a.ident && st.picker.air_point.is_none();
+            if chip_btn(ui, b, ("start", k), label, on) {
+                st.plan.airport = a.ident.clone();
+                st.plan.spec = spec.clone();
+                st.picker.air_point = None;
+            }
+        }
+        y += ((opts.len() + 2) / 3) as f32 * 40.0 + 4.0;
+        // air start
+        let air_on = matches!(st.plan.spec, Spec::Air { .. });
+        let ar = Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, if air_on { 92.0 } else { 40.0 }));
+        p.rect_filled(ar, 8, if air_on { pal::ACCENT_BG } else { pal::RAISED });
+        p.text(ar.min + Vec2::new(12.0, 11.0), Align2::LEFT_TOP, if air_on { "Airborne at the marker" } else { "Airborne: click the map" }, f_semi(13.0), if air_on { pal::TEXT } else { pal::TEXT2 });
+        if air_on {
+            let mut changed = false;
+            ui.scope_builder(UiBuilder::new().max_rect(Rect::from_min_size(ar.min + Vec2::new(12.0, 38.0), Vec2::new(w - 24.0, 46.0))), |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("ALT").font(f_inst(11.0)).color(pal::TEXT3));
+                    changed |= ui.add(egui::DragValue::new(&mut st.picker.air_alt_ft).range(500.0..=40_000.0).speed(50.0).suffix(" ft")).changed();
+                    ui.add_space(12.0);
+                    ui.label(RichText::new("HDG").font(f_inst(11.0)).color(pal::TEXT3));
+                    changed |= ui.add(egui::DragValue::new(&mut st.picker.air_hdg).range(0.0..=359.0).speed(1.0).suffix("°")).changed();
+                });
+            });
+            if changed {
+                if let Spec::Air { alt_m, hdg, .. } = &mut st.plan.spec {
+                    *alt_m = st.picker.air_alt_ft / 3.280_84;
+                    *hdg = st.picker.air_hdg;
+                }
+            }
+        }
+        ar.max.y + 16.0 - o.y
+    });
+    // suitability warning + next
+    if warn {
         p.text(Pos2::new(x, fy - 30.0), Align2::LEFT_TOP, format!("Runways here are short for the {}", def.name), f_ui(12.5), pal::AMBER);
     }
     if button(ui, Rect::from_min_size(Pos2::new(x, fy), Vec2::new(w, 44.0)), "next", "Conditions  ›", Btn::Primary, true).clicked() {
@@ -1197,148 +1450,152 @@ pub fn conditions(ui: &mut Ui, st: &mut UiState) {
         c.live = false;
     }
     let body_h = if c.live { 240.0 } else { 420.0 };
-    let body = Rect::from_min_max(Pos2::new(content.min.x, live_r.max.y + 24.0), Pos2::new(content.max.x, (live_r.max.y + 24.0 + body_h).min(content.max.y - 76.0)));
+    let body = Rect::from_min_max(Pos2::new(content.min.x, live_r.max.y + 24.0), Pos2::new(content.max.x, (live_r.max.y + 24.0 + body_h).min(content.max.y - 76.0).max(live_r.max.y + 24.0 + 120.0)));
     panel(&p, body, sp::R_CARD);
-    let x = body.min.x + 28.0;
-    let mut yy = body.min.y + 24.0;
-    let airport = st.db.as_ref().and_then(|d| d.get(&st.plan.airport).cloned());
-    if c.live {
-        p.text(Pos2::new(x, yy), Align2::LEFT_TOP, "AT DEPARTURE", f_inst_b(11.0), pal::TEXT3);
-        yy += 24.0;
-        if let Some(a) = &airport {
-            if st.picker.metar.as_ref().is_none_or(|m| m.ident != a.ident) {
-                st.picker.metar = Some(airports::MetarFetch::start(&a.ident, &a.icao, a.lat, a.lon));
-            }
-            if let Some(m) = st.picker.metar.as_mut() {
-                m.poll();
-            }
-            let rt = crate::weather::real_time(a.lat, a.lon, crate::weather::unix_now(), None);
-            p.text(Pos2::new(x, yy), Align2::LEFT_TOP, format!("{} · {}", a.code(), a.name), f_semi(18.0), pal::TEXT);
-            yy += 34.0;
-            let el = crate::atmosphere::sun_direction(a.lat, a.lon, rt.day_of_year, rt.local_hours).y.asin().to_degrees();
-            let light = if el > 0.0 { "daylight" } else if el > -6.0 { "twilight" } else { "night" };
-            let mut tiles: Vec<(&str, String, Color32)> = vec![("LOCAL TIME", format!("{}  {light}", hhmm(rt.local_hours)), pal::TEXT)];
-            match st.picker.metar.as_ref().and_then(|m| m.result.clone()) {
-                Some(Ok((m, _))) => {
-                    if let Some(w) = crate::weather::Wx::from_metar_str(&m.raw) {
-                        let catc = match w.category() {
-                            "VFR" => pal::GREEN,
-                            "MVFR" => pal::ACCENT,
-                            "IFR" => pal::RED,
-                            _ => pal::MAGENTA,
-                        };
-                        tiles.push(("CATEGORY", w.category().to_string(), catc));
-                        tiles.push(("WIND", if w.wind_kt < 1.0 { "Calm".into() } else { format!("{:03.0}° {:.0} kt", w.wind_from, w.wind_kt) }, pal::TEXT));
-                        tiles.push(("VISIBILITY", if w.vis_m >= 9999.0 { "10 km +".into() } else { format!("{:.1} km", w.vis_m / 1000.0) }, pal::TEXT));
-                        tiles.push(("CLOUD", w.cloud_text(), pal::TEXT));
-                        tiles.push(("TEMPERATURE", format!("{:.0} °C", w.temp_c), pal::TEXT));
-                        tiles.push(("QNH", format!("{:.0} hPa", w.qnh_hpa), pal::TEXT));
+    super::scroll::page(ui, body.shrink(1.0), "conditions_body", Color32::from_rgba_premultiplied(12, 15, 20, 220), |ui, o, bw| {
+        let p = ui.painter().clone();
+        let x = o.x + 27.0;
+        let mut yy = o.y + 23.0;
+        let airport = st.db.as_ref().and_then(|d| d.get(&st.plan.airport).cloned());
+        if c.live {
+            p.text(Pos2::new(x, yy), Align2::LEFT_TOP, "AT DEPARTURE", f_inst_b(11.0), pal::TEXT3);
+            yy += 24.0;
+            if let Some(a) = &airport {
+                if st.picker.metar.as_ref().is_none_or(|m| m.ident != a.ident) {
+                    st.picker.metar = Some(airports::MetarFetch::start(&a.ident, &a.icao, a.lat, a.lon));
+                }
+                if let Some(m) = st.picker.metar.as_mut() {
+                    m.poll();
+                }
+                let rt = crate::weather::real_time(a.lat, a.lon, crate::weather::unix_now(), None);
+                p.text(Pos2::new(x, yy), Align2::LEFT_TOP, format!("{} · {}", a.code(), a.name), f_semi(18.0), pal::TEXT);
+                yy += 34.0;
+                let el = crate::atmosphere::sun_direction(a.lat, a.lon, rt.day_of_year, rt.local_hours).y.asin().to_degrees();
+                let light = if el > 0.0 { "daylight" } else if el > -6.0 { "twilight" } else { "night" };
+                let mut tiles: Vec<(&str, String, Color32)> = vec![("LOCAL TIME", format!("{}  {light}", hhmm(rt.local_hours)), pal::TEXT)];
+                match st.picker.metar.as_ref().and_then(|m| m.result.clone()) {
+                    Some(Ok((m, _))) => {
+                        if let Some(w) = crate::weather::Wx::from_metar_str(&m.raw) {
+                            let catc = match w.category() {
+                                "VFR" => pal::GREEN,
+                                "MVFR" => pal::ACCENT,
+                                "IFR" => pal::RED,
+                                _ => pal::MAGENTA,
+                            };
+                            tiles.push(("CATEGORY", w.category().to_string(), catc));
+                            tiles.push(("WIND", if w.wind_kt < 1.0 { "Calm".into() } else { format!("{:03.0}° {:.0} kt", w.wind_from, w.wind_kt) }, pal::TEXT));
+                            tiles.push(("VISIBILITY", if w.vis_m >= 9999.0 { "10 km +".into() } else { format!("{:.1} km", w.vis_m / 1000.0) }, pal::TEXT));
+                            tiles.push(("CLOUD", w.cloud_text(), pal::TEXT));
+                            tiles.push(("TEMPERATURE", format!("{:.0} °C", w.temp_c), pal::TEXT));
+                            tiles.push(("QNH", format!("{:.0} hPa", w.qnh_hpa), pal::TEXT));
+                        }
+                        let tw = (bw - 56.0 - 6.0 * 12.0) / 7.0;
+                        for (k, (lab, val, col)) in tiles.iter().enumerate() {
+                            let r = Rect::from_min_size(Pos2::new(x + k as f32 * (tw + 12.0), yy), Vec2::new(tw, 64.0));
+                            p.rect_filled(r, 8, pal::RAISED);
+                            p.text(r.min + Vec2::new(12.0, 10.0), Align2::LEFT_TOP, *lab, f_inst(10.5), pal::TEXT3);
+                            p.text(r.min + Vec2::new(12.0, 30.0), Align2::LEFT_TOP, val, f_semi(16.0), *col);
+                        }
+                        yy += 82.0;
+                        p.text(Pos2::new(x, yy), Align2::LEFT_TOP, m.raw.clone(), f_mono(13.0), pal::TEXT3);
                     }
-                    let tw = (body.width() - 56.0 - 6.0 * 12.0) / 7.0;
-                    for (k, (lab, val, col)) in tiles.iter().enumerate() {
-                        let r = Rect::from_min_size(Pos2::new(x + k as f32 * (tw + 12.0), yy), Vec2::new(tw, 64.0));
-                        p.rect_filled(r, 8, pal::RAISED);
-                        p.text(r.min + Vec2::new(12.0, 10.0), Align2::LEFT_TOP, *lab, f_inst(10.5), pal::TEXT3);
-                        p.text(r.min + Vec2::new(12.0, 30.0), Align2::LEFT_TOP, val, f_semi(16.0), *col);
+                    Some(Err(_)) => {
+                        p.text(Pos2::new(x, yy), Align2::LEFT_TOP, format!("Local time {} · no METAR nearby — forecast data is used", hhmm(rt.local_hours)), f_ui(14.0), pal::TEXT2);
                     }
-                    yy += 82.0;
-                    p.text(Pos2::new(x, yy), Align2::LEFT_TOP, m.raw.clone(), f_mono(13.0), pal::TEXT3);
-                }
-                Some(Err(_)) => {
-                    p.text(Pos2::new(x, yy), Align2::LEFT_TOP, format!("Local time {} · no METAR nearby — forecast data is used", hhmm(rt.local_hours)), f_ui(14.0), pal::TEXT2);
-                }
-                None => {
-                    p.text(Pos2::new(x, yy), Align2::LEFT_TOP, format!("Local time {} · fetching weather…", hhmm(rt.local_hours)), f_ui(14.0), pal::TEXT2);
+                    None => {
+                        p.text(Pos2::new(x, yy), Align2::LEFT_TOP, format!("Local time {} · fetching weather…", hhmm(rt.local_hours)), f_ui(14.0), pal::TEXT2);
+                    }
                 }
             }
-        }
-    } else {
-        // time of day with a sun gradient
-        p.text(Pos2::new(x, yy), Align2::LEFT_TOP, "TIME OF DAY", f_inst_b(11.0), pal::TEXT3);
-        p.text(Pos2::new(x + 140.0, yy - 5.0), Align2::LEFT_TOP, hhmm(c.hours), f_semi(19.0), pal::TEXT);
-        yy += 28.0;
-        let bar = Rect::from_min_size(Pos2::new(x, yy), Vec2::new(body.width() - 56.0, 28.0));
-        let (lat, lon) = airport.as_ref().map(|a| (a.lat, a.lon)).unwrap_or((51.5, 0.0));
-        let n = 48;
-        let mut m = epaint::Mesh::default();
-        for i in 0..=n {
-            let h = i as f32 / n as f32 * 24.0;
-            let el = crate::atmosphere::sun_direction(lat, lon, c.day, h).y;
-            let col = if el > 0.15 {
-                Color32::from_rgb(110, 170, 230)
-            } else if el > 0.0 {
-                super::lerp_col(Color32::from_rgb(240, 150, 80), Color32::from_rgb(110, 170, 230), el / 0.15)
-            } else if el > -0.1 {
-                super::lerp_col(Color32::from_rgb(30, 36, 70), Color32::from_rgb(240, 150, 80), (el + 0.1) / 0.1)
-            } else {
-                Color32::from_rgb(16, 20, 38)
-            };
-            let xx = bar.min.x + bar.width() * i as f32 / n as f32;
-            m.colored_vertex(Pos2::new(xx, bar.min.y), col);
-            m.colored_vertex(Pos2::new(xx, bar.max.y), col);
-            if i > 0 {
-                let k = i as u32 * 2;
-                m.add_triangle(k - 2, k - 1, k);
-                m.add_triangle(k - 1, k + 1, k);
-            }
-        }
-        p.add(Shape::mesh(m));
-        let resp = ui.interact(bar.expand(6.0), ui.id().with("timebar"), Sense::click_and_drag());
-        if let Some(pos) = resp.interact_pointer_pos().filter(|_| resp.dragged() || resp.clicked()) {
-            c.hours = ((pos.x - bar.min.x) / bar.width() * 24.0).clamp(0.0, 23.99);
-            c.hours = (c.hours * 4.0).round() / 4.0;
-        }
-        let kx = bar.min.x + bar.width() * c.hours / 24.0;
-        p.circle_filled(Pos2::new(kx, bar.center().y), 11.0, Color32::WHITE);
-        p.circle_stroke(Pos2::new(kx, bar.center().y), 11.0, Stroke::new(2.0, pal::ACCENT_DEEP));
-        for h in [0, 6, 12, 18] {
-            p.text(Pos2::new(bar.min.x + bar.width() * h as f32 / 24.0, bar.max.y + 6.0), Align2::LEFT_TOP, format!("{h:02}:00"), f_ui(11.0), pal::TEXT3);
-        }
-        yy = bar.max.y + 36.0;
-        // season
-        p.text(Pos2::new(x, yy), Align2::LEFT_TOP, "SEASON", f_inst_b(11.0), pal::TEXT3);
-        yy += 24.0;
-        let seasons = [("Spring", 105u32), ("Summer", 196), ("Autumn", 288), ("Winter", 15)];
-        for (k, (name, doy)) in seasons.iter().enumerate() {
-            let b = Rect::from_min_size(Pos2::new(x + k as f32 * 118.0, yy), Vec2::new(110.0, 34.0));
-            let on = (c.day as i32 - *doy as i32).rem_euclid(365) < 46 || (*doy as i32 - c.day as i32).rem_euclid(365) < 46;
-            if chip_btn(ui, b, ("season", k), name, on) {
-                c.day = *doy;
-            }
-        }
-        let (m, d) = month_day(c.day);
-        p.text(Pos2::new(x + 4.0 * 118.0 + 12.0, yy + 8.0), Align2::LEFT_TOP, format!("{d} {}", MONTHS[m as usize - 1]), f_ui(14.0), pal::TEXT2);
-        yy += 56.0;
-        // weather presets
-        p.text(Pos2::new(x, yy), Align2::LEFT_TOP, "WEATHER", f_inst_b(11.0), pal::TEXT3);
-        yy += 24.0;
-        for (k, w) in crate::clouds::Weather::ALL.iter().enumerate() {
-            let b = Rect::from_min_size(Pos2::new(x + k as f32 * 118.0, yy), Vec2::new(110.0, 34.0));
-            let on = c.metar.trim().is_empty() && c.preset == w.name();
-            if chip_btn(ui, b, ("wx", k), w.name(), on) {
-                c.preset = w.name().to_string();
-                c.metar.clear();
-            }
-        }
-        yy += 54.0;
-        p.text(Pos2::new(x, yy), Align2::LEFT_TOP, "OR A METAR", f_inst_b(11.0), pal::TEXT3);
-        yy += 24.0;
-        let mr = Rect::from_min_size(Pos2::new(x, yy), Vec2::new(body.width() - 56.0, 40.0));
-        p.rect_filled(mr, sp::R_CTRL, Color32::from_rgb(9, 11, 15));
-        p.rect_stroke(mr, sp::R_CTRL, Stroke::new(1.0, pal::HAIRLINE_HI), egui::StrokeKind::Inside);
-        ui.put(mr.shrink2(Vec2::new(12.0, 8.0)), egui::TextEdit::singleline(&mut c.metar).hint_text("EGLL 121150Z 24015G25KT 6000 -RA BKN012 OVC030 11/09 Q1004").frame(egui::Frame::NONE).font(f_mono(14.0)).text_color(pal::TEXT));
-        yy = mr.max.y + 10.0;
-        if !c.metar.trim().is_empty() {
-            match crate::weather::Wx::from_metar_str(c.metar.trim()) {
-                Some(w) => {
-                    p.text(Pos2::new(x, yy), Align2::LEFT_TOP, format!("{} · wind {:03.0}° {:.0} kt · visibility {:.1} km · cloud {}", w.category(), w.wind_from, w.wind_kt, w.vis_m / 1000.0, w.cloud_text()), f_ui(13.0), pal::GREEN);
+        } else {
+            // time of day with a sun gradient
+            p.text(Pos2::new(x, yy), Align2::LEFT_TOP, "TIME OF DAY", f_inst_b(11.0), pal::TEXT3);
+            p.text(Pos2::new(x + 140.0, yy - 5.0), Align2::LEFT_TOP, hhmm(c.hours), f_semi(19.0), pal::TEXT);
+            yy += 28.0;
+            let bar = Rect::from_min_size(Pos2::new(x, yy), Vec2::new(bw - 56.0, 28.0));
+            let (lat, lon) = airport.as_ref().map(|a| (a.lat, a.lon)).unwrap_or((51.5, 0.0));
+            let n = 48;
+            let mut m = epaint::Mesh::default();
+            for i in 0..=n {
+                let h = i as f32 / n as f32 * 24.0;
+                let el = crate::atmosphere::sun_direction(lat, lon, c.day, h).y;
+                let col = if el > 0.15 {
+                    Color32::from_rgb(110, 170, 230)
+                } else if el > 0.0 {
+                    super::lerp_col(Color32::from_rgb(240, 150, 80), Color32::from_rgb(110, 170, 230), el / 0.15)
+                } else if el > -0.1 {
+                    super::lerp_col(Color32::from_rgb(30, 36, 70), Color32::from_rgb(240, 150, 80), (el + 0.1) / 0.1)
+                } else {
+                    Color32::from_rgb(16, 20, 38)
+                };
+                let xx = bar.min.x + bar.width() * i as f32 / n as f32;
+                m.colored_vertex(Pos2::new(xx, bar.min.y), col);
+                m.colored_vertex(Pos2::new(xx, bar.max.y), col);
+                if i > 0 {
+                    let k = i as u32 * 2;
+                    m.add_triangle(k - 2, k - 1, k);
+                    m.add_triangle(k - 1, k + 1, k);
                 }
-                None => {
-                    p.text(Pos2::new(x, yy), Align2::LEFT_TOP, "Not a valid METAR", f_ui(13.0), pal::AMBER);
+            }
+            p.add(Shape::mesh(m));
+            let resp = ui.interact(bar.expand(6.0), ui.id().with("timebar"), Sense::click_and_drag());
+            if let Some(pos) = resp.interact_pointer_pos().filter(|_| resp.dragged() || resp.clicked()) {
+                c.hours = ((pos.x - bar.min.x) / bar.width() * 24.0).clamp(0.0, 23.99);
+                c.hours = (c.hours * 4.0).round() / 4.0;
+            }
+            let kx = bar.min.x + bar.width() * c.hours / 24.0;
+            p.circle_filled(Pos2::new(kx, bar.center().y), 11.0, Color32::WHITE);
+            p.circle_stroke(Pos2::new(kx, bar.center().y), 11.0, Stroke::new(2.0, pal::ACCENT_DEEP));
+            for h in [0, 6, 12, 18] {
+                p.text(Pos2::new(bar.min.x + bar.width() * h as f32 / 24.0, bar.max.y + 6.0), Align2::LEFT_TOP, format!("{h:02}:00"), f_ui(11.0), pal::TEXT3);
+            }
+            yy = bar.max.y + 36.0;
+            // season
+            p.text(Pos2::new(x, yy), Align2::LEFT_TOP, "SEASON", f_inst_b(11.0), pal::TEXT3);
+            yy += 24.0;
+            let seasons = [("Spring", 105u32), ("Summer", 196), ("Autumn", 288), ("Winter", 15)];
+            for (k, (name, doy)) in seasons.iter().enumerate() {
+                let b = Rect::from_min_size(Pos2::new(x + k as f32 * 118.0, yy), Vec2::new(110.0, 34.0));
+                let on = (c.day as i32 - *doy as i32).rem_euclid(365) < 46 || (*doy as i32 - c.day as i32).rem_euclid(365) < 46;
+                if chip_btn(ui, b, ("season", k), name, on) {
+                    c.day = *doy;
+                }
+            }
+            let (m, d) = month_day(c.day);
+            p.text(Pos2::new(x + 4.0 * 118.0 + 12.0, yy + 8.0), Align2::LEFT_TOP, format!("{d} {}", MONTHS[m as usize - 1]), f_ui(14.0), pal::TEXT2);
+            yy += 56.0;
+            // weather presets
+            p.text(Pos2::new(x, yy), Align2::LEFT_TOP, "WEATHER", f_inst_b(11.0), pal::TEXT3);
+            yy += 24.0;
+            for (k, w) in crate::clouds::Weather::ALL.iter().enumerate() {
+                let b = Rect::from_min_size(Pos2::new(x + k as f32 * 118.0, yy), Vec2::new(110.0, 34.0));
+                let on = c.metar.trim().is_empty() && c.preset == w.name();
+                if chip_btn(ui, b, ("wx", k), w.name(), on) {
+                    c.preset = w.name().to_string();
+                    c.metar.clear();
+                }
+            }
+            yy += 54.0;
+            p.text(Pos2::new(x, yy), Align2::LEFT_TOP, "OR A METAR", f_inst_b(11.0), pal::TEXT3);
+            yy += 24.0;
+            let mr = Rect::from_min_size(Pos2::new(x, yy), Vec2::new(bw - 56.0, 40.0));
+            p.rect_filled(mr, sp::R_CTRL, Color32::from_rgb(9, 11, 15));
+            p.rect_stroke(mr, sp::R_CTRL, Stroke::new(1.0, pal::HAIRLINE_HI), egui::StrokeKind::Inside);
+            ui.put(mr.shrink2(Vec2::new(12.0, 8.0)), egui::TextEdit::singleline(&mut c.metar).hint_text("EGLL 121150Z 24015G25KT 6000 -RA BKN012 OVC030 11/09 Q1004").frame(egui::Frame::NONE).font(f_mono(14.0)).text_color(pal::TEXT));
+            yy = mr.max.y + 10.0;
+            if !c.metar.trim().is_empty() {
+                match crate::weather::Wx::from_metar_str(c.metar.trim()) {
+                    Some(w) => {
+                        p.text(Pos2::new(x, yy), Align2::LEFT_TOP, format!("{} · wind {:03.0}° {:.0} kt · visibility {:.1} km · cloud {}", w.category(), w.wind_from, w.wind_kt, w.vis_m / 1000.0, w.cloud_text()), f_ui(13.0), pal::GREEN);
+                    }
+                    None => {
+                        p.text(Pos2::new(x, yy), Align2::LEFT_TOP, "Not a valid METAR", f_ui(13.0), pal::AMBER);
+                    }
                 }
             }
         }
-    }
+        yy + 44.0 - o.y
+    });
     // footer
     let fy = content.max.y - 52.0;
     if button(ui, Rect::from_min_size(Pos2::new(content.min.x, fy), Vec2::new(140.0, 48.0)), "back", "Back", Btn::Secondary, true).clicked() || esc(ui) {
@@ -1394,93 +1651,103 @@ pub fn settings(ui: &mut Ui, st: &mut UiState, in_flight: bool) {
         }
     };
     let ctrl = |y: f32| Rect::from_min_size(Pos2::new(x + lw, y + 6.0), Vec2::new(body.max.x - x - lw, 34.0));
-    let mut y = body.min.y;
-    let s = &mut st.settings;
-    match st.settings_tab {
-        0 => {
-            label(&p, y, "Interface scale", "Relative to the window size");
-            let opts = ["80 %", "90 %", "100 %", "115 %", "130 %"];
-            let vals = [0.8, 0.9, 1.0, 1.15, 1.3];
-            let cur = vals.iter().position(|v| (v - s.ui_scale).abs() < 0.03).unwrap_or(2);
-            if let Some(i) = segmented(ui, ctrl(y), "scale", &opts, cur) {
-                s.ui_scale = vals[i];
+    if st.settings_tab == 3 {
+        // Bindings, devices, mouse (ui/controls.rs).
+        let foot = Rect::from_min_size(Pos2::new(x, card.max.y - 64.0), Vec2::new(w - 240.0, 44.0));
+        super::controls::page(ui, st, body, foot);
+    } else {
+        // The other tabs scroll when the window is short (the bar floats right of the controls).
+        let page_r = Rect::from_min_max(body.min, Pos2::new(card.max.x - 12.0, body.max.y));
+        let tab = st.settings_tab;
+        let audio_status = st.audio_status.clone();
+        let s = &mut st.settings;
+        super::scroll::page(ui, page_r, ["settings_display", "settings_units", "settings_sound"][tab.min(2)], pal::PANEL_SOLID, |ui, o, _| {
+            let p = ui.painter().clone();
+            let mut y = o.y;
+            match tab {
+                0 => {
+                    label(&p, y, "Interface scale", "Relative to the window size");
+                    let opts = ["80 %", "90 %", "100 %", "115 %", "130 %"];
+                    let vals = [0.8, 0.9, 1.0, 1.15, 1.3];
+                    let cur = vals.iter().position(|v| (v - s.ui_scale).abs() < 0.03).unwrap_or(2);
+                    if let Some(i) = segmented(ui, ctrl(y), "scale", &opts, cur) {
+                        s.ui_scale = vals[i];
+                    }
+                    y += row_h;
+                    label(&p, y, "Instruments", "U cycles in flight");
+                    let cur = [HudMode::Full, HudMode::Minimal, HudMode::Off].iter().position(|m| *m == s.hud).unwrap_or(0);
+                    if let Some(i) = segmented(ui, ctrl(y), "hud", &["Full", "Minimal", "Off"], cur) {
+                        s.hud = [HudMode::Full, HudMode::Minimal, HudMode::Off][i];
+                    }
+                    y += row_h;
+                    label(&p, y, "Scenery detail", "Detailed scenery radius");
+                    if let Some(i) = segmented(ui, ctrl(y), "detail", &DETAIL_NAMES, s.detail as usize) {
+                        s.detail = i as u8;
+                    }
+                    y += row_h;
+                    label(&p, y, "Vertical sync", "Off: lowest latency, may stutter");
+                    if let Some(i) = segmented(ui, ctrl(y), "vsync", &["On", "Off"], if s.vsync { 0 } else { 1 }) {
+                        s.vsync = i == 0;
+                    }
+                    y += row_h;
+                    label(&p, y, "Map style", "Auto follows the sun");
+                    let cur = [MapStyle::Auto, MapStyle::Day, MapStyle::Night].iter().position(|m| *m == s.map_style).unwrap_or(0);
+                    if let Some(i) = segmented(ui, ctrl(y), "mapstyle", &["Auto", "Day", "Night"], cur) {
+                        s.map_style = [MapStyle::Auto, MapStyle::Day, MapStyle::Night][i];
+                    }
+                    y += row_h;
+                    label(&p, y, "Map orientation", "");
+                    if let Some(i) = segmented(ui, ctrl(y), "north", &["North up", "Track up"], if s.north_up { 0 } else { 1 }) {
+                        s.north_up = i == 0;
+                    }
+                }
+                1 => {
+                    label(&p, y, "Speed", "Panels and the status card; dials keep the aircraft's own units");
+                    let cur = [SpeedUnit::Knots, SpeedUnit::Kmh, SpeedUnit::Mph].iter().position(|m| *m == s.speed).unwrap_or(0);
+                    if let Some(i) = segmented(ui, ctrl(y), "spd", &["Knots", "km/h", "mph"], cur) {
+                        s.speed = [SpeedUnit::Knots, SpeedUnit::Kmh, SpeedUnit::Mph][i];
+                    }
+                    y += row_h + 10.0;
+                    label(&p, y, "Altitude", "");
+                    if let Some(i) = segmented(ui, ctrl(y), "alt", &["Feet", "Metres"], if s.alt == AltUnit::Feet { 0 } else { 1 }) {
+                        s.alt = if i == 0 { AltUnit::Feet } else { AltUnit::Metres };
+                    }
+                }
+                _ => {
+                    label(&p, y, "Mute", "N in flight");
+                    if let Some(i) = segmented(ui, ctrl(y), "mute", &["Sound on", "Muted"], if s.sound.muted { 1 } else { 0 }) {
+                        s.sound.muted = i == 1;
+                    }
+                    y += row_h;
+                    let slider = |ui: &mut Ui, y: f32, k: &str, v: &mut f32, max: f32| {
+                        label(&p, y, k, "");
+                        let r = ctrl(y);
+                        // (Slider and its value on one line.)
+                        ui.scope_builder(UiBuilder::new().max_rect(r).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
+                            ui.spacing_mut().slider_width = r.width() - 70.0;
+                            ui.add(egui::Slider::new(v, 0.0..=max).show_value(false));
+                            ui.label(RichText::new(format!("{:.0} %", *v / max * 100.0)).font(f_mono(12.0)).color(pal::TEXT2));
+                        });
+                    };
+                    slider(ui, y, "Master", &mut s.sound.master, 1.0);
+                    y += row_h;
+                    slider(ui, y, "Engines", &mut s.sound.engines, 1.5);
+                    y += row_h;
+                    slider(ui, y, "Wind, ground, weather", &mut s.sound.environment, 1.5);
+                    y += row_h;
+                    slider(ui, y, "Cockpit systems", &mut s.sound.systems, 1.5);
+                    y += row_h;
+                    slider(ui, y, "Callouts", &mut s.sound.voice, 1.5);
+                    y += row_h;
+                    slider(ui, y, "ATC radio", &mut s.sound.radio, 1.5);
+                    y += row_h;
+                    slider(ui, y, "Interface", &mut s.sound.ui, 1.5);
+                    y += row_h;
+                    p.text(Pos2::new(x, y + 6.0), Align2::LEFT_TOP, audio_status.clone(), f_ui(12.0), pal::TEXT3);
+                }
             }
-            y += row_h;
-            label(&p, y, "Instruments", "U cycles in flight");
-            let cur = [HudMode::Full, HudMode::Minimal, HudMode::Off].iter().position(|m| *m == s.hud).unwrap_or(0);
-            if let Some(i) = segmented(ui, ctrl(y), "hud", &["Full", "Minimal", "Off"], cur) {
-                s.hud = [HudMode::Full, HudMode::Minimal, HudMode::Off][i];
-            }
-            y += row_h;
-            label(&p, y, "Scenery detail", "Detailed scenery radius");
-            if let Some(i) = segmented(ui, ctrl(y), "detail", &DETAIL_NAMES, s.detail as usize) {
-                s.detail = i as u8;
-            }
-            y += row_h;
-            label(&p, y, "Vertical sync", "Off: lowest latency, may stutter");
-            if let Some(i) = segmented(ui, ctrl(y), "vsync", &["On", "Off"], if s.vsync { 0 } else { 1 }) {
-                s.vsync = i == 0;
-            }
-            y += row_h;
-            label(&p, y, "Map style", "Auto follows the sun");
-            let cur = [MapStyle::Auto, MapStyle::Day, MapStyle::Night].iter().position(|m| *m == s.map_style).unwrap_or(0);
-            if let Some(i) = segmented(ui, ctrl(y), "mapstyle", &["Auto", "Day", "Night"], cur) {
-                s.map_style = [MapStyle::Auto, MapStyle::Day, MapStyle::Night][i];
-            }
-            y += row_h;
-            label(&p, y, "Map orientation", "");
-            if let Some(i) = segmented(ui, ctrl(y), "north", &["North up", "Track up"], if s.north_up { 0 } else { 1 }) {
-                s.north_up = i == 0;
-            }
-        }
-        1 => {
-            label(&p, y, "Speed", "Panels and the status card; dials keep the aircraft's own units");
-            let cur = [SpeedUnit::Knots, SpeedUnit::Kmh, SpeedUnit::Mph].iter().position(|m| *m == s.speed).unwrap_or(0);
-            if let Some(i) = segmented(ui, ctrl(y), "spd", &["Knots", "km/h", "mph"], cur) {
-                s.speed = [SpeedUnit::Knots, SpeedUnit::Kmh, SpeedUnit::Mph][i];
-            }
-            y += row_h + 10.0;
-            label(&p, y, "Altitude", "");
-            if let Some(i) = segmented(ui, ctrl(y), "alt", &["Feet", "Metres"], if s.alt == AltUnit::Feet { 0 } else { 1 }) {
-                s.alt = if i == 0 { AltUnit::Feet } else { AltUnit::Metres };
-            }
-        }
-        2 => {
-            label(&p, y, "Mute", "N in flight");
-            if let Some(i) = segmented(ui, ctrl(y), "mute", &["Sound on", "Muted"], if s.sound.muted { 1 } else { 0 }) {
-                s.sound.muted = i == 1;
-            }
-            y += row_h;
-            let slider = |ui: &mut Ui, y: f32, k: &str, v: &mut f32, max: f32| {
-                label(&p, y, k, "");
-                let r = ctrl(y);
-                ui.scope_builder(UiBuilder::new().max_rect(r), |ui| {
-                    ui.spacing_mut().slider_width = r.width() - 70.0;
-                    ui.add(egui::Slider::new(v, 0.0..=max).show_value(false));
-                    ui.label(RichText::new(format!("{:.0} %", *v / max * 100.0)).font(f_mono(12.0)).color(pal::TEXT2));
-                });
-            };
-            slider(ui, y, "Master", &mut s.sound.master, 1.0);
-            y += row_h;
-            slider(ui, y, "Engines", &mut s.sound.engines, 1.5);
-            y += row_h;
-            slider(ui, y, "Wind, ground, weather", &mut s.sound.environment, 1.5);
-            y += row_h;
-            slider(ui, y, "Cockpit systems", &mut s.sound.systems, 1.5);
-            y += row_h;
-            slider(ui, y, "Callouts", &mut s.sound.voice, 1.5);
-            y += row_h;
-            slider(ui, y, "ATC radio", &mut s.sound.radio, 1.5);
-            y += row_h;
-            slider(ui, y, "Interface", &mut s.sound.ui, 1.5);
-            y += row_h;
-            p.text(Pos2::new(x, y + 6.0), Align2::LEFT_TOP, st.audio_status.clone(), f_ui(12.0), pal::TEXT3);
-        }
-        _ => {
-            // Bindings, devices, mouse (ui/controls.rs).
-            let foot = Rect::from_min_size(Pos2::new(x, card.max.y - 64.0), Vec2::new(w - 240.0, 44.0));
-            super::controls::page(ui, st, body, foot);
-        }
+            y + row_h + 8.0 - o.y
+        });
     }
     if st.settings != s0 {
         st.settings_dirty = true;
@@ -1511,7 +1778,9 @@ pub fn pause(ui: &mut Ui, st: &mut UiState, title: &str, sub: &str) {
         ("Quit", Action::Quit, Btn::Ghost),
     ];
     let items: Vec<_> = items.into_iter().filter(|it| !(crate::platform::WEB && matches!(it.1, Action::Quit))).collect();
-    let h = 120.0 + items.len() as f32 * 54.0 + 10.0;
+    // Rows tighten on short windows so the card always fits.
+    let step = ((screen.height() - 48.0 - 130.0) / items.len() as f32).clamp(44.0, 54.0);
+    let h = 120.0 + items.len() as f32 * step + 10.0;
     let card = Rect::from_center_size(screen.center(), Vec2::new(w, h));
     panel_with(&p, card, sp::R_CARD, pal::PANEL_SOLID);
     p.text(card.min + Vec2::new(28.0, 24.0), Align2::LEFT_TOP, "Paused", f_display(28.0), pal::TEXT);
@@ -1519,11 +1788,11 @@ pub fn pause(ui: &mut Ui, st: &mut UiState, title: &str, sub: &str) {
     p.text(card.min + Vec2::new(28.0, 84.0), Align2::LEFT_TOP, sub, f_ui(12.5), pal::TEXT3);
     let mut y = card.min.y + 118.0;
     for (i, (label, act, kind)) in items.into_iter().enumerate() {
-        let r = Rect::from_min_size(Pos2::new(card.min.x + 24.0, y), Vec2::new(w - 48.0, 46.0));
+        let r = Rect::from_min_size(Pos2::new(card.min.x + 24.0, y), Vec2::new(w - 48.0, step - 8.0));
         if button(ui, r, ("pause", i), label, kind, true).clicked() {
             st.actions.push(act);
         }
-        y += 54.0;
+        y += step;
     }
 }
 
@@ -1569,4 +1838,36 @@ pub fn loading(ui: &mut Ui, st: &mut UiState, title: &str, detail: &str, frac: O
     p.text(card.min + Vec2::new(28.0, 116.0), Align2::LEFT_TOP, crate::hud::ATTRIBUTION, f_ui(11.0), pal::TEXT3);
     p.text(Pos2::new(card.max.x - 28.0, card.min.y + 116.0), Align2::RIGHT_TOP, pct, f_ui(11.0), pal::TEXT2);
     let _ = (CornerRadius::ZERO, Id::NULL);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_type_has_a_family() {
+        let defs = crate::flight::catalogue();
+        let of = |id: &str| Group::of(defs.iter().find(|d| d.id == id).expect(id));
+        assert_eq!(of("kestrel"), Group::Light);
+        assert_eq!(of("swift"), Group::Light);
+        assert_eq!(of("meridian320"), Group::Airliner);
+        assert_eq!(of("hercules"), Group::Military);
+        assert_eq!(of("galaxy"), Group::Military);
+        assert_eq!(of("vulcan"), Group::Military);
+        assert_eq!(of("ec130"), Group::Rotor);
+        assert_eq!(of("fpv"), Group::Rotor);
+        for g in Group::ALL {
+            assert!(!g.name().is_empty());
+        }
+    }
+
+    #[test]
+    fn card_grid_fits_any_width() {
+        for w in [120.0, 300.0, 520.0, 800.0, 1130.0, 1600.0, 2400.0] {
+            let (cols, cw, ch) = card_grid(w);
+            assert!(cols >= 1 && ch > cw * 0.6);
+            assert!(cols as f32 * cw + (cols as f32 - 1.0) * CARD_GAP <= w + 0.01, "{w}");
+            assert!(cols == 1 || cw >= 228.0, "{w}: {cw}");
+        }
+    }
 }
