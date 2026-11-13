@@ -519,6 +519,9 @@ fn decrab(def: &AircraftDef, ac: &Aircraft, end: &RunwayEnd, p: Vec2, max_bank_d
 /// Pitch attitude to touch down in (main wheels first; three-point for taildraggers).
 fn touchdown_pitch(def: &AircraftDef) -> f32 {
     let d = match def.category {
+        // Floats: the planing attitude; light taildraggers: three-point.
+        _ if def.on_water() => 6.0,
+        Category::Trainer if def.taildragger => def.rest_pitch().to_degrees() - 1.0,
         Category::Trainer => 5.0,
         Category::Warbird => def.rest_pitch().to_degrees() - 1.0,
         Category::FastJet => 9.0,
@@ -1784,6 +1787,78 @@ impl Profile {
                 p.tour_alt = 1_100.0;
                 p.taxi = 9.0;
             }
+            // Track H2b.
+            "extra500" => {
+                // Flaps 15° to take off and on the approach, 30° to land.
+                p.climb_ias = 120.0 * KT;
+                p.cruise_ias = 170.0 * KT;
+                p.vapp = 88.0 * KT;
+                p.flap_up_ias = 105.0 * KT;
+                p.tour_alt = 900.0;
+                p.final_dist = 6_000.0;
+                p.tour_r = 18_000.0;
+                p.turn_r = 900.0;
+                p.flare_h = 4.0;
+                p.taxi = 6.0;
+            }
+            "cub" => {
+                p.climb_ias = 62.0 * KT;
+                p.cruise_ias = 85.0 * KT;
+                p.vapp = 52.0 * KT;
+                p.flap_up_ias = 58.0 * KT;
+                p.tour_alt = 450.0;
+                p.final_dist = 2_500.0;
+                p.tour_r = 8_000.0;
+                p.turn_r = 300.0;
+                p.rot_pitch = deg(9.0);
+                p.flare_h = 3.0;
+                p.taxi = 6.0;
+            }
+            "zlin" => {
+                p.climb_ias = 90.0 * KT;
+                p.cruise_ias = 130.0 * KT;
+                p.vapp = 72.0 * KT;
+                p.flap_up_ias = 0.0;
+                p.tour_alt = 600.0;
+                p.final_dist = 3_000.0;
+                p.turn_r = 450.0;
+                p.rot_pitch = deg(9.0);
+                p.flare_h = 3.0;
+                p.taxi = 6.0;
+            }
+            "otter" => {
+                // On floats: flaps 20° for the water take-off, full to land on the water.
+                p.to_flap = 2.min(def.flap_detents.len() - 1);
+                p.climb_ias = 85.0 * KT;
+                p.cruise_ias = 105.0 * KT;
+                p.vapp = 66.0 * KT;
+                p.flap_up_ias = 72.0 * KT;
+                p.tour_alt = 500.0;
+                p.final_dist = 4_000.0;
+                p.tour_r = 10_000.0;
+                p.turn_r = 600.0;
+                p.rot_pitch = deg(9.0);
+                p.flare_h = 4.0;
+                p.taxi = 5.0;
+                p.brakes = 0.0;
+            }
+            "dc3" => {
+                // Flaps ¼ to take off; wheel landing on the mains with flaps 45°.
+                p.to_flap = 1;
+                p.climb_ias = 110.0 * KT;
+                p.cruise_ias = 150.0 * KT;
+                p.vapp = 88.0 * KT;
+                p.flap_up_ias = 110.0 * KT;
+                p.rot_pitch = deg(7.0);
+                p.climb_pitch = deg(7.0);
+                p.tour_alt = 800.0;
+                p.final_dist = 6_000.0;
+                p.tour_r = 20_000.0;
+                p.turn_r = 1_500.0;
+                p.flare_h = 6.0;
+                p.taxi = 7.0;
+                p.brakes = 0.35;
+            }
             "vulcan" => {
                 // The flap lever is the airbrakes: clean take-off, half airbrakes on
                 // the approach, full for the landing; a fast climb.
@@ -2207,7 +2282,15 @@ impl Powered {
                 ctl.rudder = (steer(def, ac, end.course(), end.cross(p)) + swing).clamp(-1.0, 1.0);
                 ctl.aileron = (-2.0 * ac.roll() - 0.5 * ac.rates().x).clamp(-1.0, 1.0);
                 if self.phase == PPhase::TakeoffRoll {
-                    ctl.elevator = if def.taildragger && ias > 0.45 * pf.vr {
+                    ctl.elevator = if def.on_water() && ac.water.afloat() {
+                        // Floats: stick fully back to lift the bows over the hump, then
+                        // ease forward and hold the planing attitude on the step.
+                        if ias < 0.35 * pf.vr {
+                            1.0
+                        } else {
+                            (3.0 * (6f32.to_radians() - ac.pitch()) - 0.8 * ac.rates().y).clamp(-1.0, 1.0)
+                        }
+                    } else if def.taildragger && ias > 0.45 * pf.vr {
                         // Tail up, then hold it level.
                         (3.0 * (1f32.to_radians() - ac.pitch()) - 0.8 * ac.rates().y).clamp(-1.0, 0.6)
                     } else if def.taildragger {
@@ -2734,7 +2817,10 @@ impl Powered {
                 }
                 let since = t - self.touch_t;
                 let tail = def.taildragger;
-                ctl.elevator = if tail {
+                ctl.elevator = if def.on_water() {
+                    // Hold the planing attitude, then full back stick as it comes off the step.
+                    if g < 25.0 * KT { 1.0 } else { (3.0 * (6f32.to_radians() - ac.pitch()) - 0.8 * ac.rates().y).clamp(-1.0, 1.0) }
+                } else if tail {
                     if g < 45.0 * KT { 1.0 } else if ias < def.vs0_kt * KT * 1.05 { 0.4 } else { 0.0 }
                 } else if def.category == Category::Airliner {
                     0.0

@@ -272,6 +272,12 @@ fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f32 {
 /// long enough, else the nearest suitable one among the loaded runways and the
 /// known airfields, else the nearest anyway (with a warning).
 pub fn pick_field(world: &World, def: &AircraftDef) -> Option<FieldPick> {
+    // Floatplanes start on open water near the start (src/water.rs).
+    if def.on_water() {
+        if let Some(p) = water_lane(world, def) {
+            return Some(p);
+        }
+    }
     let need = min_runway(def);
     // The start point (the origin of the home frame; the floating origin may have moved).
     let home = world.home_pos();
@@ -323,6 +329,36 @@ pub fn pick_field(world: &World, def: &AircraftDef) -> Option<FieldPick> {
         let msg = format!("No runway of {:.0} m known nearby: {} is only {:.0} m — it will be tight.", need, here, m.length());
         FieldPick::Here(m, Some(msg))
     })
+}
+
+/// A floatplane's "runway": the longest straight lane of open water near the
+/// start (a river reach, a dock, a lake), as a water-surfaced [`Runway`] the
+/// spawn logic and the bot use like any other. While the scenery around the
+/// start is still loading it asks to wait (`Remote`); with no water about
+/// it returns None and the floatplane gets a land runway (on its keels).
+fn water_lane(world: &World, def: &AircraftDef) -> Option<FieldPick> {
+    static CACHE: std::sync::Mutex<Option<(Vec2, Runway)>> = std::sync::Mutex::new(None);
+    let home = world.home_pos();
+    if let Some((h, r)) = CACHE.lock().ok().and_then(|c| c.clone()) {
+        if h.distance(home) < 50.0 {
+            return Some(FieldPick::Here(r, None));
+        }
+    }
+    let need = min_runway(def);
+    const RADIUS: f32 = 6_000.0;
+    match crate::water::find_lane(world, home, RADIUS, need, 90.0) {
+        Some((a, b)) => {
+            let r = Runway { a, b, width: 90.0, name: "Water".into(), paved: false, surface: "Water".into(), ..Default::default() };
+            if let Ok(mut c) = CACHE.lock() {
+                *c = Some((home, r.clone()));
+            }
+            Some(FieldPick::Here(r, None))
+        }
+        None => {
+            let (ready, total) = world.progress(home, RADIUS);
+            (ready < total).then(|| FieldPick::Remote(home, format!("{} operates from water: finding open water near the start…", def.name)))
+        }
+    }
 }
 
 pub struct Sim {
@@ -1018,7 +1054,11 @@ impl Sim {
                     }
                 }
                 Key::Reverse => {
-                    if !def.has_reverser {
+                    if !def.has_reverser && def.smoke_system {
+                        // Aerobats: the reverse key works the airshow smoke (src/vfx/smoke.rs).
+                        self.vfx.smoke = !self.vfx.smoke;
+                        self.say(if self.vfx.smoke { "Smoke on" } else { "Smoke off" }, 2.0);
+                    } else if !def.has_reverser {
                         self.say("No thrust reversers on this aircraft", 2.0);
                     } else if !self.ac.on_ground && !self.ctl.reverse {
                         self.say("Reverse thrust: on the ground only", 2.0);

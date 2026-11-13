@@ -23,6 +23,7 @@ released under the **GNU GPL**:
 | c172p-team/c172p (GitHub) | GPL-2.0 (repository `LICENSE`) | Sounds by Gilberto Agostinho and the c172p team |
 | fgdata (`Sounds/`, GitLab `flightgear/fgdata`) | GPL-2.0 (`LICENSE.md`) | FlightGear base package |
 | FGMEMBERS/AvroVulcanB2 (GitHub, FGUK) | GPL-2.0 (repository `COPYING`; no "or later" statement) | Sounds credited to "Algernon" in `AvroVulcanb2-set.xml`; the recordings' original source is not documented in the package (see below) |
+| FGAddon `Aircraft/Douglas-Dc3` (SVN r21799) | GPL-2.0 (package `COPYING`) | Emmanuel Baranger / PAF team; recordings' origin not documented in the package (see below) |
 
 **Compatibility note:** the A320-family files are GPL-2.0 *only* (and the
 Spitfire IX package is stated as GPLv2). Shipping them is fine for a project
@@ -61,6 +62,8 @@ rate / length / loop flag / build attenuation). 95 files, ~4.1 MB.
 | `atr_prop`, `atr_start`, `atr_stop` | `Sounds/turboprop1.wav`, `turbine_start.wav`, `turbine_shutdown.wav` | fgdata |
 | `vul_x_turb`, `vul_x_jet`, `vul_x_blast`, `vul_x_howl`, `vul_i_eng` | `Sounds/vulcan-engine-exterior.wav`, `jet.wav`, `vulcan-jetblast.wav` (first 14 s), `vulcan-howel.wav`, `vulcan-engine-inside.wav` | AvroVulcanB2 (FGUK) |
 | `vul_start`, `vul_stop` | `Sounds/vulcan-start.wav` (first 24 s), `vulcan-shutdown.wav` (first 16 s) | AvroVulcanB2 (FGUK) |
+| `r18_idle`, `r18_slow`, `r18_cruise`, `r18_i_hi`, `r18_i_lo` | `Sounds/Ralenti.wav`, `Croisiere_ext_2.wav`, `Croisiere_ext_1.wav`, `Croisiere_int_1.wav`, `Croisiere_int_2.wav` | Douglas-Dc3 |
+| `r18_start`, `r18_stop`, `r18_stop_int` | `Sounds/Demarrage.wav`, `Arret_moteur_ext1.wav`, `Arret_moteur_int1.wav` | Douglas-Dc3 |
 | `cfm_x_*` (idle, idle_r, idle_c, idle_d, spool, lowspool, spool_c, spool_cr, rumble, rumble_d, buzz, buzz_d, rev, start, stop) | `Sounds/SASA/CFM56B/external/cfm-idle`, `-idleRear`, `-idleClose`, `-idleDist`, `-spool`, `-lowspool`, `-spoolClose`, `-spoolCloseRear`, `-rumble`, `-rumbleDist`, `-buzz`, `-buzzDist`, `-reverse`, `-startup`, `-shutdown` | A320-family (SASA) |
 | `cfm_c_*` (idle, idle2, spool, hum, comb, comb2, buzz, rev, start, stop) | `Sounds/SASA/CFM56B/cockpit/cfm-idle`, `-idle2`, `-lowspool`, `-hum`, `-comb`, `-comb-full`, `-buzz`, `-reverse`; `.../start/A320_cockpit_startup`, `A320_cockpit_shutdown` | A320-family (SASA) |
 | `v25_x_*`, `v25_c_*` | `Sounds/SASA/V2500/external/v2500-idle`, `-idleRear`, `-spool`, `-lowspool`, `-buzz`, `-buzzDist`, `-startup`; `.../cockpit/v2500-idle`, `-lowspool`, `-comb`, `-buzz`, `-reverse`; `.../start/v2500-start2` | A320-family (SASA) |
@@ -132,3 +135,16 @@ main-rotor blade passage and blade slap, Arriel turbine and exhaust, main
 gearbox whine, the Fenestron's unevenly spaced blades; four motor / prop
 voices with their beating, ESC whine and prop wash). No recordings were
 imported for them.
+
+## Radial-engine samples (`r18_*`, Track H2b)
+
+From FGAddon `trunk/Aircraft/Douglas-Dc3` (SVN r21799), GPL-2.0 (package
+`COPYING`). The P&W R-1830 Twin Wasp idle, slow / cruise exterior and
+cockpit loops, start and shutdown, with the FG `dc-3-sound.xml` pitch laws
+(`src/audio/soundsets.rs`, `RADIAL`); used by the DC-3 and, as the nearest
+recorded engine, the DHC-3 Otter's R-1340 Wasp. Built by
+`tools/build_radial.py` (numpy + ffmpeg; same processing as
+`build_vulcan.py`). The package does not say where the recordings were
+made: provenance rests on the package licence, as for the Vulcan set. The
+Extra 500 uses the PW100 turboprop set and the Super Cub / Zlin the C172
+set (nearest recorded engines).

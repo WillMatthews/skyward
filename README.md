@@ -40,15 +40,27 @@ anywhere on Earth, for as long as you like. wgpu (Vulkan), winit, egui.
   local time and date. The weather is re-fetched as a long flight moves on.
 * **Wind** — boundary-layer gradient, gusts, mechanical and convective
   turbulence, thermals under the cumulus that drift with the wind aloft.
-* **Ten real aircraft** from FlightGear's open hangar — Cessna 172P,
-  ASK 21, Spitfire Mk IX, F-16C, ATR 72-500, Embraer E190, Airbus A320 and
-  the heavies: Lockheed C-130H Hercules, C-5M Super Galaxy, Avro Vulcan B.2 — with
+* **Fifteen real aircraft** from FlightGear's open hangar — Cessna 172P,
+  ASK 21, Spitfire Mk IX, F-16C, ATR 72-500, Embraer E190, Airbus A320,
+  the heavies: Lockheed C-130H Hercules, C-5M Super Galaxy, Avro Vulcan B.2,
+  and the five propeller types below — with
   their textured 3D models, cockpits and animations (surfaces, gear, props,
   lights, instruments), and their **JSBSim aerodynamics** evaluated at run
   time (C172, ASK 21, F-16, E190, A320, C-5, Vulcan — the last two with
   Skyward calibration patches, the Vulcan with delta-wing aerodynamics; the
   YASim-based Spitfire, ATR and C-130 use a calibrated model) inside one 6-DoF flight model (ISA atmosphere, engines and
   propellers, gear, spoilers, reversers, asymmetric thrust, FBW laws).
+* **Five more propeller types** — Extra EA-500 turboprop single (glass
+  cockpit on our PFD / map), Piper PA-18 Super Cub bush taildragger, Zlin
+  Z-50 LX unlimited aerobat (snap rolls, spins, inverted fuel and oil,
+  airshow smoke on T), DHC-3 Otter **on floats** and the Douglas DC-3 / C-47
+  with its radials (recorded Twin Wasp sound set).
+* **Water operations** — float hydrodynamics (`src/water.rs`): buoyancy and
+  the righting moment of two floats, the hump and getting *on the step*,
+  planing lift, water drag and spray, water rudders, weathervaning, glassy
+  water to wind-driven chop; floatplanes start on the longest lane of open
+  water near the start (the Thames, a dock, a lake) and the bot flies them
+  off and back onto it.
 * **Rotorcraft** — an Airbus Helicopters **EC130 B4** (FlightGear model with
   its working B4 panel and VEMD screens) on Skyward's own rotor flight
   model: blade-element / momentum main rotor with collective, cyclic and
@@ -259,6 +271,11 @@ suitable airfield.
 | `hercules` (`c130`) | **Lockheed C-130H Hercules** | Four T56 turboprops, high wing, short and rough fields (from ~900 m, grass OK), reverse pitch. |
 | `galaxy` (`c5`) | **Lockheed C-5M Super Galaxy** | 280 t strategic airlifter: slow-spooling CF6s, huge inertia, spoilers and reversers. Needs 2,400 m. |
 | `vulcan` | **Avro Vulcan B.2** | Delta-wing V-bomber: no stall break but huge drag at high alpha, T/W 0.6, the Olympus howl. Flap lever = airbrakes. Needs 2,000 m. |
+| `extra500` (`ea500`) | **Extra EA-500** | 450 shp turboprop single, carbon airframe, retractable gear, glass IFDs (PFD + moving map), reverse pitch; ~210 KTAS high up. |
+| `cub` (`pa18`, `supercub`) | **Piper PA-18 Super Cub** | 150 hp tube-and-fabric bush taildragger: off a grass strip in ~100 m, stalls at 37 kt, light enough that every gust moves it. Engine coughs under negative g. |
+| `zlin` (`z50`, `aerobat`) | **Zlin Z-50 LX** | Unlimited aerobat: 300 hp, +9 / −6 g, ~240°/s roll, snap rolls and spins (PARE recovery), inverted fuel and oil (2 min); T toggles the airshow smoke. No flaps. |
+| `otter` (`dhc3`, `floatplane`) | **DHC-3 Otter on floats** | 600 hp radial bush floatplane: starts on the nearest open water, full back stick over the hump then *on the step*, lifts off at ~60 kt; water rudders on Q / E below ~20 kt, weathervanes into wind. |
+| `dc3` (`c47`, `dakota`) | **Douglas DC-3 / C-47** | Two 1,200 hp Twin Wasp radials, taildragger: wheel landings, brakes only with the tail down, grass OK, needs ~900 m. |
 | `ec130` (`heli`, `h130`) | **Airbus Helicopters EC130 B4** | Single-turboshaft light helicopter: collective on the throttle, cyclic on the stick, pedals on the rudder; G or F6 cycles the stability assist (attitude hold → off → SAS); K fails the engine (autorotation). Starts beside the runway, rotors turning. |
 | `fpv` (`quad`, `drone`) | **5" FPV quadcopter** | Angle (self-levelling) or rate (acro) mode on G / ;, throttle on the throttle; C → cockpit = the FPV camera with OSD. On a gamepad both sticks fly "mode 2" (left: throttle / yaw, right: pitch / roll). |
 
@@ -369,7 +386,7 @@ The cinematic camera cycles chase angles, fly-bys, tower, nose and wingtip shots
 | `--no-menu` | fly straight away (skip the main menu) |
 | `--vsync on\|off` | present with vsync (default on: smooth); off = mailbox / immediate |
 | `--hud full\|minimal\|off`, `--map corner\|large\|off` | instrument / map mode |
-| `--aircraft ID` | `kestrel` `swift` `peregrine` `lancer` `aerolink` `meridian190` `meridian320` `hercules` `galaxy` `vulcan` `ec130` `fpv` (or `c172` `ask21` `spitfire` `f16` `atr72` `e190` `a320` `c130` `c5` `heli` `quad` `drone`) |
+| `--aircraft ID` | `kestrel` `swift` `peregrine` `lancer` `aerolink` `meridian190` `meridian320` `hercules` `galaxy` `vulcan` `ec130` `fpv` `extra500` `cub` `zlin` `otter` `dc3` (or `c172` `ask21` `spitfire` `f16` `atr72` `e190` `a320` `c130` `c5` `heli` `quad` `drone` `pa18` `z50` `dhc3` `c47`) |
 | `--start S` | `runway` `approach` `city` `thermal` |
 | `--bot` | hand the aircraft to the auto-flight bot |
 | `--watch` | auto flight + cinematic camera (+ glider relaunch) |

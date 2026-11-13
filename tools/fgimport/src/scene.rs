@@ -944,7 +944,8 @@ pub fn run(cfg: &Value, src: &Path, out: &Path) -> Result<(), String> {
     let mut statics = HashMap::new();
     if let Some(m) = cfg.get("props").and_then(|v| v.as_object()) {
         for (k, v) in m {
-            statics.insert(k.trim_start_matches('/').to_string(), v.as_f64().unwrap_or(0.0) as f32);
+            let x = v.as_f64().map(|x| x as f32).or_else(|| v.as_str().map(crate::expr::str_value)).unwrap_or(0.0);
+            statics.insert(k.trim_start_matches('/').to_string(), x);
         }
     }
     let extra: Vec<(String, String, f32, f32)> = cfg

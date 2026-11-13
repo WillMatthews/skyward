@@ -76,6 +76,12 @@ pub fn profile_for(def: &AircraftDef, size: f32) -> Profile {
     } else if id == "hercules" || has(&["c130", "c-130", "hercules"]) {
         // Allison T56: nearest recorded turboprop set (PW100), 4-blade props.
         SoundSet::Atr
+    } else if matches!(id.as_str(), "dc3" | "otter") || has(&["dc-3", "dakota", "dhc3", "otter"]) {
+        // P&W R-1830 Twin Wasp (DC-3 recordings); the Otter's R-1340 Wasp is the same family.
+        SoundSet::Radial
+    } else if id == "extra500" {
+        // Rolls-Royce 250 turboprop: nearest recorded set (PW100), 5-blade prop.
+        SoundSet::Atr
     } else {
         match p.family {
             Family::LightPiston => SoundSet::C172,
@@ -111,6 +117,24 @@ pub fn profile_for(def: &AircraftDef, size: f32) -> Profile {
         "hercules" => p.blades = 4,
         "galaxy" => p.fan_blades = 38,
         "vulcan" => p.fan_blades = 22,
+        // Track H2b.
+        "extra500" => p.blades = 5,
+        "cub" => {
+            p.cylinders = 4;
+            p.blades = 2;
+        }
+        "zlin" => {
+            p.cylinders = 6;
+            p.blades = 3;
+        }
+        "otter" => {
+            p.cylinders = 9;
+            p.blades = 3;
+        }
+        "dc3" => {
+            p.cylinders = 14;
+            p.blades = 3;
+        }
         // EC130 B4: 3-blade Starflex main rotor (Ø 10.69 m), 10-blade Fenestron.
         "ec130" => {
             p.blades = 3;

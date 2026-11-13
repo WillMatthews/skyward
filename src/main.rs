@@ -49,6 +49,7 @@ mod terrain;
 mod landmarks;
 mod tiles;
 mod vfx;
+mod water;
 mod ui;
 mod weather;
 mod world;

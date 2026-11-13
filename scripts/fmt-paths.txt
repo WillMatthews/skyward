@@ -56,3 +56,8 @@ src/atc/tests.rs
 src/audio/radio.rs
 src/ui/comms.rs
 src/ui/scroll.rs
+src/water.rs
+src/flight/ga.rs
+src/flight/tests/ga_types.rs
+src/vfx/spray.rs
+src/vfx/smoke.rs

@@ -2173,6 +2173,10 @@ fn persons(def: &AircraftDef) -> u32 {
         "hercules" => 6,
         "galaxy" => 9,
         "vulcan" => 5,
+        "extra500" => 4,
+        "zlin" => 1,
+        "otter" => 6,
+        "dc3" => 24,
         _ => 2,
     }
 }

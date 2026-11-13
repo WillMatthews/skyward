@@ -129,6 +129,14 @@ embed!(
     "vul_i_eng",
     "vul_start",
     "vul_stop",
+    "r18_idle",
+    "r18_slow",
+    "r18_cruise",
+    "r18_i_hi",
+    "r18_i_lo",
+    "r18_start",
+    "r18_stop",
+    "r18_stop_int",
 );
 
 const N: usize = NAMES.len();

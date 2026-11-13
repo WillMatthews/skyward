@@ -1,0 +1,78 @@
+"zlin": 26 nodes (25 animated out of 26), 25 materials, 20 textures (0.7 MB), 60 chunks
+triangles: exterior 13236, interior 46536; vertices 49012; model.skac 0.7 MB; radius 4.7 m
+eye: Some(Vec3(0.0, 0.69799995, -0.847))
+lights: 6
+channels used: aileron_l aileron_r alt_ft clock_s elevator eng0_map_inhg eng0_rpm g_load heading_deg ias_kt landing_light panel_light slip turn_rate vs_fpm
+texture-animated chunks: 0; display screens: 0
+animation types: [("", 106), ("knob", 2), ("material", 46), ("noshadow", 39), ("pick", 37), ("rotate", 54), ("select", 75), ("spin", 4), ("texmultiple", 1), ("textranslate", 37), ("translate", 9)]
+unmapped properties (count):
+    17 autopilot/kap140/panel/state
+    13 autopilot/kap140/panel/digit-mode
+    13 autopilot/kap140/panel/digit
+     7 instrumentation/nav/frequencies/standby-mhz
+     7 instrumentation/dme/miles-display
+     7 instrumentation/comm/frequencies/standby-mhz
+     6 autopilot/kap140/sensors/pitch-up
+     6 autopilot/kap140/sensors/pitch-down
+     6 autopilot/kap140/panel/hdg-timer
+     6 autopilot/kap140/panel/alt-alert
+     5 instrumentation/nav/frequencies/selected-mhz
+     5 instrumentation/dme/min-kts-display
+     5 instrumentation/comm/frequencies/selected-mhz
+     5 autopilot/kap140/settings/lateral-mode
+     5 autopilot/kap140/panel/alt-alert-arm
+     4 autopilot/kap140/settings/lateral-arm
+     4 autopilot/kap140/panel/ap-timer
+     3 instrumentation/nav-source/gs-needle-deflection
+     3 instrumentation/dme/switch-min-kts
+     3 autopilot/kap140/settings/vertical-mode
+     3 autopilot/kap140/settings/vertical-arm
+     3 autopilot/kap140/panel/baro-mode
+     3 autopilot/kap140/bad-condition
+     2 sim/multiplay/generic/float
+     2 sim/multiplay/generic/bool[1]
+     2 sim/multiplay/generic/bool[16]
+     2 instrumentation/kcs55/ki525/selected-course-deg
+     2 instrumentation/engine/cht-degf
+     2 instrumentation/dme/left-dot
+     2 controls/switches/starter
+     2 consumables/fuel/tank[2]/level-m3
+     2 consumables/fuel/tank[1]/level-m3
+     2 consumables/fuel/tank/level-m3
+     2 autopilot/kap140/sensors/pitch-trim
+     2 autopilot/kap140/panel/digit-timer
+     2 autopilot/kap140/config/model
+     1 sim/multiplay/generic/float[9]
+     1 sim/multiplay/generic/float[7]
+     1 sim/multiplay/generic/float[6]
+     1 sim/multiplay/generic/float[5]
+     1 sim/multiplay/generic/float[10]
+     1 sim/multiplay/generic/bool
+     1 instrumentation/nav/volume
+     1 instrumentation/nav/frq-swap-btn
+     1 instrumentation/nav/audio-btn
+     1 instrumentation/nav-source/heading-needle-deflection-norm
+     1 instrumentation/nav-source/has-gs
+     1 instrumentation/kcs55/ki525/to-flag
+     1 instrumentation/kcs55/ki525/selected-heading-deg
+     1 instrumentation/kcs55/ki525/nav-flag
+     1 instrumentation/kcs55/ki525/from-flag
+     1 instrumentation/kcs55/kg102/slaving-meter-norm
+     1 instrumentation/kcs55/ka51/slaved
+     1 instrumentation/kcs55/ka51/manual-slave
+     1 instrumentation/engine/oil-temp
+     1 instrumentation/dme/in-range
+     1 instrumentation/dme/dimming-norm
+     1 instrumentation/comm/volume
+     1 instrumentation/comm/frq-swap-btn
+     1 instrumentation/attitude-indicator/internal-roll-deg
+     1 instrumentation/attitude-indicator/internal-pitch-deg
+     1 controls/smoke
+     1 controls/engines/engine/magnetos
+     1 autopilot/kap140/settings/cws
+     1 autopilot/kap140/roll-axis-fail
+     1 autopilot/kap140/powered
+     1 autopilot/kap140/pitch-axis-fail
+     1 autopilot/internal/target-climb-rate
+     1 autopilot/internal/target-altitude
+log:

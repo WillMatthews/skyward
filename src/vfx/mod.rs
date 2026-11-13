@@ -22,6 +22,8 @@
 pub mod atmo;
 pub mod gpu;
 mod rotorwash;
+mod smoke;
+mod spray;
 
 use crate::debris::{Debris, Fx};
 use crate::flight::{Aircraft, AircraftDef, EngineKind, GRAVITY};
@@ -219,6 +221,8 @@ pub struct Vfx {
     pub isa_only: bool,
     /// Accumulators for rate-based emitters.
     acc: Vec<(u32, f32)>,
+    /// Airshow smoke on (aerobats with a smoke system, src/vfx/smoke.rs).
+    pub smoke: bool,
 }
 
 impl Default for Vfx {
@@ -242,6 +246,7 @@ impl Default for Vfx {
             winds: [Vec3::ZERO; 10],
             isa_only: false,
             acc: Vec::new(),
+            smoke: false,
         }
     }
 }
@@ -528,6 +533,8 @@ impl Vfx {
         if ac.crashed.is_none() {
             self.flight_effects(&c, sd, dt, &gh);
             self.rotor_wash(&c, dt, &gh);
+            self.float_spray(&c, dt, &gh);
+            self.airshow_smoke(&c, dt);
         } else {
             self.cone = 0.0;
             self.wing_vapour = 0.0;
