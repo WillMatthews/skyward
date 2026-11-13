@@ -70,6 +70,10 @@ pub fn keyboard() -> Vec<(Key, Vec<K>)> {
         (Key::Failures, vec![K::KeyO, K::F2]),
         (Key::Mute, vec![K::KeyN]),
         (Key::Assist, vec![K::F6]),
+        (Key::Chat, vec![K::Enter, K::NumpadEnter]),
+        (Key::PlayerList, vec![K::F7]),
+        (Key::NameTags, vec![K::F8]),
+        (Key::QuickChat, vec![K::F9]),
     ]
 }
 

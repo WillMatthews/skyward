@@ -108,15 +108,17 @@ struct Inst {
 }
 
 struct GpuModel {
-    key: usize,
+    key: (usize, bool),
     /// Per-vertex structural attributes (part, span station, chord offset).
     pv: wgpu::Buffer,
-    has_parts: bool,
     vb: wgpu::Buffer,
     ib: wgpu::Buffer,
     /// Per chunk (first index, count) in `ib` (the parts copy re-tessellates the wings).
     ranges: Vec<(u32, u32)>,
     tex_bgs: Vec<wgpu::BindGroup>,
+    asset: Arc<AircraftAsset>,
+    /// Frames since an aircraft last used it (evicted when unused for a while).
+    idle: u32,
 }
 
 /// Draw list prepared for this frame: (chunk index, instance index).
@@ -124,6 +126,20 @@ struct GpuModel {
 struct Prepared {
     opaque: Vec<(u32, u32)>,
     shadow: Vec<(u32, u32)>,
+}
+
+/// One aircraft's per-frame GPU state: its instances, structural dynamics
+/// and which (shared) model it draws.
+struct Slot {
+    inst_buf: wgpu::Buffer,
+    inst_cap: usize,
+    inst_bg: wgpu::BindGroup,
+    dyn_buf: wgpu::Buffer,
+    /// Index into `AircraftRenderer::models`.
+    model: Option<usize>,
+    prepared: Prepared,
+    /// Per prepared draw: the display bind group to use (index into `disp_bgs`).
+    disp_of: Vec<Option<usize>>,
 }
 
 pub struct AircraftRenderer {
@@ -135,19 +151,17 @@ pub struct AircraftRenderer {
     tex_bgl: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     white_bg: wgpu::BindGroup,
-    inst_buf: wgpu::Buffer,
-    inst_cap: usize,
-    inst_bg: wgpu::BindGroup,
-    dyn_buf: wgpu::Buffer,
-    model: Option<GpuModel>,
-    asset: Option<Arc<AircraftAsset>>,
-    prepared: Prepared,
+    /// Uploaded models, shared by every aircraft of the same type.
+    models: Vec<GpuModel>,
+    /// The player's aircraft.
+    main: Slot,
+    /// Other aircraft (multiplayer traffic), one slot each, reused frame to frame.
+    traffic: Vec<Slot>,
+    n_traffic: usize,
     /// Display sampler (clamped, trilinear, anisotropic).
     disp_sampler: wgpu::Sampler,
     /// (generation, per display kind: bind group).
     disp_bgs: Option<(u64, Vec<(String, wgpu::BindGroup)>)>,
-    /// Per prepared draw: the display bind group to use (index into `disp_bgs`).
-    disp_of: Vec<Option<usize>>,
 }
 
 /// Scene radiance of fully lit cockpit backlighting / annunciators (× the
@@ -323,13 +337,7 @@ impl AircraftRenderer {
         });
         let white = upload_texture(device, queue, 1, 1, &[255, 255, 255, 255]);
         let white_bg = tex_bg(device, &tex_bgl, &white, &sampler);
-        let inst_cap = 256;
-        let dyn_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("aircraft dynamics"),
-            contents: bytemuck::bytes_of(&AcDynamics::default()),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        });
-        let (inst_buf, inst_bg) = make_inst(device, &inst_bgl, inst_cap, &dyn_buf);
+        let main = new_slot(device, &inst_bgl);
         AircraftRenderer {
             main_cull,
             main_twosided,
@@ -339,89 +347,128 @@ impl AircraftRenderer {
             tex_bgl,
             sampler,
             white_bg,
-            inst_buf,
-            inst_cap,
-            inst_bg,
-            dyn_buf,
-            model: None,
-            asset: None,
-            prepared: Prepared::default(),
+            models: Vec::new(),
+            main,
+            traffic: Vec::new(),
+            n_traffic: 0,
             disp_sampler,
             disp_bgs: None,
-            disp_of: Vec::new(),
         }
     }
 
     /// Upload the model (when it changed) and this frame's instances.
     pub fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frame: Option<&AircraftFrame>) {
-        self.prepared.opaque.clear();
-        self.prepared.shadow.clear();
-        let Some(f) = frame else { return };
+        for m in &mut self.models {
+            m.idle = m.idle.saturating_add(1);
+        }
         // Display textures → bind groups (rebuilt when the views change).
-        match &f.displays {
-            Some(ds) if self.disp_bgs.as_ref().map(|d| d.0) != Some(ds.generation) => {
+        if let Some(ds) = frame.and_then(|f| f.displays.as_ref()) {
+            if self.disp_bgs.as_ref().map(|d| d.0) != Some(ds.generation) {
                 let bgs = ds.views.iter().map(|(k, v)| (k.clone(), tex_bg(device, &self.tex_bgl, v, &self.disp_sampler))).collect();
                 self.disp_bgs = Some((ds.generation, bgs));
             }
-            _ => {}
         }
-        let disp_lum = f.displays.as_ref().map(|d| d.brightness);
-        let key = Arc::as_ptr(&f.asset) as usize;
-        if self.model.as_ref().map(|m| (m.key, m.has_parts)) != Some((key, f.parts.is_some())) {
-            let a = &f.asset;
-            if a.vertices.is_empty() || a.indices.is_empty() {
-                self.model = None;
-                return;
+        let ph = Slot::placeholder(&self.main);
+        let mut main = std::mem::replace(&mut self.main, ph);
+        self.prepare_slot(device, queue, &mut main, frame, true);
+        self.main = main;
+    }
+
+    /// Other aircraft this frame (multiplayer traffic; eye-relative frames
+    /// like the player's). Models are shared with the player's and between
+    /// aircraft of the same type.
+    pub fn prepare_traffic(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frames: &[AircraftFrame]) {
+        while self.traffic.len() < frames.len() {
+            self.traffic.push(new_slot(device, &self.inst_bgl));
+        }
+        let mut slots = std::mem::take(&mut self.traffic);
+        for (slot, f) in slots.iter_mut().zip(frames) {
+            self.prepare_slot(device, queue, slot, Some(f), false);
+        }
+        self.traffic = slots;
+        self.n_traffic = frames.len();
+        // Free models no aircraft has used for ~10 s (not the player's).
+        let keep = self.main.model;
+        let mut i = 0;
+        while i < self.models.len() {
+            if self.models[i].idle > 600 && Some(i) != keep && !self.traffic[..self.n_traffic].iter().any(|s| s.model == Some(i)) {
+                self.models.swap_remove(i);
+                let last = self.models.len();
+                for s in std::iter::once(&mut self.main).chain(self.traffic.iter_mut()) {
+                    if s.model == Some(i) {
+                        s.model = None;
+                    } else if s.model == Some(last) {
+                        s.model = Some(i);
+                    }
+                }
+            } else {
+                i += 1;
             }
-            // With structural parts: the seam-split copy of the geometry.
-            let split = f.parts.as_ref().filter(|p| p.vert.len() == p.vertices.len() && p.ranges.len() == a.chunks.len());
-            let (verts, idx) = match split {
-                Some(p) => (&p.vertices[..], &p.indices[..]),
-                None => (&a.vertices[..], &a.indices[..]),
-            };
-            let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("aircraft vb"),
-                contents: bytemuck::cast_slice(verts),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-            let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("aircraft ib"),
-                contents: bytemuck::cast_slice(idx),
-                usage: wgpu::BufferUsages::INDEX,
-            });
-            let tex_bgs = a
+        }
+    }
+
+    /// The model for a frame (uploaded once per asset / parts variant).
+    fn model_for(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, f: &AircraftFrame) -> Option<usize> {
+        let key = (Arc::as_ptr(&f.asset) as usize, f.parts.is_some());
+        if let Some(i) = self.models.iter().position(|m| m.key == key) {
+            self.models[i].idle = 0;
+            return Some(i);
+        }
+        let a = &f.asset;
+        if a.vertices.is_empty() || a.indices.is_empty() {
+            return None;
+        }
+        // With structural parts: the seam-split copy of the geometry.
+        let split = f.parts.as_ref().filter(|p| p.vert.len() == p.vertices.len() && p.ranges.len() == a.chunks.len());
+        let (verts, idx) = match split {
+            Some(p) => (&p.vertices[..], &p.indices[..]),
+            None => (&a.vertices[..], &a.indices[..]),
+        };
+        let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("aircraft vb"), contents: bytemuck::cast_slice(verts), usage: wgpu::BufferUsages::VERTEX });
+        let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("aircraft ib"), contents: bytemuck::cast_slice(idx), usage: wgpu::BufferUsages::INDEX });
+        // Textures: reuse another variant's bind groups of the same asset.
+        let tex_bgs = match self.models.iter().find(|m| m.key.0 == key.0) {
+            Some(other) => other.tex_bgs.clone(),
+            None => a
                 .textures
                 .iter()
                 .map(|t| {
                     let v = upload_texture(device, queue, t.width, t.height, &t.rgba);
                     tex_bg(device, &self.tex_bgl, &v, &self.sampler)
                 })
-                .collect();
-            let pv_data: Vec<[f32; 4]> = match split {
-                Some(p) => p.vert.clone(),
-                None => vec![[0.0, 0.0, 0.0, 1.0]; a.vertices.len()],
-            };
-            let pv = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("aircraft parts"),
-                contents: bytemuck::cast_slice(&pv_data),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-            let ranges = match split {
-                Some(p) => p.ranges.clone(),
-                None => a.chunks.iter().map(|c| (c.first, c.count)).collect(),
-            };
-            self.model = Some(GpuModel { key, pv, has_parts: f.parts.is_some(), vb, ib, ranges, tex_bgs });
-            self.asset = Some(f.asset.clone());
+                .collect(),
+        };
+        let pv_data: Vec<[f32; 4]> = match split {
+            Some(p) => p.vert.clone(),
+            None => vec![[0.0, 0.0, 0.0, 1.0]; a.vertices.len()],
+        };
+        let pv = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("aircraft parts"), contents: bytemuck::cast_slice(&pv_data), usage: wgpu::BufferUsages::VERTEX });
+        let ranges = match split {
+            Some(p) => p.ranges.clone(),
+            None => a.chunks.iter().map(|c| (c.first, c.count)).collect(),
+        };
+        self.models.push(GpuModel { key, pv, vb, ib, ranges, tex_bgs, asset: a.clone(), idle: 0 });
+        Some(self.models.len() - 1)
+    }
+
+    fn prepare_slot(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, slot: &mut Slot, frame: Option<&AircraftFrame>, displays: bool) {
+        slot.prepared.opaque.clear();
+        slot.prepared.shadow.clear();
+        slot.disp_of.clear();
+        let Some(f) = frame else { return };
+        slot.model = self.model_for(device, queue, f);
+        if slot.model.is_none() {
+            return;
         }
+        let disp_lum = if displays { f.displays.as_ref().map(|d| d.brightness) } else { None };
         let a = &f.asset;
-        if f.draws.len() > self.inst_cap {
-            self.inst_cap = f.draws.len().next_power_of_two();
-            (self.inst_buf, self.inst_bg) = make_inst(device, &self.inst_bgl, self.inst_cap, &self.dyn_buf);
+        if f.draws.len() > slot.inst_cap {
+            slot.inst_cap = f.draws.len().next_power_of_two();
+            (slot.inst_buf, slot.inst_bg) = make_inst(device, &self.inst_bgl, slot.inst_cap, &slot.dyn_buf);
         }
         let dynamics = f.dynamics.as_deref().copied().unwrap_or_default();
-        queue.write_buffer(&self.dyn_buf, 0, bytemuck::bytes_of(&dynamics));
+        queue.write_buffer(&slot.dyn_buf, 0, bytemuck::bytes_of(&dynamics));
         let mut insts = Vec::with_capacity(f.draws.len());
-        self.disp_of.clear();
         // Opaque first, then cut-outs, then glass (alpha-to-coverage needs no sorting,
         // but drawing glass last lets the depth test skip what it hides).
         let mut order: Vec<(u8, usize)> = f
@@ -462,13 +509,13 @@ impl AircraftRenderer {
             let f0 = if mode == 2 { 0.06 } else { 0.03 + 0.05 * spec.clamp(0.0, 1.0) };
             let mut uv = d.uv;
             // A glass display: its texture window → the whole display texture.
-            let disp = c.display.as_ref().and_then(|ds| {
+            let disp = c.display.as_ref().filter(|_| displays).and_then(|ds| {
                 let i = self.disp_bgs.as_ref()?.1.iter().position(|(k, _)| *k == ds.kind)?;
                 let (w, h) = ((ds.uv[2] - ds.uv[0]).max(1e-4), (ds.uv[3] - ds.uv[1]).max(1e-4));
                 uv = [uv[0] / w, uv[1] / h, uv[2] / w, uv[3] / h, (uv[4] - ds.uv[0]) / w, (uv[5] - ds.uv[1]) / h];
                 Some(i)
             });
-            self.disp_of.push(disp);
+            slot.disp_of.push(disp);
             let (mode, params) = match (disp, disp_lum) {
                 // Mode 3: emissive screen behind smooth cover glass.
                 (Some(_), Some(lum)) => (3, [0.04, 0.12, 3.0, lum]),
@@ -483,19 +530,24 @@ impl AircraftRenderer {
                 uvo: [uv[4], uv[5], 0.0, 0.0],
             });
             let ii = (insts.len() - 1) as u32;
-            self.prepared.opaque.push((d.chunk, ii));
+            slot.prepared.opaque.push((d.chunk, ii));
             if mode != 2 && mode != 3 && !c.interior {
-                self.prepared.shadow.push((d.chunk, ii));
+                slot.prepared.shadow.push((d.chunk, ii));
             }
         }
         if !insts.is_empty() {
-            queue.write_buffer(&self.inst_buf, 0, bytemuck::cast_slice(&insts));
+            queue.write_buffer(&slot.inst_buf, 0, bytemuck::cast_slice(&insts));
         }
     }
 
-    fn draw_list(&self, pass: &mut wgpu::RenderPass<'_>, list: &[(u32, u32)], refl: bool) {
-        let (Some(gm), Some(a)) = (&self.model, &self.asset) else { return };
-        pass.set_bind_group(1, &self.inst_bg, &[]);
+    fn slots(&self) -> impl Iterator<Item = &Slot> {
+        std::iter::once(&self.main).chain(self.traffic[..self.n_traffic].iter())
+    }
+
+    fn draw_list(&self, pass: &mut wgpu::RenderPass<'_>, slot: &Slot, list: &[(u32, u32)], refl: bool) {
+        let Some(gm) = slot.model.and_then(|i| self.models.get(i)) else { return };
+        let a = &gm.asset;
+        pass.set_bind_group(1, &slot.inst_bg, &[]);
         pass.set_vertex_buffer(0, gm.vb.slice(..));
         pass.set_vertex_buffer(1, gm.pv.slice(..));
         pass.set_index_buffer(gm.ib.slice(..), wgpu::IndexFormat::Uint32);
@@ -512,7 +564,7 @@ impl AircraftRenderer {
                 });
                 cur_pipe = p;
             }
-            let disp = self.disp_of.get(ii as usize).copied().flatten().and_then(|k| self.disp_bgs.as_ref().map(|d| &d.1[k].1));
+            let disp = slot.disp_of.get(ii as usize).copied().flatten().and_then(|k| self.disp_bgs.as_ref().map(|d| &d.1[k].1));
             let bg = disp.or_else(|| m.tex.and_then(|t| gm.tex_bgs.get(t))).unwrap_or(&self.white_bg);
             pass.set_bind_group(2, bg, &[]);
             let (first, count) = gm.ranges[ci as usize];
@@ -522,37 +574,61 @@ impl AircraftRenderer {
 
     /// Main HDR pass (group 0 = the scene globals, already bound).
     pub fn draw_main(&self, pass: &mut wgpu::RenderPass<'_>) {
-        self.draw_list(pass, &self.prepared.opaque, false);
+        for s in self.slots() {
+            self.draw_list(pass, s, &s.prepared.opaque, false);
+        }
     }
 
     /// Planar water reflection (group 0 = the reflection globals, already bound).
     pub fn draw_refl(&self, pass: &mut wgpu::RenderPass<'_>) {
-        let list: Vec<(u32, u32)> = self
-            .prepared
-            .opaque
-            .iter()
-            .copied()
-            .filter(|&(ci, _)| self.asset.as_ref().map(|a| !a.chunks[ci as usize].interior).unwrap_or(false))
-            .collect();
-        self.draw_list(pass, &list, true);
+        for s in self.slots() {
+            let Some(a) = s.model.and_then(|i| self.models.get(i)).map(|m| &m.asset) else { continue };
+            let list: Vec<(u32, u32)> = s.prepared.opaque.iter().copied().filter(|&(ci, _)| !a.chunks[ci as usize].interior).collect();
+            self.draw_list(pass, s, &list, true);
+        }
     }
 
     /// One shadow cascade (group 0 = the cascade's uniform, already bound).
     pub fn draw_shadow(&self, pass: &mut wgpu::RenderPass<'_>) {
-        let (Some(gm), Some(a)) = (&self.model, &self.asset) else { return };
-        if self.prepared.shadow.is_empty() {
-            return;
+        let mut set = false;
+        for s in self.slots() {
+            let Some(gm) = s.model.and_then(|i| self.models.get(i)) else { continue };
+            if s.prepared.shadow.is_empty() {
+                continue;
+            }
+            if !set {
+                pass.set_pipeline(&self.shadow);
+                set = true;
+            }
+            let a = &gm.asset;
+            pass.set_bind_group(1, &s.inst_bg, &[]);
+            pass.set_vertex_buffer(0, gm.vb.slice(..));
+            pass.set_vertex_buffer(1, gm.pv.slice(..));
+            pass.set_index_buffer(gm.ib.slice(..), wgpu::IndexFormat::Uint32);
+            for &(ci, ii) in &s.prepared.shadow {
+                let c = &a.chunks[ci as usize];
+                let (first, count) = gm.ranges[ci as usize];
+                pass.draw_indexed(first..first + count, c.base_vertex as i32, ii..ii + 1);
+            }
         }
-        pass.set_pipeline(&self.shadow);
-        pass.set_bind_group(1, &self.inst_bg, &[]);
-        pass.set_vertex_buffer(0, gm.vb.slice(..));
-        pass.set_vertex_buffer(1, gm.pv.slice(..));
-        pass.set_index_buffer(gm.ib.slice(..), wgpu::IndexFormat::Uint32);
-        for &(ci, ii) in &self.prepared.shadow {
-            let c = &a.chunks[ci as usize];
-            let (first, count) = gm.ranges[ci as usize];
-            pass.draw_indexed(first..first + count, c.base_vertex as i32, ii..ii + 1);
-        }
+    }
+}
+
+fn new_slot(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout) -> Slot {
+    let inst_cap = 256;
+    let dyn_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("aircraft dynamics"),
+        contents: bytemuck::bytes_of(&AcDynamics::default()),
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    });
+    let (inst_buf, inst_bg) = make_inst(device, bgl, inst_cap, &dyn_buf);
+    Slot { inst_buf, inst_cap, inst_bg, dyn_buf, model: None, prepared: Prepared::default(), disp_of: Vec::new() }
+}
+
+impl Slot {
+    /// A stand-in while `main` is borrowed out (shares its buffers; never drawn).
+    fn placeholder(s: &Slot) -> Slot {
+        Slot { inst_buf: s.inst_buf.clone(), inst_cap: s.inst_cap, inst_bg: s.inst_bg.clone(), dyn_buf: s.dyn_buf.clone(), model: None, prepared: Prepared::default(), disp_of: Vec::new() }
     }
 }
 

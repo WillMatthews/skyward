@@ -91,7 +91,8 @@ item lands; keep entries one line.
 - [ ] **P1** Nav follow-ups: no magnetic variation (all courses true); no airways / SIDs / STARs / published procedures (RNAV = ILS geometry); no marker beacons / back courses / GS false lobes; ILS synthetic outside London (frequency clashes possible); MCDU is display-only (editing in the F3 panel); KAP 140 buttons not clickable; ADF needle (KI-227) / E190 / ATR cockpit radios not bound; LOWI 08 still not landed by the airliners (synthetic ILS there is LOC-only by terrain; bot uses its own path)
 - [ ] **P1** Replay / flight recorder with cinematic cameras
 - [ ] **P2** Live real traffic (ADS-B feed) as AI aircraft
-- [ ] **P2** Multiplayer (shared sky)
+- [x] **P2** Multiplayer (shared sky): dedicated `skyward-server` (headless, any OS; flags + TOML; console list / kick / ban / say / time / weather / motd; logs; live METAR; clean shutdown), own UDP reliability layer (`crates/skyward-net`: acks + ordered reliable channel, clock sync, Hermite snapshot interpolation + dead reckoning, protocol version handshake, cookies, password proof, rate limits), LAN server browser (broadcast + mDNS discovery, pings, favourites / recents, add by address, details, password prompt, clear refusals), other players with real models / lights / engine sound / name tags / map + ND TCAS, chat + quick-chat wheel, spectating, server time + weather sync; web build: disabled with a message (MP)
+- [ ] **P1** Multiplayer follow-ups: other players' contrails / smoke / crash fire and debris are not drawn (flags and lost-part bits are sent; lost parts are hidden); ATC does not know about other players (no traffic information / sequencing); no collisions between players; no voice chat; IPv4 discovery only (IPv6 by address works); server-side cheat checks are limited to sanity (states are client-authoritative); no internet listing (by design)
 - [ ] **P2** Tutorial / onboarding flights
 
 ## 6. UI / UX
@@ -144,4 +145,5 @@ item lands; keep entries one line.
 | Q | Rotorcraft: EC130 B4 helicopter + FPV quad (src/rotor, rotor wash, audio, bot) | ✅ |
 | R | ATC radio + ATIS: frequencies, phraseology, voices, taxi routing, vectors, comms menu, bot radio (`src/atc/`) | ✅ |
 | UI | Menu scrolling / responsive layouts | ⏳ running |
+| MP | Multiplayer: dedicated server, UDP netcode, LAN server browser, remote aircraft, chat, spectate (`crates/`, `src/net/`) | ✅ |
 | next | H2 extra aircraft (proposed) | ⏳ awaiting decision |

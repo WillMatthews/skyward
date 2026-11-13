@@ -166,6 +166,9 @@ pub struct World {
     pub live_time: bool,
     /// Use today's real date (season, sun) even when the clock time is set by hand.
     pub live_date: bool,
+    /// Seconds added to this machine's clock for the live time (multiplayer:
+    /// the server's UTC is authoritative, net/).
+    pub clock_skew_s: i64,
     live_seen: u64,
     /// Bumped whenever `clouds` is replaced.
     pub cloud_version: u64,
@@ -231,6 +234,7 @@ impl World {
             live_weather: false,
             live_time: false,
             live_date: false,
+            clock_skew_s: 0,
             live_seen: 0,
             cloud_version: 1,
             wind: WindField::from_wx(&Wx::preset(Weather::Scattered)),
@@ -301,7 +305,7 @@ impl World {
         if self.live_time || self.live_date {
             let off = self.live.wx.as_ref().and_then(|w| w.utc_offset_s);
             // The clock is the start's (its zone): the sun then moves smoothly with the aircraft.
-            let rt = weather::real_time(self.home.lat0, self.home.lon0, weather::unix_now(), off);
+            let rt = weather::real_time(self.home.lat0, self.home.lon0, weather::unix_now() + self.clock_skew_s, off);
             self.clock = if self.live_time { (rt.sun_hours, rt.sun_doy) } else { (clock.0, rt.day_of_year) };
             out = Some(self.clock);
             self.real_time = self.live_time.then_some(rt);

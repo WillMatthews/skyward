@@ -78,7 +78,7 @@ pub(super) fn segmented(ui: &mut Ui, rect: Rect, id: &str, items: &[&str], sel: 
     out
 }
 
-fn heading(p: &egui::Painter, at: Pos2, title: &str, sub: &str) -> f32 {
+pub(super) fn heading(p: &egui::Painter, at: Pos2, title: &str, sub: &str) -> f32 {
     p.text(at, Align2::LEFT_TOP, title, f_display(30.0), pal::TEXT);
     p.text(at + Vec2::new(0.0, 40.0), Align2::LEFT_TOP, sub, f_ui(14.0), pal::TEXT2);
     at.y + 70.0
@@ -113,7 +113,7 @@ fn steps(ui: &mut Ui, at: Pos2, current: usize) -> Option<usize> {
 }
 
 /// Darken the 3D scene behind a menu: strong on the left, lighter right.
-fn backdrop(p: &egui::Painter, screen: Rect, strength: f32) {
+pub(super) fn backdrop(p: &egui::Painter, screen: Rect, strength: f32) {
     let mut m = epaint::Mesh::default();
     let a = |v: f32| Color32::from_rgba_premultiplied(5, 7, 10, (v * 255.0 * strength) as u8);
     m.colored_vertex(screen.left_top(), a(0.92));
@@ -209,7 +209,13 @@ pub fn main_menu(ui: &mut Ui, st: &mut UiState) {
         p.text(r.min + Vec2::new(20.0, 37.0), Align2::LEFT_TOP, format!("{def} · {} · {spec}", l.airport), f_ui(13.0), Color32::from_rgb(20, 44, 70));
         by += 76.0;
     }
-    let items: [(&str, Action, &str); 4] = [("New flight", Action::Goto(Screen::Aircraft), "new"), ("Settings", Action::Goto(Screen::Settings), "settings"), ("Credits", Action::Goto(Screen::Credits), "credits"), ("Quit", Action::Quit, "quit")];
+    let items: [(&str, Action, &str); 5] = [
+        ("New flight", Action::Goto(Screen::Aircraft), "new"),
+        ("Multiplayer", Action::Goto(Screen::Multiplayer), "multiplayer"),
+        ("Settings", Action::Goto(Screen::Settings), "settings"),
+        ("Credits", Action::Goto(Screen::Credits), "credits"),
+        ("Quit", Action::Quit, "quit"),
+    ];
     // (A browser tab has nothing to quit to.)
     for (i, (label, act, id)) in items.into_iter().filter(|it| !(crate::platform::WEB && matches!(it.1, Action::Quit))).enumerate() {
         let r = Rect::from_min_size(Pos2::new(x, by), Vec2::new(bw, 48.0));
@@ -286,7 +292,7 @@ pub fn credits(ui: &mut Ui, st: &mut UiState) {
     }
 }
 
-fn esc(ui: &Ui) -> bool {
+pub(super) fn esc(ui: &Ui) -> bool {
     ui.input(|i| i.key_pressed(egui::Key::Escape))
 }
 
@@ -1777,7 +1783,12 @@ pub fn pause(ui: &mut Ui, st: &mut UiState, title: &str, sub: &str) {
         ("Main menu", Action::Goto(Screen::Main), Btn::Ghost),
         ("Quit", Action::Quit, Btn::Ghost),
     ];
-    let items: Vec<_> = items.into_iter().filter(|it| !(crate::platform::WEB && matches!(it.1, Action::Quit))).collect();
+    let mut items: Vec<_> = items.into_iter().filter(|it| !(crate::platform::WEB && matches!(it.1, Action::Quit))).collect();
+    // Multiplayer: the server sets the airport; leaving keeps the flight going alone.
+    if st.mp.connected() {
+        items.retain(|it| !matches!(it.1, Action::Goto(Screen::Departure)));
+        items.insert(items.len().saturating_sub(2), ("Leave server", Action::LeaveServer, Btn::Secondary));
+    }
     // Rows tighten on short windows so the card always fits.
     let step = ((screen.height() - 48.0 - 130.0) / items.len() as f32).clamp(44.0, 54.0);
     let h = 120.0 + items.len() as f32 * step + 10.0;

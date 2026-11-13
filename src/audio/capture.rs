@@ -725,6 +725,8 @@ impl Director {
             thunder: world.wx.thunder,
             day,
             urban: world.roughness(ear_xz),
+            traffic: Default::default(),
+            spectator: false,
         }
     }
 }

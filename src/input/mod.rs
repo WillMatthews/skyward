@@ -193,6 +193,10 @@ pub const BUTTONS: &[(Key, &str, &str, &str)] = &[
     (Key::WeatherPanel, "weather_panel", "Weather panel", "Interface"),
     (Key::Failures, "failures", "Systems & failures", "Interface"),
     (Key::Mute, "mute", "Mute", "Interface"),
+    (Key::Chat, "mp_chat", "Chat", "Multiplayer"),
+    (Key::PlayerList, "mp_players", "Players & spectate", "Multiplayer"),
+    (Key::NameTags, "mp_tags", "Name tags on / off", "Multiplayer"),
+    (Key::QuickChat, "mp_quick_chat", "Quick-chat wheel", "Multiplayer"),
 ];
 
 pub fn key_id(k: Key) -> &'static str {

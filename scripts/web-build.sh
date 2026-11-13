@@ -28,7 +28,7 @@ if [[ "$have" != "$want" ]]; then
 fi
 
 echo "== cargo build ($PROFILE, wasm32-unknown-unknown)"
-cargo build --locked --profile "$PROFILE" --target wasm32-unknown-unknown
+cargo build --locked --profile "$PROFILE" --target wasm32-unknown-unknown -p skyward
 dir=$PROFILE
 [[ $PROFILE == dev ]] && dir=debug
 wasm="$TARGET_DIR/wasm32-unknown-unknown/$dir/skyward.wasm"

@@ -759,6 +759,8 @@ fn nd_map(p: &egui::Painter, cv: &mut canvas::Frame, ppp: f32, s: Rect, sim: &Si
         let b = anchor + Vec2::new(0.0, -arc_r * (i as f32 + 0.5) / 12.0);
         pc.line_segment([a, b], Stroke::new(1.4, GREEN));
     }
+    // Multiplayer traffic (TCAS symbols, ui/mp.rs).
+    super::mp::nd_traffic(&clip, &view, sim, u);
     aircraft_mark(&pc, anchor, u);
     nd_corner_info(&pc, s, sim, world, route, u);
     adf_vor_footer(&pc, s, sim, u);

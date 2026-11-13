@@ -8,6 +8,7 @@
 
 #![allow(deprecated)]
 
+pub mod browser;
 pub mod canvas;
 pub mod comms;
 pub mod controls;
@@ -19,6 +20,7 @@ pub mod hudsym;
 pub mod map;
 pub mod mapdata;
 pub mod menus;
+pub mod mp;
 pub mod overview;
 pub mod radio;
 pub mod scroll;
@@ -435,6 +437,8 @@ pub enum Screen {
     Pause,
     Loading,
     Flying,
+    /// Server browser (net/, ui/browser.rs).
+    Multiplayer,
 }
 
 impl Screen {
@@ -448,6 +452,7 @@ impl Screen {
             "credits" => Screen::Credits,
             "pause" => Screen::Pause,
             "loading" => Screen::Loading,
+            "multiplayer" | "mp" | "servers" => Screen::Multiplayer,
             _ => return None,
         })
     }
@@ -463,6 +468,8 @@ pub enum Action {
     Restart,
     /// Systems & failures panel (over the flight).
     Failures,
+    /// Leave the multiplayer server (keep flying alone).
+    LeaveServer,
     Quit,
 }
 
@@ -510,6 +517,9 @@ pub struct UiState {
     pub controls_axis: Option<(crate::input::AxisAction, usize)>,
     /// Aircraft screen: the family filter (None: all).
     pub aircraft_group: Option<menus::Group>,
+    /// Multiplayer session (net/) and the server browser's model.
+    pub mp: crate::net::Mp,
+    pub browser: crate::net::browse::Browser,
     /// Seconds since the last frame / since start, frame counter.
     pub dt: f32,
     pub time: f32,
@@ -546,6 +556,8 @@ impl UiState {
             controls_page: 0,
             controls_axis: None,
             aircraft_group: None,
+            mp: crate::net::Mp::new(),
+            browser: Default::default(),
             dt: 1.0 / 60.0,
             time: 0.0,
             frame_no: 0,
@@ -558,6 +570,9 @@ impl UiState {
         }
         if s == Screen::Departure && self.screen != Screen::Departure {
             self.picker.selected = None;
+        }
+        if s != Screen::Multiplayer {
+            self.browser.close();
         }
         self.screen = s;
     }
@@ -575,6 +590,7 @@ pub fn draw_menus(ctx: &egui::Context, st: &mut UiState, in_flight: bool, loadin
             Screen::Conditions => menus::conditions(ui, st),
             Screen::Settings => menus::settings(ui, st, in_flight),
             Screen::Credits => menus::credits(ui, st),
+            Screen::Multiplayer => browser::draw(ui, st),
             Screen::Pause => {
                 let def = st.defs[st.plan.aircraft.min(st.defs.len() - 1)].name;
                 let title = format!("{def} · {}", st.plan.airport);

@@ -123,6 +123,26 @@ pub struct EngineFrame {
     pub throttle: f32,
 }
 
+/// Other aircraft voiced at once (multiplayer traffic, nearest first).
+pub const MAX_TRAFFIC: usize = 6;
+
+/// Another aircraft's engines (multiplayer, `traffic.rs`). `id` 0 = empty slot.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TrafficFrame {
+    pub id: u32,
+    pub profile: Profile,
+    pub n_engines: u8,
+    /// A representative engine (one voice per aircraft).
+    pub eng: EngineFrame,
+    pub pos: Vec3,
+    pub vel: Vec3,
+    /// Nose direction (jet / prop directivity).
+    pub axis: Vec3,
+    pub tas: f32,
+    pub reverser: f32,
+    pub rotor: RotorFrame,
+}
+
 /// Continuous state, sampled once per video frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Frame {
@@ -204,6 +224,11 @@ pub struct Frame {
     pub day: f32,
     /// City-ness under the listener 0..1.
     pub urban: f32,
+
+    // --- multiplayer
+    pub traffic: [TrafficFrame; MAX_TRAFFIC],
+    /// Spectating another aircraft: no own aircraft, the world stays audible.
+    pub spectator: bool,
 }
 
 /// Recorded speech clips (pre-rendered, see assets/audio/CREDITS.md).

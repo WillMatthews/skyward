@@ -136,6 +136,12 @@ anywhere on Earth, for as long as you like. wgpu (Vulkan), winit, egui.
   nearest ILS. Read-backs are automatic (or from the menu); assists tune the
   next frequency, set the squawk and (`atc_follow`) let the autopilot fly
   the vectors. The auto-flight bot does its own radio work in watch mode.
+* **Multiplayer** — a dedicated server (`skyward-server`, headless, any OS)
+  and a LAN server browser that finds servers by itself (broadcast + mDNS):
+  other players' aircraft with their real models, lights and engine sound,
+  name tags, traffic on the map and TCAS on the ND, chat and a quick-chat
+  wheel, spectating; time and weather shared from the server (see
+  *Multiplayer* below).
 * **Auto flight bot** — an AI pilot that flies the real flight model through
   the controls: glider soaring and powered take-off → landmark tour →
   approach → landing cycles, wind-aware (see below).
@@ -192,7 +198,8 @@ aircraft, streamed scenery, terrain, live weather and sound in a browser tab.
   plus the chosen aircraft (2–15 MB) and the airport list from OurAirports
   (≈17 MB of CSV, ≈4 MB compressed; once per browser cache). Map, terrain and
   weather stream as natively; the browser's HTTP cache stands in for `cache/`.
-* **Differences**: no live METARs (aviationweather.gov sends no CORS headers,
+* **Differences**: no multiplayer (browsers cannot send UDP; see
+  *Multiplayer*); no live METARs (aviationweather.gov sends no CORS headers,
   so the weather comes from Open-Meteo alone); settings live in the browser's
   `localStorage`; lighter defaults (Low scenery detail, 2048² shadow cascades,
   the 3D view rendered at ≤ 1.6 Mpixel and scaled up); sound starts after the
@@ -442,6 +449,169 @@ keeps sim time on wall time), with the physics pose interpolated between
 120 Hz steps — even motion at any refresh rate. `--vsync off` or Settings ›
 Display switches to mailbox / immediate for the lowest latency.
 
+## Multiplayer
+
+Fly with other people on your network: one machine runs the dedicated
+server, everyone else picks it in **Main menu › Multiplayer**.
+
+```sh
+cargo build --release -p skyward-server        # headless: no GPU, audio or window needed
+target/release/skyward-server --name "Friday night" --airport EGKK --max-players 12
+target/release/skyward-server --config server.toml   # same keys as the flags (see below)
+```
+
+Everyone starts at the server's airport. The server keeps the shared sky in
+step: **time** (`--time real` — the current UTC instant — or a fixed local
+`--time HH:MM` that then runs in real time) and **weather** (`--weather
+live`: the airport's METAR from aviationweather.gov, refreshed every 10 min;
+a preset `clear` … `overcast`, `rain`, `fog`; a full METAR string; or `own`:
+each player keeps theirs). Time warp is off in multiplayer.
+
+**Ports** (all UDP): **47820** game traffic (`--port`), **47821** LAN
+discovery broadcasts (shared by every server on a host), **5353** mDNS
+(`_skyward._udp`, shared with Avahi / Bonjour). A host firewall must let
+these in for other machines to see / join the server (e.g. `sudo ufw allow
+47820:47821/udp`, `sudo ufw allow 5353/udp`; Windows asks on first start).
+Over the internet: forward UDP 47820 and use **Add by address**; nothing is
+listed publicly (no master server, no telemetry).
+
+**Finding servers.** The browser lists LAN servers by itself: it sends one
+small broadcast per local subnet (and to 127.0.0.1) to the discovery port and
+one mDNS query, every 3 s — no port scanning. Each server answers with its
+name, players / slots, airport and region, password flag, version and time /
+weather mode; the round trip is the ping. **Add by address** takes an IP or
+host name with an optional port (`lan-box.local`, `192.168.1.20:47830`).
+Favourites (☆) and the servers you joined (Recent) are kept in
+`~/.config/skyward/multiplayer.json` with your callsign (passwords are never
+stored), and pinged too. Select a server for its message of the day, who is
+flying what, the METAR and time; **Join** (password prompt if needed).
+Refusals say why: unreachable / firewall, full, wrong version, wrong
+password, banned.
+
+**In flight.** Other aircraft are drawn with their real models (surfaces,
+gear, flaps, spoilers, props / rotors, lights — nav, beacon, strobes,
+landing — afterburner) and heard with their engines (positional, Doppler);
+they show on the moving map and, for airliners, as TCAS symbols on the ND
+(other / proximate / traffic advisory / resolution advisory, relative altitude,
+climb / descent arrows). Name tags (callsign, type, distance, relative
+altitude) fade with distance. Keys (rebindable, Settings › Controls ›
+Multiplayer):
+
+| Key | |
+|---|---|
+| `Enter` | chat (Enter sends, Esc closes) |
+| `F7` | players: who is flying what and where; **Spectate** follows another aircraft (◀ ▶ to switch, **Fly** to respawn at the start) |
+| `F8` | name tags on / off |
+| `F9`, or hold the controller's **View** button | quick-chat wheel (1–8 / click; on a controller: right stick picks, release sends; a tap still changes the camera) |
+| `Esc` › **Leave server** | keep flying alone |
+
+Crashes and respawns are announced to everyone. Missions are single-player.
+
+**Server console** (stdin): `list`, `kick <player> [reason]`, `ban
+<player|ip> [reason]`, `unban <ip>`, `bans`, `say <text>`, `time real|HH:MM
+[day]`, `weather live|own|<preset>|<METAR>`, `motd <text>`, `status`, `quit`.
+Logs are timestamped lines on stderr (`--log-json` for JSON lines,
+`--log-level debug|info|warn`); Ctrl-C / SIGTERM / `quit` shut down cleanly
+(players see "server shut down", LAN browsers drop the entry). Bans persist
+with `--ban-file bans.txt`.
+
+`skyward-server --help`:
+
+```
+skyward-server — Skyward dedicated multiplayer server
+
+USAGE:
+    skyward-server [OPTIONS]
+
+OPTIONS:
+    -c, --config <FILE>      TOML config file (flags override it)
+    -n, --name <NAME>        server name shown in the browser   [Skyward server]
+    -p, --port <PORT>        UDP game port                        [47820]
+    -b, --bind <ADDR>        address to listen on                 [0.0.0.0]
+    -m, --max-players <N>    player slots (1-64)                  [16]
+        --password <PW>      require a password to join           [none]
+        --motd <TEXT>        message of the day (browser + on join)
+    -a, --airport <ICAO>     airport everyone starts at           [EGLC]
+        --region <TEXT>      region label for the browser ("London")
+        --time <MODE>        `real` (UTC now) or a local time `HH:MM`   [real]
+        --day <N>            day of year with a fixed time (1-366)       [today]
+        --weather <MODE>     `live` (METAR of the airport, refreshed every 10 min),
+                             `own` (each client keeps its own), a preset
+                             (clear, few, scattered, broken, overcast, rain, fog)
+                             or a full METAR string                       [live]
+        --tick-hz <N>        snapshot rate, 10-60 Hz              [30]
+        --no-discovery       don't answer LAN discovery broadcasts (UDP 47821)
+        --no-mdns            don't announce over mDNS (_skyward._udp)
+        --ban-file <FILE>    banned addresses, one per line (ban / unban keep it updated)
+        --log-level <LVL>    debug, info, warn                    [info]
+        --log-json           log as JSON lines
+        --no-console         don't read commands from stdin
+    -h, --help               this help
+    -V, --version            version
+
+PORTS (UDP; open them in a host firewall for LAN play):
+    47820   game traffic (or --port)
+    47821   LAN discovery broadcasts (shared by all servers on a host)
+    5353    mDNS (shared with the system's responder)
+
+CONSOLE (type `help` while running):
+    list · kick <player> [reason] · ban <player|ip> [reason] · unban <ip> · bans
+    say <text> · time real|HH:MM · weather live|own|<preset>|<METAR> · motd <text>
+    status · quit
+
+EXAMPLE:
+    skyward-server --name "Friday night" --airport EGKK --max-players 12 --time 21:30
+```
+
+`server.toml` uses the same keys (`name`, `port`, `bind`, `max_players`,
+`password`, `motd`, `airport`, `region`, `time`, `day`, `weather`, `tick_hz`,
+`ban_file`, `log_level`, and the switches `discovery`, `mdns`, `log_json`,
+`console`):
+
+```toml
+name = "Friday night"
+airport = "EGKK"
+region = "London"
+max_players = 12
+time = "21:30"
+weather = "live"
+motd = "Gatwick departures; be nice on 118.5."
+```
+
+**Joining from the command line** (also headless): `skyward --connect
+host[:port] --name Alpha [--password pw]`. `scripts/mp-loopback.sh` runs a
+server and two headless clients on 127.0.0.1 and writes what each saw
+(nothing is shown on screen). `SKYWARD_NET_SIM="lat=75,jitter=10,loss=2"`
+puts a simulated bad link (ms / ms / %) under a client, for trying the
+interpolation on a LAN.
+
+**How it works** (`crates/skyward-net`, shared by the game and the server):
+UDP with a small reliability layer of our own — 16-bit sequence numbers and
+32-packet ack bit fields on every packet; aircraft states are unreliable and
+latest-wins, chat / joins / events / world sync are reliable, ordered and
+resent until acknowledged. No async runtime or TLS (QUIC would need
+certificates on a LAN box), identical on every OS, and the protocol and
+interpolation code is sans-IO, so loss, latency and 32 clients are tested
+deterministically. Clients send their state at the server's tick rate (30
+Hz): position as latitude / longitude (f64) and altitude — never the
+floating-origin frame — attitude and velocities in the local tangent frame,
+surfaces, engines, rotor, lights, damage. The server relays new samples as
+snapshots; clients sync their clock to the server's (NTP-style, slewed) and
+draw others ~1.25 send intervals plus the measured lag and jitter in the
+past, along cubic Hermite curves through positions and velocities with
+slerped attitude, dead-reckoning up to 0.6 s through gaps and blending the
+correction out. Handshake: protocol version check (a clear "version
+mismatch" both in the browser and on join), a stateless keyed cookie before
+the server keeps any state, SHA-256 password proof (the password never
+crosses the wire), random session tokens. Every datagram is size-capped,
+bounds-checked and rate-limited; requests are padded so replies never
+amplify; nothing panics on bad input.
+
+**Browser build**: multiplayer is disabled with a message — browsers cannot
+send UDP; WebTransport would need a TLS certificate the browser trusts on
+every LAN server (and a QUIC stack in it), WebSockets would add head-of-line
+blocking to the 30 Hz state stream. The native protocol stays lean.
+
 ## Tests and CI
 
 `cargo test` runs the unit tests (flight model, audio, input mapping...).
@@ -525,6 +695,9 @@ A shift costs well under 0.1 ms.
 | `src/atc/` | ATC: frequencies (`freqs.rs`), phraseology + voice vocabulary (`phrase.rs`, `assets/audio/atc/vocab.tsv`), ATIS + runway in use (`atis.rs`), taxi routing (`taxi.rs`), radar vectors (`vectors.rs`), the controllers / pilot session (`mod.rs`); radio audio `src/audio/radio.rs`, comms menu + subtitles `src/ui/comms.rs` |
 | `src/airport/`, `src/shaders/airport*.wgsl` | airport detail: tile-side airside styles + summaries (`tile.rs`), layout (`layout.rs`: markings, stands, signs, lights, vehicles), Overpass client (`overpass.rs`), procedural models + sign font (`mesh.rs`, `font.rs`), parked-aircraft LODs (`fleet.rs`), renderer (`gfx.rs`) |
 | `src/startpos.rs` | departure-screen starts (runway end, final, apron, air) |
+| `crates/skyward-net/` | multiplayer protocol (`proto.rs`), UDP reliability (`channel.rs`), clock sync, snapshot interpolation (`interp.rs`), sans-IO client / server, LAN discovery (broadcast, mDNS, interfaces), lossy-link simulator; protocol / lossy-link / 32-client tests |
+| `crates/skyward-server/` | the dedicated server: flags + TOML config, console, logs, live METAR, signals |
+| `src/net/` | multiplayer in the game: session, own state out (`capture.rs`), remote aircraft (`remote.rs`: real models, lights), server browser model (`browse.rs`), favourites / recents (`prefs.rs`); screens `src/ui/browser.rs`, in-flight overlay `src/ui/mp.rs` (tags, chat, players, wheel, TCAS), engine sound `src/audio/traffic.rs` |
 
 See `ROADMAP.md` for what's next.
 

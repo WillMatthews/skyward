@@ -294,6 +294,8 @@ pub struct Synth {
     speaker: Speaker,
     /// COM 1 / COM 2 receivers (ATC, ATIS).
     radio: super::radio::Radio,
+    /// Other aircraft (multiplayer).
+    traffic: super::traffic::Traffic,
     fdn: Fdn,
     world_lp: OnePole,
     world_lp2: OnePole,
@@ -352,6 +354,7 @@ impl Synth {
             ife: [1.0; MAX_ENG],
             speaker: Speaker::new(sr),
             radio: super::radio::Radio::new(sr),
+            traffic: super::traffic::Traffic::default(),
             fdn: Fdn::new(sr),
             world_lp: OnePole::new(700.0, sr),
             world_lp2: OnePole::new(1100.0, sr),
@@ -410,6 +413,7 @@ impl Synth {
             for e in &mut self.emit {
                 e.est += f.shift;
             }
+            self.traffic.shift(f.shift);
         }
         self.frame = *f;
         self.frame.cut = cut;
@@ -649,7 +653,7 @@ impl Synth {
         self.g_radio.to(st.radio.clamp(0.0, 2.0), n);
         self.g_ui.to(st.ui.clamp(0.0, 2.0), n);
 
-        let world_target = if !self.have_frame || !f.active || f.paused { 0.0 } else if f.menu { 0.45 } else { 1.0 };
+        let world_target = if !self.have_frame || (!f.active && !f.spectator) || f.paused { 0.0 } else if f.menu { 0.45 } else { 1.0 };
         let w = self.world.go(world_target, dt, 0.35, 0.18);
         self.world_r.to(w, n);
         let mf = self.muffle.go(if f.menu || f.paused { 1.0 } else { 0.0 }, dt, 0.2, 0.3);
@@ -829,6 +833,9 @@ impl Synth {
             }
         }
 
+        // Other aircraft (multiplayer).
+        self.traffic.control(&f.traffic, ear, er, sf, eng_warp, n, sr);
+
         // World-placed one-shots and the wreck follow the listener.
         for s in self.pool.shots.iter_mut().flatten() {
             if s.route == Route::World {
@@ -935,6 +942,10 @@ impl Synth {
         let (fl, fr) = self.wreck.tick(&mut self.rng);
         wext.0 += fl;
         wext.1 += fr;
+        // Other aircraft: world-placed too (muffled through the airframe inside).
+        let (tl, tr, _) = self.traffic.tick();
+        wext.0 += tl;
+        wext.1 += tr;
         send += (wext.0 + wext.1) * 0.15;
         // Heard from the cockpit: through the airframe, muffled.
         let wi = self.world_lp.lp(self.world_lp2.lp((wext.0 + wext.1) * 0.5)) * 0.35;

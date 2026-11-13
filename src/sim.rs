@@ -216,6 +216,11 @@ pub enum Key {
     CommsNext,
     CommsPrev,
     CommsSelect,
+    /// Multiplayer (net/, ui/mp.rs): chat, player list, name tags, quick-chat wheel.
+    Chat,
+    PlayerList,
+    NameTags,
+    QuickChat,
 }
 
 impl Key {
