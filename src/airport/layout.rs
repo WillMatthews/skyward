@@ -94,6 +94,10 @@ pub struct Layout {
     pub holds: Vec<Hold>,
     /// Taxiway centrelines and their refs (airport frame): ATC taxi routing (atc/taxi.rs).
     pub taxiways: Vec<(Vec<Vec2>, String)>,
+    /// Taxiway width (m) and apron outlines (airport frame): the pavement the
+    /// tyres roll on (src/ground/surface.rs).
+    pub taxi_w: f32,
+    pub aprons: Vec<Vec<Vec2>>,
     /// Bounds of everything (airport frame).
     pub lo: Vec2,
     pub hi: Vec2,
@@ -369,6 +373,8 @@ pub fn build(ap: &Airport, tiles: &[(TileId, Arc<AeroTile>)], osm: Option<&OsmAi
         stands: Vec::new(),
         holds: Vec::new(),
         taxiways: c.taxis.iter().map(|t| (t.pts.clone(), t.name.clone())).collect(),
+        taxi_w: c.taxi_w,
+        aprons: c.aprons.iter().map(|a| a.outer.clone()).collect(),
         lo: Vec2::splat(f32::MAX),
         hi: Vec2::splat(f32::MIN),
         tiles: tiles.iter().map(|t| t.0).collect(),

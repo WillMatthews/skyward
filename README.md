@@ -110,6 +110,17 @@ painted over or composited.
 - **Structure and crashes.** Wings flex with load. There are limit and ultimate load factors,
   flutter and overspeeds, and parts that tear off and change the aerodynamics. Survivable accidents
   slide to a stop; fatal ones break into rigid-body debris that tumbles, burns and sinks.
+- **Ground handling.** Every wheel has a tyre model: slip ratio with the wheel's spin (spin-up
+  smoke at touchdown, locked-wheel skids, anti-skid), slip angle and the friction ellipse, oleo
+  struts, rolling resistance. Friction depends on the surface and the weather: dry / wet /
+  flooded asphalt and concrete, grass, gravel, dirt, slush, snow and ice, with **hydroplaning**
+  above 9·√p kt. Steel and carbon brakes heat up, fade, show on the ECAM / EICAS WHEEL page and
+  melt their fusible plugs. Autobrake LO / MED / MAX / RTO, parking brake, chocks, ground power,
+  **nose-wheel tillers** (pedals steer only a few degrees), castering nose wheels and tail wheels
+  with differential braking, a lockable DC-3 tail wheel — and real ground loops in taildraggers.
+  **Pushback** by a tug (straight, tail left / right), **taxi guidance** with
+  **follow-the-greens** centreline lights and the route on the moving map, and an auto-flight
+  bot that pushes back and taxis the taxiway network to the holding point and back to a stand.
 - **Live weather and wind.** The nearest METAR plus Open-Meteo drive clouds, visibility,
   precipitation, the wind gradient, gusts, turbulence and drifting thermals. Real local time and
   date, re-fetched along long flights.
@@ -293,6 +304,8 @@ Every key can be rebound in **Settings › Controls**. Press **H** or **F1** in 
 | **Right-drag, wheel** | Look / orbit, zoom | **J** | Hand over to the AI pilot |
 | **M** | Moving map | **F3** / **F4** | Radios & flight plan / ATC comms |
 | **Esc** | Pause menu | **O** / **F2** | Systems & failures |
+| **Backspace** | Parking brake | **Enter** | Pushback (again: direction / stop) |
+| **Num / *** | Nose-wheel tiller | **Left Alt** | Taxi route + follow the greens |
 
 <details>
 <summary><b>Full keyboard reference</b></summary>
@@ -307,7 +320,15 @@ Every key can be rebound in **Settings › Controls**. Press **H** or **F1** in 
 | G | landing gear up / down (3 green = down and locked, red = in transit) |
 | / and \ (or ') | spoilers / speed brake out / in one step |
 | T | thrust reverse on / off (ground only; throttle then sets reverse power) |
-| B or Space (hold) | brakes |
+| B or Space (hold) | brakes (single-lever types split them with the rudder) |
+| Num 0 / Num Enter (hold) | left / right toe brake |
+| Num / / Num * (hold) | nose-wheel tiller left / right (airliners; without a tiller the rudder keys work it below ~30 kt) |
+| Backspace | parking brake set / release |
+| F11 | autobrake OFF → LO → MED → MAX (Embraer: RTO too); pedal braking or thrust disarms it |
+| Enter | pushback: request (straight back), again within 3 s for tail left / right; during the push: stop. Set the parking brake when told, the tug disconnects |
+| Caps Lock | chocks + ground power in / out (the crew also puts them in 20 s after you park with the engines off) |
+| Right Alt | tail-wheel lock (DC-3) |
+| Left Alt | taxi guidance: route to the departure holding point (or, after a flight, to a free stand) on the moving map, follow-the-greens lights, next turn and speed |
 | [ / ] | trim nose down / up |
 | Z | autopilot on (holds heading, altitude, speed) / off; a mouse AP panel appears |
 | Ins / Del, Home / End, 9 / 0 | autopilot heading ∓5°, altitude ±100 ft, speed ∓5 kt |
@@ -359,7 +380,8 @@ first time it's seen:
 - **Sticks** (T.16000M, X52, Extreme 3D...). Twist is rudder, the slider / Z axis is throttle, the hat
   glances.
 - **Throttles** (TCA quadrant, X56). One lever per engine.
-- **Pedals.** Rudder plus toe brakes.
+- **Pedals.** Rudder plus left / right toe brakes (each brakes its own main wheels). A
+  **Nose-wheel tiller** axis can be bound in Settings › Controls (Ground).
 
 Layouts are saved per device in the settings file.
 
@@ -385,7 +407,10 @@ the real flight model through the controls and autopilot. Nothing is scripted or
   2. Tours landmarks.
   3. Flies an obstacle-checked approach, coupling to the ILS where there is one.
   4. Flares and rolls out with spoilers, reversers and brakes.
-  5. Taxis, turns round and repeats.
+  5. Where the airport's taxiway layout is known: vacates, taxis to a free stand, parks, is pushed
+     back by a tug and taxis the taxiway network to the holding point (slow in the turns, main
+     gear on the centreline), lines up and goes again. Elsewhere it taxis the runway, turns round
+     and repeats.
 - **Wind.** Every leg is flown as a track. The bot picks the runway end by headwind and adds half
   the headwind plus the gust to the approach speed. It de-crabs with rudder and holds the centreline
   wing-low in the flare.
@@ -400,7 +425,8 @@ the real flight model through the controls and autopilot. Nothing is scripted or
 |---|---|
 | `--lat L --lon L` | start point (default EGLC 51.5045, 0.0300) |
 | `--airport CODE` | start at an airport (OurAirports ident / ICAO / IATA / name; Nominatim fallback) |
-| `--start-at SPEC` | `runway:27L`, `final:27L:5` (NM), `apron`, `air:LAT:LON:ALT_M:HDG`, `thermal` |
+| `--start-at SPEC` | `runway:27L`, `final:27L:5` (NM), `apron`, `stand` / `stand:NAME` (parked nose-in: push back to leave), `air:LAT:LON:ALT_M:HDG`, `thermal` |
+| `--runway COND` | runway condition: `dry` `damp` `wet[:MM]` `flooded[:MM]` `slush[:MM]` `snow[:MM]` `ice` `wet-ice` (default: from the weather) |
 | `--start S` | `runway` `approach` `city` `thermal` |
 | `--aircraft ID` | `kestrel` `swift` `peregrine` `lancer` `aerolink` `meridian190` `meridian320` `hercules` `galaxy` `vulcan` `ec130` `fpv` (or `c172` `ask21` `spitfire` `f16` `atr72` `e190` `a320` `c130` `c5` `heli` `quad` `drone`) |
 | `--no-menu` | fly straight away (skip the main menu) |

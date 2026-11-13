@@ -673,6 +673,15 @@ impl Bot {
         tour.iter().skip(wp).map(|l| (l.name.clone(), l.pos)).collect()
     }
 
+    /// Ground phases (src/ground/bot_taxi.rs): the tug's tow this step, the
+    /// pushback (for drawing the tug), the taxi route (for the map).
+    pub fn ground(&self) -> Option<&crate::ground::bot_taxi::BotGround> {
+        match &self.kind {
+            Kind::Powered(p) => p.ground.as_ref(),
+            _ => None,
+        }
+    }
+
     /// ATC (atc/): hold at the runway until cleared for take-off.
     pub fn set_atc_wait(&mut self, wait: bool) {
         if let Kind::Powered(p) = &mut self.kind {
@@ -735,6 +744,9 @@ impl Bot {
                     l.pos = r.ground(l.pos);
                 }
                 p.gate = r.ground(p.gate);
+                if let Some(g) = &mut p.ground {
+                    g.rebase(&|q| r.ground(q));
+                }
             }
             Kind::Rotor(b) => b.rebase(r),
         }
@@ -2036,6 +2048,10 @@ struct Powered {
     /// Height (m) and sink rate (m/s) at the start of the flare.
     flare_h0: f32,
     flare_vs0: f32,
+    /// On the taxiway graph (src/ground/bot_taxi.rs): pushback, taxi to the
+    /// holding point / a stand; and when to retry planning it.
+    ground: Option<crate::ground::bot_taxi::BotGround>,
+    ground_try: f32,
 }
 
 impl Powered {
@@ -2095,6 +2111,8 @@ impl Powered {
             turn_at: None,
             flare_h0: 0.0,
             flare_vs0: 0.0,
+            ground: None,
+            ground_try: 0.0,
         };
         // Where are we?
         if ac.on_ground {
@@ -2117,6 +2135,10 @@ impl Powered {
                 } else {
                     PPhase::Taxi
                 };
+                if s.phase == PPhase::Taxi {
+                    // Off the runway (a stand / the apron): push back and taxi there (src/ground).
+                    s.try_ground(def, ac, world, false);
+                }
             } else {
                 s.phase = PPhase::Stuck;
             }
@@ -2137,6 +2159,30 @@ impl Powered {
     fn set_phase(&mut self, ph: PPhase, t: f32) {
         self.phase = ph;
         self.phase_t = t;
+    }
+
+    /// Ground phases on the taxiway graph (src/ground/bot_taxi.rs): from off
+    /// the runway to the departure hold (`arrive` = false), or after landing to
+    /// a stand first. Departs into wind next.
+    fn try_ground(&mut self, def: &AircraftDef, ac: &Aircraft, world: &World, arrive: bool) -> bool {
+        let Some(f) = self.field.clone() else { return false };
+        let end = best_takeoff_end(world, &f);
+        let g = if arrive {
+            crate::ground::bot_taxi::BotGround::arrive(def, ac, world, &f, end.thr, end.dir)
+                .or_else(|| crate::ground::bot_taxi::BotGround::depart(def, ac, world, &f, end.thr, end.dir))
+        } else {
+            let p = xz(ac.pos);
+            let on_runway = end.cross(p).abs() < end.width * 0.5 + 8.0 && end.along(p) > -60.0 && end.along(p) < end.len + 60.0;
+            if on_runway { None } else { crate::ground::bot_taxi::BotGround::depart(def, ac, world, &f, end.thr, end.dir) }
+        };
+        let ok = g.is_some();
+        if ok {
+            self.ground = g;
+            self.rw = Some(end);
+            self.backtrack = false;
+            self.turn_at = None;
+        }
+        ok
     }
 
     fn start_approach(&mut self, world: &World, ac: &Aircraft) {
@@ -2239,6 +2285,45 @@ impl Powered {
                 ctl.elevator,
                 ap.engaged
             );
+        }
+        // On the taxiway graph (src/ground/bot_taxi.rs). Off the runway with no
+        // route (yet): hold position and ask again, rather than cross the grass.
+        if self.phase == PPhase::Taxi && self.ground.is_none() {
+            if t > self.ground_try {
+                self.ground_try = t + 5.0;
+                self.try_ground(def, ac, world, false);
+            }
+            let off_runway = self.rw.as_ref().is_some_and(|e| {
+                let p = xz(ac.pos);
+                e.cross(p).abs() > e.width * 0.5 + 8.0 || e.along(p) < -60.0 || e.along(p) > e.len + 60.0
+            });
+            if self.ground.is_none() && off_runway && world.airport_detail.enabled {
+                ap.disengage();
+                ctl.throttle = 0.0;
+                ctl.brakes = 1.0;
+                *status = "Holding — waiting for a taxi route".into();
+                return;
+            }
+        }
+        if let Some(to_hold) = self.ground.as_ref().map(|g| matches!(g.stage, crate::ground::bot_taxi::Stage::Taxi(_, true))) {
+            ap.disengage();
+            self.set_flaps(def, ctl, if to_hold { pf.to_flap } else { 0 }, t);
+            let g = self.ground.as_mut().unwrap();
+            match g.update(def, ac, ctl, world, dt) {
+                crate::ground::bot_taxi::Step::Running => {
+                    *status = g.status.clone();
+                    return;
+                }
+                crate::ground::bot_taxi::Step::AtHold => {
+                    ev.push(format!("at the holding point for RWY {}", self.rw.as_ref().map(|r| r.name.clone()).unwrap_or_default()));
+                    self.ground = None;
+                    self.set_phase(PPhase::LineUp, t);
+                }
+                crate::ground::bot_taxi::Step::Failed => {
+                    self.ground = None;
+                    self.ground_try = t + 30.0;
+                }
+            }
         }
         // Throttle never touched by the AP on the ground.
         match self.phase {
@@ -2853,6 +2938,14 @@ impl Powered {
                     ctl.reverse = false;
                     stats.cycles += 1;
                     ev.push(format!("rollout complete, {:.0} m remaining", end.len - end.along(p)));
+                    // Vacate on the taxiway graph to a stand, then push back and
+                    // taxi out again (src/ground/bot_taxi.rs) — when the airport's
+                    // layout is known.
+                    if self.try_ground(def, ac, world, true) {
+                        ev.push("vacating: taxi to a stand".into());
+                        self.set_phase(PPhase::Taxi, t);
+                        return;
+                    }
                     // Take off into wind next time: if that is the way we landed,
                     // turn round here and backtrack to the threshold.
                     let next = self.field.as_ref().map(|f| best_takeoff_end(world, f));

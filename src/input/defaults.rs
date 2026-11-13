@@ -75,6 +75,17 @@ pub fn keyboard() -> Vec<(Key, Vec<K>)> {
         (Key::Failures, vec![K::KeyO, K::F2]),
         (Key::Mute, vec![K::KeyN]),
         (Key::Assist, vec![K::F6]),
+        // Ground handling (src/ground).
+        (Key::BrakeLeft, vec![K::Numpad0]),
+        (Key::BrakeRight, vec![K::NumpadEnter]),
+        (Key::TillerLeft, vec![K::NumpadDivide]),
+        (Key::TillerRight, vec![K::NumpadMultiply]),
+        (Key::ParkingBrake, vec![K::Backspace]),
+        (Key::Autobrake, vec![K::F11]),
+        (Key::Pushback, vec![K::Enter]),
+        (Key::GroundServices, vec![K::CapsLock]),
+        (Key::TailwheelLock, vec![K::AltRight]),
+        (Key::TaxiGuide, vec![K::AltLeft]),
     ]
 }
 

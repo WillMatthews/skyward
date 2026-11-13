@@ -32,6 +32,7 @@ mod damage;
 mod debris;
 mod flight;
 mod gfx;
+mod ground;
 mod gfx_aircraft;
 mod hud;
 mod jsbsim;
@@ -144,6 +145,8 @@ struct Args {
     live: bool,
     live_given: bool,
     metar: Option<String>,
+    /// `--runway wet|flooded|snow|ice|...`: runway condition (src/ground/surface.rs).
+    runway: Option<String>,
     /// Test: render, move the floating origin 20 km away, render again, compare.
     rebase_check: bool,
     /// Sound (audio/): start muted; offline render to a WAV (+ PNG, report) and its cue script.
@@ -255,6 +258,7 @@ fn parse_args_from(argv: Vec<String>) -> Args {
         live: true,
         live_given: false,
         metar: None,
+        runway: None,
         rebase_check: false,
         mute: false,
         audio_render: None,
@@ -390,6 +394,7 @@ fn parse_args_from(argv: Vec<String>) -> Args {
                 a.live_given = true;
             }
             "--metar" => a.metar = Some(next(&mut i)),
+            "--runway" => a.runway = Some(next(&mut i)),
             "--map-zoom" => a.map_zoom = next(&mut i).parse().ok(),
             "--radius-km" => a.radius = next(&mut i).parse::<f32>().ok().map(|k| k * 1000.0),
             "-h" | "--help" => {
@@ -498,6 +503,8 @@ struct Session {
     runway_version: u64,
     /// Airport detail lights uploaded (airport/ light version) and the runway lights they join.
     airport_lights: u64,
+    /// Follow-the-greens lights version uploaded (src/ground/guide.rs).
+    greens_lights: u64,
     runway_lights: Vec<lights::LightInst>,
     /// The last origin shift (consumed by the soak / realtime loggers).
     last_rebase: Option<world::Rebase>,
@@ -515,6 +522,9 @@ impl Session {
         let mut world = World::new(args.lat, args.lon, WORKERS);
         if let Some(r) = args.radius {
             world.radius = r;
+        }
+        if let Some(c) = args.runway.as_deref().and_then(crate::ground::Contam::parse) {
+            world.runway_cond = Some(c);
         }
         if let Some(db) = db {
             world.set_airport_db(db);
@@ -540,7 +550,7 @@ impl Session {
         world.set_focus(Vec2::ZERO, Vec2::ZERO);
         // Browser: start downloading the aircraft alongside the scenery.
         let _ = aircraft_assets(args.aircraft);
-        Session { world, sim: None, stage: Stage::Area, started: Instant::now(), runway_version: u64::MAX, airport_lights: u64::MAX, runway_lights: Vec::new(), last_rebase: None, catch_up: None, custom, args: args.clone() }
+        Session { world, sim: None, stage: Stage::Area, started: Instant::now(), runway_version: u64::MAX, airport_lights: u64::MAX, greens_lights: 0, runway_lights: Vec::new(), last_rebase: None, catch_up: None, custom, args: args.clone() }
     }
 
     /// Advance loading; returns a status line while still loading.
@@ -756,11 +766,18 @@ fn sync_gpu(s: &mut Session, renderer: &mut Renderer, ui: &mut Ui, gpu: &Gpu, bu
         renderer.set_runways(device, &scene::runway_mesh(&w.runways));
         s.runway_lights = lights::airport_lights_for(w);
     }
-    // Runway lights + the airport detail lights (taxiways, stop bars, floods), current frame.
-    if runways_changed || w.airport_detail.light_version != s.airport_lights {
+    // Runway lights + the airport detail lights (taxiways, stop bars, floods),
+    // current frame; plus follow-the-greens along a taxi route (src/ground/guide.rs).
+    let greens = s.sim.as_ref().and_then(|sim| sim.ground.guide.as_ref()).filter(|g| g.greens);
+    let greens_v = greens.map(|g| g.version).unwrap_or(0);
+    if runways_changed || w.airport_detail.light_version != s.airport_lights || greens_v != s.greens_lights {
         s.airport_lights = w.airport_detail.light_version;
+        s.greens_lights = greens_v;
         let mut all = s.runway_lights.clone();
         all.extend(w.airport_detail.lights(&w.proj));
+        if let Some(g) = greens {
+            all.extend(g.lights(&|p| crate::flight::Environment::ground_height(&*w, p)));
+        }
         renderer.set_airport_lights(device, &all);
     }
     // Weather (weather.rs / world.rs): live data + real time, wind drift, season.

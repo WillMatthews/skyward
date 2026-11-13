@@ -144,6 +144,10 @@ pub mod pilot;
 #[path = "missions/sim_glue.rs"]
 pub mod mission_glue;
 
+/// Ground handling in the sim (Track GH): ground keys, tug, chocks, ground power, taxi guidance.
+#[path = "ground/sim_glue.rs"]
+pub mod ground_glue;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Key {
     PitchDown,
@@ -227,6 +231,20 @@ pub enum Key {
     CommsNext,
     CommsPrev,
     CommsSelect,
+    /// Ground handling (src/ground): nose-wheel tiller left / right (held),
+    /// left / right toe brakes (held), parking brake, autobrake selector,
+    /// pushback (request / direction / stop), chocks + ground power,
+    /// tail-wheel lock, taxi guidance (route on the map + follow the greens).
+    TillerLeft,
+    TillerRight,
+    BrakeLeft,
+    BrakeRight,
+    ParkingBrake,
+    Autobrake,
+    Pushback,
+    GroundServices,
+    TailwheelLock,
+    TaxiGuide,
 }
 
 impl Key {
@@ -473,6 +491,8 @@ pub struct Sim {
     pub mission_pilot: Option<crate::missions::pilot::MissionPilot>,
     pub mission_mayday: bool,
     pub tenders: Option<crate::missions::tenders::Tenders>,
+    /// Ground operations (src/ground): pushback tug, chocks, ground power, taxi guidance.
+    pub ground: crate::ground::ops::GroundOps,
 }
 
 /// Cinematic camera state.
@@ -595,6 +615,7 @@ impl Sim {
             mission_pilot: None,
             mission_mayday: false,
             tenders: None,
+            ground: crate::ground::ops::GroundOps::new(),
         };
         s.nav = crate::nav::NavState::new(&s.defs[sel]);
         s.atc = crate::atc::Atc::new(&s.defs[sel]);
@@ -672,6 +693,11 @@ impl Sim {
             None => None,
         };
         let custom = self.custom_start.as_ref().and_then(|c| crate::startpos::spawn(&def, world, c));
+        // A stand start waits for the airport's layout (stands) to be built.
+        let stand_start = self.custom_start.as_ref().is_some_and(|c| matches!(c.spec, crate::startpos::Spec::Stand(_)));
+        if stand_start && custom.is_none() {
+            self.needs_respawn = true;
+        }
         let (ac, ctl, flap_idx) = match custom {
             Some((ac, ctl, flap, rw)) => {
                 if rw.is_some() {
@@ -686,6 +712,12 @@ impl Sim {
         self.ac = ac;
         self.ctl = ctl;
         self.flap_idx = flap_idx;
+        self.ground.reset();
+        if stand_start && !self.needs_respawn {
+            // On the stand: chocks in, ground power on (src/ground).
+            self.ground.chocks = true;
+            self.ground.gpu = true;
+        }
         // Systems (systems/): ready to go, or cold and dark; armed failures are cleared.
         self.failures.clear();
         if self.cold_dark {
@@ -883,6 +915,7 @@ impl Sim {
             d.rebase(r.delta);
         }
         self.vfx.rebase(r.delta);
+        self.ground.rebase(r.delta);
     }
 
     /// Hand the aircraft to the auto-flight bot.
@@ -1171,7 +1204,10 @@ impl Sim {
                         self.say("Auto flight on — any control input takes over (J to hand back)", 4.0);
                     }
                 }
-                _ => {}
+                k => {
+                    // Ground handling (src/ground/sim_glue.rs).
+                    self.ground_key(world, k);
+                }
             }
         }
         // Camera orbit / head-look (input/sim_glue.rs), zoom.
@@ -1208,6 +1244,8 @@ impl Sim {
         }
         // Controllers: analog axes straight to the controls, levers when moved.
         self.apply_analog(input, dt);
+        // Tiller and toe brakes (src/ground/sim_glue.rs).
+        self.ground_controls(input, dt);
         if !bot_on {
             self.ctl.brakes = h(Key::Brakes).max(pilot::toe_brakes(&input.analog));
             let det = def.flap_detents;
@@ -1270,6 +1308,8 @@ impl Sim {
                 }
                 // Aircraft systems and failures (systems/), then the flight model
                 // (in the mission's air: a microburst, missions/wind.rs).
+                // The tug, chocks, ground power, pilot aids (src/ground/sim_glue.rs).
+                self.ground_step(DT);
                 self.systems_step(&amb, DT);
                 let def = &self.defs[self.sel];
                 let env = mission_glue::MissionEnv { inner: world, run: self.mission.as_ref() };
@@ -1293,6 +1333,9 @@ impl Sim {
             t.update(world, self.ac.pos, if self.paused { 0.0 } else { dt * self.warp.min(4) as f32 });
         }
         self.systems_frame();
+        if !self.paused {
+            self.ground_frame(world, dt * self.warp as f32);
+        }
         // Air traffic control: the frequency, ATIS, the controllers (atc/).
         crate::atc::step(self, world, dt);
         // The bot's runway: NAV 1 on its ILS (it couples to it on final, bot.rs).
@@ -1780,6 +1823,10 @@ impl Sim {
         if let Some(t) = &self.tenders {
             t.mesh(&mut dynm, eye, self.time);
         }
+        // The pushback tug (src/ground/pushback.rs): the pilot's, or the bot's.
+        let bot_push = self.bot.as_ref().and_then(|b| b.ground()).and_then(|g| g.pushback()).cloned();
+        let push = self.ground.push.clone().or(bot_push);
+        self.ground.tug_mesh(&mut dynm, eye, push.as_ref());
         if std::env::var_os("SKYWARD_NO_VFX").is_none() {
             let vf = self.effects_frame(eye);
             if std::env::var_os("SKYWARD_VFX_STATS").is_some() {

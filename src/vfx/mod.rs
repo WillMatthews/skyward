@@ -760,22 +760,52 @@ impl Vfx {
         let n_eng = def.engine_count.min(def.engine_pos.len()).min(4);
         let jet = def.engine_kind == EngineKind::Jet;
         let lost = ac.dmg.lost;
-        // ---- tyre smoke at touchdown (wheels spun up from rest by the runway)
-        if ac.on_ground && !self.prev_on_ground {
+        // ---- tyres (src/ground): smoke where the contact patch scrubs — the
+        // wheels spinning up at touchdown, locked-wheel skids, hard cornering —
+        // and spray thrown up from a wet / flooded runway.
+        let weight = (def.mass * GRAVITY).max(1.0);
+        for (i, gp) in def.gear.iter().enumerate().take(crate::ground::MAX_WHEELS) {
+            let w = &ac.ground.wheels[i];
+            if !w.contact || ac.dmg.gear_lost(def, gp) {
+                continue;
+            }
+            let p = at(gp.pos);
+            let p = Vec3::new(p.x, gh(p) + 0.25, p.z);
             let gs = Vec2::new(vel.x, vel.z).length();
-            if gs > 15.0 {
-                let k = ((gs - 15.0) / 40.0).clamp(0.0, 1.5) * (1.0 + (-self.prev_vs).max(0.0) * 0.4);
-                let gear: Vec<Vec3> = def.gear.iter().filter(|g| matches!(g.kind, crate::flight::ContactKind::Wheel { .. }) && g.pos.z < 0.5 && !ac.dmg.gear_lost(def, g)).map(|g| g.pos).collect();
-                for g in gear {
-                    let p = at(g);
-                    let p = Vec3::new(p.x, gh(p) + 0.3, p.z);
-                    let n = (6.0 + 22.0 * k) as usize;
+            let wet = w.surface.contam.fluid_mm() > 0.2 || matches!(w.surface.contam, crate::ground::Contam::Slush(_));
+            // Smoke ∝ the power scrubbed off the rubber (normalised by the aircraft's weight).
+            let k = (w.scrub / (weight * 8.0)).min(2.0) * if gs > 6.0 { 1.0 } else { 0.0 };
+            // (On a wet runway the spin-up scrub flashes the water film to a thinner vapour.)
+            let k = if wet { k * 0.4 } else { k };
+            if k > 0.05 {
+                let n = self.count(5000 + i as u32, 260.0 * k, dt);
+                for _ in 0..n {
+                    let d = self.rsph();
+                    // Left behind on the runway: most of the wheel's speed is lost at once.
+                    let v = vel * (0.3 + 0.25 * self.rnd()) + Vec3::new(d.x * 1.5, 0.6 + 0.8 * self.rnd(), d.z * 1.5);
+                    let size = (0.35 + 0.35 * self.rnd()) * (def.gear_height * 0.5).clamp(0.4, 1.0);
+                    self.emit(Kind::Steam, p + d * 0.3, v, 2.5 + 1.5 * self.rnd(), size, size * 7.0, Vec3::new(0.7, 0.7, 0.72), (0.3 * k).min(0.55) + 0.12, 1.4, 0.0, 0.15);
+                }
+            }
+            if wet && gs > 12.0 {
+                // Rooster tail and side sheets from the tyre's bow wave; more on deeper water.
+                let depth = w.surface.contam.fluid_mm().clamp(0.3, 12.0);
+                let rate = (gs - 12.0) * (8.0 + 6.0 * depth) * if gp.pos.z < 0.0 { 1.0 } else { 0.5 };
+                let n = self.count(5100 + i as u32, rate, dt);
+                let fwd = Vec3::new(vel.x, 0.0, vel.z) / gs;
+                let side = Vec3::new(-fwd.z, 0.0, fwd.x);
+                for _ in 0..n {
+                    let r = self.rnd() * 2.0 - 1.0;
+                    let up = 1.5 + 4.0 * self.rnd() * (gs / 60.0).min(1.2);
+                    let v = vel * (0.45 + 0.3 * self.rnd()) + side * r * (2.0 + gs * 0.08) + Vec3::Y * up;
+                    self.emit(Kind::Spray, p - fwd * 0.6 + side * r * 0.3, v, 1.0 + 0.8 * self.rnd(), 0.18, 0.55 + 0.02 * gs, Vec3::splat(0.86), 0.55, 0.5, 1.0, 0.0);
+                }
+                // A fine mist hangs behind at speed.
+                if gs > 35.0 {
+                    let n = self.count(5200 + i as u32, (gs - 35.0) * 1.5, dt);
                     for _ in 0..n {
                         let d = self.rsph();
-                        // Left behind on the runway: most of the wheel's speed is lost at once.
-                        let v = vel * (0.35 + 0.25 * self.rnd()) + Vec3::new(d.x * 1.5, 0.6 + 0.8 * self.rnd(), d.z * 1.5);
-                        let size = (0.35 + 0.35 * self.rnd()) * (c.def.gear_height * 0.5).clamp(0.4, 1.0);
-                        self.emit(Kind::Steam, p + d * 0.3, v, 2.5 + 1.5 * self.rnd(), size, size * 7.0, Vec3::new(0.7, 0.7, 0.72), 0.45 * k.min(1.0) + 0.15, 1.4, 0.0, 0.15);
+                        self.emit(Kind::Steam, p + d * 0.5, vel * 0.5 + Vec3::Y * 0.8 + d, 2.0 + self.rnd(), 0.6, 4.0, Vec3::splat(0.82), 0.22, 1.0, 0.0, 0.05);
                     }
                 }
             }

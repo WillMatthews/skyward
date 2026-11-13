@@ -494,6 +494,11 @@ impl AirportScene {
         f
     }
 
+    /// Every built layout (the tyres' pavement map, src/ground).
+    pub fn layouts(&self) -> Vec<Arc<Layout>> {
+        self.sites.values().filter_map(|s| s.layout.clone()).collect()
+    }
+
     /// The current layout of an airport (ATC taxi routing), if built.
     pub fn layout(&self, ident: &str) -> Option<Arc<Layout>> {
         self.sites.get(ident).and_then(|s| s.layout.clone())

@@ -44,10 +44,12 @@ pub enum AxisAction {
     Trim,
     LookX,
     LookY,
+    /// Nose-wheel steering tiller (src/ground).
+    Tiller,
 }
 
 impl AxisAction {
-    pub const COUNT: usize = 14;
+    pub const COUNT: usize = 15;
     pub const ALL: [AxisAction; AxisAction::COUNT] = [
         AxisAction::Pitch,
         AxisAction::Roll,
@@ -63,6 +65,7 @@ impl AxisAction {
         AxisAction::Trim,
         AxisAction::LookX,
         AxisAction::LookY,
+        AxisAction::Tiller,
     ];
     pub fn idx(self) -> usize {
         self as usize
@@ -83,6 +86,7 @@ impl AxisAction {
             AxisAction::Trim => "trim",
             AxisAction::LookX => "look_x",
             AxisAction::LookY => "look_y",
+            AxisAction::Tiller => "tiller",
         }
     }
     pub fn from_id(s: &str) -> Option<AxisAction> {
@@ -104,6 +108,7 @@ impl AxisAction {
             AxisAction::Trim => "Elevator trim",
             AxisAction::LookX => "Look left / right",
             AxisAction::LookY => "Look up / down",
+            AxisAction::Tiller => "Nose-wheel tiller",
         }
     }
     /// 0..1 levers (throttles, flaps, brakes) rather than centred −1..1 axes.
@@ -123,7 +128,7 @@ impl AxisAction {
     /// Self-centring stick-type axes (applied continuously) vs levers that stay
     /// where they are put (applied when they move, so keys can still adjust).
     pub fn centred(self) -> bool {
-        matches!(self, AxisAction::Pitch | AxisAction::Roll | AxisAction::Yaw | AxisAction::LookX | AxisAction::LookY)
+        matches!(self, AxisAction::Pitch | AxisAction::Roll | AxisAction::Yaw | AxisAction::LookX | AxisAction::LookY | AxisAction::Tiller)
     }
 }
 
@@ -139,6 +144,16 @@ pub const BUTTONS: &[(Key, &str, &str, &str)] = &[
     (Key::TrimDown, "trim_down", "Trim nose down", "Flight controls"),
     (Key::TrimUp, "trim_up", "Trim nose up", "Flight controls"),
     (Key::Brakes, "brakes", "Brakes (hold)", "Flight controls"),
+    (Key::BrakeLeft, "brake_left", "Left toe brake (hold)", "Ground"),
+    (Key::BrakeRight, "brake_right", "Right toe brake (hold)", "Ground"),
+    (Key::TillerLeft, "tiller_left", "Nose-wheel tiller left (hold)", "Ground"),
+    (Key::TillerRight, "tiller_right", "Nose-wheel tiller right (hold)", "Ground"),
+    (Key::ParkingBrake, "parking_brake", "Parking brake", "Ground"),
+    (Key::Autobrake, "autobrake", "Autobrake (OFF / LO / MED / MAX / RTO)", "Ground"),
+    (Key::Pushback, "pushback", "Pushback (request · direction · stop)", "Ground"),
+    (Key::GroundServices, "ground_services", "Chocks + ground power", "Ground"),
+    (Key::TailwheelLock, "tailwheel_lock", "Tail-wheel lock", "Ground"),
+    (Key::TaxiGuide, "taxi_guide", "Taxi route + follow the greens", "Ground"),
     (Key::ThrottleUp, "throttle_up", "Throttle up", "Engines & levers"),
     (Key::ThrottleDown, "throttle_down", "Throttle down", "Engines & levers"),
     (Key::ThrottleLeftUp, "throttle_left_up", "Left engine(s) throttle up", "Engines & levers"),

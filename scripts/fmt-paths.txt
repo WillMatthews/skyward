@@ -74,3 +74,13 @@ src/flight/ga.rs
 src/flight/tests/ga_types.rs
 src/vfx/spray.rs
 src/vfx/smoke.rs
+src/ground/mod.rs
+src/ground/surface.rs
+src/ground/spec.rs
+src/ground/tyre.rs
+src/ground/pushback.rs
+src/ground/guide.rs
+src/ground/bot_taxi.rs
+src/ground/ops.rs
+src/ground/sim_glue.rs
+src/ground/tests.rs
