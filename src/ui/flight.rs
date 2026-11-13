@@ -180,6 +180,10 @@ pub fn draw(ctx: &egui::Context, st: &mut UiState, sim: &mut Sim, world: &World,
     warnings(&p, screen, sim, &st.settings.assists);
     // Settings › Flight & Realism › G-effects (ui/geffects.rs).
     super::geffects::draw(ctx, st, sim);
+    // ---- weapons: gunsight, markers, stores, RWR, kill feed (weapons/)
+    if mode != HudMode::Off {
+        super::weapons::draw(&p, screen, sim);
+    }
     if sim.show_help {
         help(ctx, sim);
     }
@@ -867,6 +871,7 @@ pub fn control_rows(def: &crate::flight::AircraftDef) -> Vec<(&'static str, &'st
         v.push(("Systems", "B  Space", "Wheel brakes".into()));
     }
     v.push(("Systems", "L", "Landing · taxi lights".into()));
+    v.extend(super::weapons::control_rows(def));
     v.extend([
         ("Autopilot", "Z", "Engage · disengage".into()),
         ("Autopilot", "Ins Del", "Heading −/+ 5°".into()),

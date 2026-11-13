@@ -6,7 +6,7 @@
 //! list (ui/settings_ui.rs draws it).
 
 use super::settings::HudMode;
-use super::settings::{Autobrake, Crashes, DETAIL_NAMES, DefaultView, MapStyle, Palette, PressureUnit, Realism, RealismPreset, Settings, StructuralDamage, TempUnit, UI_SCALES};
+use super::settings::{Autobrake, DETAIL_NAMES, DefaultView, MapStyle, Palette, PressureUnit, RealismPreset, Settings, TempUnit, UI_SCALES};
 use super::{AltUnit, SpeedUnit};
 
 /// Settings categories, in rail order.
@@ -564,7 +564,7 @@ fn build() -> Vec<Item> {
             desc: "Sets the options below; change any to make your own",
             keywords: "difficulty casual standard hard easy realistic preset",
             kind: Kind::Choice(&["Casual", "Standard", "Hard", "Custom"]),
-            get: |s| Val::I(s.realism.current_preset() as usize),
+            get: |s| Val::I(s.realism_preset() as usize),
             set: |s, v| {
                 let p = match v.i() {
                     0 => RealismPreset::Casual,
@@ -572,7 +572,7 @@ fn build() -> Vec<Item> {
                     2 => RealismPreset::Hard,
                     _ => return,
                 };
-                s.realism = Realism { random_failures: s.realism.random_failures, ..Realism::preset(p) };
+                s.apply_realism_preset(p);
             },
             ..BASE
         },
@@ -584,8 +584,8 @@ fn build() -> Vec<Item> {
             "Forgiving: higher load margins · Off: indestructible",
             "damage g overstress wings break limits forgiving indestructible",
             &["Realistic", "Forgiving", "Off"],
-            StructuralDamage::ALL,
-            |s| s.realism.structural_damage
+            crate::damage::Realism::ALL,
+            |s| s.structural_damage
         ),
         choice!(
             "crashes",
@@ -595,8 +595,8 @@ fn build() -> Vec<Item> {
             "Forgiving: survivable hard landings · Off: no crash, the aircraft resets",
             "crash collision crash detection invincible reset forgiving",
             &["Realistic", "Forgiving", "Off"],
-            Crashes::ALL,
-            |s| s.realism.crashes
+            crate::damage::Realism::ALL,
+            |s| s.crashes
         ),
         Item {
             pending: Some("DMG"),
@@ -1203,12 +1203,12 @@ mod tests {
         assert_eq!((i.get)(&s), Val::I(1));
         s.realism.random_failures = true;
         (i.set)(&mut s, Val::I(0));
-        assert_eq!(s.realism.current_preset(), RealismPreset::Casual);
-        assert!(s.realism.unlimited_fuel && s.realism.crashes == Crashes::Forgiving && s.realism.structural_damage == StructuralDamage::Off);
+        assert_eq!(s.realism_preset(), RealismPreset::Casual);
+        assert!(s.realism.unlimited_fuel && s.crashes == crate::damage::Realism::Forgiving && s.structural_damage == crate::damage::Realism::Off);
         assert!(s.realism.random_failures, "the preset keeps the random-failures choice");
         // Custom is shown, not chosen.
         (i.set)(&mut s, Val::I(3));
-        assert_eq!(s.realism.current_preset(), RealismPreset::Casual);
+        assert_eq!(s.realism_preset(), RealismPreset::Casual);
         s.realism.auto_trim = false;
         assert_eq!((i.get)(&s), Val::I(3));
     }

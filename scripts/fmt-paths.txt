@@ -3,6 +3,7 @@
 # `cargo fmt --check` instead.
 src/input/mod.rs
 src/input/sim_glue.rs
+src/input/key_pitch.rs
 src/ui/controls.rs
 src/platform/mod.rs
 src/tiles_web.rs
@@ -111,3 +112,20 @@ src/ui/settings_video.rs
 src/ui/palette.rs
 src/ui/chrome.rs
 src/ui/geffects.rs
+src/weapons/mod.rs
+src/weapons/ai.rs
+src/weapons/ballistics.rs
+src/weapons/bdmg.rs
+src/weapons/eject.rs
+src/weapons/events.rs
+src/weapons/guns.rs
+src/weapons/hitbox.rs
+src/weapons/missiles.rs
+src/weapons/render.rs
+src/weapons/sensors.rs
+src/weapons/setup.rs
+src/weapons/tests.rs
+src/audio/weapons.rs
+src/ui/weapons.rs
+src/vfx/weapons.rs
+src/net/combat.rs

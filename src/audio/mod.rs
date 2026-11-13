@@ -43,6 +43,7 @@ mod scenarios;
 #[cfg(test)]
 mod tests;
 mod voice;
+pub mod weapons;
 
 pub use synth::Settings;
 

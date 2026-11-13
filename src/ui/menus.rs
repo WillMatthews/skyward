@@ -268,8 +268,10 @@ pub fn main_menu(ui: &mut Ui, st: &mut UiState) {
     p.text(Pos2::new(tx, card.min.y + 64.0), Align2::LEFT_TOP, ap, f_ui(13.0), pal::TEXT2);
     p.text(Pos2::new(tx, card.min.y + 84.0), Align2::LEFT_TOP, st.plan.spec.label(), f_ui(13.0), pal::TEXT3);
     if button(ui, Rect::from_min_size(Pos2::new(tx, card.max.y - 46.0), Vec2::new(card.max.x - tx - 16.0, 36.0)), "flynow", "Fly", Btn::Primary, true).clicked() {
+        st.plan.dogfight = None;
         st.actions.push(Action::Fly);
     }
+    dogfight_card(ui, st, Rect::from_min_size(Pos2::new(card.min.x, card.min.y - 286.0), Vec2::new(cw, 274.0)));
     p.text(Pos2::new(x, screen.max.y - 28.0), Align2::LEFT_BOTTOM, format!("{} · {} · {}", crate::hud::ATTRIBUTION, airports::CREDIT, WEATHER_CREDIT_SHORT), f_ui(11.0), pal::TEXT3);
 }
 
@@ -281,6 +283,56 @@ const WEATHER_CREDIT: &str = if crate::platform::WEB {
     "METARs: aviationweather.gov (NOAA) · forecasts: Open-Meteo (CC BY 4.0)"
 };
 const WEATHER_CREDIT_SHORT: &str = if crate::platform::WEB { "Weather: METARs via VATSIM, Open-Meteo" } else { "Weather: NOAA aviationweather.gov, Open-Meteo" };
+
+/// The dogfight quick start: aircraft, opponent, format, opponents' skill.
+fn dogfight_card(ui: &mut Ui, st: &mut UiState, card: Rect) {
+    use crate::weapons::ai::Difficulty;
+    use crate::weapons::setup::Format;
+    let p = ui.painter().clone();
+    panel(&p, card, sp::R_CARD);
+    let x = card.min.x + 18.0;
+    let w = card.width() - 36.0;
+    p.text(Pos2::new(x, card.min.y + 16.0), Align2::LEFT_TOP, "DOGFIGHT", f_inst_b(11.0), pal::ACCENT);
+    p.text(Pos2::new(x, card.min.y + 34.0), Align2::LEFT_TOP, "Guns, missiles and AI pilots over this airfield", f_ui(13.0), pal::TEXT2);
+    let types = [("peregrine", "Spitfire IX"), ("lancer", "F-16C")];
+    let lw = 84.0;
+    let mut y = card.min.y + 62.0;
+    let row = |p: &egui::Painter, y: f32, label: &str| {
+        p.text(Pos2::new(x, y + 15.0), Align2::LEFT_CENTER, label, f_ui(13.0), pal::TEXT3);
+        Rect::from_min_size(Pos2::new(x + lw, y), Vec2::new(w - lw, 30.0))
+    };
+    let names: Vec<&str> = types.iter().map(|t| t.1).collect();
+    let sel = types.iter().position(|t| t.0 == st.dogfight.player).unwrap_or(0);
+    if let Some(i) = segmented(ui, row(&p, y, "You"), "df_you", &names, sel) {
+        st.dogfight.player = types[i].0.to_string();
+    }
+    y += 38.0;
+    let sel = types.iter().position(|t| t.0 == st.dogfight.opponent).unwrap_or(0);
+    if let Some(i) = segmented(ui, row(&p, y, "Opponent"), "df_opp", &names, sel) {
+        st.dogfight.opponent = types[i].0.to_string();
+    }
+    y += 38.0;
+    let fmts = [Format::OneVOne, Format::TwoVTwo];
+    let sel = fmts.iter().position(|f| *f == st.dogfight.format).unwrap_or(0);
+    if let Some(i) = segmented(ui, row(&p, y, "Format"), "df_fmt", &["1 v 1", "2 v 2"], sel) {
+        st.dogfight.format = fmts[i];
+    }
+    y += 38.0;
+    let names: Vec<&str> = Difficulty::ALL.iter().map(|d| d.name()).collect();
+    let sel = Difficulty::ALL.iter().position(|d| *d == st.dogfight.difficulty).unwrap_or(1);
+    if let Some(i) = segmented(ui, row(&p, y, "Pilots"), "df_skill", &names, sel) {
+        st.dogfight.difficulty = Difficulty::ALL[i];
+    }
+    y += 44.0;
+    if button(ui, Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, 36.0)), "df_fight", "Fight", Btn::Primary, true).clicked() {
+        if let Some(i) = st.defs.iter().position(|d| d.id == st.dogfight.player) {
+            st.plan.aircraft = i;
+        }
+        st.plan.watch = false;
+        st.plan.dogfight = Some(st.dogfight.clone());
+        st.actions.push(Action::Fly);
+    }
+}
 
 pub fn credits(ui: &mut Ui, st: &mut UiState) {
     let screen = ui.ctx().content_rect();
@@ -1647,6 +1699,7 @@ pub fn conditions(ui: &mut Ui, st: &mut UiState) {
     let summary = format!("{} · {} · {}", def.name, st.plan.airport, st.plan.spec.label());
     p.text(Pos2::new(content.max.x - 250.0, fy + 24.0), Align2::RIGHT_CENTER, summary, f_ui(14.0), pal::TEXT2);
     if button(ui, Rect::from_min_size(Pos2::new(content.max.x - 230.0, fy), Vec2::new(230.0, 48.0)), "fly", "Fly", Btn::Primary, !st.plan.airport.is_empty()).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.any()) {
+        st.plan.dogfight = None;
         st.actions.push(Action::Fly);
     }
 }

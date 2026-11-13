@@ -11,6 +11,7 @@
 //! Systems:    --fail pitot,vacuum,fire2@30,... (names, optional @seconds to arm) [--cold-dark] [--panel failures|armed|systems]
 //! Missions:   skyward --mission river|v1|decompression|... [--mission-bot]   (airline emergencies; --menu-screen missions|briefing|debrief)
 //! Auto flight: skyward [--bot | --watch] ...        (hand the aircraft to the AI pilot; --watch adds the cinematic camera)
+//! Dogfight:  skyward --aircraft spitfire|f16 --dogfight [1v1|2v2] [--opponent ID] [--difficulty rookie|average|veteran|ace] [--dogfight-ai] [--shot-when guns|hit|lock|missile|flares|smoke|eject|chute|kill] [--view-bandit] [--eject-at S]
 //! Soak test:  skyward --shot out.png --bot --soak --seconds 1800 [--warp 8] [--shot-every 300] [--weather scattered]
 //! Weather:    live METAR + real local time by default; --no-live, --metar "EGLC 121450Z 22012KT 3000 RA BKN008 09/08 Q1002", --time HH.MM, --date MM-DD, --weather clear|few|scattered|broken|overcast
 //! Controllers: --controllers [SECONDS] lists devices and prints their inputs (SKYWARD_FAKE_INPUT=xbox,x52,pedals,tca adds virtual ones)
@@ -55,6 +56,7 @@ mod landmarks;
 mod tiles;
 mod vfx;
 mod water;
+mod weapons;
 mod ui;
 mod weather;
 mod world;
@@ -176,6 +178,14 @@ struct Args {
     /// Airline-emergency mission to fly (missions/), and fly it with the scripted pilot.
     mission: Option<String>,
     mission_bot: bool,
+    /// Dogfight quick start (weapons/): format, opponent, difficulty, AI-flown.
+    dogfight: Option<weapons::setup::Config>,
+    /// Headless: fast-forward until this happens in the fight (guns, hit, lock, missile, flares, smoke, eject, kill), then shoot.
+    shot_when: Option<String>,
+    /// Headless: eject / bail out at this many seconds.
+    eject_at: Option<f32>,
+    /// Chase camera on the (first) opponent.
+    view_bandit: bool,
 }
 
 fn parse_vec3(s: &str) -> Option<Vec3> {
@@ -291,6 +301,10 @@ fn parse_args_from(argv: Vec<String>) -> Args {
         mp_chat: String::new(),
         mission: None,
         mission_bot: false,
+        dogfight: None,
+        shot_when: None,
+        eject_at: None,
+        view_bandit: false,
     };
     let mut i = 0;
     let next = |i: &mut usize| -> String {
@@ -319,6 +333,27 @@ fn parse_args_from(argv: Vec<String>) -> Args {
             "--start" => a.start = Start::parse(&next(&mut i)).unwrap_or(Start::Runway),
             "--start-at" => a.start_at = startpos::Spec::decode(&next(&mut i)),
             "--shot" => a.shot = Some(next(&mut i)),
+            "--dogfight" => {
+                let mut cfg = a.dogfight.take().unwrap_or_default();
+                cfg.opponent = String::new();
+                if let Some(f) = argv.get(i + 1).and_then(|v| weapons::setup::Format::parse(v)) {
+                    cfg.format = f;
+                    i += 1;
+                }
+                a.dogfight = Some(cfg);
+            }
+            "--opponent" => {
+                let v = flight::resolve_id(&next(&mut i));
+                a.dogfight.get_or_insert_with(Default::default).opponent = v;
+            }
+            "--difficulty" => {
+                let v = next(&mut i);
+                a.dogfight.get_or_insert_with(Default::default).difficulty = weapons::ai::Difficulty::parse(&v).unwrap_or(weapons::ai::Difficulty::Average);
+            }
+            "--dogfight-ai" => a.dogfight.get_or_insert_with(Default::default).autopilot = true,
+            "--shot-when" => a.shot_when = Some(next(&mut i)),
+            "--eject-at" => a.eject_at = next(&mut i).parse().ok(),
+            "--view-bandit" => a.view_bandit = true,
             "--width" => a.width = next(&mut i).parse().unwrap_or(1920),
             "--height" => a.height = next(&mut i).parse().unwrap_or(1080),
             "--cam" => a.cam = CamMode::parse(&next(&mut i)).unwrap_or(CamMode::Chase),
@@ -638,6 +673,16 @@ impl Session {
                         sim.enable_bot(w);
                         if args.watch {
                             sim.cam = CamMode::Cinematic;
+                        }
+                    }
+                    if let Some(cfg) = args.dogfight.clone() {
+                        let mut cfg = cfg;
+                        if cfg.opponent.is_empty() {
+                            cfg.opponent = sim.def().id.to_string();
+                        }
+                        sim.start_dogfight(w, cfg);
+                        if args.view_bandit {
+                            sim.view_unit = sim.combat.as_ref().and_then(|c| c.units.iter().find(|u| u.team != 0).map(|u| u.id));
                         }
                     }
                     if let Some((msg, _)) = &sim.note {
@@ -974,6 +1019,9 @@ fn render_frame(
                 if let Some(af) = fv.aircraft.as_mut() {
                     af.shift(d);
                 }
+                for af in &mut fv.others {
+                    af.shift(d);
+                }
                 fv = FrameView { eye, view: glam::camera::rh::view::look_at_mat4(eye, look, Vec3::Y), ..fv };
             }
             // Other players' aircraft (net/): real models, lights, afterburners — eye-relative.
@@ -1210,7 +1258,7 @@ fn plan_from_args(args: &Args, db: Option<&airports::Db>) -> ui::Plan {
             _ => startpos::Spec::Runway(String::new()),
         },
     };
-    ui::Plan { aircraft: args.aircraft, airport, spec, watch: args.watch }
+    ui::Plan { aircraft: args.aircraft, airport, spec, watch: args.watch, dogfight: args.dogfight.clone() }
 }
 
 /// Arguments for flying a plan with the chosen conditions.
@@ -1226,6 +1274,7 @@ fn args_for_plan(base: &Args, st: &UiState) -> (Args, Option<startpos::CustomSta
     a.start = plan.spec.as_start();
     a.bot = plan.watch;
     a.watch = plan.watch;
+    a.dogfight = plan.dogfight.clone();
     a.heading = None;
     let c = &st.settings.conditions;
     a.live = c.live;
@@ -1548,12 +1597,25 @@ fn headless(args: Args) -> Result<(), String> {
             for c in cues.due(i as f32 / 60.0, sim, &s.world) {
                 audio::render::apply(&c, sim, &mut input, &s.world);
             }
+            if let Some(t) = args.eject_at {
+                let now = i as f32 / 60.0;
+                if (now - t).abs() < 0.5 / 60.0 || (now - t - 0.2).abs() < 0.5 / 60.0 {
+                    input.pressed.push(Key::Eject);
+                }
+            }
             sim.update(&s.world, &mut input, if steps == 0 { 0.0 } else { 1.0 / 60.0 });
             if let (Some(t), None) = (args.throttle, &sim.bot) {
                 sim.ctl.throttle = t;
             }
             if mp {
                 ui.st.mp.fly(sim, &mut s.world, false, 1.0 / 60.0);
+            }
+            if let Some(w) = &args.shot_when {
+                if sim.combat_moment(w) {
+                    eprintln!("shot-when {w}: at {:.1} s", i as f32 / 60.0);
+                    s.follow();
+                    break;
+                }
             }
             if i % if mp { 10 } else { 30 } == 0 {
                 s.follow();
@@ -3040,6 +3102,9 @@ impl App {
                 sim.tenders = None;
                 sim.custom_start = custom;
                 sim.select(&s.world, args2.aircraft, args2.start, args2.watch);
+                if let Some(cfg) = args2.dogfight.clone() {
+                    sim.start_dogfight(&s.world, cfg);
+                }
                 if !args2.live {
                     sim.hours = args2.hours.unwrap_or(sim.hours);
                     sim.day_of_year = args2.day_of_year.unwrap_or(sim.day_of_year);
@@ -3164,7 +3229,10 @@ impl App {
                 r.input.pressed.retain(|k| *k != Key::Screenshot);
                 let before = s.sim.as_ref().map(|x| x.ac.pos);
                 if screen == Screen::Flying && s.catch_up.is_none() {
-                    s.sim.as_mut().unwrap().update(&s.world, &mut r.input, dt);
+                    let sim = s.sim.as_mut().unwrap();
+                    // Damage / crash assists (missions override them in the sim).
+                    sim.assists = damage::Assists { structural: r.ui.st.settings.structural_damage, crashes: r.ui.st.settings.crashes };
+                    sim.update(&s.world, &mut r.input, dt);
                 } else {
                     r.input.pressed.clear();
                     r.input.orbit_delta = glam::Vec2::ZERO;
@@ -3383,6 +3451,7 @@ impl App {
                         r.ui.st.plan.airport = l.airport;
                         r.ui.st.plan.spec = startpos::Spec::decode(&l.start).unwrap_or(startpos::Spec::Runway(String::new()));
                         r.ui.st.plan.watch = l.watch;
+                        r.ui.st.plan.dogfight = None;
                     }
                     self.start_flight();
                 }

@@ -151,59 +151,11 @@ pub enum Autobrake {
     Max,
 }
 
-/// Structural damage model (Flight & Realism). Consumers: damage.rs (owned by DMG).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum StructuralDamage {
-    /// Published limits: overstress, flutter and overspeed tear parts off.
-    #[default]
-    Realistic,
-    /// Higher load margins before anything bends or breaks.
-    Forgiving,
-    /// Indestructible airframe.
-    Off,
-}
-
-/// What an impact does (Flight & Realism). Consumers: flight.rs / sim.rs crash code (owned by DMG).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum Crashes {
-    /// A hard enough impact is a crash, with a wreck and a debrief.
-    #[default]
-    Realistic,
-    /// Hard landings are survivable; only real impacts crash.
-    Forgiving,
-    /// No crashes: the aircraft resets to the start instead.
-    Off,
-}
-
-impl StructuralDamage {
-    pub const ALL: [StructuralDamage; 3] = [StructuralDamage::Realistic, StructuralDamage::Forgiving, StructuralDamage::Off];
-    pub fn id(self) -> &'static str {
-        match self {
-            StructuralDamage::Realistic => "realistic",
-            StructuralDamage::Forgiving => "forgiving",
-            StructuralDamage::Off => "off",
-        }
-    }
-}
-
-impl Crashes {
-    pub const ALL: [Crashes; 3] = [Crashes::Realistic, Crashes::Forgiving, Crashes::Off];
-    pub fn id(self) -> &'static str {
-        match self {
-            Crashes::Realistic => "realistic",
-            Crashes::Forgiving => "forgiving",
-            Crashes::Off => "off",
-        }
-    }
-}
-
 /// Flight & Realism.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Realism {
-    /// Structural damage: Realistic / Forgiving / Off. // consumer owned by DMG.
-    pub structural_damage: StructuralDamage,
-    /// Crashes: Realistic / Forgiving / Off (resets). // consumer owned by DMG.
-    pub crashes: Crashes,
+    /// (Structural damage and crashes are `Settings::structural_damage` /
+    /// `Settings::crashes`, damage.rs's `Realism`: the presets set them too.)
     /// Engines can be torn off by overload or impact. // consumer owned by DMG (pending).
     pub engine_damage: bool,
     /// Grey-out / blackout and red-out at high positive / negative g (screen effect).
@@ -228,16 +180,13 @@ impl Default for Realism {
 
 impl Realism {
     pub fn preset(p: RealismPreset) -> Realism {
-        use {Crashes as C, StructuralDamage as D};
-        let (structure, crash, engines, g, auto) = match p {
-            RealismPreset::Casual => (D::Off, C::Forgiving, false, false, true),
-            RealismPreset::Hard => (D::Realistic, C::Realistic, true, true, false),
+        let (engines, g, auto) = match p {
+            RealismPreset::Casual => (false, false, true),
+            RealismPreset::Hard => (true, true, false),
             // (Standard is the defaults: how Skyward flew before the presets.)
-            _ => (D::Realistic, C::Realistic, true, false, false),
+            _ => (true, false, false),
         };
         Realism {
-            structural_damage: structure,
-            crashes: crash,
             engine_damage: engines,
             g_effects: g,
             random_failures: false,
@@ -247,13 +196,22 @@ impl Realism {
             autobrake: if p == RealismPreset::Casual { Autobrake::Medium } else { Autobrake::Off },
         }
     }
-    /// The preset these knobs match (Custom: none).
-    pub fn current_preset(&self) -> RealismPreset {
-        [RealismPreset::Casual, RealismPreset::Standard, RealismPreset::Hard]
-            .into_iter()
-            .find(|p| Realism { random_failures: self.random_failures, ..Realism::preset(*p) } == *self)
-            .unwrap_or(RealismPreset::Custom)
+    /// (structural damage, crashes) of a preset (damage.rs).
+    pub fn damage_preset(p: RealismPreset) -> (crate::damage::Realism, crate::damage::Realism) {
+        use crate::damage::Realism as R;
+        match p {
+            RealismPreset::Casual => (R::Off, R::Forgiving),
+            _ => (R::Realistic, R::Realistic),
+        }
     }
+}
+
+/// Damage settings: the top-level DMG keys ("Realistic" …), else the
+/// pre-merge nested `realism.<key>` ("realistic" …), else Realistic.
+fn damage_level(v: &Value, k: &str) -> crate::damage::Realism {
+    let top = v.get(k).and_then(Value::as_str);
+    let nested = v.get("realism").and_then(|r| r.get(k)).and_then(Value::as_str);
+    crate::damage::Realism::from_name(top.or(nested).unwrap_or(""))
 }
 
 /// Assists.
@@ -440,6 +398,12 @@ pub struct Settings {
     pub last: Option<LastFlight>,
     pub recents: Vec<String>,
     pub favourites: Vec<String>,
+    /// Airframe damage: Realistic / Forgiving (limits ×1.5, no permanent set,
+    /// no flutter) / Off (indestructible; warnings still show). damage.rs.
+    pub structural_damage: crate::damage::Realism,
+    /// Crashes: Realistic / Forgiving (only high-energy impacts end the
+    /// flight) / Off (bounce or reset, the flight goes on). flight.rs.
+    pub crashes: crate::damage::Realism,
     /// Keys this build does not know (a newer file, other tracks): written back untouched.
     pub extra: Map<String, Value>,
 }
@@ -479,6 +443,8 @@ impl Default for Settings {
             last: None,
             recents: Vec::new(),
             favourites: Vec::new(),
+            structural_damage: crate::damage::Realism::Realistic,
+            crashes: crate::damage::Realism::Realistic,
             extra: Map::new(),
         }
     }
@@ -516,8 +482,6 @@ pub const UI_SCALE_MAX: f32 = 2.0;
 /// What the simulation reads from the settings each frame (sim.rs `prefs`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SimPrefs {
-    pub structural_damage: StructuralDamage,
-    pub crashes: Crashes,
     pub engine_damage: bool,
     pub unlimited_fuel: bool,
     pub auto_rudder: bool,
@@ -596,9 +560,32 @@ const KNOWN: &[&str] = &[
     "last",
     "recents",
     "favourites",
+    "structural_damage",
+    "crashes",
 ];
 
 impl Settings {
+    /// The realism preset the Flight & Realism knobs and the damage / crash
+    /// settings match (Custom: none). Random failures are a separate choice.
+    pub fn realism_preset(&self) -> RealismPreset {
+        [RealismPreset::Casual, RealismPreset::Standard, RealismPreset::Hard]
+            .into_iter()
+            .find(|p| {
+                Realism { random_failures: self.realism.random_failures, ..Realism::preset(*p) } == self.realism
+                    && Realism::damage_preset(*p) == (self.structural_damage, self.crashes)
+            })
+            .unwrap_or(RealismPreset::Custom)
+    }
+
+    /// Apply a preset (keeps the random-failures choice). Custom: nothing.
+    pub fn apply_realism_preset(&mut self, p: RealismPreset) {
+        if p == RealismPreset::Custom {
+            return;
+        }
+        self.realism = Realism { random_failures: self.realism.random_failures, ..Realism::preset(p) };
+        (self.structural_damage, self.crashes) = Realism::damage_preset(p);
+    }
+
     pub fn load() -> Settings {
         // Browser: localStorage.
         #[cfg(target_arch = "wasm32")]
@@ -655,8 +642,6 @@ impl Settings {
         let r = &self.realism;
         let c = &self.camera;
         SimPrefs {
-            structural_damage: r.structural_damage,
-            crashes: r.crashes,
             engine_damage: r.engine_damage,
             unlimited_fuel: r.unlimited_fuel,
             auto_rudder: r.auto_rudder,
@@ -701,7 +686,7 @@ impl Settings {
             "mute_in_background": self.mute_in_background,
             "controls": self.controls.to_json(),
             "realism": {
-                "structural_damage": r.structural_damage.id(), "crashes": r.crashes.id(), "engine_damage": r.engine_damage, "g_effects": r.g_effects,
+                "engine_damage": r.engine_damage, "g_effects": r.g_effects,
                 "random_failures": r.random_failures, "unlimited_fuel": r.unlimited_fuel, "auto_rudder": r.auto_rudder, "auto_trim": r.auto_trim,
                 "autobrake": match r.autobrake { Autobrake::Off => "off", Autobrake::Low => "low", Autobrake::Medium => "medium", Autobrake::Max => "max" },
             },
@@ -719,6 +704,8 @@ impl Settings {
             "last": self.last.as_ref().map(|l| json!({ "aircraft": l.aircraft, "airport": l.airport, "start": l.start, "watch": l.watch })),
             "recents": self.recents,
             "favourites": self.favourites,
+            "structural_damage": self.structural_damage.name(),
+            "crashes": self.crashes.name(),
         });
         if let Some(o) = v.as_object_mut() {
             for (k, x) in &self.extra {
@@ -758,8 +745,6 @@ impl Settings {
         let r = j.o("realism");
         let dr = &d.realism;
         let realism = Realism {
-            structural_damage: StructuralDamage::ALL.into_iter().find(|x| x.id() == r.s("structural_damage")).unwrap_or(dr.structural_damage),
-            crashes: Crashes::ALL.into_iter().find(|x| x.id() == r.s("crashes")).unwrap_or(dr.crashes),
             engine_damage: r.b("engine_damage", dr.engine_damage),
             g_effects: r.b("g_effects", dr.g_effects),
             random_failures: r.b("random_failures", dr.random_failures),
@@ -856,6 +841,8 @@ impl Settings {
             last,
             recents: list("recents"),
             favourites: list("favourites"),
+            structural_damage: damage_level(v, "structural_damage"),
+            crashes: damage_level(v, "crashes"),
             extra,
         }
     }
@@ -895,13 +882,7 @@ mod tests {
             mute_in_background: true,
             ..Settings::default()
         };
-        s.realism = Realism {
-            random_failures: true,
-            autobrake: Autobrake::Max,
-            structural_damage: StructuralDamage::Forgiving,
-            crashes: Crashes::Off,
-            ..Realism::preset(RealismPreset::Hard)
-        };
+        s.realism = Realism { random_failures: true, autobrake: Autobrake::Max, ..Realism::preset(RealismPreset::Hard) };
         s.realism.auto_trim = true;
         s.assists = Assists { taxi_ribbon: true, landing_guidance: true, stall_warning: false, overspeed_warning: false };
         s.wx = WxPrefs { turbulence: 0.8, max_warp: 16 };
@@ -914,7 +895,7 @@ mod tests {
         let text = serde_json::to_string_pretty(&s.to_json()).unwrap();
         let back = Settings::from_str(&text);
         assert_eq!(back, s);
-        assert_eq!(back.realism.current_preset(), RealismPreset::Custom);
+        assert_eq!(back.realism_preset(), RealismPreset::Custom);
         assert!(text.contains("\"graphics\""), "unknown keys are written back");
     }
 
@@ -946,7 +927,8 @@ mod tests {
         // Saved again it is a v2 file.
         assert_eq!(s.to_json()["version"], json!(VERSION));
         // The pre-redesign defaults are the realism "Standard" preset (same flying as before).
-        assert_eq!(s.realism.current_preset(), RealismPreset::Standard);
+        assert_eq!(s.realism_preset(), RealismPreset::Standard);
+        assert_eq!((s.structural_damage, s.crashes), (crate::damage::Realism::Realistic, crate::damage::Realism::Realistic));
     }
 
     #[test]
@@ -966,13 +948,28 @@ mod tests {
 
     #[test]
     fn presets_are_distinct_and_recognised() {
+        use crate::damage::Realism as R;
         for p in [RealismPreset::Casual, RealismPreset::Standard, RealismPreset::Hard] {
-            assert_eq!(Realism::preset(p).current_preset(), p);
+            let mut s = Settings::default();
+            s.apply_realism_preset(p);
+            assert_eq!(s.realism_preset(), p);
         }
+        assert_eq!(Settings::default().realism_preset(), RealismPreset::Standard);
         assert_ne!(Realism::preset(RealismPreset::Casual), Realism::preset(RealismPreset::Hard));
         // Random failures are a separate choice: they do not make a preset "Custom".
-        let r = Realism { random_failures: true, ..Realism::preset(RealismPreset::Hard) };
-        assert_eq!(r.current_preset(), RealismPreset::Hard);
+        let mut s = Settings::default();
+        s.apply_realism_preset(RealismPreset::Hard);
+        s.realism.random_failures = true;
+        assert_eq!(s.realism_preset(), RealismPreset::Hard);
+        // The damage settings (damage.rs) are part of the preset.
+        s.crashes = R::Off;
+        assert_eq!(s.realism_preset(), RealismPreset::Custom);
+        let mut c = Settings::default();
+        c.apply_realism_preset(RealismPreset::Casual);
+        assert_eq!((c.structural_damage, c.crashes), (R::Off, R::Forgiving));
+        // The settings file written before the merge kept them under "realism" (lower case).
+        let old = Settings::from_json(&json!({ "realism": { "structural_damage": "forgiving", "crashes": "off" } }));
+        assert_eq!((old.structural_damage, old.crashes), (R::Forgiving, R::Off));
     }
 
     #[test]
@@ -996,5 +993,18 @@ mod tests {
         unsafe { std::env::remove_var("SKYWARD_CONFIG_DIR") };
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(back, s);
+    }
+
+    #[test]
+    fn damage_and_crash_settings() {
+        use crate::damage::Realism;
+        let d = Settings::default();
+        assert_eq!((d.structural_damage, d.crashes), (Realism::Realistic, Realism::Realistic));
+        let s = Settings { structural_damage: Realism::Forgiving, crashes: Realism::Off, ..Settings::default() };
+        let back = Settings::from_json(&s.to_json());
+        assert_eq!((back.structural_damage, back.crashes), (Realism::Forgiving, Realism::Off));
+        // Missing / unknown values load as Realistic.
+        let old = Settings::from_json(&serde_json::json!({ "crashes": "bogus" }));
+        assert_eq!((old.structural_damage, old.crashes), (Realism::Realistic, Realism::Realistic));
     }
 }
