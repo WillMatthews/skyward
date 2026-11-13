@@ -1,0 +1,152 @@
+{
+  "id": "decompression",
+  "title": "Thin Air",
+  "tagline": "A bang at FL370 — the cabin is at the aircraft's altitude.",
+  "aircraft": "meridian320",
+  "difficulty": 2,
+  "minutes": 5,
+  "history": "Inspired by airliners that lost cabin pressure at cruise altitude — a fuselage skin failure in 1988, a burst oxygen bottle in 2008 — whose crews got everyone down to breathable air in a few minutes.",
+  "situation": "Cruising at FL370 over Kent towards Gatwick with 168 aboard. Without warning there is a bang, fog fills the cabin and your ears pop. The passenger oxygen lasts about 13 minutes; your useful consciousness without a mask, about 20 seconds.",
+  "failures": [
+    "Rapid decompression: cabin altitude climbs to 37,000 ft",
+    "Passenger oxygen: about 13 minutes from the masks dropping"
+  ],
+  "tips": [
+    "Masks are on automatically — fly the emergency descent",
+    "Thrust idle, speed brakes FULL (/), nose down to about 330 kt",
+    "Level at 10,000 ft (FL100); watch the overspeed",
+    "Declare MAYDAY (F4)"
+  ],
+  "target": {
+    "airport": "EGKK",
+    "runway": "26L",
+    "course_deg": 257.6,
+    "length_m": 3317,
+    "width_m": 45,
+    "elev_ft": 202,
+    "lat": 51.151493,
+    "lon": -0.165992
+  },
+  "start": {
+    "x_nm": -40,
+    "y_nm": 0,
+    "alt_ft": 37000,
+    "hdg_rel": 0,
+    "kias": 240,
+    "flaps": 0,
+    "gear_down": false
+  },
+  "fuel_frac": 0.55,
+  "time": "10:20",
+  "date": "09-02",
+  "metar": "EGKK 021020Z 24010KT 9999 FEW035 17/10 Q1018",
+  "pax": 168,
+  "par_s": 300,
+  "events": [
+    {
+      "id": "bang",
+      "when": {
+        "t": 10
+      },
+      "do": [
+        {
+          "cabin_leak": 2.5
+        },
+        {
+          "ap_off": true
+        },
+        {
+          "note": "F/O: Cabin pressure! Masks on — emergency descent!"
+        },
+        {
+          "checkpoint": "Decompression"
+        }
+      ]
+    },
+    {
+      "id": "pa",
+      "when": {
+        "after": "bang",
+        "delay": 5
+      },
+      "do": [
+        {
+          "pa": "emergency_descent"
+        }
+      ]
+    },
+    {
+      "id": "masks",
+      "when": {
+        "after": "pa",
+        "delay": 5
+      },
+      "do": [
+        {
+          "pa": "masks"
+        }
+      ]
+    },
+    {
+      "id": "atc",
+      "when": {
+        "after": "bang",
+        "delay": 40
+      },
+      "do": [
+        {
+          "note": "ATC: Descend at your discretion to FL100, no traffic below you."
+        }
+      ]
+    },
+    {
+      "id": "fl100",
+      "when": {
+        "after": "bang",
+        "alt_below_ft": 10000
+      },
+      "do": [
+        {
+          "note": "F/O: FL100 — cabin's breathable. Masks can come off."
+        }
+      ]
+    }
+  ],
+  "objectives": [
+    {
+      "id": "brakes",
+      "text": "Speed brakes out within 30 s",
+      "kind": "player",
+      "act": "speedbrakes",
+      "after": "bang",
+      "within_s": 30,
+      "points": 40
+    },
+    {
+      "id": "mayday",
+      "text": "Declare MAYDAY",
+      "kind": "player",
+      "act": "mayday",
+      "after": "bang",
+      "within_s": 90,
+      "points": 30
+    },
+    {
+      "id": "control",
+      "text": "No stall, no overspeed for 3 minutes",
+      "kind": "in_control",
+      "s": 180,
+      "after": "bang",
+      "points": 60
+    },
+    {
+      "id": "down",
+      "text": "Below 10,000 ft within 6 minutes",
+      "kind": "alt_below",
+      "ft": 10000,
+      "after": "bang",
+      "within_s": 360,
+      "required": true
+    }
+  ]
+}

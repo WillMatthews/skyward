@@ -38,10 +38,12 @@ pub enum Kind {
     Adf,
     /// Helicopters: 0 = tail-rotor drive failure, 1 = tail-rotor pitch control (pedals frozen).
     TailRotor,
+    /// Rapid decompression (a hole in the pressure hull).
+    Decompression,
 }
 
 /// Number of failure kinds.
-pub const N_KINDS: usize = 28;
+pub const N_KINDS: usize = 29;
 
 /// Menu groups.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -115,6 +117,7 @@ impl Kind {
         Kind::GlideSlope,
         Kind::Adf,
         Kind::TailRotor,
+        Kind::Decompression,
     ];
     pub fn bit(self) -> usize {
         Kind::ALL.iter().position(|k| *k == self).unwrap_or(0)
@@ -150,6 +153,7 @@ impl Kind {
             Kind::GlideSlope => "gs",
             Kind::Adf => "adf",
             Kind::TailRotor => "tailrotor",
+            Kind::Decompression => "decomp",
         }
     }
     pub fn group(self) -> Group {
@@ -163,7 +167,7 @@ impl Kind {
             }
             Kind::FlapAsym | Kind::FlapJam | Kind::ControlJam | Kind::TailRotor => Group::Controls,
             Kind::GearExtend | Kind::Brakes | Kind::TyreBurst => Group::Gear,
-            Kind::BirdStrike | Kind::Icing => Group::Airframe,
+            Kind::BirdStrike | Kind::Icing | Kind::Decompression => Group::Airframe,
         }
     }
     pub fn index(self) -> Index {
@@ -215,6 +219,7 @@ impl Kind {
             Kind::BirdStrike => true,
             Kind::Icing => def.rotor.is_none(),
             Kind::NavRadio | Kind::GlideSlope | Kind::Adf => crate::nav::state::has_radios(def),
+            Kind::Decompression => super::cabin::pressurised(def),
         }
     }
     /// Menu label for index `i` on `def`.
@@ -256,6 +261,7 @@ impl Kind {
             Kind::GlideSlope => format!("NAV {} glideslope receiver", i + 1),
             Kind::Adf => "ADF receiver".into(),
             Kind::TailRotor => (if i == 0 { "Tail rotor drive failure" } else { "Tail rotor pitch control (pedals frozen)" }).into(),
+            Kind::Decompression => "Rapid decompression".into(),
         }
     }
     /// One-line hint on the effect / what to do, for the menu.
@@ -313,6 +319,7 @@ impl Kind {
             Kind::GlideSlope => "GS flag: localizer only (non-precision); the autopilot loses G/S",
             Kind::Adf => "ADF needle parks at 90°",
             Kind::TailRotor => "Yaw towards the torque: keep speed (the fin works), run-on landing or autorotation",
+            Kind::Decompression => "Cabin altitude climbs: masks on, emergency descent to 10,000 ft",
         }
     }
     /// Parse "fire", "fire2", "eng2fire", "jam-rudder", "tyre-right"... (1-based indices).
@@ -327,6 +334,7 @@ impl Kind {
                 "redx" | "display" => (Kind::DisplayFail, 0),
                 "elecfire" => (Kind::ElecFire, 0),
                 "birdstrike" => (Kind::BirdStrike, 0),
+                "decompression" | "depress" => (Kind::Decompression, 0),
                 "jam-elevator" | "jam-elev" => (Kind::ControlJam, 0),
                 "jam-aileron" | "jam-ail" => (Kind::ControlJam, 1),
                 "jam-rudder" | "jam-rud" => (Kind::ControlJam, 2),

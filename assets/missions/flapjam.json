@@ -1,0 +1,29 @@
+{
+  "id": "flapjam",
+  "title": "Locked Flaps",
+  "tagline": "Flaps jammed at 1 on a gusty approach to London City.",
+  "aircraft": "meridian190",
+  "difficulty": 4,
+  "minutes": 6,
+  "history": "Inspired by flap failures on approach to short runways, where the higher landing speed turns a routine arrival into a choice between a precise touchdown and a diversion to a longer runway.",
+  "situation": "Six miles from London City's runway 27 — 1,508 m long, a steep 5.5° glidepath, buildings all round — in a gusty southerly. As you select flap 2 nothing happens: the flaps are locked at 1. Your approach speed just went up by 25 knots.",
+  "failures": ["Flaps jammed at detent 1 (7°)", "Crosswind 200° 20 kt gusting 32"],
+  "tips": ["Vref + 25 kt with flap 1 — London City is very short for that", "Southend (05/23, 1,856 m) and Stansted (04/22, 3,049 m) are nearby", "Crab into the wind, kick it straight just before touchdown", "Full reverse and maximum braking once down"],
+  "target": { "airport": "EGLC", "runway": "27", "course_deg": 272.9, "length_m": 1508, "width_m": 30, "elev_ft": 19, "lat": 51.504894, "lon": 0.066026 },
+  "start": { "x_nm": -6, "y_nm": 0, "alt_ft": 2000, "hdg_rel": 0, "kias": 175, "flaps": 1, "gear_down": false },
+  "fuel_frac": 0.3,
+  "time": "15:45",
+  "date": "11-05",
+  "metar": "EGLC 051545Z 20020G32KT 9999 SCT020 12/07 Q0998",
+  "pax": 88,
+  "par_s": 300,
+  "events": [
+    { "id": "jam", "when": { "t": 4 }, "do": [ { "fail": "flapjam" }, { "note": "F/O: Flaps two… they're not moving. Flap fault — locked at one." }, { "checkpoint": "Flaps jammed" } ] },
+    { "id": "atc", "when": { "after": "jam", "delay": 20 }, "do": [ { "note": "ATC: Wind 200 degrees 20 knots, gusting 32. Say intentions." } ] },
+    { "id": "down", "when": { "after": "jam", "on_ground": true }, "do": [ { "pa": "remain_seated" } ] }
+  ],
+  "objectives": [
+    { "id": "pan", "text": "Declare PAN or MAYDAY", "kind": "player", "act": "mayday", "after": "jam", "points": 30 },
+    { "id": "land", "text": "Land and stop on a runway", "kind": "land", "required": true, "points": 40 }
+  ]
+}

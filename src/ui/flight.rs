@@ -154,6 +154,10 @@ pub fn draw(ctx: &egui::Context, st: &mut UiState, sim: &mut Sim, world: &World,
     if mode != HudMode::Off {
         y = weather_panel(ctx, st, sim, world, Pos2::new(sp::L, y));
     }
+    // ---- mission: objectives, clock, crew / cabin / ATC lines (ui/missions.rs)
+    if sim.mission.is_some() {
+        y = super::missions::hud(ctx, st, sim, Pos2::new(sp::L, y + sp::S));
+    }
     let _ = y;
     // ---- top centre: auto flight / AP strip + toasts
     let mut ty = sp::M;
@@ -308,7 +312,13 @@ fn annunciators(p: &egui::Painter, screen: Rect, sim: &Sim, y: f32) -> f32 {
     let mut items: Vec<(String, Color32, bool)> = Vec::new(); // text, colour, lit
     if def.has_engine {
         let t = sim.ctl.throttle * 100.0;
-        let lab = if sim.ctl.reverse { format!("REV {t:.0}%") } else { format!("THR {t:.0}%") };
+        let n = crate::missions::n_eng(def);
+        let lab = match sim.ctl.engine_throttle {
+            // Split throttles (differential thrust): every lever.
+            Some(l) if n > 1 && !sim.ctl.reverse => format!("THR {}", l.iter().take(n).map(|x| format!("{:.0}", x * 100.0)).collect::<Vec<_>>().join("/")),
+            _ if sim.ctl.reverse => format!("REV {t:.0}%"),
+            _ => format!("THR {t:.0}%"),
+        };
         items.push((lab, if sim.ctl.reverse { pal::AMBER } else { pal::TEXT }, true));
     }
     let flap = if def.flap_label == "Airbrakes" { format!("AIRBRAKE {}", sim.flap_label()) } else { format!("FLAPS {}", sim.flap_label()) };

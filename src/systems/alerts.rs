@@ -69,7 +69,6 @@ pub fn alerts(sys: &Systems, def: &AircraftDef, ac: &Aircraft, ctl: &Controls) -
     let airborne = !ac.on_ground;
     let multi = n > 1;
     let tag = |i: usize| if multi { format!(" {}", i + 1) } else { String::new() };
-    let idle = ctl.throttle < 0.05;
     let any_running = (0..n).any(|i| sys.eng[i].run);
 
     // ---------------- engines
@@ -78,6 +77,8 @@ pub fn alerts(sys: &Systems, def: &AircraftDef, ac: &Aircraft, ctl: &Controls) -
         let k = tag(i);
         let master = sys.sw.eng_master[i];
         let handle = sys.sw.fire_handle[i];
+        // (Split throttles: this engine's own lever.)
+        let idle = ctl.lever(i) < 0.05;
         if e.fire > 0.0 && sd.fire_detect {
             let lines = match style {
                 Alerting::Ecam => {
@@ -372,6 +373,26 @@ pub fn alerts(sys: &Systems, def: &AircraftDef, ac: &Aircraft, ctl: &Controls) -
         if style != Alerting::Vms {
             o.add(Level::Warning, t, lines).smoke = true;
         }
+    }
+    // Cabin altitude above 9,550 ft (cabin.rs).
+    if sys.cabin.warning() && style != Alerting::Annunciators {
+        let fpm = ac.vertical_speed() * 196.85;
+        let lines = vec![
+            l("CREW OXY MASKS", "USE", sys.cabin.crew_masks),
+            l("SIGNS", "ON", sys.cabin.crew_masks),
+            l("EMER DESCENT", "INITIATE", fpm < -1500.0 || ac.pos.y < 10_000.0 * 0.3048),
+            l("THR LEVERS", "IDLE", ctl.throttle < 0.05 || ac.pos.y < 10_000.0 * 0.3048),
+            l("SPD BRK", "FULL", ctl.spoilers > 0.9 || ac.pos.y < 10_000.0 * 0.3048),
+            l("MAX FL", "100 / MEA", ac.pos.y < 10_200.0 * 0.3048),
+            l("PAX OXY MASKS", "MAN ON", sys.cabin.pax_masks),
+        ];
+        let t = match style {
+            Alerting::Ecam => "CAB PR EXCESS CAB ALT",
+            Alerting::Eicas => "CABIN ALTITUDE",
+            Alerting::Atr => "EXCESS CAB ALT",
+            _ => "CABIN PRESS",
+        };
+        o.add(Level::Warning, t, lines);
     }
     if sys.windscreen_cracked && style != Alerting::Annunciators {
         o.add(Level::Advisory, "WINDSHIELD CRACKED", vec![l("SPEED", "250 KT MAX", ac.airspeed_kt() < 250.0)]);

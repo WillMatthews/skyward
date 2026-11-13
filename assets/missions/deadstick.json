@@ -1,0 +1,143 @@
+{
+  "id": "deadstick",
+  "title": "The Long Glide",
+  "tagline": "Out of fuel at 10,500 ft — Lydd is 22 miles away.",
+  "aircraft": "meridian320",
+  "difficulty": 5,
+  "minutes": 8,
+  "history": "Inspired by airliners that ran out of fuel in flight — after a fuel-quantity mix-up in 1983, after an unnoticed leak in 2001 — and were glided to a landing: one on a disused air base, one on an island runway.",
+  "situation": "10,500 ft over the Channel inbound to Lydd at first light, 170 aboard. A leak nobody noticed has drained the tanks: the engines are about to flame out. The runway is 1,505 m long and you will have one go at it.",
+  "failures": [
+    "Fuel exhausted: both engines flame out, the APU has no fuel",
+    "Ram-air turbine: blue hydraulics and essential electrics only",
+    "Gear by gravity (alternate extension); brakes on the accumulator"
+  ],
+  "tips": [
+    "Best glide is about 210 kt clean — you have more height than distance, so manage the excess",
+    "Speed brakes and a wide S-turn to lose height; lower the gear late (it's draggy)",
+    "Gravity gear: O → Systems → ALT GEAR",
+    "Aim for the threshold — there is no go-around"
+  ],
+  "target": {
+    "airport": "EGMD",
+    "runway": "03",
+    "course_deg": 32.7,
+    "length_m": 1505,
+    "width_m": 32,
+    "elev_ft": 13,
+    "lat": 50.9505,
+    "lon": 0.933364
+  },
+  "start": {
+    "x_nm": -22,
+    "y_nm": 0,
+    "alt_ft": 10500,
+    "hdg_rel": 0,
+    "kias": 240,
+    "flaps": 0,
+    "gear_down": false
+  },
+  "fuel_frac": 0.002,
+  "time": "06:15",
+  "date": "07-23",
+  "metar": "EGMD 230615Z 03006KT 9999 FEW030 08/03 Q1024",
+  "pax": 170,
+  "survivable_ok": false,
+  "par_s": 480,
+  "events": [
+    {
+      "id": "dry",
+      "when": {
+        "t": 1
+      },
+      "do": [
+        {
+          "fuel_frac": 0.0
+        },
+        {
+          "note": "F/O: Fuel imbalance… no — fuel's gone. Both tanks. We're going to lose them."
+        }
+      ]
+    },
+    {
+      "id": "out",
+      "when": {
+        "after": "dry",
+        "delay": 4
+      },
+      "do": [
+        {
+          "engine_dead": 0
+        },
+        {
+          "engine_dead": 1
+        },
+        {
+          "checkpoint": "Flame-out"
+        }
+      ]
+    },
+    {
+      "id": "atc",
+      "when": {
+        "after": "out",
+        "delay": 20
+      },
+      "do": [
+        {
+          "note": "ATC: Lydd runway 03 is yours, 22 miles, wind calm. Emergency services alerted."
+        }
+      ]
+    },
+    {
+      "id": "stations",
+      "when": {
+        "after": "out",
+        "alt_below_ft": 2500
+      },
+      "do": [
+        {
+          "pa": "crew_stations"
+        }
+      ]
+    },
+    {
+      "id": "brace",
+      "when": {
+        "after": "out",
+        "agl_below_ft": 300
+      },
+      "do": [
+        {
+          "pa": "brace"
+        }
+      ]
+    }
+  ],
+  "objectives": [
+    {
+      "id": "mayday",
+      "text": "Declare MAYDAY",
+      "kind": "player",
+      "act": "mayday",
+      "after": "out",
+      "within_s": 120,
+      "points": 40
+    },
+    {
+      "id": "gear",
+      "text": "Gravity-extend the gear",
+      "kind": "player",
+      "act": "alt_gear",
+      "after": "out",
+      "points": 40
+    },
+    {
+      "id": "land",
+      "text": "Land and stop on the runway",
+      "kind": "land",
+      "required": true,
+      "points": 40
+    }
+  ]
+}

@@ -134,6 +134,10 @@ painted over or composited.
 
 ### Everything else
 
+- **Emergency missions.** Twelve airline emergencies, fictional but inspired by real incidents. You fly each one through to a safe outcome:
+  a V1 engine fire, rapid decompression, a belly landing, unreliable airspeed at night, a microburst on final, an uncontained engine failure,
+  a dual bird strike over the Thames (land or ditch), smoke with a clock running, jammed flaps in a crosswind, a fuel-exhaustion glide and
+  thrust-only control. Each has a briefing, live objectives, cabin PA, fire tenders and a scored debrief with medals.
 - **Sound.** Real FlightGear engine recordings mixed with Skyward's own synthesis: prop blade-pass,
   afterburner crackle, positional / Doppler mixing, sonic-boom N-waves, GPWS callouts, impacts.
 - **Instruments.** Full 3D cockpits with live needles and glass displays, a 2D glass or steam-gauge
@@ -310,6 +314,7 @@ Every key can be rebound in **Settings › Controls**. Press **H** or **F1** in 
 | 1 / 2 / 3 / 4 | autopilot LOC (VOR) track on NAV 1 / **APPR** (LOC + G/S, autoland on airliners) / LNAV (flight plan) / VNAV; arm, press again to cancel |
 | 5, 6 / 7, 8 | NAV 1: swap active ↔ standby, course (OBS) −/+ 1°, Morse ident audio |
 | F3 | **radios & flight plan** panel: COM / NAV / ADF frequencies, course, ident, transponder; route, destination + approach, direct-to, predictions |
+| F5 / F7–F10 | **split throttles**: F7/F8 left engines −/+, F9/F10 right engines −/+, F5 brings the levers back together |
 | F4 | **ATC comms menu**: the requests for the unit on COM 1 (1–9 pick, 0 = tune a station, Esc closes), read-back / assist / subtitle / COM 2 options |
 | ; | navigation display: ROSE ILS → ROSE VOR → ROSE NAV → ARC → PLAN |
 | K | engine-failure practice (fails engine 1, then 2, then restores) |
@@ -564,7 +569,7 @@ Settings › Display switches to mailbox / immediate for the lowest latency.
 These are being built now or planned. They aren't in `main` yet. See [`ROADMAP.md`](ROADMAP.md) and
 [`PLAN.md`](PLAN.md).
 
-- **Missions and challenges.** Crosswind and short-field landings, glider task racing, scored tours.
+- **More challenges.** Crosswind and short-field landings, glider task racing, scored tours.
 - **Multiplayer.** A shared sky.
 - **Live traffic.** Real ADS-B traffic as AI aircraft.
 - **More aircraft.** And military types with weapons.
