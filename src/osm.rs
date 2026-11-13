@@ -225,6 +225,18 @@ pub struct TileFeatures {
     pub lines: Vec<Line>,
     pub runways: Vec<RunwayPiece>,
     pub airports: Vec<Airport>,
+    /// Airport detail (airport/): gates, named taxiways, service roads.
+    pub aero: AeroFeatures,
+}
+
+/// Airport features the generic layers drop: gates (with their refs),
+/// taxiway centrelines with their refs, service roads (apron roads).
+#[derive(Default, Clone, Debug)]
+pub struct AeroFeatures {
+    pub gates: Vec<(Vec2, String)>,
+    /// (points, cut flags, ref).
+    pub taxiways: Vec<(Vec<Vec2>, [bool; 2], String)>,
+    pub service: Vec<(Vec<Vec2>, [bool; 2])>,
 }
 
 fn hash(mut x: u64) -> u64 {
@@ -499,9 +511,26 @@ pub fn extract(layers: &[Layer], id: TileId, proj: &Proj) -> TileFeatures {
                         continue;
                     }
                     let Some(kind) = line_kind(name, class) else { continue };
+                    let taxi = matches!(kind, Kind::Taxiway { .. });
+                    let service = name == "transportation" && class == "service" && !matches!(f.str("service"), Some("parking_aisle" | "alley" | "drive-through"));
                     for part in &f.parts {
                         for (pts, cut) in clip_line(part, e) {
-                            out.lines.push(Line { kind, pts: xf.ring(&pts), cut });
+                            let pts = xf.ring(&pts);
+                            if taxi {
+                                out.aero.taxiways.push((pts.clone(), cut, f.str("ref").unwrap_or("").to_string()));
+                            } else if service {
+                                out.aero.service.push((pts.clone(), cut));
+                            }
+                            out.lines.push(Line { kind, pts, cut });
+                        }
+                    }
+                }
+                ("aeroway", GeomType::Point) if class == "gate" => {
+                    for part in &f.parts {
+                        for p in part {
+                            if p[0] >= 0.0 && p[0] < e && p[1] >= 0.0 && p[1] < e {
+                                out.aero.gates.push((xf.world(*p), f.str("ref").unwrap_or("").to_string()));
+                            }
                         }
                     }
                 }

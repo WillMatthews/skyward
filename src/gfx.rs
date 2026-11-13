@@ -558,6 +558,10 @@ pub struct Renderer {
     tree_meshes: TreeMeshes,
     dynamic: DynMesh,
     aircraft: crate::gfx_aircraft::AircraftRenderer,
+    /// Airport detail: markings, objects, parked aircraft, vehicles (airport/gfx.rs).
+    pub airport: crate::airport::gfx::AirportRenderer,
+    /// This frame's airport instances (set before `render`).
+    airport_frame: Option<crate::airport::Frame>,
     targets: Option<Targets>,
     atmos: Atmosphere,
     clouds: CloudRenderer,
@@ -1022,6 +1026,8 @@ impl Renderer {
         Renderer {
             xforms,
             aircraft: crate::gfx_aircraft::AircraftRenderer::new(device, queue, &globals_bgl, &shadow_bgl, IMMEDIATE_SIZE),
+            airport: crate::airport::gfx::AirportRenderer::new(device, queue, &globals_bgl, &shadow_bgl),
+            airport_frame: None,
             globals_bgl,
             post_bgl,
             sky_main,
@@ -1077,6 +1083,11 @@ impl Renderer {
     }
 
     /// Replace the airport lighting (world frame, `lights::place::airport_lights`).
+    /// Airport instances for the next `render` (airport/: parked aircraft, vehicles, windsocks).
+    pub fn set_airport_frame(&mut self, f: crate::airport::Frame) {
+        self.airport_frame = Some(f);
+    }
+
     pub fn set_airport_lights(&mut self, device: &wgpu::Device, l: &[crate::lights::LightInst]) {
         self.lights.set_airport(device, l);
     }
@@ -1306,6 +1317,7 @@ impl Renderer {
         self.tiles.values().map(|t| t.bytes).sum::<u64>()
             + self.pending.iter().map(|p| p.tile.bytes).sum::<u64>()
             + self.runways.as_ref().map_or(0, |m| m.bytes())
+            + self.airport.bytes
     }
 
     fn ensure_targets(&mut self, device: &wgpu::Device, w: u32, h: u32) {
@@ -1726,6 +1738,13 @@ impl Renderer {
         let refl_f = Frustum::new(rvp);
         // (Cascade matrices are eye-relative; culling boxes are world-space.)
         let shadow_f: Vec<Frustum> = shadow_mats.iter().map(|m| Frustum::new(Mat4::from_cols_array_2d(m) * Mat4::from_translation(-fv.eye))).collect();
+        {
+            let af = self.airport_frame.take();
+            let eye = fv.eye;
+            self.airport.prepare(device, queue, &self.proj, eye, af.as_ref(), &|lo, hi| main_f.aabb(lo + eye, hi + eye));
+        }
+        // Airport markings / objects stand on a detailed tile's terrain: drawn while it is resident.
+        let resident = |id: TileId| self.tiles.contains_key(&id);
         // Far-field (low zoom) tiles first: the ground pass is painter's-ordered.
         let mut tiles: Vec<(&TileId, &GpuTile)> = self.tiles.iter().collect();
         tiles.sort_by_key(|(id, _)| id.z);
@@ -1822,12 +1841,14 @@ impl Renderer {
                     }
                 }
             }
+            self.airport.draw_objects(&mut pass, &xfs, &resident, false, SPLITS[i + 1] * 1.2);
             if let Some((vb, ib, n)) = dynamic {
                 place(&mut pass, &DYN);
                 pass.set_vertex_buffer(0, vb.slice(..));
                 pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..n, 0, 0..1);
             }
+            self.airport.draw_shadow(&mut pass, i);
             self.aircraft.draw_shadow(&mut pass);
             pass.set_pipeline(&self.shadow_tree);
             for t in &tiles {
@@ -1905,6 +1926,9 @@ impl Renderer {
                         draw_mesh(&mut pass, m);
                     }
                 }
+            }
+            if water_plane {
+                self.airport.draw_objects(&mut pass, &xfs, &resident, false, 2500.0);
             }
             if let Some((vb, ib, n)) = dynamic {
                 place(&mut pass, &DYN);
@@ -1995,6 +2019,7 @@ impl Renderer {
                     pass.draw_indexed(r.0..r.1, 0, 0..1);
                 }
             }
+            self.airport.draw_marks(&mut pass, &xfs, &resident);
             if let Some(m) = &self.runways {
                 place(&mut pass, &world_xf);
                 draw_mesh(&mut pass, m);
@@ -2009,12 +2034,14 @@ impl Renderer {
                     }
                 }
             }
+            self.airport.draw_objects(&mut pass, &xfs, &resident, true, 20_000.0);
             if let Some((vb, ib, n)) = dynamic {
                 place(&mut pass, &DYN);
                 pass.set_vertex_buffer(0, vb.slice(..));
                 pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..n, 0, 0..1);
             }
+            self.airport.draw_main(&mut pass);
             self.aircraft.draw_main(&mut pass);
             pass.set_pipeline(&self.tree_main);
             for tile in &tiles {

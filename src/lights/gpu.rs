@@ -429,10 +429,15 @@ impl LightRenderer {
 
     /// Replace the airport lights (world frame).
     pub fn set_airport(&mut self, device: &wgpu::Device, lights: &[LightInst]) {
-        self.airport = (!lights.is_empty()).then(|| {
-            (device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("airport lights"), contents: bytemuck::cast_slice(lights), usage: wgpu::BufferUsages::VERTEX }), lights.len() as u32)
+        // Apron floodlights also light the ground (light map): they go first.
+        let map_kind = |x: &LightInst| matches!(x.kind(), kind::STREET | kind::FLOOD);
+        let mut l: Vec<LightInst> = lights.iter().filter(|x| map_kind(x)).copied().collect();
+        let n_map = l.len() as u32;
+        l.extend(lights.iter().filter(|x| !map_kind(x)));
+        self.airport = (!l.is_empty()).then(|| {
+            (device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("airport lights"), contents: bytemuck::cast_slice(&l), usage: wgpu::BufferUsages::VERTEX }), l.len() as u32)
         });
-        self.airport_n_map = 0;
+        self.airport_n_map = n_map;
     }
 
     /// This frame's aircraft light sprites (eye-relative).

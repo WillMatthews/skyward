@@ -4,18 +4,20 @@
 # METAR, so only code changes move the pixels (and the tile cache: run from the
 # repository root with cache/ populated). Audio: --audio-render, bit-exact
 # today; the tolerance absorbs harmless DSP changes.
+# Airport detail runs with SKYWARD_NO_OVERPASS=1 (map tiles + procedural
+# layout only: Overpass answers depend on the cache and the servers).
 # Flight scenes run with SKYWARD_NO_VFX=1 so effects work (src/vfx) does not
 # churn them; they still show the aircraft (aircraft*.wgsl / models.rs changes
 # move chase_day, cockpit_*, night_city, rain_low_cloud, landmarks_city).
 # terrain_alps / landmarks_city cover the DEM terrain + alpine shading and the
 # procedural landmarks (St Paul's, the City towers).
-chase_day      | image | SKYWARD_NO_VFX=1 | --airport EGLC --aircraft kestrel --cam chase --time 14.00 --date 06-15 --metar "EGLC 151350Z 24008KT 9999 SCT040 18/09 Q1018" |
-cockpit_dusk   | image | SKYWARD_NO_VFX=1 | --airport EGLC --aircraft kestrel --cam cockpit --time 20.40 --date 06-15 --metar "EGLC 151950Z 24006KT 9999 FEW050 16/09 Q1018" |
-cockpit_look   | image | SKYWARD_NO_VFX=1 SKYWARD_LOOK=-60,10 | --airport EGLC --aircraft kestrel --cam cockpit --time 11.00 --date 06-15 --metar "EGLC 151050Z 24008KT 9999 SCT045 17/09 Q1018" |
-night_city     | image | SKYWARD_NO_VFX=1 | --airport EGLC --aircraft lancer --start city --heading 270 --cam chase --time 22.30 --date 01-15 --metar "EGLC 152220Z 27010KT 9999 FEW030 05/01 Q1012" |
-rain_low_cloud | image | SKYWARD_NO_VFX=1 | --airport EGLC --aircraft aerolink --cam chase --time 13.00 --date 11-10 --metar "EGLC 101250Z 18014KT 3000 RA BKN008 OVC015 11/10 Q1003" |
-terrain_alps   | image | SKYWARD_NO_VFX=1 | --airport LOWI --aircraft kestrel --start-at air:47.255:11.25:1500:90 --cam chase --no-hud --time 13.00 --date 06-15 --metar "LOWI 151250Z 27008KT 9999 SCT060 20/09 Q1018" |
-landmarks_city | image | SKYWARD_NO_VFX=1 SKYWARD_ORBIT=160,-5,30 | --airport EGLC --aircraft kestrel --start-at air:51.5075:-0.1080:200:235 --cam chase --no-hud --time 14.00 --date 06-15 --metar "EGLC 151350Z 24008KT 9999 SCT040 18/09 Q1018" |
+chase_day      | image | SKYWARD_NO_VFX=1 SKYWARD_NO_OVERPASS=1 | --airport EGLC --aircraft kestrel --cam chase --time 14.00 --date 06-15 --metar "EGLC 151350Z 24008KT 9999 SCT040 18/09 Q1018" |
+cockpit_dusk   | image | SKYWARD_NO_VFX=1 SKYWARD_NO_OVERPASS=1 | --airport EGLC --aircraft kestrel --cam cockpit --time 20.40 --date 06-15 --metar "EGLC 151950Z 24006KT 9999 FEW050 16/09 Q1018" |
+cockpit_look   | image | SKYWARD_NO_VFX=1 SKYWARD_NO_OVERPASS=1 SKYWARD_LOOK=-60,10 | --airport EGLC --aircraft kestrel --cam cockpit --time 11.00 --date 06-15 --metar "EGLC 151050Z 24008KT 9999 SCT045 17/09 Q1018" |
+night_city     | image | SKYWARD_NO_VFX=1 SKYWARD_NO_OVERPASS=1 | --airport EGLC --aircraft lancer --start city --heading 270 --cam chase --time 22.30 --date 01-15 --metar "EGLC 152220Z 27010KT 9999 FEW030 05/01 Q1012" |
+rain_low_cloud | image | SKYWARD_NO_VFX=1 SKYWARD_NO_OVERPASS=1 | --airport EGLC --aircraft aerolink --cam chase --time 13.00 --date 11-10 --metar "EGLC 101250Z 18014KT 3000 RA BKN008 OVC015 11/10 Q1003" |
+terrain_alps   | image | SKYWARD_NO_VFX=1 SKYWARD_NO_OVERPASS=1 | --airport LOWI --aircraft kestrel --start-at air:47.255:11.25:1500:90 --cam chase --no-hud --time 13.00 --date 06-15 --metar "LOWI 151250Z 27008KT 9999 SCT060 20/09 Q1018" |
+landmarks_city | image | SKYWARD_NO_VFX=1 SKYWARD_NO_OVERPASS=1 SKYWARD_ORBIT=160,-5,30 | --airport EGLC --aircraft kestrel --start-at air:51.5075:-0.1080:200:235 --cam chase --no-hud --time 14.00 --date 06-15 --metar "EGLC 151350Z 24008KT 9999 SCT040 18/09 Q1018" |
 menu_main      | image | | --airport EGLC --aircraft kestrel --menu-screen main --time 14.00 --date 06-15 --metar "EGLC 151350Z 24008KT 9999 SCT040 18/09 Q1018" |
 menu_controls  | image | SKYWARD_FAKE_INPUT=xbox,x52,pedals,tca SKYWARD_SETTINGS_TAB=3:0:pitch | --airport EGLC --aircraft kestrel --menu-screen settings --time 14.00 --date 06-15 --metar "EGLC 151350Z 24008KT 9999 SCT040 18/09 Q1018" |
 audio_piston   | audio | | --airport EGLC --aircraft kestrel --cam chase --throttle 1.0 --seconds 6 --metar "EGLC 151350Z 24008KT 9999 SCT040 18/09 Q1018" |

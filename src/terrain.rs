@@ -569,6 +569,7 @@ pub fn build_grid(id: TileId, water: &[&Area], zones: &[Zone]) -> Grid {
     }
     // Water bodies: the local minimum (lakes flat, rivers smoothed, the sea at 0),
     // on the nodes in or next to the water (so the banks' triangles stay flat too).
+    let mut wet_nodes: Vec<bool> = Vec::new();
     if !water.is_empty() {
         let raw = h.clone();
         let mut wet = vec![false; m * m];
@@ -600,6 +601,7 @@ pub fn build_grid(id: TileId, water: &[&Area], zones: &[Zone]) -> Grid {
                 }
             }
         }
+        wet_nodes = grown.clone();
         for j in B..m - B {
             for i in B..m - B {
                 if grown[j * m + i] {
@@ -619,7 +621,7 @@ pub fn build_grid(id: TileId, water: &[&Area], zones: &[Zone]) -> Grid {
     if !zones.is_empty() {
         for j in 0..m {
             for i in 0..m {
-                let (w, v) = flatten_w(&proj, zones, pos(i, j), h[j * m + i]);
+                let (w, v) = flatten_w(&proj, zones, pos(i, j), h[j * m + i], !wet_nodes.get(j * m + i).copied().unwrap_or(false));
                 h[j * m + i] = v;
                 strict[j * m + i] = w > 0.0;
             }
@@ -731,7 +733,11 @@ fn bbox(pts: &[Vec2]) -> (Vec2, Vec2) {
 
 /// A runway flattening zone: the runway's plane (profile `ha` → `hb` along
 /// a → b, level across) over the pavement and a margin, blended into the
-/// terrain around it.
+/// terrain around it. `grade` (m, from the centreline) is the half-width of
+/// the graded airfield around it — aprons, taxiways, stands: there the
+/// ground is pulled to the same plane (level across the runway, the way
+/// airfields are graded), but only where the natural terrain is within a few
+/// metres of it, so valley sides and embankments are left alone.
 #[derive(Clone, Debug)]
 pub struct Zone {
     pub a: (f64, f64),
@@ -739,6 +745,7 @@ pub struct Zone {
     pub width: f32,
     pub ha: f32,
     pub hb: f32,
+    pub grade: f32,
 }
 
 /// Flat margin beyond the pavement edge (≥ a grid cell diagonal, so every
@@ -747,10 +754,39 @@ pub struct Zone {
 const ZONE_MARGIN: f32 = 40.0;
 const ZONE_END: f32 = 90.0;
 const ZONE_BLEND: f32 = 260.0;
+/// Graded airfield: blend length beyond `grade`, extra length beyond the
+/// runway ends, and the height differences (natural terrain vs the plane,
+/// m) over which grading fades out.
+const GRADE_BLEND: f32 = 240.0;
+const GRADE_END: f32 = 300.0;
+const GRADE_DH: (f32, f32) = (6.0, 22.0);
+
+/// Graded half-width (m from the centreline) of the airfield around a
+/// runway of an airport of this kind (aprons and taxiways lie within it).
+pub fn grade_width(kind: crate::airports::Kind, len_m: f32, paved: bool) -> f32 {
+    use crate::airports::Kind;
+    match kind {
+        Kind::Large => 1000.0,
+        Kind::Medium => (300.0 + len_m * 0.12).min(650.0),
+        Kind::Small if paved => 160.0,
+        Kind::Small => 90.0,
+        Kind::Seaplane => 0.0,
+    }
+}
+
+fn smooth01(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
 
 impl Zone {
     /// (weight 0..1, plane height) at a point of the frame `proj`.
     fn at(&self, proj: &Proj, p: Vec2) -> (f32, f32) {
+        let (w, _, h) = self.at2(proj, p);
+        (w, h)
+    }
+    /// (runway weight, graded-airfield weight before the height test, plane height).
+    fn at2(&self, proj: &Proj, p: Vec2) -> (f32, f32, f32) {
         let a = proj.to_world(self.a.0, self.a.1);
         let b = proj.to_world(self.b.0, self.b.1);
         let len = a.distance(b).max(1.0);
@@ -763,7 +799,14 @@ impl Zone {
         let out_s = (-s - ZONE_END).max(0.0).max(s - len - ZONE_END);
         let out = (out_l * out_l + out_s * out_s).sqrt();
         let t = (out / ZONE_BLEND).clamp(0.0, 1.0);
-        (1.0 - t * t * (3.0 - 2.0 * t), h)
+        let wg = if self.grade > 0.0 {
+            let gl = (l - self.grade).max(0.0);
+            let gs = (-s - GRADE_END).max(0.0).max(s - len - GRADE_END);
+            1.0 - smooth01((gl * gl + gs * gs).sqrt() / GRADE_BLEND)
+        } else {
+            0.0
+        };
+        (1.0 - t * t * (3.0 - 2.0 * t), wg, h)
     }
     /// Plane height of the runway at a point (ends extended level).
     pub fn plane(&self, proj: &Proj, p: Vec2) -> f32 {
@@ -772,19 +815,32 @@ impl Zone {
 }
 
 fn flatten(proj: &Proj, zones: &[Zone], p: Vec2, h: f32) -> f32 {
-    flatten_w(proj, zones, p, h).1
+    flatten_w(proj, zones, p, h, true).1
 }
 
-/// (zone weight, flattened height).
-fn flatten_w(proj: &Proj, zones: &[Zone], p: Vec2, h: f32) -> (f32, f32) {
+/// (runway weight, flattened height). `grade`: also grade the airfield
+/// around the runways (not on water).
+fn flatten_w(proj: &Proj, zones: &[Zone], p: Vec2, h: f32, grade: bool) -> (f32, f32) {
     let mut best = (0.0f32, h);
+    // Graded airfield: the planes of every runway around, weighted (crossing
+    // runways' planes meet smoothly), each faded by its height difference.
+    let (mut sw, mut swh, mut wmax) = (0.0f32, 0.0f32, 0.0f32);
     for z in zones {
-        let (w, zh) = z.at(proj, p);
+        let (w, wg, zh) = z.at2(proj, p);
         if w > best.0 {
             best = (w, zh);
         }
+        if grade && wg > 0.0 {
+            let wg = wg * (1.0 - smooth01(((zh - h).abs() - GRADE_DH.0) / (GRADE_DH.1 - GRADE_DH.0)));
+            if wg > 0.0 {
+                sw += wg;
+                swh += wg * zh;
+                wmax = wmax.max(wg);
+            }
+        }
     }
-    (best.0, h + (best.1 - h) * best.0)
+    let hg = if sw > 0.0 { h + (swh / sw - h) * wmax } else { h };
+    (best.0, hg + (best.1 - hg) * best.0)
 }
 
 static DB: RwLock<Option<Arc<crate::airports::Db>>> = RwLock::new(None);
@@ -792,6 +848,11 @@ static DB: RwLock<Option<Arc<crate::airports::Db>>> = RwLock::new(None);
 /// The airport database the tile workers flatten runways from.
 pub fn set_airport_db(db: Arc<crate::airports::Db>) {
     *DB.write().unwrap() = Some(db);
+}
+
+/// The airport database the workers use (airport detail: tile styling).
+pub fn airport_db() -> Option<Arc<crate::airports::Db>> {
+    DB.read().unwrap().clone()
 }
 
 pub fn has_airport_db() -> bool {
@@ -846,7 +907,8 @@ pub fn airport_profiles(a: &crate::airports::Airport, block: bool) -> Option<Pro
         let c0 = (sh - c1 * st) / cnt;
         let la = proj.to_latlon(rw.a);
         let lb = proj.to_latlon(rw.b);
-        out.push((rw.name.clone(), Zone { a: la, b: lb, width: rw.width, ha: c0 as f32, hb: (c0 + c1) as f32 }, rw.a, rw.b));
+        let grade = grade_width(a.kind, len, r.surface.paved());
+        out.push((rw.name.clone(), Zone { a: la, b: lb, width: rw.width, ha: c0 as f32, hb: (c0 + c1) as f32, grade }, rw.a, rw.b));
     }
     // Crossing runways meet at the same height.
     for _ in 0..3 {
@@ -899,7 +961,7 @@ pub fn zones_for(id: TileId) -> Vec<Zone> {
         for (_, z) in p.iter() {
             // Only zones whose influence reaches the tile.
             let (pa, pb) = (proj.to_world(z.a.0, z.a.1), proj.to_world(z.b.0, z.b.1));
-            let r = z.width * 0.5 + ZONE_MARGIN + ZONE_BLEND + ZONE_END;
+            let r = (z.width * 0.5 + ZONE_MARGIN + ZONE_BLEND + ZONE_END).max(z.grade + GRADE_BLEND + GRADE_END);
             let (zlo, zhi) = (pa.min(pb) - Vec2::splat(r), pa.max(pb) + Vec2::splat(r));
             if zhi.x >= lo.x - 50.0 && zlo.x <= hi.x + 50.0 && zhi.y >= lo.y - 50.0 && zlo.y <= hi.y + 50.0 {
                 out.push(z.clone());
@@ -1272,12 +1334,27 @@ mod tests {
         let proj = Proj::new(51.33, 0.03);
         let a = proj.to_latlon(vec2(0.0, 0.0));
         let b = proj.to_latlon(vec2(1800.0, 0.0));
-        let z = Zone { a, b, width: 45.0, ha: 100.0, hb: 118.0 };
+        let z = Zone { a, b, width: 45.0, ha: 100.0, hb: 118.0, grade: 0.0 };
         let (w, h) = z.at(&proj, vec2(900.0, 20.0));
         assert!((w - 1.0).abs() < 1e-6 && (h - 109.0).abs() < 0.01);
         let (w, _) = z.at(&proj, vec2(900.0, 800.0));
         assert!(w < 1e-6);
         assert!((flatten(&proj, std::slice::from_ref(&z), vec2(900.0, 0.0), 50.0) - 109.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn graded_airfield_is_level_with_the_runway_but_spares_hills() {
+        let proj = Proj::new(51.33, 0.03);
+        let a = proj.to_latlon(vec2(0.0, 0.0));
+        let b = proj.to_latlon(vec2(2000.0, 0.0));
+        let z = Zone { a, b, width: 45.0, ha: 100.0, hb: 104.0, grade: 500.0 };
+        let zs = std::slice::from_ref(&z);
+        // An apron 400 m off the centreline, 3 m below the plane: graded to it.
+        assert!((flatten(&proj, zs, vec2(1000.0, 400.0), 99.0) - 102.0).abs() < 0.01);
+        // A hillside 60 m above the plane: untouched.
+        assert!((flatten(&proj, zs, vec2(1000.0, 400.0), 160.0) - 160.0).abs() < 0.01);
+        // Far outside: untouched.
+        assert!((flatten(&proj, zs, vec2(1000.0, 1500.0), 99.0) - 99.0).abs() < 0.01);
     }
 
     #[test]

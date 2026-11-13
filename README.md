@@ -81,7 +81,19 @@ anywhere on Earth, for as long as you like. wgpu (Vulkan), winit, egui.
 * **Airports** — ~49 000 airfields and their runways from
   [OurAirports](https://ourairports.com/data/): exact runway ends, headings,
   widths, displaced thresholds, surface and lighting drive the runways in the
-  world, spawns and the auto-flight bot (tile runways fill gaps).
+  world, spawns and the auto-flight bot (tile runways fill gaps). Every
+  airport is detailed from the map data (aprons, taxiways with their refs,
+  gates, airside buildings, apron roads), OpenStreetMap via Overpass where it
+  answers (parking positions, windsocks, towers) and procedural placement
+  where the data is thin: graded airfields, concrete aprons, taxiway centre
+  and edge lines, runway-holding positions, stand lead-in lines and numbers;
+  glass terminals, hangars with their doors, control towers, a fire station
+  and fuel farm; stands with jet bridges and parked aircraft (the sim's own
+  models, textured close up, clustered LODs far away), ground vehicles at
+  the stands and driving the apron roads, windsocks blowing in the real wind,
+  readable lit signs (holding position, location, direction), taxiway
+  centre / edge lights, stop bars and floodlit aprons at night
+  (`src/airport/`).
 * **Menus** — main menu → aircraft (rendered thumbnails, specs) → departure
   (world map, fuzzy search by name / city / ICAO / IATA, suitability filter,
   airport diagram with clickable runway ends, live METAR with head / crosswind
@@ -294,6 +306,7 @@ Headless (no window) — renders offscreen and writes a PNG:
 | `--throttle T`, `--heading DEG`, `--ap` | throttle, initial heading, engage the autopilot |
 | `--gear up\|down`, `--flaps N`, `--spoilers F`, `--reverse`, `--fail BITS` | aircraft setup |
 | `--eye x,y,z --look x,y,z` | fixed camera |
+| `--eye-ll lat,lon,h --look-ll lat,lon,h` | fixed camera by geography (heights above the ground) |
 | `--menu-screen S` | capture a menu: `main` `aircraft` `airport` `conditions` `settings` `pause` `loading` `credits` |
 | `--menu`, `--no-hud`, `--stats` | show the aircraft menu, hide the HUD, print the final state |
 | `--realtime [--fps HZ]` | stream + render in real time flying straight and level; reports frame times, streaming gaps, camera smoothness and origin shifts (`--fps`: fixed sim step) |
@@ -316,7 +329,10 @@ flies a scripted structures / crash / effects test (src/scenario.rs; with
 `SKYWARD_VFX_STATS=1` prints their counts, `SKYWARD_DEBUG_DEBRIS=1` the wreck;
 `BOT_TRACE=Final,Flare` prints the controls every frame in those bot phases;
 `SKYWARD_SOAK_LOG=10` logs a soak every 10 s instead of every minute (with height above the ground);
-`SKYWARD_REBASE_LOG=1` logs every origin shift; `SKYWARD_FLAT_TERRAIN=1`
+`SKYWARD_REBASE_LOG=1` logs every origin shift; `SKYWARD_NO_AIRPORTS=1` turns
+the airport detail layer off, `SKYWARD_NO_OVERPASS=1` builds it from the map
+tiles alone (no Overpass requests), `SKYWARD_AIRPORT_DEBUG=1` (or `2`) logs
+each airport's layout (holds, stands, windsocks); `SKYWARD_FLAT_TERRAIN=1`
 flattens the world (sea level everywhere), `SKYWARD_NO_LANDMARKS=1` uses the
 plain OSM buildings, `SKYWARD_TERRAIN_DEBUG=1` logs per-tile terrain grids and
 runway elevations; `SKYWARD_GPU_TIMING=1` prints
@@ -410,6 +426,7 @@ A shift costs well under 0.1 ms.
 | `src/ui/` | interface: design system (`mod.rs`), instruments (`gauges.rs`, `glass.rs`, `hudsym.rs`), moving map (`mapdata.rs` worker side, `map.rs`, MSAA `canvas.rs`), menus (`menus.rs`, `overview.rs` world map), in-flight UI (`flight.rs`), settings (`controls.rs`: bindings / devices), toasts |
 | `src/input/` | game controllers (gilrs + Linux evdev), bindings, default layouts, curves, head-look / analog glue (`sim_glue.rs`) |
 | `src/airports.rs` | OurAirports download / cache / search, runways in the world frame, METAR lookup |
+| `src/airport/`, `src/shaders/airport*.wgsl` | airport detail: tile-side airside styles + summaries (`tile.rs`), layout (`layout.rs`: markings, stands, signs, lights, vehicles), Overpass client (`overpass.rs`), procedural models + sign font (`mesh.rs`, `font.rs`), parked-aircraft LODs (`fleet.rs`), renderer (`gfx.rs`) |
 | `src/startpos.rs` | departure-screen starts (runway end, final, apron, air) |
 
 See `ROADMAP.md` for what's next.
@@ -440,7 +457,9 @@ vector tiles served by [OpenFreeMap](https://openfreemap.org/). Weather:
 METARs from the [aviationweather.gov](https://aviationweather.gov/) data API
 (NOAA), forecasts from [Open-Meteo](https://open-meteo.com/) (CC BY 4.0).
 Airports and runways: [OurAirports](https://ourairports.com/data/) (public
-domain; cached in `cache/ourairports.tsv.gz`); fallback lookup via
+domain; cached in `cache/ourairports.tsv.gz`); airport detail from
+OpenStreetMap through the [Overpass API](https://overpass-api.de/) (©
+OpenStreetMap contributors, ODbL; cached in `cache/airports/`); fallback lookup via
 [Nominatim](https://nominatim.org/). Fonts (SIL Open Font License 1.1, see
 `assets/fonts/`): [Inter](https://github.com/rsms/inter),
 [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) and

@@ -14,6 +14,7 @@
 //! Sound:      --mute (N toggles in flight; volumes in Settings › Sound); offline: --audio-render out.wav --seconds S [--audio-script "2:cam=cockpit,9:gear"] [--audio-until Final]
 //! Display:    --vsync on|off (default on: FIFO present, smoothed frame step); SKYWARD_FRAME_LOG=file logs per-frame timing
 
+mod airport;
 mod airports;
 mod atmosphere;
 mod aircraft_asset;
@@ -90,6 +91,9 @@ struct Args {
     heading: Option<f32>,
     eye: Option<Vec3>,
     look: Option<Vec3>,
+    /// Fixed camera by geography: (lat, lon, metres above the ground).
+    eye_ll: Option<(f64, f64, f32)>,
+    look_ll: Option<(f64, f64, f32)>,
     menu: bool,
     menu_screen: Option<Screen>,
     no_menu: bool,
@@ -140,6 +144,12 @@ fn parse_vec3(s: &str) -> Option<Vec3> {
 }
 
 /// "HH.MM" or "HH:MM" -> hours.
+/// "lat,lon,height_agl".
+fn parse_geo(s: &str) -> Option<(f64, f64, f32)> {
+    let v: Vec<f64> = s.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+    (v.len() == 3).then(|| (v[0], v[1], v[2] as f32))
+}
+
 fn parse_time(s: &str) -> Option<f32> {
     let mut it = s.split(|c| c == '.' || c == ':');
     let h: f32 = it.next()?.parse().ok()?;
@@ -183,6 +193,8 @@ fn parse_args_from(argv: Vec<String>) -> Args {
         throttle: None,
         heading: None,
         eye: None,
+        eye_ll: None,
+        look_ll: None,
         look: None,
         menu: false,
         menu_screen: None,
@@ -271,6 +283,8 @@ fn parse_args_from(argv: Vec<String>) -> Args {
             "--heading" => a.heading = next(&mut i).parse().ok(),
             "--eye" => a.eye = parse_vec3(&next(&mut i)),
             "--look" => a.look = parse_vec3(&next(&mut i)),
+            "--eye-ll" => a.eye_ll = parse_geo(&next(&mut i)),
+            "--look-ll" => a.look_ll = parse_geo(&next(&mut i)),
             "--menu" => a.menu = true,
             "--menu-screen" => a.menu_screen = Screen::parse(&next(&mut i)),
             "--no-menu" => a.no_menu = true,
@@ -387,6 +401,9 @@ struct Session {
     stage: Stage,
     started: Instant,
     runway_version: u64,
+    /// Airport detail lights uploaded (airport/ light version) and the runway lights they join.
+    airport_lights: u64,
+    runway_lights: Vec<lights::LightInst>,
     /// The last origin shift (consumed by the soak / realtime loggers).
     last_rebase: Option<world::Rebase>,
     /// Set after a restart/teleport far away: the sim waits until the
@@ -428,7 +445,7 @@ impl Session {
         world.set_focus(Vec2::ZERO, Vec2::ZERO);
         // Browser: start downloading the aircraft alongside the scenery.
         let _ = aircraft_assets(args.aircraft);
-        Session { world, sim: None, stage: Stage::Area, started: Instant::now(), runway_version: u64::MAX, last_rebase: None, catch_up: None, custom, args: args.clone() }
+        Session { world, sim: None, stage: Stage::Area, started: Instant::now(), runway_version: u64::MAX, airport_lights: u64::MAX, runway_lights: Vec::new(), last_rebase: None, catch_up: None, custom, args: args.clone() }
     }
 
     /// Advance loading; returns a status line while still loading.
@@ -628,10 +645,19 @@ fn sync_gpu(s: &mut Session, renderer: &mut Renderer, ui: &mut Ui, gpu: &Gpu, bu
     let spent = renderer.pump_uploads(queue, budget);
     w.gpu_pending = renderer.pending_tiles().collect();
     w.gpu_bytes = renderer.gpu_bytes();
-    if w.runway_version != s.runway_version {
+    renderer.airport.sync(device, &w.airport_detail);
+    let runways_changed = w.runway_version != s.runway_version;
+    if runways_changed {
         s.runway_version = w.runway_version;
         renderer.set_runways(device, &scene::runway_mesh(&w.runways));
-        renderer.set_airport_lights(device, &lights::airport_lights_for(w));
+        s.runway_lights = lights::airport_lights_for(w);
+    }
+    // Runway lights + the airport detail lights (taxiways, stop bars, floods), current frame.
+    if runways_changed || w.airport_detail.light_version != s.airport_lights {
+        s.airport_lights = w.airport_detail.light_version;
+        let mut all = s.runway_lights.clone();
+        all.extend(w.airport_detail.lights(&w.proj));
+        renderer.set_airport_lights(device, &all);
     }
     // Weather (weather.rs / world.rs): live data + real time, wind drift, season.
     match s.sim.as_mut() {
@@ -664,6 +690,7 @@ fn replace_session(old: Option<Session>, new: &mut Session, renderer: &mut Rende
     ui.st.map_tiles.clear();
     renderer.reset_history();
     new.runway_version = u64::MAX;
+    new.airport_lights = u64::MAX;
 }
 
 // ---------------------------------------------------------------- shared frame
@@ -784,6 +811,12 @@ fn render_frame(
             // Browser: the scene may render below the output size (upscaled by the tonemap pass).
             #[cfg(target_arch = "wasm32")]
             let (w, h) = platform::web::scene_size(w, h);
+            {
+                // Airport instances (parked aircraft, vehicles, windsocks in the real wind).
+                let wd = &s.world;
+                let af = wd.airport_detail.frame(&wd.proj, fv.eye, sim.time, &|p| flight::Environment::wind(wd, p), &|xz| flight::Environment::ground_height(wd, xz));
+                renderer.set_airport_frame(af);
+            }
             renderer.render(device, queue, &mut enc, target, w, h, &fv, &dynm);
         }
         _ => {
@@ -1138,10 +1171,19 @@ fn headless(args: Args) -> Result<(), String> {
         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w as f32, h as f32))),
         ..Default::default()
     };
-    let ov = match (args.eye, args.look) {
+    let mut ov = match (args.eye, args.look) {
         (Some(e), Some(l)) => Some((e, l)),
         _ => None,
     };
+    // Geographic camera (heights above the ground are resolved once the
+    // scenery under it has loaded, below).
+    if let (Some(e), Some(l)) = (args.eye_ll, args.look_ll) {
+        let geo = |g: (f64, f64, f32)| {
+            let p = s.world.proj.to_world(g.0, g.1);
+            vec3(p.x, g.2, p.y)
+        };
+        ov = Some((geo(e), geo(l)));
+    }
     {
         let sim = s.sim.as_mut().unwrap();
         if !args.watch || std::env::args().any(|a| a == "--cam") {
@@ -1220,7 +1262,7 @@ fn headless(args: Args) -> Result<(), String> {
         // (The floating origin may have moved: follow the world's focus.)
         let focus = if ov.is_some() { focus } else { s.world.focus() };
         let (ready, total) = s.world.progress(focus, s.world.effective_radius() - 300.0);
-        if ready >= total && s.world.uploads.is_empty() && s.world.gpu_pending.is_empty() && s.world.far_ready() {
+        if ready >= total && s.world.uploads.is_empty() && s.world.gpu_pending.is_empty() && s.world.far_ready() && s.world.airport_detail.idle() {
             break;
         }
         if tw.elapsed() > Duration::from_secs(120) {
@@ -1230,6 +1272,11 @@ fn headless(args: Args) -> Result<(), String> {
         std::thread::sleep(Duration::from_millis(5));
     }
     eprintln!("scenery around camera ready after {:.2}s more", tw.elapsed().as_secs_f32());
+    if let (Some(e), Some(l), Some((eye, look))) = (args.eye_ll, args.look_ll, ov.as_mut()) {
+        let gh = |p: Vec3| flight::Environment::ground_height(&s.world, vec2(p.x, p.z));
+        eye.y = e.2 + gh(*eye);
+        look.y = l.2 + gh(*look);
+    }
 
     if args.stats {
         let ac = &s.sim.as_ref().unwrap().ac;

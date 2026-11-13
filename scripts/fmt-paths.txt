@@ -10,3 +10,12 @@ src/cockpit/mod.rs
 src/cockpit/channels.rs
 src/cockpit/displays.rs
 src/cockpit/tests.rs
+src/airport/mod.rs
+src/airport/fleet.rs
+src/airport/font.rs
+src/airport/gfx.rs
+src/airport/layout.rs
+src/airport/mesh.rs
+src/airport/overpass.rs
+src/airport/tile.rs
+src/airport/types.rs

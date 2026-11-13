@@ -237,7 +237,7 @@ pub fn credits(ui: &mut Ui, st: &mut UiState) {
     let mut y = heading(&p, Pos2::new(x, screen.min.y + 80.0), "Credits", "Data, fonts and services Skyward is built on.");
     let rows = [
         ("Map data", "© OpenMapTiles · © OpenStreetMap contributors (ODbL)"),
-        ("Vector tiles", "OpenFreeMap"),
+        ("Vector tiles", "OpenFreeMap · airport detail: OSM via the Overpass API"),
         ("Airports & runways", "OurAirports — public domain (ourairports.com/data)"),
         ("Weather", "METARs: aviationweather.gov (NOAA) · forecasts: Open-Meteo (CC BY 4.0)"),
         ("Elevation", "Terrain Tiles on AWS (Mapzen / Tilezen: SRTM, GMTED2010, 3DEP, ETOPO1, EU-DEM and more)"),

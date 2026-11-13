@@ -572,20 +572,39 @@ fn glass_surface(in: VOut, n: vec3<f32>, tint_srgb: vec3<f32>, fwuv: vec2<f32>) 
     s.albedo = tint * (0.06 + 0.06 * r);
     let night = g.sun_true.w * mix(0.45, 1.0, smoothstep(0.05, 0.55, abs(dot(n, normalize(-in.wpos)))));
     // Offices: whole floors stay lit (cleaners, late workers), the rest go dark.
-    let bfac = 0.4 + 1.2 * hash12(vec2<f32>(seed, 31.3));
-    let floor_on = step(hash12(vec2<f32>(seed * 1.7, cell.y + 0.5)), g.city.y * bfac);
+    // Airport terminals (negative seeds, airport/mesh.rs): open all night,
+    // every floor lit, a more even glow.
+    let terminal = seed < 0.0;
+    let bfac = select(0.4 + 1.2 * hash12(vec2<f32>(seed, 31.3)), 4.0, terminal);
+    let floor_on = select(step(hash12(vec2<f32>(seed * 1.7, cell.y + 0.5)), g.city.y * bfac), 1.0, terminal);
     let ph = hash12(cell * 1.9 + seed);
-    let panel = select(step(0.93, ph), step(0.18, ph) * (0.45 + 0.75 * fract(ph * 7.3)), floor_on > 0.5);
-    let tint_l = mix(vec3<f32>(0.78, 0.88, 1.0), vec3<f32>(1.0, 0.82, 0.58), step(0.6, hash12(vec2<f32>(seed, 5.5))));
+    var panel = select(step(0.93, ph), step(0.18, ph) * (0.45 + 0.75 * fract(ph * 7.3)), floor_on > 0.5);
+    if (terminal) {
+        panel = 0.8 + 0.25 * ph;
+    }
+    var tint_l = mix(vec3<f32>(0.78, 0.88, 1.0), vec3<f32>(1.0, 0.82, 0.58), step(0.6, hash12(vec2<f32>(seed, 5.5))));
+    if (terminal) {
+        tint_l = vec3<f32>(1.0, 0.9, 0.74);
+        // Daylight: the bright concourse behind the glass.
+        s.albedo = tint * (0.16 + 0.06 * r);
+    }
     // Far: floors resolved (bands) → per-floor share; beyond → building average.
     let floor_lod = 1.0 - smoothstep(0.25, 0.7, fwuv.y / fl);
-    let far_share = mix(clamp(g.city.y * bfac, 0.0, 1.0) * 0.5 + 0.03, floor_on * 0.7 + (1.0 - floor_on) * 0.05, floor_lod);
+    let far_share = select(mix(clamp(g.city.y * bfac, 0.0, 1.0) * 0.5 + 0.03, floor_on * 0.7 + (1.0 - floor_on) * 0.05, floor_lod), 0.8, terminal);
     // Unresolved, the light comes through the tinted curtain wall.
     let far_tint = mix(tint_l * mix(vec3<f32>(1.0), normalize(tint + vec3<f32>(0.05)) * 1.6, 0.5), tint_l, lod);
     s.emit = far_tint * mix(far_share, panel, lod) * night * WIN_OFFICE;
     // Mullions and spandrel bands fade separately (floors stay visible further).
-    let mullion = mix(0.05, step(fx, 0.04), lodx);
-    let band = mix(spandrel, step(1.0 - spandrel, fy), lody);
+    var mullion = mix(0.05, step(fx, 0.04), lodx);
+    var band = mix(spandrel, step(1.0 - spandrel, fy), lody);
+    if (terminal) {
+        // Terminals are seen from close by: antialiased mullions / spandrels.
+        let fwx = max(fwuv.x / mull, 1e-4);
+        let fwy = max(fwuv.y / fl, 1e-4);
+        let dm = min(fx, 1.0 - fx);
+        mullion = mix(0.05, 1.0 - smoothstep(0.02 - fwx * 0.7, 0.02 + fwx * 0.7, dm), lodx);
+        band = mix(spandrel, smoothstep(1.0 - spandrel - fwy * 0.7, 1.0 - spandrel + fwy * 0.7, fy), lody);
+    }
     let fin = select(0.0, mix(0.1, step(fx, 0.10), lodx), fins);
     let opaque = max(max(mullion, band), fin);
     s.albedo = mix(s.albedo, tint * 0.45 + 0.02, opaque);
@@ -901,6 +920,57 @@ fn fs_main(in: VOut) -> FOut {
             }
             s = snowy(s, np, ngeo, 1.0, fwp);
         }
+        case 18: { // apron concrete: slabs, joints, stains
+            let per = nper(1.0 / 7.5);
+            let sl = NP / per;
+            let q = np / sl;
+            let cell = wrapc(floor(q), per);
+            let f = fract(q);
+            let r = hash12(cell);
+            let r2 = hash12(cell + vec2<f32>(17.0, 3.0));
+            s.albedo *= (0.9 + 0.16 * r) * (0.86 + 0.28 * pna(np, 0.8, vec2<f32>(1.0), fwp * 0.8));
+            // Joints (sealant): dark lines, faded out where thinner than a pixel.
+            let dj = min(min(f.x, 1.0 - f.x), min(f.y, 1.0 - f.y)) * sl;
+            let jv = 1.0 - smoothstep(0.08, 0.6, fwp);
+            let joint = (1.0 - smoothstep(0.03, 0.03 + max(fwp, 0.01), dj)) * jv;
+            s.albedo *= 1.0 - 0.45 * joint;
+            // Repaired / replaced slabs and broad weathering.
+            s.albedo *= mix(1.0, 0.82, step(0.92, r2));
+            s.albedo *= 0.88 + 0.2 * pna(np, 0.02, vec2<f32>(4.0), fwp * 0.02);
+            // Oil and rubber stains.
+            let oil = smoothstep(0.62, 0.85, pna(np, 0.12, vec2<f32>(9.0), fwp * 0.12)) * (0.5 + 0.5 * pna(np, 1.1, vec2<f32>(2.0), fwp * 1.1));
+            s.albedo *= 1.0 - 0.32 * oil;
+            s.rough = 0.82 - 0.2 * oil;
+            s.f0 = vec3<f32>(0.04);
+            s = wet_paving(s, wp, px, fwp, 0.35);
+            puddle = puddle_mask(np, fwp) * 0.7;
+            s = snowy(s, np, ngeo, 0.5, fwp);
+        }
+        case 19: { // corrugated metal cladding: uv = (metres along, height)
+            let u = in.uv.x;
+            let y = in.uv.y;
+            let pitch = 0.2;
+            let lod = 1.0 - smoothstep(0.25, 0.7, fwuv.x / pitch);
+            let ph = fract(u / pitch);
+            var t = cross(vec3<f32>(0.0, 1.0, 0.0), ngeo);
+            if (dot(t, t) < 0.01) {
+                t = vec3<f32>(1.0, 0.0, 0.0);
+            }
+            t = normalize(t);
+            // Trapezoidal ribs: the normal tilts on the flanks.
+            let flank = smoothstep(0.1, 0.25, ph) * (1.0 - smoothstep(0.35, 0.5, ph)) - smoothstep(0.6, 0.75, ph) * (1.0 - smoothstep(0.85, 1.0, ph));
+            s.n = normalize(ngeo + t * flank * 0.55 * lod);
+            // Panel joints (every ~1 m along, every ~6 m up) and streaks.
+            let pj = 1.0 - smoothstep(0.0, 0.03 + fwuv.x, abs(fract(u / 1.05 + 0.5) - 0.5) * 1.05);
+            let hj = 1.0 - smoothstep(0.0, 0.03 + fwuv.y, abs(fract(y / 6.1 + 0.5) - 0.5) * 6.1);
+            s.albedo *= 1.0 - 0.12 * max(pj, hj) * lod;
+            let streak = noise_aa(vec2<f32>(u * 0.6, y * 0.05), fwuv.x * 0.6);
+            s.albedo *= (0.88 + 0.14 * streak) * (0.85 + 0.15 * smoothstep(0.0, 3.0, y));
+            s.rough = 0.42;
+            s.f0 = vec3<f32>(0.07);
+            s.ao = 0.75 + 0.25 * smoothstep(0.0, 4.0, y);
+            s = snowy(s, np, ngeo, 0.6, fwp);
+        }
         case 2: { // masonry wall with punched windows
             s = wall_surface(in, ngeo, in.col, fwuv);
         }
@@ -968,7 +1038,7 @@ fn fs_main(in: VOut) -> FOut {
     var col = light(s, rel, V, dist, px, ngeo);
     // Wet paving: glossy reflections smeared toward the viewer (the long
     // streaks of street lights and headlights on a wet road at night).
-    let paved = m == 7 || m == 15 || m == 16 || (m == 12 && in.uv.x > 0.5) || (m == 5 && ngeo.y > 0.95);
+    let paved = m == 7 || m == 15 || m == 16 || m == 18 || (m == 12 && in.uv.x > 0.5) || (m == 5 && ngeo.y > 0.95);
     // (Only on the mirror plane: the planar reflection is wrong elsewhere.)
     let on_plane = abs(wp.y - g.pre.z) < 0.6;
     if (paved && g.wx.x > 0.15 && !is_refl() && on_plane) {

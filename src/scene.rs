@@ -40,6 +40,10 @@ pub mod mat {
     pub const ROAD: f32 = 16.0;
     /// Self-lit only at night (floodlit crowns of towers): uv.x = luminance (cd/m²).
     pub const NIGHT_EMISSIVE: f32 = 17.0;
+    /// Apron concrete: slabs with joints, per-slab tone, tyre / oil stains (pattern space).
+    pub const CONCRETE: f32 = 18.0;
+    /// Corrugated metal cladding (hangars, sheds, jet bridges): uv = (metres along, height).
+    pub const CLADDING: f32 = 19.0;
 }
 
 #[repr(C)]
@@ -243,6 +247,9 @@ const TAXI: [f32; 3] = [0.40, 0.40, 0.41];
 const RUNWAY: [f32; 3] = [0.24, 0.24, 0.26];
 const PAINT: [f32; 3] = [0.80, 0.80, 0.79];
 const TAXI_LINE: [f32; 3] = [0.85, 0.70, 0.15];
+const TAXI_SHOULDER: [f32; 3] = [0.47, 0.47, 0.46];
+/// Apron concrete (mat::CONCRETE).
+const CONCRETE: [f32; 3] = [0.66, 0.66, 0.63];
 /// Urban ground by landuse class (residential, commercial, industrial, institutional),
 /// and for dense-building cells.
 const URBAN: [[f32; 3]; 4] = [[0.50, 0.49, 0.45], [0.54, 0.52, 0.50], [0.52, 0.51, 0.50], [0.52, 0.52, 0.48]];
@@ -632,6 +639,8 @@ pub struct TileBuild {
     pub building_count: usize,
     /// Street lights, traffic, warning lights, skyglow sources (lights.rs).
     pub lights: crate::lights::TileLights,
+    /// Airport detail: what this tile adds to its airports' layouts (airport/).
+    pub aero: Option<std::sync::Arc<crate::airport::tile::AeroTile>>,
 }
 
 const DENSITY_N: usize = 24;
@@ -660,6 +669,9 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
     let mut mask = vec![0u8; (MASK_N * MASK_N) as usize];
     let mut mask_set = |x: i32, y: i32| mask[(y as u32 * MASK_N + x as u32) as usize] = 1;
     let landmarks = if std::env::var_os("SKYWARD_NO_LANDMARKS").is_some() { Vec::new() } else { crate::landmarks::for_tile(id) };
+    // Aerodromes in the tile (airport/tile.rs): airside styles, and where the
+    // airport layer draws markings / lights instead of the generic ones.
+    let aero = crate::airport::tile::Ctx::new(id, proj, &f);
 
     // --- building density → urban ground cells
     let mut density = vec![0f32; DENSITY_N * DENSITY_N];
@@ -783,12 +795,17 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
     flat.mat = mat::ASPHALT;
     for a in sel(&f, |k| matches!(k, Kind::Pier | Kind::Apron | Kind::RunwayArea)) {
         let col = if a.kind == Kind::RunwayArea { RUNWAY } else { APRON };
-        if a.kind == Kind::Apron && ring_area(&a.outer).abs() > 8000.0 {
+        let owned = a.kind == Kind::Apron && !aero.is_empty() && aero.owned(a.outer[0]);
+        if a.kind == Kind::Apron && ring_area(&a.outer).abs() > 8000.0 && !owned {
             lights.apron(&a.outer);
         }
-        flat.flat_poly(&a.outer, &a.holes, 0.0, Vec3::Y, col);
+        // Aprons at airports: concrete slabs.
+        let concrete = a.kind == Kind::Apron && !aero.is_empty() && aero.at(a.outer[0]).is_some_and(|p| p.owner.is_some());
+        flat.mat = if concrete { mat::CONCRETE } else { mat::ASPHALT };
+        flat.flat_poly(&a.outer, &a.holes, 0.0, Vec3::Y, if concrete { CONCRETE } else { col });
         rx_mask.fill(&a.outer, &a.holes, &mut mask_set);
     }
+    flat.mat = mat::ASPHALT;
     for a in sel(&f, |k| *k == Kind::Aerodrome) {
         rx_mask.fill(&a.outer, &a.holes, &mut mask_set);
     }
@@ -823,16 +840,33 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
         }
     }
     flat.mat = mat::ASPHALT;
+    // Taxiways: pavement width by airport class (grass fields: none), wide
+    // shoulders at major airports. Inside an airport with a detail layer
+    // (airport/), its markings and lights replace the generic centreline.
+    let taxi_w = |pts: &[Vec2], width: f32| if aero.is_empty() { Some(width) } else { aero.taxiway_width(pts) };
     for l in &f.lines {
         if let Kind::Taxiway { width } = l.kind {
-            lights.taxiway(&l.pts, width);
-            flat.strip_cut(&l.pts, width, 0.0, TAXI, l.cut);
-            rx_mask.stroke(&l.pts, width + 10.0, &mut mask_set);
+            if let (Some(w), Some(crate::airports::Kind::Large)) = (taxi_w(&l.pts, width), aero.class_at(l.pts[l.pts.len() / 2])) {
+                flat.strip_cut(&l.pts, w + 15.0, 0.0, TAXI_SHOULDER, l.cut);
+            }
+        }
+    }
+    for l in &f.lines {
+        if let Kind::Taxiway { width } = l.kind {
+            let Some(w) = taxi_w(&l.pts, width) else { continue };
+            let owned = !aero.is_empty() && aero.owned(l.pts[l.pts.len() / 2]);
+            if !owned {
+                lights.taxiway(&l.pts, w);
+            }
+            flat.strip_cut(&l.pts, w, 0.0, TAXI, l.cut);
+            rx_mask.stroke(&l.pts, w + 10.0, &mut mask_set);
         }
     }
     for l in &f.lines {
         if let Kind::Taxiway { .. } = l.kind {
-            flat.strip_cut(&l.pts, 0.5, 0.0, TAXI_LINE, l.cut);
+            if aero.is_empty() || !aero.owned(l.pts[l.pts.len() / 2]) {
+                flat.strip_cut(&l.pts, 0.5, 0.0, TAXI_LINE, l.cut);
+            }
         }
     }
 
@@ -873,10 +907,20 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
             }
         }
     }
+    let mut aero_blds = Vec::new();
     for (a, &base) in blds.iter().zip(&bases) {
         let Kind::Building { height, min_height, colour } = a.kind else { continue };
         let v0 = bld.verts.len();
-        building(&mut bld, a, height, min_height, colour);
+        let class = if aero.is_empty() { None } else { aero.classify(a, height) };
+        match class {
+            Some(c) => {
+                let tops = aero.building(&mut bld, a, c, height, min_height);
+                let ls: Vec<crate::lights::LightInst> = tops.iter().map(|t| crate::lights::LightInst::new(*t, 2000.0, crate::lights::colour::OBST_RED, crate::lights::kind::OBSTACLE)).collect();
+                lights.extend_raised(&ls, base);
+                aero_blds.push(crate::airport::tile::AeroBuilding { outer: a.outer.clone(), class: c.code(), height, base });
+            }
+            None => building(&mut bld, a, height, min_height, colour),
+        }
         for v in &mut bld.verts[v0..] {
             v.pos[1] = if min_height <= 0.5 && v.pos[1] <= 1e-3 { base - FOUNDATION } else { v.pos[1] + base };
         }
@@ -966,6 +1010,7 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
     let min_y = flat.verts.iter().fold(grid.min, |m, v| m.min(v.pos[1]));
     let mut lights = lights.finish();
     drape_lights(&mut lights, &grid);
+    let aero = aero.summary(id, &f, aero_blds);
 
     TileBuild {
         id,
@@ -982,6 +1027,7 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
         airports: f.airports,
         building_count,
         lights,
+        aero,
     }
 }
 
@@ -1080,6 +1126,7 @@ pub fn build_far_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
         airports: Vec::new(),
         building_count: 0,
         lights,
+        aero: None,
     }
 }
 
@@ -1102,6 +1149,7 @@ impl TileBuild {
             airports: Vec::new(),
             building_count: 0,
             lights: crate::lights::TileLights::default(),
+            aero: None,
         }
     }
 }
@@ -1156,7 +1204,7 @@ fn pitched_plan(a: &Area, height: f32, min_h: f32) -> Option<([Vec2; 4], f32, bo
     Some((q, rise, (h >> 16) % 3 == 0))
 }
 
-fn building(m: &mut MeshData, a: &Area, height: f32, min_h: f32, colour: Option<[f32; 3]>) {
+pub(crate) fn building(m: &mut MeshData, a: &Area, height: f32, min_h: f32, colour: Option<[f32; 3]>) {
     let col = match colour {
         // OSM colours are often garish; pull them toward a neutral facade.
         Some(c) => {
@@ -1378,6 +1426,31 @@ fn runway_geometry(m: &mut MeshData, rw: &Runway) {
     let n = vec2(-d.y, d.x);
     let len = rw.length();
     let w = rw.width;
+    // Grass / gravel strips (OurAirports surface): a mown strip with white
+    // edge and threshold markers, no paint.
+    if !rw.paved && rw.source != RunwaySource::Tiles {
+        let gravel = rw.surface.to_ascii_lowercase().contains("grav");
+        m.mat = if gravel { mat::DIFFUSE } else { mat::GRASS };
+        m.ground_rect(rw.a, rw.b, w, 0.0, if gravel { [0.55, 0.50, 0.42] } else { [0.40, 0.50, 0.26] });
+        m.mat = mat::DIFFUSE;
+        let mut t = 0.0;
+        while t <= len {
+            for s in [-1.0, 1.0] {
+                let c = rw.a + d * t + n * (s * (w * 0.5 + 0.6));
+                m.ground_rect(c - d * 1.5, c + d * 1.5, 0.9, 0.0, PAINT);
+            }
+            t += 90.0;
+        }
+        for (start, dir) in [(rw.a, d), (rw.b, -d)] {
+            let k = ((w / 6.0) as i32).max(2);
+            for i in 0..=k {
+                let c = start + dir * 2.0 + n * (-w * 0.5 + w * i as f32 / k as f32);
+                m.ground_rect(c - n * 1.2, c + n * 1.2, 0.8, 0.0, PAINT);
+            }
+        }
+        m.mat = mat::ASPHALT;
+        return;
+    }
     {
         // Asphalt with (along, across) uvs for wear / rubber deposits.
         m.mat = mat::RUNWAY;
@@ -1483,6 +1556,7 @@ mod wire_impls {
             self.airports.put(w);
             self.building_count.put(w);
             self.lights.put(w);
+            self.aero.put(w);
         }
         fn get(r: &mut R) -> Res<Self> {
             Ok(TileBuild {
@@ -1500,6 +1574,7 @@ mod wire_impls {
                 airports: Wire::get(r)?,
                 building_count: Wire::get(r)?,
                 lights: Wire::get(r)?,
+                aero: Wire::get(r)?,
             })
         }
     }
