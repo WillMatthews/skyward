@@ -17,6 +17,7 @@ pub mod flight;
 pub mod gauges;
 pub mod glass;
 pub mod hudsym;
+pub mod weapons;
 pub mod map;
 pub mod mapdata;
 pub mod menus;
@@ -492,10 +493,14 @@ pub struct Plan {
     pub airport: String,
     pub spec: crate::startpos::Spec,
     pub watch: bool,
+    /// A dogfight quick start (weapons/).
+    pub dogfight: Option<crate::weapons::setup::Config>,
 }
 
 pub struct UiState {
     pub screen: Screen,
+    /// The main menu's dogfight choices.
+    pub dogfight: crate::weapons::setup::Config,
     /// Where Back / Done returns to from settings and credits.
     pub back_to: Screen,
     pub settings: settings::Settings,
@@ -548,7 +553,8 @@ impl UiState {
             settings,
             settings_dirty: false,
             settings_tab: 0,
-            plan: Plan { aircraft: 0, airport: "EGLC".into(), spec: crate::startpos::Spec::Runway(String::new()), watch: false },
+            plan: Plan { aircraft: 0, airport: "EGLC".into(), spec: crate::startpos::Spec::Runway(String::new()), watch: false, dogfight: None },
+            dogfight: Default::default(),
             defs: crate::flight::catalogue(),
             picker: menus::Picker::default(),
             toasts: toast::Toasts::default(),

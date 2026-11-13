@@ -1260,6 +1260,9 @@ pub struct Damage {
     pub side_f: f32,
     /// Seconds since a wing failed.
     pub since_fail: f32,
+    /// Battle damage (weapons/): fraction of each wing's strength shot away
+    /// [left, right], 0..1 — lowers the limit and ultimate loads.
+    pub weaken: [f32; 2],
 }
 
 fn hash01(n: u32) -> f32 {
@@ -1468,6 +1471,9 @@ impl Damage {
             // Real structures meet ultimate with a margin: 0..6 % stronger.
             let scatter = 1.0 + 0.06 * hash01(self.seed.wrapping_add(s as u32 * 7919));
             let (lim, ult) = if n >= 0.0 { (sd.n_lim, n_ult * scatter) } else { (sd.n_lim_neg, n_ult_neg * scatter) };
+            // Shot-through spars carry less (weapons/).
+            let k_w = 1.0 - 0.7 * self.weaken[s].clamp(0.0, 1.0);
+            let (lim, ult) = (lim * k_w, ult * k_w);
             let r = n / lim;
             if r > 1.0 {
                 self.overstress = true;

@@ -417,4 +417,22 @@ pub enum Event {
     /// Thunder clap at a distance (km).
     Thunder(f32),
     UiClick,
+    /// Gun fire this frame (weapons/): `rounds` from gun type `gun`
+    /// (0 = 20 mm Hispano, 1 = .303 Browning, 2 = M61A1, 3 = .50) firing at
+    /// `rate` rounds / s, at `pos`; `own` = the listener's aircraft.
+    Gun { gun: u8, rounds: u16, rate: f32, pos: Vec3, own: bool },
+    /// A round passed the listener `miss` m away (supersonic: a crack, else a whiz).
+    Crack { pos: Vec3, miss: f32, cal: f32, supersonic: bool },
+    /// A round / fragment struck an airframe (`own`: the listener's).
+    Hit { pos: Vec3, energy: f32, own: bool },
+    /// A missile left its rail.
+    Missile { pos: Vec3, own: bool },
+    /// A flare cartridge fired.
+    Countermeasure { pos: Vec3, own: bool },
+    /// Ejection seat fired / canopy jettisoned.
+    Eject { pos: Vec3, own: bool, seat: bool },
+    /// Cockpit weapon tones, sent every frame: AIM-9 seeker growl (signal
+    /// 0..1; `locked` = the high tracking tone), RWR (worst threat 0 = none,
+    /// 1 search, 2 track, 3 launch / active; `rwr_new` = a new emitter).
+    Tones { growl: f32, locked: bool, rwr: u8, rwr_new: bool },
 }

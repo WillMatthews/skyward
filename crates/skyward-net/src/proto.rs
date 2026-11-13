@@ -15,7 +15,7 @@ use crate::codec::{DecodeError, Reader, Result, Writer, clip, sanitize};
 
 pub const MAGIC: [u8; 4] = *b"SKWD";
 /// Bumped on any incompatible change of the connected protocol.
-pub const PROTOCOL: u16 = 1;
+pub const PROTOCOL: u16 = 2;
 /// Game port (UDP), configurable on the server.
 pub const DEFAULT_PORT: u16 = 47820;
 /// LAN discovery broadcast port (UDP, shared by every server on a host).
@@ -274,11 +274,13 @@ pub struct WorldSync {
     pub metar: String,
     /// Live weather (re-fetched by the server) or fixed.
     pub live_weather: bool,
+    /// Air combat on (weapons fire and do damage) or off.
+    pub combat: bool,
 }
 
 impl Default for WorldSync {
     fn default() -> Self {
-        WorldSync { time: TimeSync::Real, utc: 0.0, metar: String::new(), live_weather: false }
+        WorldSync { time: TimeSync::Real, utc: 0.0, metar: String::new(), live_weather: false, combat: true }
     }
 }
 
@@ -295,6 +297,7 @@ impl WorldSync {
         w.f64(self.utc);
         w.str(&self.metar, 256);
         w.bool(self.live_weather);
+        w.bool(self.combat);
     }
     fn decode(r: &mut Reader) -> Result<WorldSync> {
         let time = match r.u8()? {
@@ -309,7 +312,7 @@ impl WorldSync {
             }
             _ => return Err(DecodeError::Invalid("time mode")),
         };
-        Ok(WorldSync { time, utc: r.f64()?, metar: r.str(256)?, live_weather: r.bool()? })
+        Ok(WorldSync { time, utc: r.f64()?, metar: r.str(256)?, live_weather: r.bool()?, combat: r.bool()? })
     }
     /// "Real time · live weather", "Fixed 14:00 · METAR" for the browser.
     pub fn summary(&self) -> String {
@@ -327,7 +330,7 @@ impl WorldSync {
         } else {
             "fixed weather"
         };
-        format!("{t} · {w}")
+        format!("{t} · {w}{}", if self.combat { " · combat on" } else { "" })
     }
 }
 
@@ -832,6 +835,159 @@ impl GameEvent {
     }
 }
 
+/// Air combat (the game's `weapons::events`, positions relative to the
+/// aircraft involved so no floating-origin frame crosses the wire).
+/// Clients send what their own aircraft does; a shooter's client detects its
+/// hits and sends `Hit` *claims* that the server validates (combat on, both
+/// players flying, range plausible for the weapon, rate-limited) before
+/// relaying them; the target's client applies them to its own aircraft and
+/// reports the result (`Damage`, `Kill`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum CombatMsg {
+    /// `rounds` fired from gun `gun` (loadout index); `seed` = its dispersion RNG.
+    Fire {
+        gun: u8,
+        rounds: u16,
+        seed: u32,
+    },
+    /// Missile launched (`kind`: 0 = AIM-9, 1 = AIM-120) at `target` (`SERVER_ID` = none).
+    Launch {
+        id: u32,
+        kind: u8,
+        target: u16,
+    },
+    MissileEnd {
+        id: u32,
+    },
+    Countermeasure {
+        flare: bool,
+    },
+    /// A hit on `target` (its body frame, m): part, damage units, HE, weapon (`WeaponKind` code).
+    Hit {
+        target: u16,
+        weapon: u8,
+        part: u8,
+        pos: [f32; 3],
+        normal: [f32; 3],
+        damage: f32,
+        he: bool,
+    },
+    /// The sender's battle damage: hit points per part (0..255), lost parts, failures, fire, leak.
+    Damage {
+        hp: Vec<u8>,
+        lost: u16,
+        failures: Vec<(u8, u8)>,
+        fire: f32,
+        leak: f32,
+    },
+    /// The sender was shot down by `killer` (`SERVER_ID` = no one) with `weapon`.
+    Kill {
+        killer: u16,
+        weapon: u8,
+    },
+    Eject,
+}
+
+/// Largest damage a single hit claim may carry (a missile burst on top of the aircraft).
+pub const MAX_HIT_DAMAGE: f32 = 4000.0;
+
+impl CombatMsg {
+    fn encode(&self, w: &mut Writer) {
+        match self {
+            CombatMsg::Fire { gun, rounds, seed } => {
+                w.u8(0);
+                w.u8(*gun);
+                w.u16(*rounds);
+                w.u32(*seed);
+            }
+            CombatMsg::Launch { id, kind, target } => {
+                w.u8(1);
+                w.u32(*id);
+                w.u8(*kind);
+                w.u16(*target);
+            }
+            CombatMsg::MissileEnd { id } => {
+                w.u8(2);
+                w.u32(*id);
+            }
+            CombatMsg::Countermeasure { flare } => {
+                w.u8(3);
+                w.bool(*flare);
+            }
+            CombatMsg::Hit { target, weapon, part, pos, normal, damage, he } => {
+                w.u8(4);
+                w.u16(*target);
+                w.u8(*weapon);
+                w.u8(*part);
+                for v in pos.iter().chain(normal.iter()) {
+                    w.f32(*v);
+                }
+                w.f32(*damage);
+                w.bool(*he);
+            }
+            CombatMsg::Damage { hp, lost, failures, fire, leak } => {
+                w.u8(5);
+                w.u8(hp.len().min(64) as u8);
+                for v in hp.iter().take(64) {
+                    w.u8(*v);
+                }
+                w.u16(*lost);
+                w.u8(failures.len().min(64) as u8);
+                for (k, i) in failures.iter().take(64) {
+                    w.u8(*k);
+                    w.u8(*i);
+                }
+                w.f32(*fire);
+                w.f32(*leak);
+            }
+            CombatMsg::Kill { killer, weapon } => {
+                w.u8(6);
+                w.u16(*killer);
+                w.u8(*weapon);
+            }
+            CombatMsg::Eject => w.u8(7),
+        }
+    }
+    fn decode(r: &mut Reader) -> Result<CombatMsg> {
+        let fin = |v: f32, lim: f32| if v.is_finite() && v.abs() <= lim { Ok(v) } else { Err(DecodeError::Invalid("combat value")) };
+        Ok(match r.u8()? {
+            0 => CombatMsg::Fire { gun: r.u8()?, rounds: r.u16()?.min(400), seed: r.u32()? },
+            1 => CombatMsg::Launch { id: r.u32()?, kind: r.u8()?.min(1), target: r.u16()? },
+            2 => CombatMsg::MissileEnd { id: r.u32()? },
+            3 => CombatMsg::Countermeasure { flare: r.bool()? },
+            4 => {
+                let (target, weapon, part) = (r.u16()?, r.u8()?, r.u8()?);
+                let mut v = [0.0f32; 6];
+                for x in v.iter_mut() {
+                    *x = fin(r.f32()?, 100.0)?;
+                }
+                CombatMsg::Hit { target, weapon, part, pos: [v[0], v[1], v[2]], normal: [v[3], v[4], v[5]], damage: fin(r.f32()?, MAX_HIT_DAMAGE)?.max(0.0), he: r.bool()? }
+            }
+            5 => {
+                let n = r.u8()? as usize;
+                let mut hp = Vec::with_capacity(n);
+                for _ in 0..n {
+                    hp.push(r.u8()?);
+                }
+                let lost = r.u16()?;
+                let m = r.u8()? as usize;
+                let mut failures = Vec::with_capacity(m);
+                for _ in 0..m {
+                    failures.push((r.u8()?, r.u8()?));
+                }
+                CombatMsg::Damage { hp, lost, failures, fire: fin(r.f32()?, 1.0)?, leak: fin(r.f32()?, 1.0)? }
+            }
+            6 => CombatMsg::Kill { killer: r.u16()?, weapon: r.u8()? },
+            7 => CombatMsg::Eject,
+            _ => return Err(DecodeError::Invalid("combat")),
+        })
+    }
+    /// Gun rounds and missiles (what "combat off" forbids).
+    pub fn is_weapon(&self) -> bool {
+        matches!(self, CombatMsg::Fire { .. } | CombatMsg::Launch { .. } | CombatMsg::Hit { .. } | CombatMsg::Countermeasure { .. })
+    }
+}
+
 /// A player as the others see them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlayerInfo {
@@ -886,6 +1042,12 @@ pub enum Msg {
         aircraft: String,
         spectating: bool,
     },
+    /// Air combat. Client → server: `from` ignored (stamped by the server);
+    /// server → client: the player it concerns.
+    Combat {
+        from: u16,
+        msg: CombatMsg,
+    },
 }
 
 pub mod msg {
@@ -899,6 +1061,7 @@ pub mod msg {
     pub const WORLD: u8 = 67;
     pub const EVENT: u8 = 68;
     pub const SET_AIRCRAFT: u8 = 69;
+    pub const COMBAT: u8 = 70;
     /// Types ≥ 64 are reliable (carry a message id).
     pub fn reliable(t: u8) -> bool {
         t >= 64
@@ -921,6 +1084,7 @@ impl Msg {
             Msg::World(_) => msg::WORLD,
             Msg::Event { .. } => msg::EVENT,
             Msg::SetAircraft { .. } => msg::SET_AIRCRAFT,
+            Msg::Combat { .. } => msg::COMBAT,
         }
     }
 
@@ -969,6 +1133,10 @@ impl Msg {
                 w.str(aircraft, MAX_AIRCRAFT_ID);
                 w.bool(*spectating);
             }
+            Msg::Combat { from, msg } => {
+                w.u16(*from);
+                msg.encode(&mut w);
+            }
         }
         w.buf
     }
@@ -996,6 +1164,7 @@ impl Msg {
             msg::WORLD => Msg::World(WorldSync::decode(&mut r)?),
             msg::EVENT => Msg::Event { from: r.u16()?, event: GameEvent::decode(&mut r)? },
             msg::SET_AIRCRAFT => Msg::SetAircraft { aircraft: aircraft_id(&r.str(MAX_AIRCRAFT_ID)?)?, spectating: r.bool()? },
+            msg::COMBAT => Msg::Combat { from: r.u16()?, msg: CombatMsg::decode(&mut r)? },
             t => return Err(DecodeError::Kind(t)),
         };
         Ok(m)
