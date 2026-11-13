@@ -1,0 +1,738 @@
+//! Track H2b: five more propeller types from FlightGear (GPL) — the Extra
+//! EA-500 turboprop single, Piper PA-18 Super Cub, Zlin Z-50 LX aerobat,
+//! DHC-3 Otter on floats and Douglas DC-3 / C-47. Geometry from the
+//! imported models (`assets/aircraft/<id>/`, CG-relative body frame), flight
+//! numbers from the FlightGear FDMs and published figures (see each
+//! `CREDITS.md` and the tests in `flight/tests_ga.rs`).
+
+use super::*;
+use crate::water::Hull;
+
+// ---------------------------------------------------------------------------
+// Extra EA-500 (FGAddon extra500; parametric, calibrated)
+// ---------------------------------------------------------------------------
+
+const EXTRA500_GEAR: &[GearPoint] = &[
+    // extra500 JSBSim contacts: steerable nose wheel, braked mains, all retractable.
+    wheel(Vec3::new(0.0, -1.626, 2.116), 60_000.0, 9_000.0, true, false, true),
+    wheel(Vec3::new(1.06, -1.562, -0.702), 183_000.0, 16_000.0, false, true, true),
+    wheel(Vec3::new(-1.06, -1.562, -0.702), 183_000.0, 16_000.0, false, true, true),
+    // Ventral fin (tail strike limit ~13°).
+    skid(Vec3::new(0.0, -0.543, -5.264), 26_700.0, 2_700.0, 0.5),
+];
+
+const EXTRA500_HARD: &[HardPoint] = &[
+    hard(0.0, -1.05, 3.31, "Prop strike"),
+    hard(0.0, -0.10, 3.70, "Flew into the ground"),
+    hard(5.80, 0.43, -0.97, "Wingtip strike"),
+    hard(-5.80, 0.43, -0.97, "Wingtip strike"),
+    hard(0.0, 0.71, 0.38, "Crashed inverted"),
+    hard(0.0, 1.95, -5.78, "Crashed inverted"),
+    hard(0.0, -1.20, 0.03, GEAR_UP),
+    hard(0.0, -0.78, 2.53, GEAR_UP),
+];
+
+const EXTRA500_ENGINES: &[Vec3] = &[Vec3::new(0.0, -0.10, 3.30)];
+
+/// The extra500 package's JSBSim aerodynamics are a per-surface model
+/// (local wing / tail / fin velocities, free-floating ailerons) built on
+/// custom system properties that Skyward's JSBSim evaluator does not run, so
+/// the type flies on the parametric model calibrated to that FDM's geometry
+/// and the published figures.
+pub(super) fn extra500_def() -> AircraftDef {
+    extra500_base()
+}
+
+fn extra500_base() -> AircraftDef {
+    AircraftDef {
+        id: "extra500",
+        name: "Extra EA-500",
+        description: "Six-seat pressurised turboprop single (FlightGear extra500, JSBSim aerodynamics). \
+                      Rolls-Royce 250-B17F/2, 450 shp, five-blade MT prop, carbon-fibre airframe, \
+                      glass cockpit: 200 KTAS up at FL250.",
+        role: "Turboprop tourer",
+        has_engine: true,
+        flap_label: "Flaps",
+        flap_detents: &[0.0, 15.0, 30.0],
+        flap_max_deg: 30.0,
+        vs0_kt: 61.0,
+        vs1_kt: 72.0,
+        vno_kt: 170.0,
+        vne_kt: 210.0,
+        gear_height: 1.533,
+        wingspan: 11.0,
+        mass: 1_986.0,
+        inertia_roll: 5_240.0,
+        inertia_pitch: 5_650.0,
+        inertia_yaw: 9_510.0,
+        wing_area: 14.025,
+        chord: 1.322,
+        wing_height: -0.2,
+        cl0: 0.40,
+        cl_alpha: 5.0,
+        alpha_stall: deg(15.0),
+        alpha_stall_neg: deg(13.0),
+        stall_sharpness: 40.0,
+        cl_flat: 1.0,
+        stall_drop: 0.8,
+        stall_decay: 0.15,
+        cd0: 0.029,
+        oswald: 0.8,
+        cd_flat: 1.3,
+        cd_beta: 0.2,
+        flap_cl: 0.80,
+        flap_curve: 0.4,
+        flap_alpha_stall: deg(-2.0),
+        flap_cd: 0.05,
+        flap_cd_exp: 1.5,
+        flap_cm: -0.06,
+        cm0: 0.04,
+        cm_alpha: -0.9,
+        cm_q: -16.0,
+        cm_elevator: 0.6,
+        cm_stall: -0.10,
+        trim_authority: 0.4,
+        cy_beta: -0.5,
+        cl_beta: -0.11,
+        cl_p: -0.47,
+        stall_autorotation: 0.2,
+        cl_r_per_cl: 0.25,
+        cl_aileron: 0.05,
+        cn_beta: 0.08,
+        cn_r: -0.11,
+        cn_p: -0.03,
+        cn_rudder: 0.03,
+        cn_aileron: -0.004,
+        surface_rate: 4.0,
+        flap_rate: 0.15,
+        windmill_cd: 0.15,
+        prop_disk_area: 3.46,
+        prop_wash: 0.3,
+        idle_power: 0.07,
+        spool_time: 1.4,
+        rpm_idle: 1_500.0,
+        rpm_static: 2_030.0,
+        rpm_per_ms: 4.0,
+        gear: EXTRA500_GEAR,
+        hard_points: EXTRA500_HARD,
+        roll_mu: 0.02,
+        brake_mu: 0.6,
+        tire_mu: 0.85,
+        nose_steer_deg: 20.0,
+        max_touchdown_sink: 3.2,
+        max_touchdown_bank: deg(9.0),
+        min_touchdown_pitch: deg(-2.0),
+        g_limit_pos: 3.8,
+        g_limit_neg: -1.52,
+
+        category: Category::Trainer,
+        engine_kind: EngineKind::Turboprop,
+        engine_count: 1,
+        retractable_gear: true,
+        has_reverser: true,
+        eye: Vec3::new(0.34, 0.338, 0.485),
+        vr_kt: 70.0,
+        vref_kt: 85.0,
+        vle_kt: 150.0,
+        ceiling_m: 7_620.0,
+        mmo: 0.0,
+        gear_time: 6.0,
+        cd_gear: 0.018,
+        mach_dd: 0.68,
+        cd_wave: 0.03,
+        engine_pos: EXTRA500_ENGINES,
+        engine_power_w: 335_600.0,
+        const_speed_prop: true,
+        prop_eta: 0.82,
+        prop_fm: 0.72,
+        prop_radius: 1.05,
+        prop_rotation: 1.0,
+        prop_gear: 1.0,
+        prop_inertia: 4.2 * 1.356,
+        // 450 shp flat-rated to altitude (the 250 is good for ~600 shp).
+        crit_alt_m: 4_500.0,
+        lapse_exp: 0.9,
+        torque_k: 0.15,
+        swirl_k: 0.15,
+        pfactor_k: 0.08,
+        rig_kt: 150.0,
+        sfc: 0.39,
+        egt_idle: 450.0,
+        egt_max: 750.0,
+        reverse_eff: 0.35,
+        min_runway_m: 650.0,
+        ..Default::default()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Piper PA-18-150 Super Cub (FGAddon Piper-PA-18, YASim → parametric)
+// ---------------------------------------------------------------------------
+
+const CUB_GEAR: &[GearPoint] = &[
+    // Bungee-sprung mains on big tyres, steerable tail wheel; ~12° three-point.
+    wheel(Vec3::new(0.887, -1.40, 0.333), 24_000.0, 2_400.0, false, true, false),
+    wheel(Vec3::new(-0.887, -1.40, 0.333), 24_000.0, 2_400.0, false, true, false),
+    wheel(Vec3::new(0.0, -0.31, -4.76), 12_000.0, 900.0, true, false, false),
+];
+
+const CUB_HARD: &[HardPoint] = &[
+    hard(0.0, -1.06, 1.81, "Prop strike"),
+    hard(0.0, -0.10, 1.94, "Flew into the ground"),
+    hard(5.36, 0.57, -0.41, "Wingtip strike"),
+    hard(-5.36, 0.57, -0.41, "Wingtip strike"),
+    hard(0.0, 0.73, -0.40, "Crashed inverted"),
+    hard(0.0, 1.30, -4.80, "Crashed inverted"),
+    hard(0.0, -0.55, -2.4, "Belly struck the ground"),
+];
+
+const CUB_ENGINES: &[Vec3] = &[Vec3::new(0.0, -0.12, 1.81)];
+
+pub(super) fn cub_def() -> AircraftDef {
+    AircraftDef {
+        id: "cub",
+        name: "Piper PA-18 Super Cub",
+        description: "The classic tube-and-fabric bush taildragger (FlightGear Piper-PA-18 model; flight \
+                      model calibrated to its YASim data and published figures). 150 hp Lycoming O-320, \
+                      fixed-pitch prop, 794 kg: off a grass strip in 100 m, lands in less — and every gust \
+                      moves it.",
+        role: "Bush plane",
+        has_engine: true,
+        flap_label: "Flaps",
+        flap_detents: &[0.0, 25.0, 50.0],
+        flap_max_deg: 50.0,
+        vs0_kt: 37.0,
+        vs1_kt: 41.0,
+        vno_kt: 104.0,
+        vne_kt: 133.0,
+        gear_height: 1.18,
+        wingspan: 10.73,
+        mass: 794.0,
+        inertia_roll: 950.0,
+        inertia_pitch: 1_050.0,
+        inertia_yaw: 1_750.0,
+        wing_area: 16.58,
+        chord: 1.6,
+        wing_height: 0.57,
+        cl0: 0.48,
+        cl_alpha: 4.6,
+        alpha_stall: deg(15.0),
+        alpha_stall_neg: deg(12.0),
+        stall_sharpness: 40.0,
+        cl_flat: 1.0,
+        stall_drop: 0.85,
+        stall_decay: 0.18,
+        cd0: 0.042,
+        oswald: 0.72,
+        cd_flat: 1.3,
+        cd_beta: 0.25,
+        flap_cl: 0.62,
+        flap_curve: 0.6,
+        flap_alpha_stall: deg(-2.0),
+        flap_cd: 0.06,
+        flap_cd_exp: 1.6,
+        flap_cm: -0.04,
+        cm0: 0.06,
+        cm_alpha: -1.0,
+        cm_q: -16.0,
+        cm_elevator: 0.6,
+        cm_stall: -0.10,
+        trim_authority: 0.4,
+        cy_beta: -0.6,
+        cl_beta: -0.14,
+        cl_p: -0.47,
+        stall_autorotation: 0.3,
+        cl_r_per_cl: 0.18,
+        cl_aileron: 0.055,
+        cn_beta: 0.075,
+        cn_r: -0.11,
+        cn_p: -0.05,
+        cn_rudder: 0.035,
+        cn_aileron: -0.012,
+        surface_rate: 5.0,
+        flap_rate: 0.35,
+        static_thrust: 2_700.0,
+        thrust_v1: 9.0,
+        thrust_v2: 0.20,
+        windmill_cd: 0.19,
+        prop_disk_area: 2.84,
+        prop_wash: 0.40,
+        idle_power: 0.05,
+        spool_time: 0.5,
+        rpm_idle: 650.0,
+        rpm_static: 2_300.0,
+        rpm_per_ms: 6.5,
+        gear: CUB_GEAR,
+        hard_points: CUB_HARD,
+        roll_mu: 0.03,
+        brake_mu: 0.5,
+        tire_mu: 0.8,
+        nose_steer_deg: 25.0,
+        max_touchdown_sink: 3.5,
+        max_touchdown_bank: deg(12.0),
+        min_touchdown_pitch: deg(-5.0),
+        g_limit_pos: 4.4,
+        g_limit_neg: -1.76,
+
+        category: Category::Trainer,
+        engine_kind: EngineKind::Piston,
+        engine_count: 1,
+        taildragger: true,
+        eye: Vec3::new(0.0, 0.39, 0.128),
+        vr_kt: 38.0,
+        vref_kt: 50.0,
+        vle_kt: 133.0,
+        ceiling_m: 5_800.0,
+        engine_pos: CUB_ENGINES,
+        engine_power_w: 112_000.0,
+        prop_radius: 0.94,
+        prop_rotation: 1.0,
+        prop_gear: 1.0,
+        prop_inertia: 2.5,
+        lapse_exp: 1.13,
+        torque_k: 0.1,
+        swirl_k: 0.1,
+        pfactor_k: 0.07,
+        rig_kt: 72.0,
+        sfc: 0.31,
+        egt_idle: 560.0,
+        egt_max: 720.0,
+        min_runway_m: 250.0,
+        rough_field: true,
+        ..Default::default()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Zlin Z-50 LX (FGAddon Zlin-50lx, YASim → parametric): unlimited aerobat
+// ---------------------------------------------------------------------------
+
+const ZLIN_GEAR: &[GearPoint] = &[
+    // Spring-steel mains ahead of the CG, steerable tail wheel; ~8° three-point.
+    wheel(Vec3::new(1.118, -1.13, 0.612), 30_000.0, 2_800.0, false, true, false),
+    wheel(Vec3::new(-1.118, -1.13, 0.612), 30_000.0, 2_800.0, false, true, false),
+    wheel(Vec3::new(0.0, -0.425, -4.455), 14_000.0, 1_000.0, true, false, false),
+];
+
+const ZLIN_HARD: &[HardPoint] = &[
+    hard(0.0, -0.87, 1.69, "Prop strike"),
+    hard(0.0, 0.0, 1.98, "Flew into the ground"),
+    hard(4.27, -0.25, -0.71, "Wingtip strike"),
+    hard(-4.27, -0.25, -0.71, "Wingtip strike"),
+    hard(0.0, 1.43, -1.65, "Crashed inverted"),
+    hard(0.0, 1.35, -4.07, "Crashed inverted"),
+    hard(0.0, -0.50, -1.5, "Belly struck the ground"),
+];
+
+const ZLIN_ENGINES: &[Vec3] = &[Vec3::new(0.0, 0.13, 1.69)];
+
+pub(super) fn zlin_def() -> AircraftDef {
+    AircraftDef {
+        id: "zlin",
+        name: "Zlin Z-50 LX",
+        description: "Single-seat unlimited aerobatic monoplane (FlightGear Zlin-50lx model; flight model \
+                      calibrated to its YASim data and published figures). 300 hp Lycoming AEIO-540 with \
+                      inverted fuel and oil, symmetric wing, +9 / −6 g: rolls, snaps, spins, flies upside \
+                      down. Smoke on T.",
+        role: "Aerobatic",
+        has_engine: true,
+        flap_label: "None",
+        flap_detents: &[0.0],
+        flap_max_deg: 0.0,
+        vs0_kt: 58.0,
+        vs1_kt: 58.0,
+        vno_kt: 160.0,
+        vne_kt: 184.0,
+        gear_height: 0.96,
+        wingspan: 8.58,
+        mass: 720.0,
+        inertia_roll: 520.0,
+        inertia_pitch: 850.0,
+        inertia_yaw: 1_300.0,
+        wing_area: 12.5,
+        chord: 1.48,
+        wing_height: -0.25,
+        cl0: 0.12,
+        cl_alpha: 4.5,
+        alpha_stall: deg(12.5),
+        alpha_stall_neg: deg(13.5),
+        stall_sharpness: 45.0,
+        cl_flat: 1.0,
+        stall_drop: 0.75,
+        stall_decay: 0.12,
+        cd0: 0.040,
+        oswald: 0.78,
+        cd_flat: 1.3,
+        cd_beta: 0.25,
+        // (Tail incidence: hands-off trim ~120 kt with the trim neutral.)
+        cm0: 0.033,
+        cm_alpha: -1.2,
+        cm_q: -12.0,
+        cm_elevator: 0.7,
+        cm_stall: -0.05,
+        trim_authority: 0.3,
+        cy_beta: -0.6,
+        cl_beta: -0.03,
+        cl_p: -0.42,
+        // Strong autorotation once stalled: snap rolls and spins.
+        stall_autorotation: 0.55,
+        cl_r_per_cl: 0.25,
+        cl_aileron: 0.115,
+        cn_beta: 0.07,
+        cn_r: -0.10,
+        cn_p: -0.03,
+        cn_rudder: 0.045,
+        cn_aileron: -0.004,
+        surface_rate: 8.0,
+        flap_rate: 0.5,
+        windmill_cd: 0.15,
+        prop_disk_area: 3.1,
+        prop_wash: 0.40,
+        idle_power: 0.05,
+        spool_time: 0.45,
+        rpm_idle: 700.0,
+        rpm_static: 2_700.0,
+        rpm_per_ms: 6.0,
+        gear: ZLIN_GEAR,
+        hard_points: ZLIN_HARD,
+        roll_mu: 0.03,
+        brake_mu: 0.5,
+        tire_mu: 0.8,
+        nose_steer_deg: 20.0,
+        max_touchdown_sink: 3.0,
+        max_touchdown_bank: deg(10.0),
+        min_touchdown_pitch: deg(-4.0),
+        g_limit_pos: 9.0,
+        g_limit_neg: -6.0,
+
+        category: Category::Trainer,
+        engine_kind: EngineKind::Piston,
+        engine_count: 1,
+        taildragger: true,
+        eye: Vec3::new(0.0, 0.698, -0.847),
+        vr_kt: 60.0,
+        vref_kt: 75.0,
+        vle_kt: 184.0,
+        ceiling_m: 6_000.0,
+        engine_pos: ZLIN_ENGINES,
+        engine_power_w: 224_000.0,
+        const_speed_prop: true,
+        prop_eta: 0.80,
+        prop_fm: 0.62,
+        prop_radius: 1.0,
+        prop_rotation: 1.0,
+        prop_gear: 1.0,
+        prop_inertia: 6.0,
+        lapse_exp: 1.13,
+        torque_k: 0.5,
+        swirl_k: 0.3,
+        pfactor_k: 0.15,
+        rig_kt: 120.0,
+        sfc: 0.31,
+        egt_idle: 560.0,
+        egt_max: 760.0,
+        min_runway_m: 450.0,
+        rough_field: true,
+        smoke_system: true,
+        ..Default::default()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DHC-3 Otter on floats (FGAddon dhc3 dhc3F, YASim → parametric)
+// ---------------------------------------------------------------------------
+
+/// The Otter's EDO-type floats: 7.5 m long, 0.83 m beam, step 0.43 m aft
+/// of the CG, water rudders. (Reserve buoyancy ≈ 2 × the weight.)
+pub const OTTER_FLOATS: &[Hull] =
+    &[Hull::float(1.64, 3.58, -0.43, -3.88, -2.02, 0.32, 0.47, 0.83, 0.95, 0.07), Hull::float(-1.64, 3.58, -0.43, -3.88, -2.02, 0.32, 0.47, 0.83, 0.95, 0.07)];
+
+const OTTER_GEAR: &[GearPoint] = &[
+    // On land (a ramp or a beach) the float keels are skids.
+    skid(Vec3::new(1.64, -1.72, 3.0), 400_000.0, 40_000.0, 0.45),
+    skid(Vec3::new(-1.64, -1.72, 3.0), 400_000.0, 40_000.0, 0.45),
+    skid(Vec3::new(1.64, -2.02, -0.43), 400_000.0, 40_000.0, 0.45),
+    skid(Vec3::new(-1.64, -2.02, -0.43), 400_000.0, 40_000.0, 0.45),
+    skid(Vec3::new(1.64, -1.55, -3.80), 300_000.0, 30_000.0, 0.45),
+    skid(Vec3::new(-1.64, -1.55, -3.80), 300_000.0, 30_000.0, 0.45),
+];
+
+const OTTER_HARD: &[HardPoint] = &[
+    // The disc clears the water by ~0.15 m at rest on the model's floats: the
+    // tips only count as a strike once they dig in (prop spray ignored).
+    hard(0.0, -1.29, 3.25, "Prop strike"),
+    hard(8.74, 1.20, -0.51, "Wingtip strike"),
+    hard(-8.74, 1.20, -0.51, "Wingtip strike"),
+    hard(0.0, 2.16, 0.0, "Crashed inverted"),
+    hard(0.0, 2.44, -8.49, "Crashed inverted"),
+    hard(0.0, -0.42, -7.30, "Tail struck the water"),
+    hard(0.0, -0.70, 0.5, "Fuselage hit the water"),
+];
+
+const OTTER_ENGINES: &[Vec3] = &[Vec3::new(0.0, 0.06, 3.25)];
+
+pub(super) fn otter_def() -> AircraftDef {
+    AircraftDef {
+        id: "otter",
+        name: "de Havilland Canada DHC-3 Otter",
+        description: "Single-radial STOL bush plane on floats (FlightGear dhc3 model; flight model \
+                      calibrated to its YASim data and published figures; Skyward float hydrodynamics). \
+                      600 hp P&W R-1340 Wasp, 3.5 t: up on the step and off a river or lake in half a \
+                      kilometre. Starts on the water.",
+        role: "Floatplane",
+        has_engine: true,
+        flap_label: "Flaps",
+        flap_detents: &[0.0, 10.0, 20.0, 35.0],
+        flap_max_deg: 35.0,
+        vs0_kt: 52.0,
+        vs1_kt: 60.0,
+        vno_kt: 125.0,
+        vne_kt: 160.0,
+        gear_height: 1.43,
+        wingspan: 17.69,
+        mass: 3_500.0,
+        inertia_roll: 16_000.0,
+        inertia_pitch: 17_000.0,
+        inertia_yaw: 30_000.0,
+        wing_area: 34.84,
+        chord: 2.03,
+        wing_height: 1.1,
+        cl0: 0.30,
+        cl_alpha: 5.0,
+        alpha_stall: deg(15.0),
+        alpha_stall_neg: deg(12.0),
+        stall_sharpness: 40.0,
+        cl_flat: 1.0,
+        stall_drop: 0.85,
+        stall_decay: 0.15,
+        cd0: 0.053,
+        oswald: 0.75,
+        cd_flat: 1.3,
+        cd_beta: 0.3,
+        flap_cl: 0.75,
+        flap_curve: 0.4,
+        flap_alpha_stall: deg(-2.0),
+        flap_cd: 0.06,
+        flap_cd_exp: 1.6,
+        flap_cm: -0.06,
+        cm0: 0.06,
+        cm_alpha: -1.1,
+        cm_q: -18.0,
+        cm_elevator: 0.55,
+        cm_stall: -0.10,
+        trim_authority: 0.45,
+        cy_beta: -0.9,
+        cl_beta: -0.10,
+        cl_p: -0.47,
+        stall_autorotation: 0.2,
+        cl_r_per_cl: 0.25,
+        cl_aileron: 0.055,
+        cn_beta: 0.075,
+        cn_r: -0.12,
+        cn_p: -0.04,
+        cn_rudder: 0.035,
+        cn_aileron: -0.008,
+        surface_rate: 3.5,
+        flap_rate: 0.12,
+        windmill_cd: 0.15,
+        prop_disk_area: 7.07,
+        prop_wash: 0.35,
+        idle_power: 0.05,
+        spool_time: 0.9,
+        rpm_idle: 650.0,
+        rpm_static: 2_200.0,
+        rpm_per_ms: 6.0,
+        gear: OTTER_GEAR,
+        hard_points: OTTER_HARD,
+        roll_mu: 0.03,
+        brake_mu: 0.0,
+        tire_mu: 0.5,
+        nose_steer_deg: 0.0,
+        max_touchdown_sink: 3.0,
+        max_touchdown_bank: deg(7.0),
+        min_touchdown_pitch: deg(-3.0),
+        g_limit_pos: 3.5,
+        g_limit_neg: -1.4,
+
+        category: Category::Trainer,
+        engine_kind: EngineKind::Piston,
+        engine_count: 1,
+        eye: Vec3::new(0.335, 0.771, 0.985),
+        vr_kt: 55.0,
+        vref_kt: 68.0,
+        vle_kt: 160.0,
+        ceiling_m: 5_700.0,
+        engine_pos: OTTER_ENGINES,
+        engine_power_w: 447_000.0,
+        const_speed_prop: true,
+        prop_eta: 0.78,
+        prop_fm: 0.70,
+        prop_radius: 1.5,
+        prop_rotation: 1.0,
+        prop_gear: 1.0,
+        prop_inertia: 60.0,
+        lapse_exp: 1.1,
+        torque_k: 0.5,
+        swirl_k: 0.3,
+        pfactor_k: 0.15,
+        rig_kt: 95.0,
+        sfc: 0.33,
+        egt_idle: 520.0,
+        egt_max: 760.0,
+        min_runway_m: 600.0,
+        hulls: OTTER_FLOATS,
+        ..Default::default()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Douglas DC-3 / C-47 (FGAddon Douglas-Dc3, YASim → parametric)
+// ---------------------------------------------------------------------------
+
+const DC3_GEAR: &[GearPoint] = &[
+    // Retracting mains (half-buried in the nacelles when up), fixed castoring
+    // tail wheel; ~11.5° three-point.
+    wheel(Vec3::new(2.814, -2.78, 0.47), 600_000.0, 90_000.0, false, true, true),
+    wheel(Vec3::new(-2.814, -2.78, 0.47), 600_000.0, 90_000.0, false, true, true),
+    wheel(Vec3::new(0.0, -0.45, -11.14), 200_000.0, 20_000.0, true, false, false),
+];
+
+const DC3_HARD: &[HardPoint] = &[
+    hard(2.814, -2.13, 2.53, "Prop strike"),
+    hard(-2.814, -2.13, 2.53, "Prop strike"),
+    hard(0.0, 0.3, 5.95, "Flew into the ground"),
+    hard(14.6, 1.0, -2.9, "Wingtip strike"),
+    hard(-14.6, 1.0, -2.9, "Wingtip strike"),
+    hard(0.0, 2.3, 3.0, "Crashed inverted"),
+    hard(0.0, 4.4, -12.6, "Crashed inverted"),
+    hard(0.0, -0.80, 0.0, GEAR_UP),
+    hard(2.8, -1.06, 1.5, GEAR_UP),
+    hard(-2.8, -1.06, 1.5, GEAR_UP),
+];
+
+/// Propeller hubs, engine 0 = left.
+const DC3_ENGINES: &[Vec3] = &[Vec3::new(2.814, -0.394, 2.53), Vec3::new(-2.814, -0.394, 2.53)];
+
+pub(super) fn dc3_def() -> AircraftDef {
+    AircraftDef {
+        id: "dc3",
+        name: "Douglas DC-3 / C-47",
+        description: "The classic twin-radial airliner and Dakota (FlightGear Douglas-Dc3 model; flight \
+                      model calibrated to its YASim data and published figures). 2 × 1,200 hp P&W R-1830 \
+                      Twin Wasp, 11 t taildragger: wheel landings, swing on the take-off roll, grass \
+                      strips welcome.",
+        role: "Classic airliner",
+        has_engine: true,
+        flap_label: "Flaps",
+        flap_detents: &[0.0, 15.0, 30.0, 45.0],
+        flap_max_deg: 45.0,
+        vs0_kt: 63.0,
+        vs1_kt: 73.0,
+        vno_kt: 158.0,
+        vne_kt: 190.0,
+        gear_height: 2.54,
+        wingspan: 29.0,
+        mass: 11_000.0,
+        inertia_roll: 160_000.0,
+        inertia_pitch: 130_000.0,
+        inertia_yaw: 270_000.0,
+        wing_area: 91.7,
+        chord: 3.42,
+        wing_height: -0.6,
+        cl0: 0.32,
+        cl_alpha: 5.0,
+        alpha_stall: deg(14.5),
+        alpha_stall_neg: deg(12.0),
+        stall_sharpness: 40.0,
+        cl_flat: 1.0,
+        stall_drop: 0.75,
+        stall_decay: 0.15,
+        cd0: 0.0210,
+        oswald: 0.75,
+        cd_flat: 1.3,
+        cd_beta: 0.2,
+        flap_cl: 0.55,
+        flap_curve: 0.4,
+        flap_alpha_stall: deg(-2.0),
+        flap_cd: 0.075,
+        flap_cd_exp: 1.4,
+        flap_cm: -0.07,
+        cm0: 0.05,
+        cm_alpha: -1.0,
+        cm_q: -18.0,
+        cm_elevator: 0.6,
+        cm_stall: -0.10,
+        trim_authority: 0.45,
+        cy_beta: -0.6,
+        cl_beta: -0.11,
+        cl_p: -0.47,
+        stall_autorotation: 0.35,
+        cl_r_per_cl: 0.25,
+        cl_aileron: 0.032,
+        cn_beta: 0.075,
+        cn_r: -0.12,
+        cn_p: -0.03,
+        cn_rudder: 0.045,
+        cn_aileron: -0.006,
+        surface_rate: 2.5,
+        flap_rate: 0.1,
+        windmill_cd: 0.12,
+        prop_disk_area: 19.0,
+        prop_wash: 0.35,
+        idle_power: 0.04,
+        spool_time: 1.0,
+        rpm_idle: 600.0,
+        rpm_static: 2_700.0,
+        rpm_per_ms: 6.0,
+        gear: DC3_GEAR,
+        hard_points: DC3_HARD,
+        roll_mu: 0.03,
+        brake_mu: 0.45,
+        tire_mu: 0.8,
+        nose_steer_deg: 30.0,
+        max_touchdown_sink: 3.2,
+        max_touchdown_bank: deg(9.0),
+        min_touchdown_pitch: deg(-3.0),
+        g_limit_pos: 2.83,
+        g_limit_neg: -0.83,
+
+        category: Category::Airliner,
+        engine_kind: EngineKind::Piston,
+        engine_count: 2,
+        retractable_gear: true,
+        taildragger: true,
+        eye: Vec3::new(0.475, 1.234, 4.085),
+        vr_kt: 80.0,
+        vref_kt: 85.0,
+        vle_kt: 126.0,
+        ceiling_m: 7_560.0,
+        gear_time: 10.0,
+        cd_gear: 0.012,
+        mach_dd: 0.6,
+        cd_wave: 0.03,
+        engine_pos: DC3_ENGINES,
+        // 1,200 hp for take-off (1,050 METO).
+        engine_power_w: 895_000.0,
+        const_speed_prop: true,
+        prop_eta: 0.72,
+        prop_fm: 0.62,
+        prop_radius: 1.74,
+        prop_rotation: 1.0,
+        prop_gear: 0.5625,
+        prop_inertia: 90.0,
+        // Single-stage two-speed blower: rated power held to ~2,300 m.
+        crit_alt_m: 2_300.0,
+        lapse_exp: 1.0,
+        torque_k: 0.45,
+        swirl_k: 0.3,
+        pfactor_k: 0.25,
+        rig_kt: 140.0,
+        sfc: 0.33,
+        egt_idle: 520.0,
+        egt_max: 760.0,
+        yaw_damper: 0.0,
+        min_runway_m: 900.0,
+        rough_field: true,
+        ..Default::default()
+    }
+}

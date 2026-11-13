@@ -11,7 +11,14 @@ macro_rules! clip {
     };
 }
 
-/// Embedded WAV bytes, in `Clip::ALL` order.
+/// Mission PA lines / windshear: small Ogg Vorbis files (assets/audio/pa, gen_pa.py).
+macro_rules! pa {
+    ($f:literal) => {
+        include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/audio/pa/", $f, ".ogg")).as_slice()
+    };
+}
+
+/// Embedded WAV (or Ogg) bytes, in `Clip::ALL` order.
 fn wav_bytes(c: Clip) -> &'static [u8] {
     match c {
         Clip::Ft2500 => clip!("2500"),
@@ -44,6 +51,17 @@ fn wav_bytes(c: Clip) -> &'static [u8] {
         Clip::Warning => clip!("warning"),
         Clip::Caution => clip!("caution"),
         Clip::Smoke => clip!("smoke"),
+        Clip::Windshear => pa!("windshear"),
+        Clip::PaCrewStations => pa!("crew_stations"),
+        Clip::PaBrace => pa!("brace"),
+        Clip::PaHeadsDown => pa!("heads_down"),
+        Clip::PaMasks => pa!("masks"),
+        Clip::PaEvacuate => pa!("evacuate"),
+        Clip::PaRemainSeated => pa!("remain_seated"),
+        Clip::PaDivert => pa!("divert"),
+        Clip::PaLifejackets => pa!("lifejackets"),
+        Clip::PaPurser => pa!("purser"),
+        Clip::PaEmergencyDescent => pa!("emergency_descent"),
     }
 }
 
@@ -53,6 +71,9 @@ pub struct Pcm {
 }
 
 fn decode(bytes: &[u8]) -> Pcm {
+    if bytes.starts_with(b"OggS") {
+        return decode_ogg(bytes);
+    }
     match hound::WavReader::new(std::io::Cursor::new(bytes)) {
         Ok(r) => {
             let spec = r.spec();
@@ -68,6 +89,19 @@ fn decode(bytes: &[u8]) -> Pcm {
         }
         Err(_) => Pcm { rate: 16000.0, data: Vec::new() },
     }
+}
+
+fn decode_ogg(bytes: &[u8]) -> Pcm {
+    let mut data = Vec::new();
+    let mut rate = 16000.0;
+    if let Ok(mut r) = lewton::inside_ogg::OggStreamReader::new(std::io::Cursor::new(bytes)) {
+        rate = r.ident_hdr.audio_sample_rate as f32;
+        let ch = r.ident_hdr.audio_channels.max(1) as usize;
+        while let Ok(Some(pk)) = r.read_dec_packet_itl() {
+            data.extend(pk.iter().step_by(ch).map(|s| *s as f32 / 32768.0));
+        }
+    }
+    Pcm { rate, data }
 }
 
 /// All clips, decoded on first use.

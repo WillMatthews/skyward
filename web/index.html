@@ -4,47 +4,102 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Skyward — flight simulator</title>
-<link rel="icon" href="data:,">
-<meta name="description" content="Skyward: a flight simulator over real OpenStreetMap scenery, in the browser (WebGPU).">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23101824'/%3E%3Cpath d='M5 19 L27 9 L20 25 L16 18 Z' fill='%2358a6ff'/%3E%3C/svg%3E">
+<meta name="description" content="Skyward: a free flight simulator over real OpenStreetMap scenery, anywhere on Earth, in the browser (WebGPU).">
+<meta name="theme-color" content="#05070b">
+<meta property="og:title" content="Skyward — flight simulator">
+<meta property="og:description" content="Fly anywhere on Earth over real map data, in your browser. Free software (GPL).">
+<!-- The module and the worker script are fetched as early as possible. -->
+<link rel="modulepreload" href="pkg/__GLUE__">
 <style>
-  :root { --bg: #05070b; --panel: rgba(16, 22, 32, 0.92); --text: #e8edf4; --text2: #9aa7b8; --accent: #f2b33d; --err: #ff7a6b; }
+  :root {
+    --bg: #05070b; --panel: rgba(14, 20, 30, 0.86); --line: rgba(255, 255, 255, 0.08);
+    --text: #e8edf4; --text2: #9aa7b8; --text3: #66748a; --accent: #58a6ff; --accent2: #9fd0ff;
+    --ok: #57d18b; --err: #ff7a6b; --warn: #f2b33d;
+  }
+  * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden;
-    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    font: 15px/1.5 Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; }
   #skyward { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; outline: none; touch-action: none; }
-  #overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px;
-    background: radial-gradient(ellipse at 50% 30%, #1b2a40 0%, #070a10 70%); z-index: 2; }
-  #overlay.hidden { display: none; }
-  .card { width: min(520px, 100%); background: var(--panel); border: 1px solid rgba(255,255,255,0.08); border-radius: 16px;
-    padding: 28px 30px; box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
-  h1 { margin: 0 0 4px; font-size: 30px; letter-spacing: 0.02em; font-weight: 650; }
-  .sub { color: var(--text2); margin: 0 0 22px; }
-  #status { min-height: 1.5em; }
-  .bar { height: 4px; border-radius: 2px; background: rgba(255,255,255,0.08); overflow: hidden; margin: 10px 0 18px; }
-  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width 0.15s; }
-  .bar.indet > div { width: 30%; animation: indet 1.2s ease-in-out infinite; }
-  @keyframes indet { 0% { margin-left: -30%; } 100% { margin-left: 100%; } }
-  button { font: inherit; font-weight: 600; color: #1a1205; background: var(--accent); border: 0; border-radius: 10px;
-    padding: 12px 22px; cursor: pointer; }
-  button:disabled { opacity: 0.4; cursor: default; }
-  .err { color: var(--err); white-space: pre-wrap; }
-  .small { color: var(--text2); font-size: 13px; margin-top: 18px; }
-  a { color: var(--accent); }
-  #credits-link { position: fixed; right: 10px; bottom: 6px; z-index: 3; font-size: 12px; color: rgba(255,255,255,0.35); text-decoration: none; }
-  #credits-link:hover { color: rgba(255,255,255,0.8); }
+  /* Loading screen: a dusk sky with a slow horizon glow. */
+  #overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 2;
+    background:
+      radial-gradient(120% 70% at 50% 108%, rgba(255, 170, 90, 0.30) 0%, rgba(255, 120, 60, 0.10) 35%, transparent 60%),
+      linear-gradient(180deg, #050a14 0%, #0c1a30 45%, #1d2c46 72%, #3a3a4c 100%);
+    transition: opacity 0.45s ease; }
+  #overlay.hidden { opacity: 0; pointer-events: none; }
+  #overlay.gone { display: none; }
+  #overlay::before { content: ""; position: absolute; inset: 0; pointer-events: none; opacity: 0.55;
+    background-image: radial-gradient(1px 1px at 12% 18%, #fff 50%, transparent 51%), radial-gradient(1px 1px at 72% 12%, #cfe3ff 50%, transparent 51%),
+      radial-gradient(1px 1px at 38% 28%, #fff 50%, transparent 51%), radial-gradient(1px 1px at 88% 30%, #fff 50%, transparent 51%),
+      radial-gradient(1px 1px at 22% 40%, #dfe9ff 50%, transparent 51%), radial-gradient(1px 1px at 58% 8%, #fff 50%, transparent 51%); }
+  .card { position: relative; width: min(540px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 18px;
+    padding: 30px 32px 24px; box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+  h1 { margin: 0; font-size: 34px; letter-spacing: 0.04em; font-weight: 750; }
+  .sub { color: var(--text2); margin: 2px 0 24px; }
+  #status { min-height: 1.5em; font-weight: 550; }
+  #detail { color: var(--text2); font-size: 13px; min-height: 1.4em; font-variant-numeric: tabular-nums; }
+  .bar { height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.08); overflow: hidden; margin: 10px 0 6px; }
+  .bar > div { height: 100%; width: 0; border-radius: 3px; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width 0.2s ease; }
+  .bar.indet > div { width: 28%; animation: indet 1.3s ease-in-out infinite; }
+  @keyframes indet { 0% { margin-left: -28%; } 100% { margin-left: 100%; } }
+  .steps { list-style: none; padding: 0; margin: 16px 0 20px; display: grid; gap: 6px; font-size: 14px; color: var(--text3); }
+  .steps li { display: flex; align-items: center; gap: 10px; }
+  .steps li::before { content: ""; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid currentColor; flex: none; }
+  .steps li.active { color: var(--text); }
+  .steps li.active::before { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 0 4px rgba(88, 166, 255, 0.18); }
+  .steps li.done { color: var(--text2); }
+  .steps li.done::before { background: var(--ok); border-color: var(--ok); }
+  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  button { font: inherit; font-weight: 650; color: #04101f; background: var(--accent); border: 0; border-radius: 11px;
+    padding: 12px 28px; cursor: pointer; transition: transform 0.08s ease, filter 0.15s ease; }
+  button:hover:not(:disabled) { filter: brightness(1.08); }
+  button:active:not(:disabled) { transform: translateY(1px); }
+  button:focus-visible { outline: 2px solid var(--accent2); outline-offset: 3px; }
+  button:disabled { opacity: 0.35; cursor: default; }
+  button.secondary { background: rgba(255, 255, 255, 0.08); color: var(--text); }
+  .keys { color: var(--text3); font-size: 13px; }
+  kbd { font: 12px ui-monospace, "JetBrains Mono", monospace; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 0 5px; color: var(--text2); }
+  .msg { display: none; margin: 4px 0 18px; padding: 14px 16px; border-radius: 12px; border: 1px solid rgba(255, 122, 107, 0.35); background: rgba(255, 122, 107, 0.08); }
+  .msg.show { display: block; }
+  .msg.warn { border-color: rgba(242, 179, 61, 0.35); background: rgba(242, 179, 61, 0.08); }
+  .msg h2 { margin: 0 0 6px; font-size: 16px; }
+  .msg p { margin: 6px 0; color: var(--text2); font-size: 14px; }
+  .msg ul { margin: 6px 0; padding-left: 20px; color: var(--text2); font-size: 14px; }
+  .msg code { font-size: 12.5px; color: var(--text); }
+  .small { color: var(--text3); font-size: 12.5px; margin: 20px 0 0; border-top: 1px solid var(--line); padding-top: 14px; }
+  a { color: var(--accent2); }
+  #credits-link { position: fixed; right: 10px; bottom: 6px; z-index: 3; font-size: 12px; color: rgba(255, 255, 255, 0.35); text-decoration: none; }
+  #credits-link:hover { color: rgba(255, 255, 255, 0.8); }
+  @media (max-width: 480px) { .card { padding: 22px 18px 18px; } h1 { font-size: 28px; } }
+  @media (prefers-reduced-motion: reduce) { .bar.indet > div { animation: none; width: 100%; opacity: 0.4; } #overlay { transition: none; } }
 </style>
 </head>
 <body>
-<canvas id="skyward" tabindex="0"></canvas>
-<div id="overlay">
+<canvas id="skyward" tabindex="0" aria-label="Skyward flight simulator"></canvas>
+<div id="overlay" role="dialog" aria-labelledby="title" aria-describedby="status">
   <div class="card">
-    <h1>Skyward</h1>
-    <p class="sub">A flight simulator over real OpenStreetMap scenery — anywhere on Earth.</p>
-    <div id="status">Checking for WebGPU…</div>
-    <div class="bar" id="bar"><div></div></div>
-    <button id="start" disabled>Fly</button>
+    <h1 id="title">SKYWARD</h1>
+    <p class="sub">Fly anywhere on Earth, over real map data.</p>
+    <div id="msg" class="msg" role="alert"></div>
+    <div id="progress">
+      <div id="status" aria-live="polite">Checking your browser…</div>
+      <div class="bar" id="bar"><div></div></div>
+      <div id="detail"></div>
+      <ol class="steps" id="steps">
+        <li data-step="gpu">Graphics (WebGPU)</li>
+        <li data-step="dl">Download the simulator</li>
+        <li data-step="compile">Prepare it for this device</li>
+        <li data-step="start">Take off — scenery streams in as you fly</li>
+      </ol>
+    </div>
+    <div class="row">
+      <button id="start" disabled>Fly</button>
+      <button id="retry" class="secondary" hidden>Try again</button>
+      <span class="keys" id="keys"><kbd>W</kbd><kbd>S</kbd> pitch · <kbd>A</kbd><kbd>D</kbd> roll · <kbd>Shift</kbd>/<kbd>Ctrl</kbd> throttle</span>
+    </div>
     <p class="small">
-      Needs a browser with WebGPU (Chrome / Edge 113+, Safari 26+, Firefox 141+ on Windows) and a GPU.
-      Map, terrain and weather stream from public services while you fly.
+      Free software (GPL). Map, terrain and weather stream from public services while you fly.
       <a href="credits.html" target="_blank" rel="noopener">Credits &amp; licence</a> ·
       <a href="https://github.com/WillMatthews/skyward" target="_blank" rel="noopener">Source</a>
     </p>
@@ -52,90 +107,171 @@
 </div>
 <a id="credits-link" href="credits.html" target="_blank" rel="noopener">Credits &amp; licence</a>
 <script type="module">
-// Uncompressed module size (scripts/web-build.sh): progress while downloading.
+// The build (scripts/web-build.sh) fills these in: content-hashed file names
+// (so a new deploy never mixes with cached old files) and the module size.
+const WASM_URL = "pkg/__WASM__", GLUE_URL = "./pkg/__GLUE__";
 const WASM_SIZE = Number("__WASM_SIZE__") || 0;
-const $ = (id) => document.getElementById(id);
-const overlay = $("overlay"), statusEl = $("status"), bar = $("bar"), start = $("start");
+window.skywardWorker = "__WORKER__";
 
-function setStatus(text, progress) {
+const $ = (id) => document.getElementById(id);
+const overlay = $("overlay"), statusEl = $("status"), detail = $("detail"), bar = $("bar"), start = $("start"), retry = $("retry"), msg = $("msg");
+let failed = false;
+
+function step(name) {
+  let seen = false;
+  for (const li of $("steps").children) {
+    const me = li.dataset.step === name;
+    li.className = me ? "active" : seen ? "" : "done";
+    if (me) seen = true;
+  }
+  if (!name) for (const li of $("steps").children) li.className = "done";
+}
+function progress(p) {
+  if (p == null || p < 0) { bar.classList.add("indet"); bar.firstElementChild.style.width = ""; }
+  else { bar.classList.remove("indet"); bar.firstElementChild.style.width = Math.min(100, p * 100).toFixed(1) + "%"; }
+}
+function setStatus(text, p, more) {
+  if (failed) return;
   statusEl.textContent = text;
-  statusEl.className = "";
-  if (progress == null || progress < 0) { bar.classList.add("indet"); bar.firstElementChild.style.width = ""; }
-  else { bar.classList.remove("indet"); bar.firstElementChild.style.width = Math.min(100, progress * 100).toFixed(1) + "%"; }
+  if (more !== undefined) detail.textContent = more;
+  progress(p);
+}
+// A friendly error box: a title, a paragraph, optional list items; `canRetry` shows "Try again".
+function showError(title, text, items = [], canRetry = false, warn = false) {
+  msg.className = "msg show" + (warn ? " warn" : "");
+  msg.replaceChildren();
+  const h = document.createElement("h2"); h.textContent = title; msg.append(h);
+  for (const t of [].concat(text)) { const p = document.createElement("p"); p.innerHTML = t; msg.append(p); }
+  if (items.length) { const ul = document.createElement("ul"); for (const t of items) { const li = document.createElement("li"); li.innerHTML = t; ul.append(li); } msg.append(ul); }
+  if (warn) return;
+  failed = true;
+  overlay.classList.remove("hidden", "gone");
+  $("progress").style.display = "none";
+  start.hidden = true;
+  $("keys").hidden = true;
+  retry.hidden = !canRetry;
 }
 function fatal(text) {
-  overlay.classList.remove("hidden");
-  statusEl.textContent = text;
-  statusEl.className = "err";
-  bar.style.visibility = "hidden";
-  start.style.display = "none";
+  const t = String(text);
+  if (/out of memory|Out of memory|allocation|RangeError: (WebAssembly\.Memory|Array buffer)/i.test(t)) {
+    showError("Not enough memory", ["Skyward ran out of memory in this tab. " + esc(t)],
+      ["Close other tabs or apps and try again.", "On a phone or a small laptop, a desktop browser with more memory works better."], true);
+  } else if (/WebGPU|adapter|device/i.test(t)) {
+    showError("Graphics could not start", [esc(t)], ["Update your browser and graphics driver.", "Check that hardware acceleration is on in the browser's settings."], true);
+  } else {
+    showError("Something went wrong", [esc(t)], ["Reload the page to try again. If it keeps happening, please <a href=\"https://github.com/WillMatthews/skyward/issues\" target=\"_blank\" rel=\"noopener\">report it</a>."], true);
+  }
 }
+const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+retry.addEventListener("click", () => location.reload());
+
 // Called from Rust (src/platform/web.rs).
 window.skyward = {
-  status: setStatus,
-  ready: () => { overlay.classList.add("hidden"); $("skyward").focus(); },
+  status: (text, p) => setStatus(text, p, ""),
+  // (The app has its own credits screen, which links to credits.html.)
+  ready: () => { step(null); overlay.classList.add("hidden"); $("credits-link").hidden = true; setTimeout(() => overlay.classList.add("gone"), 500); $("skyward").focus(); },
   fatal,
 };
+// Anything that escapes before the simulator is up (but winit's event loop
+// hands control back to the browser by throwing: not an error).
+const benign = (m) => String(m).includes("Using exceptions for control flow");
+addEventListener("error", (e) => { const m = e.error?.message || e.message; if (!overlay.classList.contains("gone") && e.error && !benign(m)) fatal(m); });
+addEventListener("unhandledrejection", (e) => { const m = e.reason?.message || e.reason; if (!overlay.classList.contains("gone") && !benign(m)) fatal(m); });
+
+function browserHelp() {
+  const ua = navigator.userAgent;
+  if (/Firefox\//.test(ua)) return ["Firefox has WebGPU on Windows from version 141. Elsewhere it may still be behind a flag: <code>about:config</code> → <code>dom.webgpu.enabled</code>.", "Or use a recent Chrome or Edge."];
+  if (/Safari\//.test(ua) && !/Chrome|Chromium|Edg\//.test(ua)) return ["Safari has WebGPU from Safari 26 (macOS Tahoe, iOS 26). On older versions: Settings → Advanced → Feature Flags → WebGPU.", "Or use a recent Chrome or Edge."];
+  if (/Linux/.test(ua) && /Chrome|Chromium/.test(ua) && !/Android/.test(ua)) return ["Chrome on Linux needs WebGPU switched on: <code>chrome://flags/#enable-unsafe-webgpu</code> (and <code>#enable-vulkan</code>), then restart the browser."];
+  if (/Chrome|Chromium|Edg\//.test(ua)) return ["Chrome and Edge have WebGPU from version 113 (Android: 121). Update the browser, and check that hardware acceleration is on (Settings → System)."];
+  return ["Use a recent Chrome or Edge (113+), Safari 26+, or Firefox 141+ on Windows."];
+}
 
 async function checkWebGPU() {
-  if (!("gpu" in navigator)) return "This browser has no WebGPU. Try a recent Chrome, Edge or Safari (or enable WebGPU in Firefox).";
+  if (!window.isSecureContext) return ["Open this page over https", ["WebGPU only works on secure (https) pages."]];
+  if (!("gpu" in navigator)) return ["Your browser doesn't support WebGPU yet", ["Skyward draws its 3D world with WebGPU, the new graphics standard for the web."], browserHelp()];
   try {
     const a = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
-    if (!a) return "WebGPU is available but found no usable GPU adapter (it may be disabled or blocklisted for this GPU).";
+    if (!a) return ["No usable graphics adapter", ["WebGPU is there, but your browser found no GPU it is willing to use. It may be switched off, or this GPU or driver may be blocklisted."], ["Check that hardware acceleration is on in the browser's settings.", "Update your graphics driver.", ...browserHelp()]];
+    if (a.info?.isFallbackAdapter) showError("Running without a graphics card", ["Your browser is drawing in software: Skyward will be very slow."], [], false, true);
   } catch (e) {
-    return "WebGPU failed to start: " + e;
+    return ["WebGPU failed to start", [esc(e)], browserHelp()];
   }
   return null;
 }
 
-async function download(url) {
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
+// Download the module with progress while the browser compiles it as it
+// arrives (compileStreaming on a counting stream).
+async function compileWithProgress(url) {
+  let r;
+  try { r = await fetch(url); } catch (e) { throw new NetErr(String(e)); }
+  if (!r.ok) throw new NetErr(`${url}: HTTP ${r.status}`);
   const total = WASM_SIZE || Number(r.headers.get("content-length")) || 0;
-  if (!r.body || !total) return new Uint8Array(await r.arrayBuffer());
-  const reader = r.body.getReader();
-  const chunks = [];
   let got = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    got += value.length;
-    setStatus(`Downloading Skyward · ${(got / 1e6).toFixed(1)} / ${(total / 1e6).toFixed(1)} MB`, got / total);
+  const t0 = performance.now();
+  const counter = new TransformStream({
+    transform(chunk, ctl) {
+      got += chunk.byteLength;
+      const s = (performance.now() - t0) / 1000;
+      const rate = got / Math.max(s, 0.05);
+      const left = total > got ? (total - got) / rate : 0;
+      setStatus("Downloading the simulator", total ? got / total : -1,
+        `${(got / 1e6).toFixed(1)}${total ? " / " + (total / 1e6).toFixed(1) : ""} MB · ${(rate / 1e6).toFixed(1)} MB/s` + (left > 1 ? ` · ${Math.ceil(left)} s left` : ""));
+      ctl.enqueue(chunk);
+    },
+    flush() { step("compile"); setStatus("Preparing the simulator", -1, "Compiling for this device"); },
+  });
+  const body = r.body ? r.body.pipeThrough(counter) : null;
+  if (body && WebAssembly.compileStreaming) {
+    try {
+      const m = await WebAssembly.compileStreaming(new Response(body, { headers: { "Content-Type": "application/wasm" } }));
+      return m;
+    } catch (e) {
+      if (/network|fetch|aborted/i.test(String(e))) throw new NetErr(String(e));
+      throw e;
+    }
   }
-  const out = new Uint8Array(got);
-  let o = 0;
-  for (const c of chunks) { out.set(c, o); o += c.length; }
-  return out;
+  const bytes = await new Response(body || (await r.arrayBuffer())).arrayBuffer();
+  step("compile"); setStatus("Preparing the simulator", -1, "");
+  return WebAssembly.compile(bytes);
 }
+class NetErr extends Error {}
 
 (async () => {
+  step("gpu");
   const err = await checkWebGPU();
-  if (err) { fatal(err); return; }
-  setStatus("Downloading Skyward", 0);
-  let bytes, init;
+  if (err) { showError(err[0], err[1], err[2] || [], false); return; }
+  if (navigator.deviceMemory && navigator.deviceMemory < 4) {
+    showError("This device is low on memory", [`Your browser reports ${navigator.deviceMemory} GB. Skyward needs about 1 GB to itself: close other tabs if it struggles.`], [], false, true);
+  }
+  step("dl");
+  let module, init;
   try {
-    [bytes, { default: init }] = await Promise.all([download("pkg/skyward_bg.wasm"), import("./pkg/skyward.js")]);
+    const t0 = performance.now();
+    [module, { default: init }] = await Promise.all([compileWithProgress(WASM_URL), import(GLUE_URL)]);
+    console.log(`skyward: module ready in ${((performance.now() - t0) / 1000).toFixed(1)} s`);
   } catch (e) {
-    fatal("Download failed: " + e);
+    if (e instanceof NetErr || /Failed to fetch|NetworkError|import/i.test(String(e)))
+      showError("Download failed", ["Skyward couldn't download its files. Check your connection and try again."], [esc(e.message || e)], true);
+    else fatal(e.message || e);
     return;
   }
+  // Compiled once; the tile workers (worker.js) get the same module.
+  window.skywardModule = module;
   const go = async () => {
     // A click starts it: browsers only allow sound after a user gesture.
     start.disabled = true;
-    setStatus("Starting", -1);
+    step("start");
+    setStatus("Starting", -1, "");
     try {
-      // Compiled once; the tile workers (worker.js) get the same module.
-      const module = await WebAssembly.compile(bytes);
-      window.skywardModule = module;
       await init({ module_or_path: module });
     } catch (e) {
-      // winit's event loop hands control back to the browser by throwing.
-      if (!String(e).includes("Using exceptions for control flow")) fatal("Skyward failed to start: " + e);
+      if (!benign(e)) fatal(e.message || e);
     }
   };
   if (new URLSearchParams(location.search).has("autostart")) { go(); return; }
-  setStatus("Ready", 1);
+  step("start");
+  setStatus("Ready for take-off", 1, "Sound needs a click: press Fly (or Enter).");
   start.disabled = false;
   start.focus();
   start.addEventListener("click", go, { once: true });

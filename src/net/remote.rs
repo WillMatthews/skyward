@@ -277,7 +277,7 @@ pub fn channel(name: &str, s: &AcState, def: &AircraftDef, time: f32) -> f32 {
         return s.reverser;
     }
     if idx("gear", "_roll_ms").is_some() {
-        return if on_ground { s.tas } else { 0.0 };
+        return if on_ground && !s.has(flags::ON_WATER) { s.tas } else { 0.0 };
     }
     0.0
 }
@@ -320,5 +320,22 @@ mod tests {
         assert_eq!(channel("eng3_rpm", &s, &def, 0.0), 2300.0);
         s.flags = 0;
         assert_eq!(channel("steer_deg", &s, &def, 0.0), 0.0);
+        // Afloat: on the "ground" (wow, water rudders), but the wheels stay still.
+        s.flags = flags::ON_GROUND | flags::ON_WATER;
+        s.tas = 8.0;
+        assert_eq!(channel("wow", &s, &def, 0.0), 1.0);
+        assert_eq!(channel("gear0_roll_ms", &s, &def, 0.0), 0.0);
+    }
+
+    /// Every aircraft in the catalogue has a wire-valid id and round-trips
+    /// through the lookup the remote side uses.
+    #[test]
+    fn every_catalogue_aircraft_has_a_wire_id() {
+        let defs = crate::flight::catalogue();
+        assert!(defs.len() >= 17, "{} aircraft", defs.len());
+        for d in &defs {
+            let id = skyward_net::proto::aircraft_id(d.id).unwrap_or_else(|_| panic!("{} is not a valid wire id", d.id));
+            assert_eq!(crate::flight::find(&id).map(|f| f.id), Some(d.id));
+        }
     }
 }

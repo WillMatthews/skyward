@@ -30,7 +30,7 @@ impl Type {
     }
 }
 
-pub const TYPES: [Type; 8] = [
+pub const TYPES: [Type; 12] = [
     Type { id: "meridian320", role: Role::Jet, span: 34.1, nose: 16.37, tail: -21.24, door: Some((10.6, 1.98, 3.4)) },
     Type { id: "meridian190", role: Role::Jet, span: 28.2, nose: 15.03, tail: -20.80, door: Some((11.2, 1.50, 2.3)) },
     Type { id: "aerolink", role: Role::Turboprop, span: 27.0, nose: 11.83, tail: -15.33, door: None },
@@ -41,6 +41,11 @@ pub const TYPES: [Type; 8] = [
     // ramp / crew door open.
     Type { id: "hercules", role: Role::Turboprop, span: 40.3, nose: 12.82, tail: -16.82, door: None },
     Type { id: "vulcan", role: Role::Warbird, span: 33.6, nose: 18.36, tail: -13.73, door: None },
+    // Track H2b: flying-club / GA fields (see `layout::pick_type`).
+    Type { id: "cub", role: Role::Light, span: 10.71, nose: 1.94, tail: -4.99, door: None },
+    Type { id: "extra500", role: Role::Light, span: 11.63, nose: 3.71, tail: -6.41, door: None },
+    Type { id: "zlin", role: Role::Light, span: 8.64, nose: 1.98, tail: -4.55, door: None },
+    Type { id: "dc3", role: Role::Warbird, span: 29.33, nose: 5.97, tail: -13.71, door: None },
 ];
 
 pub const A320: u16 = 0;
@@ -51,6 +56,10 @@ pub const GLIDER: u16 = 4;
 pub const SPITFIRE: u16 = 5;
 pub const C130: u16 = 6;
 pub const VULCAN: u16 = 7;
+pub const CUB: u16 = 8;
+pub const EXTRA500: u16 = 9;
+pub const ZLIN: u16 = 10;
+pub const DC3: u16 = 11;
 
 pub fn get(i: u16) -> &'static Type {
     &TYPES[(i as usize).min(TYPES.len() - 1)]

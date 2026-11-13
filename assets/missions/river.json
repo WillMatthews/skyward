@@ -1,0 +1,152 @@
+{
+  "id": "river",
+  "title": "Thames Glide",
+  "tagline": "Both engines gone at 2,500 ft over east London.",
+  "aircraft": "meridian190",
+  "difficulty": 4,
+  "minutes": 4,
+  "history": "Inspired by a 2009 airliner that lost both engines to a flock of geese two minutes after take-off and was ditched, without loss of life, on a river beside a city.",
+  "situation": "You are climbing out of London City on runway 09 with 98 passengers on a cold, clear afternoon. Passing 2,500 ft over Thamesmead a flock of geese goes through both engines. You have perhaps three minutes of gliding.",
+  "failures": [
+    "Bird strike: both engines destroyed (no relight)",
+    "No thrust \u2014 battery, APU and RAT only",
+    "Glide range from 2,500 ft: about 6 NM"
+  ],
+  "tips": [
+    "Lower the nose at once: hold about 200 kt clean (best glide)",
+    "Turning back to runway 27 costs height you may not have",
+    "Ditching: gear up, full flap, wings level, about 11\u00b0 nose-up, the lowest sink you can",
+    "Declare MAYDAY (F4)"
+  ],
+  "target": {
+    "airport": "EGLC",
+    "runway": "09",
+    "course_deg": 92.9,
+    "length_m": 1508,
+    "width_m": 30,
+    "elev_ft": 19,
+    "lat": 51.505576,
+    "lon": 0.044333
+  },
+  "start": {
+    "x_nm": 2.8,
+    "y_nm": 0.0,
+    "alt_ft": 2500,
+    "hdg_rel": 0,
+    "kias": 200,
+    "flaps": 1,
+    "gear_down": false,
+    "throttle": 0.9
+  },
+  "fuel_frac": 0.5,
+  "time": "15:30",
+  "date": "01-15",
+  "metar": "EGLC 151530Z 31008KT 9999 FEW040 M02/M10 Q1030",
+  "pax": 98,
+  "survivable_ok": true,
+  "par_s": 200,
+  "events": [
+    {
+      "id": "strike",
+      "when": {
+        "t": 5
+      },
+      "do": [
+        {
+          "fail": "bird"
+        },
+        {
+          "engine_dead": 0
+        },
+        {
+          "engine_dead": 1
+        },
+        {
+          "note": "F/O: Birds! Both engines rolling back \u2014 we've lost thrust on both!"
+        },
+        {
+          "checkpoint": "Bird strike"
+        }
+      ]
+    },
+    {
+      "id": "atc",
+      "when": {
+        "after": "strike",
+        "delay": 14
+      },
+      "do": [
+        {
+          "note": "ATC: Runway 27 is available, emergency services alerted \u2014 say intentions."
+        }
+      ]
+    },
+    {
+      "id": "fo",
+      "when": {
+        "after": "strike",
+        "delay": 32
+      },
+      "do": [
+        {
+          "note": "F/O: Relight's not working. We may not make a runway \u2014 the river is wide open ahead."
+        }
+      ]
+    },
+    {
+      "id": "brace",
+      "when": {
+        "after": "strike",
+        "agl_below_ft": 500
+      },
+      "do": [
+        {
+          "pa": "brace"
+        }
+      ]
+    },
+    {
+      "id": "heads",
+      "when": {
+        "after": "brace",
+        "delay": 3
+      },
+      "do": [
+        {
+          "pa": "heads_down"
+        }
+      ]
+    },
+    {
+      "id": "down",
+      "when": {
+        "after": "strike",
+        "on_ground": true
+      },
+      "do": [
+        {
+          "pa": "evacuate"
+        }
+      ]
+    }
+  ],
+  "objectives": [
+    {
+      "id": "mayday",
+      "text": "Declare MAYDAY",
+      "kind": "player",
+      "act": "mayday",
+      "after": "strike",
+      "within_s": 90,
+      "points": 40
+    },
+    {
+      "id": "survive",
+      "text": "Land on a runway or ditch survivably",
+      "kind": "land_or_ditch",
+      "after": "strike",
+      "required": true,
+      "points": 60
+    }
+  ]
+}

@@ -1,0 +1,112 @@
+"dc3": 143 nodes (142 animated out of 151), 50 materials, 46 textures (2.1 MB), 201 chunks
+triangles: exterior 613053, interior 129465; vertices 538159; model.skac 10.0 MB; radius 14.9 m
+eye: Some(Vec3(0.475, 1.234, 4.085))
+lights: 7
+channels used: aileron_l aileron_r alt_ft alt_set_inhg brakes clock_s ctl_gear ctl_rudder ctl_trim elevator eng0_map_inhg eng0_rpm eng0_running eng1_map_inhg eng1_rpm eng1_running flaps gear_pos hdg_bug_deg heading_deg ias_kt oat_c panel_light roll_deg rudder slip throttle time turn_rate vs_fpm
+texture-animated chunks: 0; display screens: 0
+animation types: [("", 262), ("alpha-test", 22), ("billboard", 22), ("dist-scale", 22), ("knob", 11), ("material", 227), ("noshadow", 154), ("pick", 73), ("range", 6), ("rotate", 200), ("select", 167), ("spin", 9), ("textranslate", 12), ("translate", 20)]
+unmapped properties (count):
+     6 sim/multiplay/generic/bool[23]
+     6 sim/multiplay/generic/bool[22]
+     6 sim/multiplay/generic/bool[21]
+     6 instrumentation/comm/frequencies/standby-mhz
+     6 instrumentation/comm/frequencies/selected-mhz
+     4 sim/multiplay/generic/string[1]
+     4 sim/multiplay/generic/float[1]
+     4 sim/multiplay/generic/float
+     4 sim/multiplay/generic/bool[24]
+     3 systems/hydraulics/landing-gear-psi
+     3 sim/multiplay/generic/float[26]
+     3 sim/multiplay/generic/float[25]
+     3 sim/multiplay/generic/float[15]
+     3 sim/multiplay/generic/float[14]
+     3 sim/multiplay/generic/bool[9]
+     3 sim/multiplay/generic/bool[10]
+     2 systems/hydraulics/pump-psi
+     2 sim/multiplay/generic/float[8]
+     2 sim/multiplay/generic/float[7]
+     2 sim/multiplay/generic/float[6]
+     2 sim/multiplay/generic/float[27]
+     2 sim/multiplay/generic/float[22]
+     2 sim/multiplay/generic/float[21]
+     2 sim/multiplay/generic/float[20]
+     2 sim/multiplay/generic/bool[16]
+     2 instrumentation/nav/in-range
+     2 instrumentation/adf/indicated-bearing-deg
+     2 controls/gear/gear-down-lock
+     2 controls/flight/rudder-trim
+     2 controls/flight/aileron-trim
+     1 systems/hydraulics/flaps-up-psi
+     1 systems/hydraulics/flaps-down-psi
+     1 sim/multiplay/generic/float[24]
+     1 sim/multiplay/generic/float[23]
+     1 sim/multiplay/generic/float[19]
+     1 sim/multiplay/generic/bool[8]
+     1 sim/multiplay/generic/bool
+     1 instrumentation/nav[1]/heading-deg
+     1 instrumentation/nav/to-flag
+     1 instrumentation/nav/heading-needle-deflection
+     1 instrumentation/nav/gs-needle-deflection
+     1 instrumentation/nav/from-flag
+     1 instrumentation/comm/volume
+     1 engines/engine[1]/oil-temp-c
+     1 engines/engine[1]/fuel-psi-norm
+     1 engines/engine[1]/cyl-temp
+     1 engines/engine[1]/carb-temp-degc
+     1 engines/engine/oil-temp-c
+     1 engines/engine/fuel-psi-norm
+     1 engines/engine/cyl-temp
+     1 engines/engine/carb-temp-degc
+     1 controls/paratroopers/jump-signal-pos
+     1 controls/lighting/taxi-light-pos
+     1 controls/lighting/strobe-pos
+     1 controls/lighting/recognition-lights[2]
+     1 controls/lighting/recognition-lights[1]
+     1 controls/lighting/recognition-lights-pos[2]
+     1 controls/lighting/recognition-lights-pos[1]
+     1 controls/lighting/recognition-lights-pos
+     1 controls/lighting/recognition-lights
+     1 controls/lighting/nav-lights-pos
+     1 controls/lighting/landing-lights-pos
+     1 controls/lighting/formation-lights-pos
+     1 controls/lighting/compass-lights-pos
+     1 controls/lighting/cabin-lights-pos
+     1 controls/lighting/beacon-pos
+     1 controls/hydraulic/wipers-right/position-norm
+     1 controls/hydraulic/wipers-left/position-norm
+     1 controls/gear/tailwheel-lock-pos
+     1 controls/gear/gear-down-lock-pos
+     1 controls/gear/brake-parking-pos
+     1 controls/fuel/tank[1]/boost-pump-pos
+     1 controls/fuel/tank/boost-pump-pos
+     1 controls/fuel/tank-gauge-pos
+     1 controls/fuel/right-valve-pos
+     1 controls/fuel/long-range-pos
+     1 controls/fuel/left-valve-pos
+     1 controls/engines/engine[1]/starter-pos
+     1 controls/engines/engine[1]/propeller-pitch
+     1 controls/engines/engine[1]/propeller-feather-pos
+     1 controls/engines/engine[1]/oil-dilution-pos
+     1 controls/engines/engine[1]/mixture
+     1 controls/engines/engine[1]/magnetos-pos
+     1 controls/engines/engine[1]/cowl-flaps-pos
+     1 controls/engines/engine/starter-pos
+     1 controls/engines/engine/propeller-pitch
+     1 controls/engines/engine/propeller-feather-pos
+     1 controls/engines/engine/oil-dilution-pos
+     1 controls/engines/engine/mixture
+     1 controls/engines/engine/magnetos-pos
+     1 controls/engines/engine/cowl-flaps-pos
+     1 controls/electric/engine[1]/generator
+     1 controls/electric/engine/generator
+     1 controls/electric/battery-switch-pos
+     1 controls/anti-ice/window-heat-pos
+     1 controls/anti-ice/prop-heat-pos
+     1 controls/anti-ice/pitot-heat-pos[1]
+     1 controls/anti-ice/pitot-heat-pos
+     1 controls/anti-ice/engine/carb-heat-pos
+     1 consumables/fuel/needle-gauge
+     1 
+log:
+  skip external/missing submodel Instruments/checklist/checklist1.xml
+  skip external/missing submodel Instruments/checklist/checklist2.xml

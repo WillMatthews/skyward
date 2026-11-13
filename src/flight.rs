@@ -65,6 +65,9 @@ use std::f32::consts::{PI, TAU};
 #[path = "rotor/glue.rs"]
 mod rotor_glue;
 
+/// Track H2b aircraft (Extra 500, Super Cub, Zlin, Otter, DC-3).
+mod ga;
+
 /// Gravitational acceleration, m/s².
 pub const GRAVITY: f32 = 9.81;
 /// Sea-level ISA air density, kg/m³.
@@ -232,6 +235,9 @@ pub struct Controls {
     pub reverse: bool,
     /// Bit `i` set = engine `i` failed (fuel cut; props windmill or feather).
     pub failed_engines: u8,
+    /// Split throttles (Track M): per-engine lever positions 0..1, used only
+    /// when `Some` (differential thrust); `None` = every engine on `throttle`.
+    pub engine_throttle: Option<[f32; MAX_ENGINES]>,
 }
 
 impl Default for Controls {
@@ -248,6 +254,7 @@ impl Default for Controls {
             spoilers: 0.0,
             reverse: false,
             failed_engines: 0,
+            engine_throttle: None,
         }
     }
 }
@@ -270,7 +277,25 @@ impl Controls {
             spoilers: finite_or(self.spoilers, 0.0).clamp(0.0, 1.0),
             reverse: self.reverse,
             failed_engines: self.failed_engines,
+            engine_throttle: self.engine_throttle.map(|t| t.map(|x| finite_or(x, 0.0).clamp(0.0, 1.0))),
         }
+    }
+
+    /// Thrust lever of engine `i` (its split lever, else the common one).
+    pub fn lever(&self, i: usize) -> f32 {
+        match self.engine_throttle {
+            Some(t) => t.get(i).copied().unwrap_or(self.throttle),
+            None => self.throttle,
+        }
+    }
+
+    /// Move engine `i`'s lever by `d` (splitting the throttles if they are not yet).
+    pub fn nudge_lever(&mut self, i: usize, d: f32) {
+        let mut t = self.engine_throttle.unwrap_or([self.throttle; MAX_ENGINES]);
+        if let Some(x) = t.get_mut(i) {
+            *x = (*x + d).clamp(0.0, 1.0);
+        }
+        self.engine_throttle = Some(t);
     }
 }
 
@@ -681,6 +706,20 @@ pub struct AircraftDef {
     /// Rotorcraft flight model (src/rotor): replaces the fixed-wing engines,
     /// control law and aerodynamics in [`Aircraft::step`].
     pub rotor: Option<std::sync::Arc<crate::rotor::RotorDef>>,
+
+    // ================= v3 GA / props (Track H2b) =================
+    /// Floats / hull (src/water.rs): non-empty = a floatplane that operates
+    /// from water (its `gear` are the float keels as skids on land).
+    pub hulls: &'static [crate::water::Hull],
+    /// Airshow smoke system (the T key toggles the smoke trail, src/vfx/smoke.rs).
+    pub smoke_system: bool,
+}
+
+impl AircraftDef {
+    /// A floatplane (operates from water lanes, src/water.rs).
+    pub fn on_water(&self) -> bool {
+        !self.hulls.is_empty()
+    }
 }
 
 /// A JSBSim aerodynamic model plus how Skyward's normalised surfaces map onto
@@ -1478,6 +1517,12 @@ pub fn catalogue() -> Vec<AircraftDef> {
             vulcan_def(),
             crate::rotor::ec130_def(),
             crate::rotor::quad_def(),
+            // Track H2b: more propeller types (src/flight/ga.rs).
+            ga::extra500_def(),
+            ga::cub_def(),
+            ga::zlin_def(),
+            ga::otter_def(),
+            ga::dc3_def(),
         ];
         for d in &mut v {
             rig_for_cruise(d);
@@ -1520,6 +1565,25 @@ pub const ALIASES: &[(&str, &str)] = &[
     ("quad", "fpv"),
     ("drone", "fpv"),
     ("quadcopter", "fpv"),
+    ("ea500", "extra500"),
+    ("extra-500", "extra500"),
+    ("pa18", "cub"),
+    ("pa-18", "cub"),
+    ("supercub", "cub"),
+    ("super-cub", "cub"),
+    ("z50", "zlin"),
+    ("z-50", "zlin"),
+    ("z50lx", "zlin"),
+    ("zlin50", "zlin"),
+    ("aerobat", "zlin"),
+    ("dhc3", "otter"),
+    ("dhc-3", "otter"),
+    ("floatplane", "otter"),
+    ("seaplane", "otter"),
+    ("dc-3", "dc3"),
+    ("c47", "dc3"),
+    ("c-47", "dc3"),
+    ("dakota", "dc3"),
 ];
 
 /// Canonical id for an id or alias (case-insensitive).
@@ -3113,6 +3177,8 @@ pub struct Aircraft {
     pub sys: crate::systems::Systems,
     /// Rotorcraft state (rotor speed, inflow, engine, assist; src/rotor).
     pub rotor: crate::rotor::RotorState,
+    /// Floats / hull on the water: sea state and the last contact (src/water.rs).
+    pub water: crate::water::WaterState,
 }
 
 /// Kinematic state captured when the aircraft crashed.
@@ -3173,6 +3239,7 @@ impl Aircraft {
             impact: None,
             sys: Default::default(),
             rotor: Default::default(),
+            water: Default::default(),
         };
         a.settle_engines(def, 0.0, 0.0, &isa(0.0));
         a
@@ -3226,7 +3293,9 @@ impl Aircraft {
     pub fn on_runway(def: &AircraftDef, xz: Vec2, heading_rad: f32, env: &dyn Environment) -> Self {
         let mut a = Self::blank(def);
         let gh = finite_or(env.ground_height(xz), 0.0);
-        a.pos = Vec3::new(xz.x, gh + def.gear_height, xz.y);
+        // A floatplane on land (a ramp) rests on its keels, not at its waterline.
+        let h0 = if def.on_water() && !env.is_water(xz) { def.gear.iter().map(|g| -g.pos.y).fold(def.gear_height, f32::max) } else { def.gear_height };
+        a.pos = Vec3::new(xz.x, gh + h0, xz.y);
         a.rot = attitude(heading_rad, def.rest_pitch(), 0.0);
         a.on_ground = true;
         // Let the gear settle onto its springs, then zero any residual motion.
@@ -3633,7 +3702,13 @@ impl Aircraft {
         }
 
         // ---- ground -------------------------------------------------------
+        if def.on_water() {
+            self.water.update_sea(env, self.pos, dt);
+        }
         let gnd = self.ground(def, env, &c, dt);
+        self.water.last = gnd.water_contact;
+        // Only the floats on the water: no brakes, no tyres.
+        let water_only = gnd.water && !gnd.land;
         if let Some(reason) = gnd.crash {
             self.crash(reason);
             return;
@@ -3645,7 +3720,7 @@ impl Aircraft {
         // Static friction of held brakes (the velocity-level tyre model alone
         // lets a stationary aircraft creep under idle thrust).
         let gs = Vec2::new(self.vel.x, self.vel.z);
-        if gnd.contact && c.brakes > 0.3 && gs.length() < 0.3 {
+        if gnd.contact && !water_only && c.brakes > 0.3 && gs.length() < 0.3 {
             let here = Vec2::new(self.pos.x, self.pos.z);
             let anchor = *self.brake_anchor.get_or_insert(here);
             let m = def.mass;
@@ -3675,6 +3750,8 @@ impl Aircraft {
                 // fuselage breaks.
                 let how = if sink > 1.7 * def.max_touchdown_sink || def.category == Category::Glider {
                     "airframe broke up"
+                } else if water_only {
+                    "float struts collapsed"
                 } else {
                     for p in [crate::damage::Part::GearL, crate::damage::Part::GearR, crate::damage::Part::GearNose] {
                         if def.gear.iter().any(|g| crate::damage::gear_part(def, g) == Some(p)) {
@@ -3687,7 +3764,12 @@ impl Aircraft {
                 return;
             }
             if bank.abs() > def.max_touchdown_bank {
-                self.crash(format!("Wingtip strike: touched down with {:.0}° of bank", bank.abs().to_degrees()));
+                let what = if water_only { "Caught a float" } else { "Wingtip strike" };
+                self.crash(format!("{what}: touched down with {:.0}° of bank", bank.abs().to_degrees()));
+                return;
+            }
+            if water_only && pitch < def.min_touchdown_pitch {
+                self.crash(format!("Dug the float bows in: touched down nose-low ({:.0}° nose down)", -pitch.to_degrees()));
                 return;
             }
             if pitch < def.min_touchdown_pitch {
@@ -3754,7 +3836,7 @@ impl Aircraft {
         };
         self.dmg.update(sd, def, &loads);
         // A ground loop / hard sideways skid folds the main gear.
-        if self.on_ground && self.dmg.side_f.abs() > sd.gear_side_g && loads.ground_speed > 8.0 && self.dmg.lost & crate::damage::GEAR_BITS == 0 && def.category != Category::Glider {
+        if self.on_ground && !water_only && self.dmg.side_f.abs() > sd.gear_side_g && loads.ground_speed > 8.0 && self.dmg.lost & crate::damage::GEAR_BITS == 0 && def.category != Category::Glider {
             for p in [crate::damage::Part::GearL, crate::damage::Part::GearR] {
                 if def.gear.iter().any(|g| crate::damage::gear_part(def, g) == Some(p)) {
                     self.dmg.separate(sd, def, p, "side load");
@@ -3800,11 +3882,13 @@ impl Aircraft {
         let rev = self.surf.reverser;
         // Reverse selected: forward thrust held at idle until deployed, then the
         // lever sets reverse power.
-        let thr = if def.has_reverser && c.reverse { if rev > 0.9 { c.throttle } else { 0.0 } } else { c.throttle };
-        let (spool_t, ab_t) = def.spool_for_throttle(thr);
         let mut ab_max = 0.0f32;
         let fx = self.sys.fx;
         for i in 0..def.engines() {
+            // Each engine on its own lever when the throttles are split.
+            let lever = c.lever(i);
+            let thr = if def.has_reverser && c.reverse { if rev > 0.9 { lever } else { 0.0 } } else { lever };
+            let (spool_t, ab_t) = def.spool_for_throttle(thr);
             let failed = c.failed_engines & (1 << i) != 0;
             let e = &mut self.eng[i];
             e.running = !failed;
@@ -4211,10 +4295,15 @@ impl Aircraft {
                 continue;
             }
             if env.is_water(cxz) {
+                if def.on_water() {
+                    // Floats: the hull model below carries it on the water.
+                    continue;
+                }
                 out.crash = Some("Ditched in the water".to_string());
                 return out;
             }
             out.contact = true;
+            out.land = true;
             if let Some(i) = def.gear.iter().position(|g| std::ptr::eq(g, gp)) {
                 if i < 8 {
                     out.comp[i] = pen;
@@ -4249,9 +4338,19 @@ impl Aircraft {
                 continue;
             }
             if env.is_water(cxz) {
-                out.crash = Some("Ditched in the water".to_string());
+                out.crash = Some(if def.on_water() {
+                    match hp.reason {
+                        "Wingtip strike" => "A wingtip caught the water — cartwheeled".to_string(),
+                        "Prop strike" => "The propeller hit the water".to_string(),
+                        "Crashed inverted" => "Capsized".to_string(),
+                        _ => "Flipped over on the water".to_string(),
+                    }
+                } else {
+                    "Ditched in the water".to_string()
+                });
                 return out;
             }
+            out.land = true;
             if ground_speed >= hp.tolerate_below {
                 let belly_hit = ((def.retractable_gear && !locked) || gear_gone) && hp.pos.y < -0.5 && hp.reason != "Wingtip strike";
                 let reason = if belly_hit {
@@ -4271,6 +4370,21 @@ impl Aircraft {
             torque_world += r.cross(f);
         }
         out.moment_body = inv * torque_world;
+        // Floats on the water (src/water.rs).
+        if def.on_water() {
+            let body = crate::water::BodyState { pos: self.pos, vel: self.vel, rot: self.rot, omega: self.omega };
+            let wc = crate::water::water_contact(def.hulls, &body, env, &self.water.sea, self.water.time, self.surf.rudder, def.mass * GRAVITY);
+            if wc.wet {
+                out.contact = true;
+                out.water = true;
+                out.force_world += wc.force;
+                out.moment_body += wc.moment;
+                if wc.bow_buried {
+                    out.crash = Some("Dug the float bows in — flipped over".to_string());
+                }
+            }
+            out.water_contact = wc;
+        }
         out
     }
 
@@ -4651,6 +4765,11 @@ struct GroundOut {
     contact: bool,
     crash: Option<String>,
     comp: [f32; 8],
+    /// Some contact was on land (gear, skids, scrapes) — not just the water.
+    land: bool,
+    /// The floats / hull touched the water (src/water.rs).
+    water: bool,
+    water_contact: crate::water::Contact,
 }
 
 // ---------------------------------------------------------------------------
@@ -4660,6 +4779,9 @@ struct GroundOut {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Track H2b types against published numbers (src/flight/tests/ga_types.rs).
+    mod ga_types;
 
     const DT: f32 = 1.0 / 120.0;
 
@@ -4863,6 +4985,11 @@ mod tests {
             "lancer" => 350.0,
             "aerolink" => 180.0,
             "hercules" => 200.0,
+            "extra500" => 160.0,
+            "cub" => 80.0,
+            "zlin" => 120.0,
+            "otter" => 95.0,
+            "dc3" => 140.0,
             _ => 250.0,
         }
     }
@@ -5004,7 +5131,7 @@ mod tests {
     fn catalogue_order() {
         let c = fixed_wing();
         let ids: Vec<_> = c.iter().map(|d| d.id).collect();
-        assert_eq!(ids, ["kestrel", "swift", "peregrine", "lancer", "aerolink", "meridian190", "meridian320", "hercules", "galaxy", "vulcan"]);
+        assert_eq!(ids, ["kestrel", "swift", "peregrine", "lancer", "aerolink", "meridian190", "meridian320", "hercules", "galaxy", "vulcan", "extra500", "cub", "zlin", "otter", "dc3"]);
         assert!(c[0].has_engine && !c[1].has_engine);
         assert_eq!(c[1].flap_label, "Airbrakes");
         for d in &c {
@@ -5014,7 +5141,8 @@ mod tests {
             assert_eq!(d.has_engine, d.engine_kind != EngineKind::None);
             assert!(d.vr_kt > 0.0 && d.vref_kt > 0.0 && d.vle_kt > 0.0 && d.ceiling_m > 0.0);
             assert!(d.vs0_kt <= d.vs1_kt && d.vs1_kt < d.vno_kt && d.vno_kt <= d.vne_kt);
-            assert!(*d.flap_detents.last().unwrap() > 0.0);
+            // (A flapless type, e.g. the Zlin aerobat, has the single detent 0.)
+            assert!(*d.flap_detents.last().unwrap() > 0.0 || (d.flap_detents.len() == 1 && d.flap_max_deg == 0.0));
             if d.retractable_gear {
                 assert!(d.gear.iter().any(|g| g.retracts) && d.gear_time > 0.0);
             }
@@ -5603,6 +5731,10 @@ mod tests {
             eprintln!("{} full aileron: 0→45° in {:.2} s, peak roll rate {:.0}°/s", def.name, t45.unwrap_or(99.0), pmax.to_degrees());
             let t45 = t45.unwrap();
             let range = match def.category {
+                // Unlimited aerobat: ~200°/s+.
+                _ if def.id == "zlin" => 0.12..0.6,
+                // (The Super Cub's big fabric wing rolls lazily.)
+                _ if def.id == "cub" => 0.6..2.8,
                 Category::Trainer | Category::Warbird => 0.6..2.0,
                 Category::Glider => 1.5..4.5,
                 Category::FastJet => 0.15..0.8,
@@ -5644,7 +5776,8 @@ mod tests {
 
     #[test]
     fn rest_on_runway() {
-        for def in fixed_wing() {
+        // (Floatplanes rest afloat: src/flight/tests/ga_types.rs.)
+        for def in fixed_wing().into_iter().filter(|d| !d.on_water()) {
             let env = TestEnv::default();
             let mut a = Aircraft::on_runway(&def, Vec2::new(10.0, -20.0), 1.2, &env);
             let y0 = a.pos.y;
@@ -5669,7 +5802,9 @@ mod tests {
             assert!((Vec2::new(a.pos.x, a.pos.z) - Vec2::new(10.0, -20.0)).length() < 0.5);
             assert!(a.on_ground);
             if def.taildragger {
-                assert!((a.pitch() - deg(13.6)).abs() < deg(1.0), "three-point attitude {}", a.pitch().to_degrees());
+                // Spitfire IX 13.6°; the others' three-point attitude from their gear geometry.
+                let three = if def.id == "peregrine" { deg(13.6) } else { def.rest_pitch() };
+                assert!((a.pitch() - three).abs() < deg(1.0), "{} three-point attitude {}", def.id, a.pitch().to_degrees());
             } else if def.has_engine {
                 // The c172p FDM's long nose strut sits ~4° nose-up.
                 assert!(a.pitch().abs() < deg(5.0), "{} pitch {}", def.id, a.pitch().to_degrees());
@@ -5853,10 +5988,10 @@ mod tests {
     fn land(def: &AircraftDef, sink_fpm: f32, bank: f32, pitch_override: Option<f32>) -> Aircraft {
         let env = TestEnv::default();
         let (kt, flap) = match def.category {
-            Category::Trainer => (60.0, 1.0),
-            Category::Glider => (48.0, 0.5),
             // Three-point landing just above the stall.
             _ if def.taildragger => (def.vs0_kt * 1.08, 1.0),
+            Category::Trainer => (60.0, 1.0),
+            Category::Glider => (48.0, 0.5),
             _ => (def.vref_kt - 5.0, 1.0),
         };
         let (mut a, base) = flying(def, Vec3::new(0.0, def.gear_height + 0.5, 0.0), 0.0, kt * KT, flap);
@@ -5900,7 +6035,8 @@ mod tests {
 
     #[test]
     fn landings() {
-        for def in fixed_wing() {
+        // (Floatplanes land on water: src/flight/tests/ga_types.rs.)
+        for def in fixed_wing().into_iter().filter(|d| !d.on_water()) {
             let a = land(&def, 500.0, 0.0, None);
             eprintln!("{} 500 fpm: crashed {:?}, final speed {:.2}, x {:.1}", def.name, a.crashed, a.vel.length(), a.pos.x);
             assert!(a.crashed.is_none());
@@ -6117,6 +6253,7 @@ mod tests {
                             spoilers: rng.next().max(0.0),
                             reverse: rng.next() > 0.8,
                             failed_engines: if rng.next() > 0.7 { 1 } else { 0 },
+                            engine_throttle: None,
                         };
                         if seed % 2 == 0 {
                             // Bang-bang extremes.
@@ -6159,6 +6296,7 @@ mod tests {
                         spoilers: rng.next().max(0.0),
                         reverse: rng.next() > 0.5,
                         failed_engines: (rng.next().abs() * 4.0) as u8,
+                        engine_throttle: None,
                     };
                 }
                 a.step(&def, &c, &env, DT);
@@ -6215,7 +6353,9 @@ mod tests {
             let env = TestEnv::default();
             let speed = def.stall_speed(0.0) * 1.2;
             // (v1 ran this at sea-level density; 1,500 m ISA is close to that.)
-            let alt0 = if def.category == Category::Warbird { 5000.0 } else { 1500.0 };
+            // (The aerobat's spins are fast and its hands-off pull-out from the
+            // vertical slow: it starts where an aerobatic pilot would spin, high.)
+            let alt0 = if def.category == Category::Warbird || def.id == "zlin" { 5000.0 } else { 1500.0 };
             let mut a = Aircraft::airborne(&def, Vec3::new(0.0, alt0, 0.0), 0.0, speed);
             // Clean (gear up) for the retractable.
             if def.retractable_gear {
@@ -6320,13 +6460,22 @@ mod tests {
                     bank.to_degrees()
                 );
                 assert!(a.crashed.is_none(), "{} {:?}", def.id, a.crashed);
-                if def.category == Category::Warbird {
+                if def.category == Category::Warbird || def.id == "zlin" {
                     // 1,250 kW through one propeller with no trim: torque rolls it
                     // and the speed change pitches it. Use trimmed_controls_at().
+                    // (The aerobat is built spirally neutral: it stays where it is put.)
                     continue;
                 }
                 // Turboprops: prop torque away from the rigging speed needs aileron trim.
-                let bank_lim = if def.engine_kind == EngineKind::Turboprop { 35.0 } else { 3.0 };
+                // Pistons with modelled torque / swirl (the H2b types) likewise drift
+                // a little off their rigging speed.
+                let bank_lim = if def.engine_kind == EngineKind::Turboprop {
+                    35.0
+                } else if def.torque_k > 0.0 || def.swirl_k > 0.0 {
+                    12.0
+                } else {
+                    3.0
+                };
                 assert!(bank < deg(bank_lim), "{} bank {}", def.id, bank.to_degrees());
                 assert!(vmin > def.vs1_kt * if flap > 0.0 { 0.9 } else { 1.0 }, "{} vmin {vmin}", def.id);
                 // A fixed 65 % throttle is a big thrust excess for the jets (they

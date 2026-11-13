@@ -1,0 +1,30 @@
+"cub": 63 nodes (62 animated out of 63), 21 materials, 17 textures (0.6 MB), 68 chunks
+triangles: exterior 28672, interior 17998; vertices 37335; model.skac 0.6 MB; radius 5.4 m
+eye: Some(Vec3(0.0, 0.39, 0.12800002))
+lights: 4
+channels used: aileron_l aileron_r alt_ft alt_set_inhg ctl_aileron ctl_elevator elevator eng0_oilp_psi eng0_rpm flaps heading_deg ias_kt panel_light pitch_deg roll_deg rudder slip throttle turn_rate vs_fpm
+texture-animated chunks: 0; display screens: 0
+animation types: [("", 16), ("knob", 1), ("material", 15), ("noshadow", 16), ("pick", 15), ("rotate", 52), ("scale", 8), ("select", 16), ("spin", 4), ("translate", 1)]
+unmapped properties (count):
+     8 constants/zero
+     4 sim/multiplay/generic/float[1]
+     4 sim/multiplay/generic/float
+     2 sim/multiplay/generic/float[11]
+     2 sim/multiplay/generic/float[10]
+     2 sim/multiplay/generic/bool[16]
+     2 instrumentation/kt76a/digit4
+     2 instrumentation/kt76a/digit3
+     2 instrumentation/kt76a/digit2
+     2 instrumentation/kt76a/digit1
+     1 sim/multiplay/generic/float[7]
+     1 sim/multiplay/generic/float[6]
+     1 sim/multiplay/generic/float[5]
+     1 sim/multiplay/generic/float[12]
+     1 instrumentation/kt76a/mode
+     1 engines/engine/oil-temperature-degC
+     1 engines/engine/egt-degC
+     1 controls/lighting/luminosite-lights
+     1 controls/engines/engine/starter
+     1 controls/electric/key-pos
+     1 controls/electric/engine/generator
+log:

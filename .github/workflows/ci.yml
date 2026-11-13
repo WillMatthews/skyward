@@ -137,4 +137,4 @@ jobs:
           key: wasm32
 
       - name: clippy (wasm32)
-        run: cargo clippy --locked --target wasm32-unknown-unknown -- -D warnings
+        run: cargo clippy --locked -p skyward --target wasm32-unknown-unknown -- -D warnings

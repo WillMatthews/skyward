@@ -21,6 +21,13 @@ pub fn insert(path: &str, bytes: Vec<u8>) {
     store().lock().unwrap().insert(path.to_string(), std::sync::Arc::new(bytes));
 }
 
+/// Remove a stored asset and return it (data that is used once, e.g. a
+/// texture decoded ahead of time by the browser build).
+#[allow(dead_code)]
+pub fn take(path: &str) -> Option<std::sync::Arc<Vec<u8>>> {
+    store().lock().unwrap().remove(path)
+}
+
 /// Read an asset by its path relative to the asset root.
 pub fn read(path: &str) -> Result<std::sync::Arc<Vec<u8>>, String> {
     if let Some(b) = store().lock().unwrap().get(path) {

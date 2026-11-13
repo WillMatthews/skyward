@@ -1,0 +1,143 @@
+{
+  "id": "hydraulics4",
+  "title": "Four Levers",
+  "tagline": "No hydraulics in a C-5: steer with four thrust levers.",
+  "aircraft": "galaxy",
+  "difficulty": 5,
+  "minutes": 8,
+  "history": "Inspired by airliners that lost every flight control to hydraulic failures \u2014 a 1989 wide-body above all, whose crew steered it to a runway with the throttles alone, saving most of those aboard \u2014 and the research into thrust-only control that followed.",
+  "situation": "Fifteen miles east of Brize Norton at 5,000 ft, a heavy C-5 with 40 aboard loses every hydraulic system. Nothing moves when you move the yoke \u2014 but there are four engines, two on each wing.",
+  "failures": [
+    "Hydraulic systems green, blue and yellow lost: all flight controls frozen",
+    "No flaps, no speed brakes; gear by gravity; brakes on the accumulator"
+  ],
+  "tips": [
+    "Split the throttles: F7/F8 (Numpad 1/7) for engines 1\u20132, F9/F10 (Numpad 3/9) for 3\u20134, F5 together",
+    "More thrust on the left yaws and rolls you right \u2014 small, early inputs",
+    "Power up = nose up and climb, power down = descend; the aircraft oscillates (phugoid): lead it",
+    "Gravity gear early (O \u2192 Systems \u2192 ALT GEAR); a firm touchdown on the runway is a win"
+  ],
+  "target": {
+    "airport": "EGVN",
+    "runway": "25",
+    "course_deg": 253.4,
+    "length_m": 3050,
+    "width_m": 56,
+    "elev_ft": 288,
+    "lat": 51.753899,
+    "lon": -1.56179
+  },
+  "start": {
+    "x_nm": -15,
+    "y_nm": 0,
+    "alt_ft": 5000,
+    "hdg_rel": 0,
+    "kias": 200,
+    "flaps": 0,
+    "gear_down": false
+  },
+  "fuel_frac": 0.45,
+  "time": "16:00",
+  "date": "07-19",
+  "metar": "EGVN 191600Z 25006KT 9999 FEW040 23/12 Q1017",
+  "pax": 40,
+  "survivable_ok": true,
+  "par_s": 420,
+  "events": [
+    {
+      "id": "hyd",
+      "when": {
+        "t": 5
+      },
+      "do": [
+        {
+          "fail": "hyd1"
+        },
+        {
+          "fail": "hyd2"
+        },
+        {
+          "fail": "hyd3"
+        },
+        {
+          "ap_off": true
+        },
+        {
+          "note": "F/O: All three hydraulics \u2014 gone. I've got no controls! Nothing!"
+        },
+        {
+          "checkpoint": "Hydraulics lost"
+        }
+      ]
+    },
+    {
+      "id": "idea",
+      "when": {
+        "after": "hyd",
+        "delay": 20
+      },
+      "do": [
+        {
+          "note": "Captain: Throttles. We steer with the throttles."
+        }
+      ]
+    },
+    {
+      "id": "pa",
+      "when": {
+        "after": "hyd",
+        "delay": 45
+      },
+      "do": [
+        {
+          "pa": "crew_stations"
+        }
+      ]
+    },
+    {
+      "id": "brace",
+      "when": {
+        "after": "hyd",
+        "agl_below_ft": 300
+      },
+      "do": [
+        {
+          "pa": "brace"
+        }
+      ]
+    }
+  ],
+  "objectives": [
+    {
+      "id": "split",
+      "text": "Split the thrust levers (differential thrust)",
+      "kind": "player",
+      "act": "split_throttles",
+      "after": "hyd",
+      "points": 40
+    },
+    {
+      "id": "mayday",
+      "text": "Declare MAYDAY",
+      "kind": "player",
+      "act": "mayday",
+      "after": "hyd",
+      "points": 20
+    },
+    {
+      "id": "gear",
+      "text": "Gravity-extend the gear",
+      "kind": "player",
+      "act": "alt_gear",
+      "after": "hyd",
+      "points": 40
+    },
+    {
+      "id": "land",
+      "text": "Get it onto the runway \u2014 survivably",
+      "kind": "land",
+      "required": true,
+      "points": 40
+    }
+  ]
+}

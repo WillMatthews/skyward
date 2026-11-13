@@ -28,10 +28,19 @@ python3 -I $S/fetch.py a320 svn:A320-family A320-family Models/A320-200-CFM.xml 
 # v3 heavies (Track H): C130 from FGAddon; C-5 and the Vulcan are git clones of
 # github.com/FGMEMBERS/C-5 and /AvroVulcanB2 placed at $FG_SRC/c5 and $FG_SRC/AvroVulcanB2
 python3 -I $S/fetch.py c130 svn:C130 C130 Models/c130.xml Systems/FDM/c130-yasim.xml
+# Track H2b (FGAddon r21799): give the model XML explicitly (the -set files hide it in <path archive="y">)
+python3 -I $S/fetch.py extra500 svn:extra500 extra500 Models/extra500.xml extra500.xml
+python3 -I $S/fetch.py pa18 svn:Piper-PA-18 Piper-PA-18 Models/pa18.xml Systems/FDM/pa18-150-yasim.xml
+python3 -I $S/fetch.py z50lx svn:Zlin-50lx Zlin-50lx Models/z50lx.xml Systems/z50lx-yasim.xml
+python3 -I $S/fetch.py dhc3 svn:dhc3 dhc3 Models/dhc3.xml Systems/FDM/dhc3F-yasim.xml
+python3 -I $S/fetch.py dc3 svn:Douglas-Dc3 Douglas-Dc3 Models/dc-3.xml Systems/FDM/dc-3-yasim.xml
 # extra inputs: ATR Models/paintkit.xcf, A320 Models/Liveries/CFM/2k/CFM56-white.png
 python3 -I $S/texconv.py $FG_SRC                       # SGI .rgb / DDS → PNG
 python3 -I tools/fgimport/liveries/make_liveries.py $FG_SRC   # neutral A320 / ATR liveries
 python3 -I tools/fgimport/liveries/make_liveries.py $FG_SRC c130 c5 vulcan   # heavies: insignia painted out, Vulcan camo, C-130 prop-disc alpha
+python3 -I tools/fgimport/liveries/make_liveries.py $FG_SRC dc3   # DC-3: airline titles / emblems out, oxblood cheatline
+# H2b configs: extra500.json → extra500, pa18.json → cub, z50lx.json → zlin, dhc3.json → otter
+# (float variant: sim/model/variant 2), dc3.json → dc3 (wheels: string prop "WHEELS").
 cargo run --release --manifest-path tools/fgimport/Cargo.toml -- \
     tools/fgimport/aircraft/c172p.json $FG_SRC/c172p assets/aircraft/kestrel   # etc.
 # The heavies (c130.json → hercules, c5.json → galaxy, vulcan.json → vulcan) import like the
@@ -55,7 +64,7 @@ In the game: `SKAC_DUMP=<id> cargo test --release geometry_dump -- --ignored
 | `fuel_kg`, `pointmass_kg` | loaded condition for the CG / inertia |
 | `vrp_m` | JSBSim types: override the FDM's VRP (structural metres) when it does not match the visual model (C-5) |
 | `eye_view` / `eye_model` / `eye_body` | cockpit eye (FG view offsets / model frame / body frame) |
-| `props` | static property values (variants, damage flags …) |
+| `props` | static property values (variants, damage flags …); strings (e.g. `"WHEELS"`) compare with `<value>` strings by hash |
 | `channels` | `[regex, channel, scale, offset]` property → Skyward channel rules (before the built-ins); `doors` (cargo ramp / visor / crew door, open 0..1 when parked), `doors_level` / `doors_kneeled` and `kneel` (C-5 stances) are driven by `src/models.rs` |
 | `exclude_models`, `exclude_objects`, `interior_models`, `interior_objects`, `light_models` | regexes on submodel paths / object names |
 | `textures` | texture overrides (basename → path in the source tree), e.g. the neutral liveries |

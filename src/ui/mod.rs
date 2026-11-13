@@ -21,6 +21,7 @@ pub mod map;
 pub mod mapdata;
 pub mod menus;
 pub mod mp;
+pub mod missions;
 pub mod overview;
 pub mod radio;
 pub mod scroll;
@@ -439,6 +440,10 @@ pub enum Screen {
     Flying,
     /// Server browser (net/, ui/browser.rs).
     Multiplayer,
+    /// Airline-emergency missions (ui/missions.rs): cards, briefing, debrief.
+    Missions,
+    Briefing,
+    Debrief,
 }
 
 impl Screen {
@@ -453,6 +458,9 @@ impl Screen {
             "pause" => Screen::Pause,
             "loading" => Screen::Loading,
             "multiplayer" | "mp" | "servers" => Screen::Multiplayer,
+            "missions" => Screen::Missions,
+            "briefing" => Screen::Briefing,
+            "debrief" => Screen::Debrief,
             _ => return None,
         })
     }
@@ -471,6 +479,10 @@ pub enum Action {
     /// Leave the multiplayer server (keep flying alone).
     LeaveServer,
     Quit,
+    /// Fly the mission in `missions.pending` (missions/).
+    StartMission,
+    /// Back to the mission's last checkpoint.
+    RetryCheckpoint,
 }
 
 /// What to fly: aircraft index, departure airport ident, start, auto flight.
@@ -520,6 +532,8 @@ pub struct UiState {
     /// Multiplayer session (net/) and the server browser's model.
     pub mp: crate::net::Mp,
     pub browser: crate::net::browse::Browser,
+    /// Missions: selection, records, the active one, the last result.
+    pub missions: missions::MissionUi,
     /// Seconds since the last frame / since start, frame counter.
     pub dt: f32,
     pub time: f32,
@@ -558,6 +572,7 @@ impl UiState {
             aircraft_group: None,
             mp: crate::net::Mp::new(),
             browser: Default::default(),
+            missions: Default::default(),
             dt: 1.0 / 60.0,
             time: 0.0,
             frame_no: 0,
@@ -591,6 +606,10 @@ pub fn draw_menus(ctx: &egui::Context, st: &mut UiState, in_flight: bool, loadin
             Screen::Settings => menus::settings(ui, st, in_flight),
             Screen::Credits => menus::credits(ui, st),
             Screen::Multiplayer => browser::draw(ui, st),
+            Screen::Pause if st.missions.active.is_some() => missions::pause(ui, st),
+            Screen::Missions => missions::missions_menu(ui, st),
+            Screen::Briefing => missions::briefing(ui, st),
+            Screen::Debrief => missions::debrief(ui, st),
             Screen::Pause => {
                 let def = st.defs[st.plan.aircraft.min(st.defs.len() - 1)].name;
                 let title = format!("{def} · {}", st.plan.airport);

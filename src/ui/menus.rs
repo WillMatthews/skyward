@@ -112,6 +112,11 @@ fn steps(ui: &mut Ui, at: Pos2, current: usize) -> Option<usize> {
     out
 }
 
+/// The menus' backdrop, for other screens (ui/missions.rs).
+pub fn backdrop_pub(p: &egui::Painter, screen: Rect, strength: f32) {
+    backdrop(p, screen, strength);
+}
+
 /// Darken the 3D scene behind a menu: strong on the left, lighter right.
 pub(super) fn backdrop(p: &egui::Painter, screen: Rect, strength: f32) {
     let mut m = epaint::Mesh::default();
@@ -148,6 +153,11 @@ pub fn needs(def: &AircraftDef) -> (f32, bool) {
 }
 
 pub fn suitable(a: &Airport, def: &AircraftDef) -> bool {
+    if def.on_water() {
+        // Floatplanes start on the nearest open water (src/water.rs): seaplane
+        // bases and anywhere by a river or lake.
+        return true;
+    }
     let (len, paved) = needs(def);
     a.kind != Kind::Seaplane && a.usable_m(paved) >= len * 0.95
 }
@@ -180,12 +190,19 @@ fn spec_lines(d: &AircraftDef) -> Vec<(&'static str, String)> {
     }
     v.push(("Never exceed", if d.mmo > 0.0 { format!("{:.0} kt · M {:.2}", d.vne_kt, d.mmo) } else { format!("{:.0} kt", d.vne_kt) }));
     let (len, paved) = needs(d);
-    v.push(("Runway", format!("{} m{}", thousands(len), if paved { " paved" } else { "" })));
+    if d.on_water() {
+        v.push(("Operates from", format!("Water — rivers, lakes, sea ({} m)", thousands(len))));
+    } else {
+        v.push(("Runway", format!("{} m{}", thousands(len), if paved { " paved" } else { "" })));
+    }
     v.push(("Model", if d.jsb.is_some() { "FlightGear · JSBSim aero".to_string() } else { "FlightGear · calibrated".to_string() }));
     v
 }
 
 // ---------------------------------------------------------------- main menu
+
+/// Why Missions is greyed out while connected (missions are single-player).
+pub const MISSIONS_SOLO: &str = "Missions are single-player — leave the server to fly one.";
 
 pub fn main_menu(ui: &mut Ui, st: &mut UiState) {
     let screen = ui.ctx().content_rect();
@@ -209,9 +226,10 @@ pub fn main_menu(ui: &mut Ui, st: &mut UiState) {
         p.text(r.min + Vec2::new(20.0, 37.0), Align2::LEFT_TOP, format!("{def} · {} · {spec}", l.airport), f_ui(13.0), Color32::from_rgb(20, 44, 70));
         by += 76.0;
     }
-    let items: [(&str, Action, &str); 5] = [
+    let items: [(&str, Action, &str); 6] = [
         ("New flight", Action::Goto(Screen::Aircraft), "new"),
         ("Multiplayer", Action::Goto(Screen::Multiplayer), "multiplayer"),
+        ("Missions", Action::Goto(Screen::Missions), "missions"),
         ("Settings", Action::Goto(Screen::Settings), "settings"),
         ("Credits", Action::Goto(Screen::Credits), "credits"),
         ("Quit", Action::Quit, "quit"),
@@ -220,7 +238,13 @@ pub fn main_menu(ui: &mut Ui, st: &mut UiState) {
     for (i, (label, act, id)) in items.into_iter().filter(|it| !(crate::platform::WEB && matches!(it.1, Action::Quit))).enumerate() {
         let r = Rect::from_min_size(Pos2::new(x, by), Vec2::new(bw, 48.0));
         let kind = if i == 0 && last.is_none() { Btn::Primary } else { Btn::Secondary };
-        if button(ui, r, id, label, kind, true).clicked() {
+        // Missions are single-player: not while connected to a server.
+        let solo_only = matches!(act, Action::Goto(Screen::Missions)) && st.mp.connected();
+        let mut resp = button(ui, r, id, label, kind, !solo_only);
+        if solo_only {
+            resp = resp.on_hover_text(MISSIONS_SOLO);
+        }
+        if resp.clicked() {
             st.actions.push(act);
         }
         by += 58.0;
@@ -245,8 +269,17 @@ pub fn main_menu(ui: &mut Ui, st: &mut UiState) {
     if button(ui, Rect::from_min_size(Pos2::new(tx, card.max.y - 46.0), Vec2::new(card.max.x - tx - 16.0, 36.0)), "flynow", "Fly", Btn::Primary, true).clicked() {
         st.actions.push(Action::Fly);
     }
-    p.text(Pos2::new(x, screen.max.y - 28.0), Align2::LEFT_BOTTOM, format!("{} · {} · {}", crate::hud::ATTRIBUTION, airports::CREDIT, "Weather: NOAA aviationweather.gov, Open-Meteo"), f_ui(11.0), pal::TEXT3);
+    p.text(Pos2::new(x, screen.max.y - 28.0), Align2::LEFT_BOTTOM, format!("{} · {} · {}", crate::hud::ATTRIBUTION, airports::CREDIT, WEATHER_CREDIT_SHORT), f_ui(11.0), pal::TEXT3);
 }
+
+/// Weather sources (the browser reads METARs through VATSIM's CORS-enabled
+/// mirror: aviationweather.gov sends no CORS headers).
+const WEATHER_CREDIT: &str = if crate::platform::WEB {
+    "METARs: national weather services via VATSIM's METAR service (metar.vatsim.net) · forecasts: Open-Meteo (CC BY 4.0)"
+} else {
+    "METARs: aviationweather.gov (NOAA) · forecasts: Open-Meteo (CC BY 4.0)"
+};
+const WEATHER_CREDIT_SHORT: &str = if crate::platform::WEB { "Weather: METARs via VATSIM, Open-Meteo" } else { "Weather: NOAA aviationweather.gov, Open-Meteo" };
 
 pub fn credits(ui: &mut Ui, st: &mut UiState) {
     let screen = ui.ctx().content_rect();
@@ -260,7 +293,7 @@ pub fn credits(ui: &mut Ui, st: &mut UiState) {
         ("Airports & runways", "OurAirports — public domain (ourairports.com/data)"),
         ("Navaids", "VOR / DME / NDB: OurAirports — public domain · ILS: synthetic, derived from the runway data (a few London ILS from public charts)"),
         ("ATC", "Frequencies: OurAirports — public domain · voices: Kokoro-82M (Apache-2.0), generated for Skyward"),
-        ("Weather", "METARs: aviationweather.gov (NOAA) · forecasts: Open-Meteo (CC BY 4.0)"),
+        ("Weather", WEATHER_CREDIT),
         ("Elevation", "Terrain Tiles on AWS (Mapzen / Tilezen: SRTM, GMTED2010, 3DEP, ETOPO1, EU-DEM and more)"),
         ("Aircraft & sounds", "FlightGear aircraft and recordings — GPL v2 / v2+ (per-aircraft credits in the source)"),
         ("Fonts", "Inter (Rasmus Andersson), JetBrains Mono, B612 (Airbus / Intactile / ENAC) — SIL Open Font License 1.1"),
@@ -1867,6 +1900,10 @@ mod tests {
         assert_eq!(of("vulcan"), Group::Military);
         assert_eq!(of("ec130"), Group::Rotor);
         assert_eq!(of("fpv"), Group::Rotor);
+        for id in ["extra500", "cub", "zlin", "otter"] {
+            assert_eq!(of(id), Group::Light, "{id}");
+        }
+        assert_eq!(of("dc3"), Group::Airliner);
         for g in Group::ALL {
             assert!(!g.name().is_empty());
         }

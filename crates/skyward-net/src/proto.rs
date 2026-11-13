@@ -90,6 +90,9 @@ pub mod flags {
     pub const SPECTATING: u16 = 128;
     /// Gear down lever (for the gear-warning-free "on approach" look).
     pub const GEAR_LEVER: u16 = 256;
+    /// Afloat / running on the water (floatplanes, a ditched airliner): set
+    /// together with `ON_GROUND`, so the wheels do not turn.
+    pub const ON_WATER: u16 = 512;
 }
 
 /// The state of one aircraft at one instant: everything another client needs

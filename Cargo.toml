@@ -57,7 +57,7 @@ wasm-bindgen-futures = "0.4.80"
 web-sys = { version = "0.3.107", features = [
     "Document", "Element", "HtmlElement", "HtmlCanvasElement", "Window", "Location", "Storage",
     "Request", "RequestInit", "RequestMode", "Response", "Headers", "Navigator", "Performance",
-    "CssStyleDeclaration", "AbortController", "AbortSignal",
+    "CssStyleDeclaration", "AbortController", "AbortSignal", "ResponseInit",
     "Worker", "WorkerOptions", "WorkerType", "MessageEvent",
 ] }
 

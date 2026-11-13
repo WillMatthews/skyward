@@ -46,6 +46,17 @@ impl Expr {
     }
 }
 
+/// A string property / condition value as a number (FNV-1a hash, never 0):
+/// static string properties (config `props`) compare equal to the same
+/// string in a `<condition><equals>`.
+pub fn str_value(s: &str) -> f32 {
+    let mut h: u32 = 0x811C_9DC5;
+    for b in s.bytes() {
+        h = (h ^ b as u32).wrapping_mul(0x0100_0193);
+    }
+    (h % 1_000_003 + 1) as f32
+}
+
 pub fn interp(t: &[(f32, f32)], x: f32) -> f32 {
     if t.is_empty() {
         return 0.0;
@@ -393,7 +404,7 @@ impl PropMap {
         // <property>x</property> | <value>v</value> | nested expression
         match e.name.as_str() {
             "property" | "prop" | "p" => self.prop(&e.text),
-            "value" | "v" => Expr::C(e.text.trim().parse().unwrap_or(0.0)),
+            "value" | "v" => Expr::C(e.text.trim().parse().unwrap_or_else(|_| str_value(e.text.trim()))),
             _ => self.sgexpr(e),
         }
     }
@@ -420,7 +431,8 @@ impl PropMap {
             "less-than-equals" => op("le", operands(e)),
             "greater-than" => op("gt", operands(e)),
             "greater-than-equals" => op("ge", operands(e)),
-            "value" => Expr::C(e.text.trim().parse().unwrap_or(0.0)),
+            // (String values — e.g. a model variant "WHEELS" — compare by hash, see `str_value`.)
+            "value" => Expr::C(e.text.trim().parse().unwrap_or_else(|_| str_value(e.text.trim()))),
             _ => Expr::C(1.0),
         }
     }

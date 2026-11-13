@@ -14,6 +14,11 @@
 //! | `hercules` | Lockheed C-130H Hercules | FGAddon C130 |
 //! | `galaxy` | Lockheed C-5M Super Galaxy | FGMEMBERS/C-5 |
 //! | `vulcan` | Avro Vulcan B.2 | FGMEMBERS/AvroVulcanB2 (FGUK) |
+//! | `extra500` | Extra EA-500 | FGAddon extra500 |
+//! | `cub` | Piper PA-18 Super Cub | FGAddon Piper-PA-18 |
+//! | `zlin` | Zlin Z-50 LX | FGAddon Zlin-50lx |
+//! | `otter` | DHC-3 Otter (floats) | FGAddon dhc3 |
+//! | `dc3` | Douglas DC-3 / C-47 | FGAddon Douglas-Dc3 |
 //!
 //! Body frame: metres, +Z nose, +Y up, +X left wing, origin = CG (as
 //! `flight.rs`). The model is a node tree with FlightGear animations mapped
@@ -73,11 +78,18 @@ pub struct PartMap {
     pub planform: Vec<(f32, f32, f32, f32)>,
 }
 
+/// Assets loaded for flying, once per process (decoding the textures takes a moment).
+static CACHE: std::sync::Mutex<Vec<(String, Arc<AircraftAsset>)>> = std::sync::Mutex::new(Vec::new());
+
+/// The asset of an aircraft already loaded for flying, if any (e.g. for the
+/// parked fleet: no second decode of its textures).
+pub fn cached_asset(id: &str) -> Option<Arc<AircraftAsset>> {
+    CACHE.lock().unwrap().iter().find(|(k, _)| k == id).map(|(_, a)| a.clone())
+}
+
 /// Load the model for an aircraft id (see the table above).
 pub fn build(id: &str, def_eye: Vec3) -> AircraftModel {
-    // Loaded once per process (decoding the textures takes a moment).
-    static CACHE: std::sync::Mutex<Vec<(String, Arc<AircraftAsset>)>> = std::sync::Mutex::new(Vec::new());
-    let cached = CACHE.lock().unwrap().iter().find(|(k, _)| k == id).map(|(_, a)| a.clone());
+    let cached = cached_asset(id);
     let loaded = match cached {
         Some(a) => Ok(a),
         // The FPV quad is procedural (src/rotor/quad_model.rs).

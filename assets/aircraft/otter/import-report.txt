@@ -1,0 +1,73 @@
+"otter": 66 nodes (65 animated out of 83), 34 materials, 26 textures (0.9 MB), 103 chunks
+triangles: exterior 198565, interior 40338; vertices 227863; model.skac 3.7 MB; radius 9.1 m
+eye: Some(Vec3(0.335, 0.771, 0.98500013))
+lights: 5
+channels used: aileron_l aileron_r alt_ft alt_set_inhg amps ctl_rudder elevator eng0_map_inhg eng0_n2 eng0_rpm flaps hdg_bug_deg hdg_bug_err_deg heading_deg ias_kt oat_c panel_light pitch_deg roll_deg rudder slip tank0_lbs throttle turn_rate vs_fpm
+texture-animated chunks: 1; display screens: 0
+animation types: [("", 71), ("knob", 1), ("material", 35), ("noshadow", 30), ("pick", 65), ("range", 2), ("rotate", 83), ("scale", 1), ("select", 60), ("spin", 8), ("texrotate", 1), ("textranslate", 56), ("translate", 19)]
+unmapped properties (count):
+     8 sim/multiplay/generic/float[1]
+     7 instrumentation/nav[1]/frequencies/standby-mhz
+     7 instrumentation/nav/frequencies/standby-mhz
+     7 instrumentation/comm[1]/frequencies/standby-mhz
+     7 instrumentation/comm/frequencies/standby-mhz
+     6 instrumentation/transponder/inputs/knob-mode
+     6 instrumentation/adf/right-display
+     5 instrumentation/nav[1]/frequencies/selected-mhz
+     5 instrumentation/nav/frequencies/selected-mhz
+     5 instrumentation/comm[1]/frequencies/selected-mhz
+     5 instrumentation/comm/frequencies/selected-mhz
+     5 instrumentation/adf/frequencies/selected-khz
+     4 sim/multiplay/generic/float
+     4 sim/multiplay/generic/bool[16]
+     4 instrumentation/adf/display-mode
+     4 instrumentation/adf/adf-btn
+     3 sim/time/utc/day-seconds
+     3 sim/multiplay/generic/float[11]
+     3 instrumentation/transponder/altitude
+     3 instrumentation/adf/bfo-btn
+     2 sim/multiplay/generic/float[9]
+     2 sim/multiplay/generic/float[6]
+     2 sim/multiplay/generic/float[5]
+     2 sim/multiplay/generic/float[4]
+     2 instrumentation/kt-70/annunciators/fl
+     2 instrumentation/attitude-indicator/caged
+     1 sim/signals/fdm-initialized
+     1 sim/multiplay/generic/float[8]
+     1 sim/multiplay/generic/float[7]
+     1 sim/multiplay/generic/float[10]
+     1 sim/multiplay/generic/bool[17]
+     1 sim/model/gps/redled/state
+     1 sim/model/gps/greenled/state
+     1 instrumentation/zkv500/retro-light
+     1 instrumentation/zkv500/power
+     1 instrumentation/transponder/inputs/digit[3]
+     1 instrumentation/transponder/inputs/digit[2]
+     1 instrumentation/transponder/inputs/digit[1]
+     1 instrumentation/transponder/inputs/digit
+     1 instrumentation/nav[1]/volume
+     1 instrumentation/nav[1]/frq-swap-btn
+     1 instrumentation/nav[1]/audio-btn
+     1 instrumentation/nav/volume
+     1 instrumentation/nav/to-flag
+     1 instrumentation/nav/in-range
+     1 instrumentation/nav/heading-needle-deflection
+     1 instrumentation/nav/heading-deg
+     1 instrumentation/nav/has-gs
+     1 instrumentation/nav/gs-needle-deflection-norm
+     1 instrumentation/nav/gs-distance
+     1 instrumentation/nav/frq-swap-btn
+     1 instrumentation/nav/from-flag
+     1 instrumentation/nav/audio-btn
+     1 instrumentation/kt-70/annunciators/reply
+     1 instrumentation/comm[1]/volume
+     1 instrumentation/comm[1]/frq-swap-btn
+     1 instrumentation/comm/volume
+     1 instrumentation/comm/frq-swap-btn
+     1 instrumentation/adf/volume-norm
+     1 instrumentation/adf/indicated-bearing-deg
+     1 engines/engine/oil-temp-c
+     1 controls/engines/engine/propeller-pitch
+     1 controls/engines/engine/mixture
+     1 constants/zero
+log:

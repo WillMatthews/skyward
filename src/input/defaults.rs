@@ -21,6 +21,11 @@ pub fn keyboard() -> Vec<(Key, Vec<K>)> {
         (Key::Brakes, vec![K::KeyB, K::Space]),
         (Key::ThrottleUp, vec![K::ShiftLeft, K::ShiftRight, K::Equal, K::NumpadAdd, K::PageUp]),
         (Key::ThrottleDown, vec![K::ControlLeft, K::ControlRight, K::Minus, K::NumpadSubtract, K::PageDown]),
+        (Key::ThrottleLeftUp, vec![K::F8, K::Numpad7]),
+        (Key::ThrottleLeftDown, vec![K::F7, K::Numpad1]),
+        (Key::ThrottleRightUp, vec![K::F10, K::Numpad9]),
+        (Key::ThrottleRightDown, vec![K::F9, K::Numpad3]),
+        (Key::ThrottleSync, vec![K::F5, K::NumpadDecimal]),
         (Key::Reverse, vec![K::KeyT]),
         (Key::FlapsDown, vec![K::KeyF]),
         (Key::FlapsUp, vec![K::KeyV]),
@@ -71,9 +76,9 @@ pub fn keyboard() -> Vec<(Key, Vec<K>)> {
         (Key::Mute, vec![K::KeyN]),
         (Key::Assist, vec![K::F6]),
         (Key::Chat, vec![K::Enter, K::NumpadEnter]),
-        (Key::PlayerList, vec![K::F7]),
-        (Key::NameTags, vec![K::F8]),
-        (Key::QuickChat, vec![K::F9]),
+        (Key::PlayerList, vec![K::F11]),
+        (Key::NameTags, vec![K::NumpadMultiply]),
+        (Key::QuickChat, vec![K::Backspace, K::Numpad0]),
     ]
 }
 

@@ -33,7 +33,7 @@ use web_time::Instant;
 /// Shown instead of the server browser in the browser build.
 pub const WEB_MESSAGE: &str = "Multiplayer needs the desktop version of Skyward — web browsers cannot send the UDP packets the game and the LAN discovery use.";
 
-/// Canned messages of the quick-chat wheel (gamepad / F9), clockwise from the top.
+/// Canned messages of the quick-chat wheel (gamepad / Backspace), clockwise from the top.
 pub const QUICK_CHAT: [&str; 8] = ["Hello!", "Ready for departure", "Follow me", "Join up on my wing", "Nice landing!", "Going around", "Taking off", "Good flight — see you!"];
 
 #[derive(Clone, Debug, PartialEq)]
@@ -130,9 +130,9 @@ pub struct Mp {
     applied_metar: String,
     pub spectate: Option<u16>,
     spec_yaw: Option<f32>,
-    /// Name tags over other aircraft (F8).
+    /// Name tags over other aircraft (Num *).
     pub tags: bool,
-    /// Player list (F7).
+    /// Player list (F11).
     pub show_players: bool,
     /// Chat input open (Enter).
     pub chat_open: bool,

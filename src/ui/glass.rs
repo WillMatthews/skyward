@@ -1010,7 +1010,7 @@ pub fn ewd(p: &egui::Painter, r: Rect, sim: &Sim) {
         }
         // commanded thrust (throttle) as a small cyan circle on the arc
         if def.has_engine {
-            let t = sim.ctl.throttle * if jet { 100.0 } else { 100.0 };
+            let t = sim.ctl.lever(i) * if jet { 100.0 } else { 100.0 };
             p.circle_stroke(polar(c, dial_r + 1.4 * u, ang(t)), 0.9 * u, Stroke::new(1.4, CYAN));
         }
         let col = if !running { AMBER } else if val > red { pal::RED } else { GREEN };

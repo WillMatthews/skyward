@@ -1,0 +1,31 @@
+{
+  "id": "microburst",
+  "title": "Microburst",
+  "tagline": "A thunderstorm sits on the final approach at Gatwick.",
+  "aircraft": "meridian320",
+  "difficulty": 3,
+  "minutes": 3,
+  "history": "Inspired by approaches flown into thunderstorm downbursts — a 1985 accident above all — that led to airborne windshear detection and the escape manoeuvre every airline pilot now practises.",
+  "situation": "Seven miles out on the ILS for Gatwick's 26L in the late afternoon, a storm cell is drifting across the final approach. First the speed will rise in a headwind — then the air falls out from under you.",
+  "failures": ["Microburst on the final approach: headwind gain, 2,000+ ft/min downdraft, then tailwind"],
+  "tips": ["At the WINDSHEAR warning: TOGA thrust at once, pitch towards 15°, wings level", "Do not change the configuration (gear, flaps) until clear", "Ride the stall warning if you must — never let the speed decay further", "Clear of it, climb away"],
+  "target": { "airport": "EGKK", "runway": "26L", "course_deg": 257.6, "length_m": 3317, "width_m": 45, "elev_ft": 202, "lat": 51.151493, "lon": -0.165992 },
+  "start": { "x_nm": -7, "y_nm": 0, "alt_ft": 2450, "hdg_rel": 0, "kias": 155, "flaps": 3, "gear_down": true },
+  "fuel_frac": 0.3,
+  "time": "17:10",
+  "date": "07-21",
+  "metar": "EGKK 211710Z 24012G24KT 6000 TSRA BKN025CB 24/19 Q1004",
+  "pax": 172,
+  "par_s": 120,
+  "events": [
+    { "id": "burst", "when": { "t": 1 }, "do": [ { "microburst": { "at_nm": 2.4, "radius_m": 950, "down_ms": 11, "out_ms": 15, "ramp_s": 2 } } ] },
+    { "id": "low", "when": { "after": "burst", "agl_below_ft": 1200 }, "do": [ { "checkpoint": "Into the storm" } ] },
+    { "id": "clear", "when": { "after": "low", "agl_below_ft": 4000, "alt_above_ft": 1900, "player": "toga" }, "do": [
+      { "note": "ATC: Go-around noted — climb straight ahead to 3,000 ft." } ] }
+  ],
+  "objectives": [
+    { "id": "toga", "text": "TOGA thrust in the shear", "kind": "player", "act": "toga", "after": "low", "points": 60 },
+    { "id": "ground", "text": "Don't touch the ground", "kind": "no_lower_than", "ft": 30, "after": "low", "required": true, "points": 40 },
+    { "id": "climb", "text": "Escape: climb back through 1,500 ft above the ground", "kind": "agl_above", "ft": 1500, "after": "low", "required": true }
+  ]
+}

@@ -140,6 +140,10 @@ pub struct Input {
 #[path = "input/sim_glue.rs"]
 pub mod pilot;
 
+/// Missions in the sim (Track M): strips, the step, checkpoints, the microburst.
+#[path = "missions/sim_glue.rs"]
+pub mod mission_glue;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Key {
     PitchDown,
@@ -150,6 +154,13 @@ pub enum Key {
     YawRight,
     ThrottleUp,
     ThrottleDown,
+    /// Split throttles (differential thrust, Track M): the left / right
+    /// engines' levers, and back to one lever.
+    ThrottleLeftUp,
+    ThrottleLeftDown,
+    ThrottleRightUp,
+    ThrottleRightDown,
+    ThrottleSync,
     FlapsDown,
     FlapsUp,
     Brakes,
@@ -277,6 +288,12 @@ fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f32 {
 /// long enough, else the nearest suitable one among the loaded runways and the
 /// known airfields, else the nearest anyway (with a warning).
 pub fn pick_field(world: &World, def: &AircraftDef) -> Option<FieldPick> {
+    // Floatplanes start on open water near the start (src/water.rs).
+    if def.on_water() {
+        if let Some(p) = water_lane(world, def) {
+            return Some(p);
+        }
+    }
     let need = min_runway(def);
     // The start point (the origin of the home frame; the floating origin may have moved).
     let home = world.home_pos();
@@ -328,6 +345,36 @@ pub fn pick_field(world: &World, def: &AircraftDef) -> Option<FieldPick> {
         let msg = format!("No runway of {:.0} m known nearby: {} is only {:.0} m — it will be tight.", need, here, m.length());
         FieldPick::Here(m, Some(msg))
     })
+}
+
+/// A floatplane's "runway": the longest straight lane of open water near the
+/// start (a river reach, a dock, a lake), as a water-surfaced [`Runway`] the
+/// spawn logic and the bot use like any other. While the scenery around the
+/// start is still loading it asks to wait (`Remote`); with no water about
+/// it returns None and the floatplane gets a land runway (on its keels).
+fn water_lane(world: &World, def: &AircraftDef) -> Option<FieldPick> {
+    static CACHE: std::sync::Mutex<Option<(Vec2, Runway)>> = std::sync::Mutex::new(None);
+    let home = world.home_pos();
+    if let Some((h, r)) = CACHE.lock().ok().and_then(|c| c.clone()) {
+        if h.distance(home) < 50.0 {
+            return Some(FieldPick::Here(r, None));
+        }
+    }
+    let need = min_runway(def);
+    const RADIUS: f32 = 6_000.0;
+    match crate::water::find_lane(world, home, RADIUS, need, 90.0) {
+        Some((a, b)) => {
+            let r = Runway { a, b, width: 90.0, name: "Water".into(), paved: false, surface: "Water".into(), ..Default::default() };
+            if let Ok(mut c) = CACHE.lock() {
+                *c = Some((home, r.clone()));
+            }
+            Some(FieldPick::Here(r, None))
+        }
+        None => {
+            let (ready, total) = world.progress(home, RADIUS);
+            (ready < total).then(|| FieldPick::Remote(home, format!("{} operates from water: finding open water near the start…", def.name)))
+        }
+    }
 }
 
 pub struct Sim {
@@ -423,6 +470,14 @@ pub struct Sim {
     pub nav: crate::nav::NavState,
     /// Air traffic control on the radios (atc/).
     pub atc: crate::atc::Atc,
+    /// Airline-emergency mission in progress (missions/), its last
+    /// checkpoint, the scripted pilot (`--mission-bot`), a MAYDAY the
+    /// scripted pilot declared, and the fire tenders after landing.
+    pub mission: Option<crate::missions::MissionRun>,
+    pub mission_checkpoint: Option<Box<crate::missions::Checkpoint>>,
+    pub mission_pilot: Option<crate::missions::pilot::MissionPilot>,
+    pub mission_mayday: bool,
+    pub tenders: Option<crate::missions::tenders::Tenders>,
 }
 
 /// Cinematic camera state.
@@ -540,6 +595,11 @@ impl Sim {
             cold_dark: false,
             nav: Default::default(),
             atc: Default::default(),
+            mission: None,
+            mission_checkpoint: None,
+            mission_pilot: None,
+            mission_mayday: false,
+            tenders: None,
         };
         s.nav = crate::nav::NavState::new(&s.defs[sel]);
         s.atc = crate::atc::Atc::new(&s.defs[sel]);
@@ -667,6 +727,7 @@ impl Sim {
         if let Some(sc) = self.scenario.as_mut() {
             sc.restart();
         }
+        self.mission_restart();
         self.snap_pose();
         self.note = advice.map(|a| (a, 9.0));
         if self.watch && !self.needs_respawn {
@@ -1023,7 +1084,11 @@ impl Sim {
                     }
                 }
                 Key::Reverse => {
-                    if !def.has_reverser {
+                    if !def.has_reverser && def.smoke_system {
+                        // Aerobats: the reverse key works the airshow smoke (src/vfx/smoke.rs).
+                        self.vfx.smoke = !self.vfx.smoke;
+                        self.say(if self.vfx.smoke { "Smoke on" } else { "Smoke off" }, 2.0);
+                    } else if !def.has_reverser {
                         self.say("No thrust reversers on this aircraft", 2.0);
                     } else if !self.ac.on_ground && !self.ctl.reverse {
                         self.say("Reverse thrust: on the ground only", 2.0);
@@ -1085,6 +1150,11 @@ impl Sim {
                 }
                 Key::NdMode => self.nav.nd_mode = self.nav.nd_mode.next(),
                 Key::EngineFail => self.cycle_engine_failure(),
+                Key::ThrottleSync => {
+                    if self.ctl.engine_throttle.take().is_some() {
+                        self.say("Throttles together", 2.0);
+                    }
+                }
                 Key::MasterAck => self.ac.sys.acknowledge(),
                 Key::LandingLights => {
                     let on = !self.landing_lights_on();
@@ -1118,7 +1188,8 @@ impl Sim {
         }
 
         // Controls with keyboard smoothing (skipped for what the AP / bot is flying).
-        let bot_on = self.bot.is_some();
+        // (The mission's scripted pilot flies like the bot.)
+        let bot_on = self.bot.is_some() || self.mission_pilot.is_some();
         let h = |k: Key| if input.held.contains(&k) || input.pad_held.contains(&k) { 1.0 } else { 0.0 };
         let approach = |cur: f32, target: f32, rate: f32| {
             let r = if target.abs() < 1e-3 { rate * 1.6 } else { rate };
@@ -1131,7 +1202,14 @@ impl Sim {
             self.ctl.trim = (self.ctl.trim + (h(Key::TrimUp) - h(Key::TrimDown)) * 0.25 * dt).clamp(-1.0, 1.0);
         }
         if def.has_engine && !bot_on && !(self.ap.engaged && self.ap.ias.is_some()) {
-            self.ctl.throttle = (self.ctl.throttle + (h(Key::ThrottleUp) - h(Key::ThrottleDown)) * 0.6 * dt).clamp(0.0, 1.0);
+            let d = (h(Key::ThrottleUp) - h(Key::ThrottleDown)) * 0.6 * dt;
+            self.ctl.throttle = (self.ctl.throttle + d).clamp(0.0, 1.0);
+            // Split throttles: the common keys move every lever together (Track M).
+            let side = (h(Key::ThrottleLeftUp) - h(Key::ThrottleLeftDown), h(Key::ThrottleRightUp) - h(Key::ThrottleRightDown));
+            crate::missions::throttles::keys(&def, &mut self.ctl, d, side, dt);
+        } else if self.bot.is_some() || (self.ap.engaged && self.ap.ias.is_some()) {
+            // The bot / autothrottle drive one lever.
+            self.ctl.engine_throttle = None;
         }
         // Controllers: analog axes straight to the controls, levers when moved.
         self.apply_analog(input, dt);
@@ -1191,10 +1269,16 @@ impl Sim {
                 }
                 self.prev_pos = self.ac.pos;
                 self.prev_rot = self.ac.rot;
-                // Aircraft systems and failures (systems/), then the flight model.
+                // Mission: the scripted pilot (`--mission-bot`).
+                if self.mission_pilot.is_some() {
+                    self.mission_pilot_step(world, DT);
+                }
+                // Aircraft systems and failures (systems/), then the flight model
+                // (in the mission's air: a microburst, missions/wind.rs).
                 self.systems_step(&amb, DT);
                 let def = &self.defs[self.sel];
-                self.ac.step(def, &self.ctl, world, DT);
+                let env = mission_glue::MissionEnv { inner: world, run: self.mission.as_ref() };
+                self.ac.step(def, &self.ctl, &env, DT);
                 self.acc -= DT;
                 steps += 1;
                 if self.ac.crashed.is_some() {
@@ -1205,6 +1289,13 @@ impl Sim {
                 }
             }
             self.time += dt * self.warp as f32;
+        }
+        // Mission timeline, objectives and outcome (missions/), also after a crash.
+        if !self.paused && self.mission.is_some() {
+            self.mission_step(world, dt * self.warp as f32);
+        }
+        if let Some(t) = self.tenders.as_mut() {
+            t.update(world, self.ac.pos, if self.paused { 0.0 } else { dt * self.warp.min(4) as f32 });
         }
         self.systems_frame();
         // Air traffic control: the frequency, ATIS, the controllers (atc/).
@@ -1281,7 +1372,8 @@ impl Sim {
         }
         // The crash: the wreck takes over from the frozen flight model.
         if let (Some(reason), Some(imp), None) = (self.ac.crashed.clone(), self.ac.impact, self.severity) {
-            let sev = crate::damage::classify(&def, &reason, imp.vel, self.ac.dmg.failure.is_some());
+            // (Ditchings by their attitude / sink / speed: missions/ditching.rs.)
+            let sev = crate::missions::ditching::classify(&def, &reason, &imp, self.ac.dmg.failure.is_some());
             self.severity = Some(sev);
             self.crash_clock = 0.0;
             let geom = self.part_geom(&def);
@@ -1688,6 +1780,10 @@ impl Sim {
             // Close up (and from the cockpit) the interior is drawn too.
             let interior = self.cam == CamMode::Cockpit || eye.distance(pos) < self.size * 2.5 + 4.0;
             fv.aircraft = self.aircraft_mesh(&mut dynm, eye, interior);
+        }
+        // The airport fire service after a mission's emergency landing (missions/tenders.rs).
+        if let Some(t) = &self.tenders {
+            t.mesh(&mut dynm, eye, self.time);
         }
         if std::env::var_os("SKYWARD_NO_VFX").is_none() {
             let vf = self.effects_frame(eye);

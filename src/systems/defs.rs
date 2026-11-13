@@ -125,7 +125,18 @@ pub struct SysDef {
     pub wing_anti_ice: bool,
     pub eng_anti_ice: bool,
     pub alerting: Alerting,
+    // ---- aerobatics (Track H2b)
+    /// Inverted fuel and oil systems (flop tube / Christen valve): the engine
+    /// runs under negative g; the inverted oil system holds pressure for
+    /// [`INVERTED_OIL_S`] at a time.
+    pub inverted_system: bool,
+    /// Float carburettor / gravity feed: the engine starves (and coughs)
+    /// after a moment of negative g.
+    pub neg_g_cutout: bool,
 }
+
+/// Seconds the inverted oil system holds pressure under continuous negative g.
+pub const INVERTED_OIL_S: f32 = 120.0;
 
 const NO_HYD: &[Hyd] = &[];
 
@@ -146,6 +157,8 @@ const ATR_HYD: &[Hyd] = &[
 ];
 const F16_HYD: &[Hyd] = &[Hyd { name: "A", pumps: &[0], elec: false, rat: false }, Hyd { name: "B", pumps: &[0], elec: false, rat: false }];
 const SPIT_HYD: &[Hyd] = &[Hyd { name: "HYD", pumps: &[0], elec: false, rat: false }];
+/// DC-3: one system, a pump on each engine.
+const DC3_HYD: &[Hyd] = &[Hyd { name: "HYD", pumps: &[0, LAST], elec: false, rat: false }];
 /// Helicopter flight-control servos: one system, pump on the main gearbox.
 const HELI_HYD: &[Hyd] = &[Hyd { name: "HYD", pumps: &[], elec: false, rat: false }];
 const HELI_TANK: &[(&str, f32, f32)] = &[("MAIN", 1.0, 0.0)];
@@ -197,6 +210,8 @@ fn trainer() -> SysDef {
         wing_anti_ice: false,
         eng_anti_ice: false,
         alerting: Alerting::Annunciators,
+        inverted_system: false,
+        neg_g_cutout: false,
     }
 }
 
@@ -319,6 +334,8 @@ fn jet_airliner() -> SysDef {
         wing_anti_ice: true,
         eng_anti_ice: true,
         alerting: Alerting::Ecam,
+        inverted_system: false,
+        neg_g_cutout: false,
     }
 }
 
@@ -403,6 +420,80 @@ pub fn sys_def(def: &AircraftDef) -> SysDef {
             ..jet_airliner()
         },
         "meridian320" => jet_airliner(),
+        // Track H2b.
+        // Extra 500: single-turboprop glass cockpit, 28 V starter-generator,
+        // wing + collector tanks with boost pumps, pressurised, de-iced boots.
+        "extra500" => SysDef {
+            batt_ah: 24.0,
+            load_a: 45.0,
+            gens_per_engine: 1,
+            tanks: WING2,
+            feed: Feed::Selector,
+            boost_pumps: true,
+            starter: Starter::TurbopropBattery,
+            carburettor: false,
+            vacuum: false,
+            elec_turn: false,
+            glass: true,
+            const_speed_prop: true,
+            fire_detect: true,
+            wing_anti_ice: true,
+            eng_anti_ice: true,
+            ..trainer()
+        },
+        // Super Cub: wing tanks gravity-fed through a selector, carburettor, no
+        // electric turn coordinator in the basic panel; quits under negative g.
+        "cub" => SysDef { batt_ah: 10.0, load_a: 8.0, elec_turn: false, vacuum: false, flaps_electric: false, neg_g_cutout: true, ..trainer() },
+        // Zlin Z-50 LX: fuel-injected AEIO-540 with inverted fuel and oil.
+        "zlin" => SysDef {
+            batt_ah: 10.0,
+            load_a: 8.0,
+            tanks: &[("MAIN", 1.0, 0.0)],
+            feed: Feed::Common,
+            boost_pumps: true,
+            carburettor: false,
+            vacuum: false,
+            elec_turn: false,
+            flaps_electric: false,
+            const_speed_prop: true,
+            pitot_heat: false,
+            inverted_system: true,
+            ..trainer()
+        },
+        // Otter: R-1340 radial, belly tanks (front / centre / rear) through a
+        // selector, engine-driven vacuum, carburettor (with carb heat).
+        "otter" => SysDef {
+            batt_ah: 25.0,
+            load_a: 20.0,
+            tanks: &[("FWD", 0.29, 0.0), ("CTR", 0.47, 0.0), ("AFT", 0.24, 0.0)],
+            feed: Feed::Common,
+            const_speed_prop: true,
+            flaps_electric: false,
+            ..trainer()
+        },
+        // DC-3: two radials, main + auxiliary wing tanks, engine-driven
+        // hydraulics (gear, flaps, brakes), vacuum gyros, carburettors.
+        "dc3" => SysDef {
+            volts: 28.0,
+            batt_ah: 34.0,
+            load_a: 45.0,
+            hyd: DC3_HYD,
+            gear_hyd: 1,
+            flap_hyd: 1,
+            brake_hyd: 1,
+            brake_accu: 6,
+            flaps_electric: false,
+            alt_gear_s: 25.0,
+            tanks: WING2,
+            feed: Feed::Wing,
+            carburettor: true,
+            vacuum: true,
+            elec_turn: true,
+            const_speed_prop: true,
+            fire_detect: true,
+            bottles: 1,
+            ..warbird()
+        },
         _ => match (def.category, def.engine_kind) {
             (Category::Helicopter, _) => helicopter(),
             (Category::Drone, _) | (_, EngineKind::Electric) => drone(),

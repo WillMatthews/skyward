@@ -335,7 +335,7 @@ impl AircraftRenderer {
             anisotropy_clamp: 8,
             ..Default::default()
         });
-        let white = upload_texture(device, queue, 1, 1, &[255, 255, 255, 255]);
+        let white = upload_texture(device, queue, 1, 1, &[255, 255, 255, 255], &[]);
         let white_bg = tex_bg(device, &tex_bgl, &white, &sampler);
         let main = new_slot(device, &inst_bgl);
         AircraftRenderer {
@@ -433,7 +433,7 @@ impl AircraftRenderer {
                 .textures
                 .iter()
                 .map(|t| {
-                    let v = upload_texture(device, queue, t.width, t.height, &t.rgba);
+                    let v = upload_texture(device, queue, t.width, t.height, &t.rgba, &t.mips);
                     tex_bg(device, &self.tex_bgl, &v, &self.sampler)
                 })
                 .collect(),
@@ -640,37 +640,15 @@ fn tex_bg(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout, view: &wgpu::Textu
     })
 }
 
-/// sRGB RGBA8 texture with a CPU-built mip chain (box filter in linear light).
-fn upload_texture(device: &wgpu::Device, queue: &wgpu::Queue, w: u32, h: u32, rgba: &[u8]) -> wgpu::TextureView {
+/// Mip levels 1.. of an sRGB RGBA8 image (box filter in linear light), as
+/// sRGB RGBA8. (The browser build runs this in a worker: platform::web.)
+pub fn mip_chain(w: u32, h: u32, rgba: &[u8]) -> Vec<Vec<u8>> {
     let levels = 32 - w.max(h).max(1).leading_zeros();
-    let tex = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("aircraft texture"),
-        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-        mip_level_count: levels,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
     let to_lin: Vec<f32> = (0..256).map(|i| (i as f32 / 255.0).powf(2.2)).collect();
     let mut cur: Vec<f32> = rgba.iter().enumerate().map(|(i, &b)| if i % 4 == 3 { b as f32 / 255.0 } else { to_lin[b as usize] }).collect();
     let (mut cw, mut ch) = (w, h);
-    for level in 0..levels {
-        let bytes: Vec<u8> = cur
-            .iter()
-            .enumerate()
-            .map(|(i, &v)| if i % 4 == 3 { (v * 255.0 + 0.5) as u8 } else { (v.max(0.0).powf(1.0 / 2.2) * 255.0 + 0.5).min(255.0) as u8 })
-            .collect();
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: level, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-            &bytes,
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(cw * 4), rows_per_image: Some(ch) },
-            wgpu::Extent3d { width: cw, height: ch, depth_or_array_layers: 1 },
-        );
-        if level + 1 == levels {
-            break;
-        }
+    let mut out = Vec::new();
+    for _ in 1..levels {
         let (nw, nh) = ((cw / 2).max(1), (ch / 2).max(1));
         let mut next = vec![0f32; (nw * nh * 4) as usize];
         for y in 0..nh {
@@ -694,9 +672,46 @@ fn upload_texture(device: &wgpu::Device, queue: &wgpu::Queue, w: u32, h: u32, rg
                 }
             }
         }
+        out.push(next.iter().enumerate().map(|(i, &v)| if i % 4 == 3 { (v * 255.0 + 0.5) as u8 } else { (v.max(0.0).powf(1.0 / 2.2) * 255.0 + 0.5).min(255.0) as u8 }).collect());
         cur = next;
         cw = nw;
         ch = nh;
+    }
+    out
+}
+
+/// sRGB RGBA8 texture with a CPU-built mip chain ([`mip_chain`]; `mips`:
+/// levels 1.. already built, else empty).
+fn upload_texture(device: &wgpu::Device, queue: &wgpu::Queue, w: u32, h: u32, rgba: &[u8], mips: &[Vec<u8>]) -> wgpu::TextureView {
+    let levels = 32 - w.max(h).max(1).leading_zeros();
+    let tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("aircraft texture"),
+        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        mip_level_count: levels,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let built;
+    let mips = if mips.len() + 1 == levels as usize {
+        mips
+    } else {
+        built = mip_chain(w, h, rgba);
+        &built
+    };
+    let (mut cw, mut ch) = (w, h);
+    for level in 0..levels {
+        let bytes = if level == 0 { rgba } else { &mips[level as usize - 1][..] };
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: level, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            bytes,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(cw * 4), rows_per_image: Some(ch) },
+            wgpu::Extent3d { width: cw, height: ch, depth_or_array_layers: 1 },
+        );
+        cw = (cw / 2).max(1);
+        ch = (ch / 2).max(1);
     }
     tex.create_view(&Default::default())
 }

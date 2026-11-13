@@ -80,6 +80,9 @@ pub fn own_state(sim: &Sim, world: &World, paused: bool, spectating: bool) -> Ac
     if ac.on_ground {
         st.flags |= flags::ON_GROUND;
     }
+    if ac.water.afloat() {
+        st.flags |= flags::ON_GROUND | flags::ON_WATER;
+    }
     if ac.crashed.is_some() {
         st.flags |= flags::CRASHED;
     }

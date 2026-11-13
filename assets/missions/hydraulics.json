@@ -1,0 +1,34 @@
+{
+  "id": "hydraulics",
+  "title": "Thrust Alone",
+  "tagline": "All three hydraulic systems lost. Steer with the engines.",
+  "aircraft": "meridian320",
+  "difficulty": 5,
+  "minutes": 8,
+  "history": "Inspired by airliners that lost every flight control to hydraulic failures — a 1989 wide-body above all, whose crew steered it to a runway with the throttles alone, saving most of those aboard — and the research into thrust-only control that followed.",
+  "situation": "Fourteen miles north-east of Stansted at 5,000 ft with 160 aboard, a fan disc failure takes out all three hydraulic systems. The stick does nothing. The only controls you have left are the two thrust levers.",
+  "failures": ["Hydraulic systems green, blue and yellow lost: all flight controls frozen", "No flaps, no speed brakes; gear by gravity; brakes on the accumulator"],
+  "tips": ["Split the throttles: F7/F8 (Numpad 1/7) left, F9/F10 (Numpad 3/9) right, F5 together", "More thrust on the left yaws and rolls you right — small, early inputs", "Power up = nose up and climb, power down = descend; the aircraft oscillates (phugoid): lead it", "Gravity gear early (O → Systems → ALT GEAR); a firm touchdown on the runway is a win"],
+  "target": { "airport": "EGSS", "runway": "22", "course_deg": 222.8, "length_m": 3049, "width_m": 46, "elev_ft": 348, "lat": 51.895166, "lon": 0.25005 },
+  "start": { "x_nm": -14, "y_nm": 0, "alt_ft": 4800, "hdg_rel": 0, "kias": 200, "flaps": 0, "gear_down": false },
+  "fuel_frac": 0.45,
+  "time": "16:00",
+  "date": "07-19",
+  "metar": "EGSS 191600Z 22006KT 9999 FEW040 23/12 Q1017",
+  "pax": 160,
+  "survivable_ok": true,
+  "par_s": 420,
+  "events": [
+    { "id": "hyd", "when": { "t": 5 }, "do": [ { "fail": "hyd1" }, { "fail": "hyd2" }, { "fail": "hyd3" }, { "ap_off": true },
+      { "note": "F/O: All three hydraulics — gone. I've got no controls! Nothing!" }, { "checkpoint": "Hydraulics lost" } ] },
+    { "id": "idea", "when": { "after": "hyd", "delay": 20 }, "do": [ { "note": "Captain: Throttles. We steer with the throttles." } ] },
+    { "id": "pa", "when": { "after": "hyd", "delay": 45 }, "do": [ { "pa": "crew_stations" } ] },
+    { "id": "brace", "when": { "after": "hyd", "agl_below_ft": 300 }, "do": [ { "pa": "brace" } ] }
+  ],
+  "objectives": [
+    { "id": "split", "text": "Split the thrust levers (differential thrust)", "kind": "player", "act": "split_throttles", "after": "hyd", "points": 40 },
+    { "id": "mayday", "text": "Declare MAYDAY", "kind": "player", "act": "mayday", "after": "hyd", "points": 20 },
+    { "id": "gear", "text": "Gravity-extend the gear", "kind": "player", "act": "alt_gear", "after": "hyd", "points": 40 },
+    { "id": "land", "text": "Get it onto the runway — survivably", "kind": "land", "required": true, "points": 40 }
+  ]
+}

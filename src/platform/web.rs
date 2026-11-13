@@ -120,6 +120,77 @@ pub fn offload(kind: &str, payload: Vec<u8>, done: Done) -> bool {
     OFFLOAD.with(|o| o.borrow().as_ref().is_some_and(|f| f(kind, payload, done)))
 }
 
+/// [`offload`] as a future: the job is handed over now; None if no worker
+/// could take it. The future's output is the job's result (None: it failed).
+pub fn offload_begin(kind: &str, payload: Vec<u8>) -> Option<impl Future<Output = Option<Vec<u8>>> + use<>> {
+    let slot: std::rc::Rc<RefCell<Option<Vec<u8>>>> = Default::default();
+    let mut resolve = None;
+    let p = js_sys::Promise::new(&mut |res, _| resolve = Some(res));
+    let resolve = resolve?;
+    let slot2 = slot.clone();
+    let done: Done = Box::new(move |r| {
+        *slot2.borrow_mut() = r;
+        let _ = resolve.call0(&JsValue::NULL);
+    });
+    if !offload(kind, payload, done) {
+        return None;
+    }
+    Some(async move {
+        let _ = JsFuture::from(p).await;
+        slot.borrow_mut().take()
+    })
+}
+
+/// Worker job "image": a PNG / JPEG file → (width, height, RGBA8).
+pub fn decode_image_job(bytes: &[u8]) -> Option<Vec<u8>> {
+    let img = image::load_from_memory(bytes).ok()?.to_rgba8();
+    let (w, h) = img.dimensions();
+    let mut out = Vec::with_capacity(8 + img.as_raw().len());
+    out.extend_from_slice(&w.to_le_bytes());
+    out.extend_from_slice(&h.to_le_bytes());
+    out.extend_from_slice(img.as_raw());
+    Some(out)
+}
+
+/// Worker job "texture": an aircraft texture file → (width, height) then
+/// RGBA8 level 0 and its mip chain (gfx_aircraft::mip_chain), concatenated.
+pub fn decode_texture_job(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut out = decode_image_job(bytes)?;
+    let w = u32::from_le_bytes(out[0..4].try_into().ok()?);
+    let h = u32::from_le_bytes(out[4..8].try_into().ok()?);
+    for m in crate::gfx_aircraft::mip_chain(w, h, &out[8..]) {
+        out.extend_from_slice(&m);
+    }
+    Some(out)
+}
+
+/// An aircraft texture a worker decoded while the aircraft downloaded
+/// ([`preload_dir`]): (width, height, RGBA8, mip levels 1..). Taken once
+/// (the model is loaded once per session; otherwise the page decodes the
+/// file itself).
+pub fn take_decoded_texture(path: &str) -> Option<(u32, u32, Vec<u8>, Vec<Vec<u8>>)> {
+    let b = crate::assets::take(&format!("{path}#rgba"))?;
+    let w = u32::from_le_bytes(b.get(0..4)?.try_into().ok()?);
+    let h = u32::from_le_bytes(b.get(4..8)?.try_into().ok()?);
+    let (mut o, mut cw, mut ch) = (8usize, w, h);
+    let mut levels = Vec::new();
+    loop {
+        let n = (cw * ch * 4) as usize;
+        levels.push(b.get(o..o + n)?.to_vec());
+        o += n;
+        if cw == 1 && ch == 1 {
+            break;
+        }
+        cw = (cw / 2).max(1);
+        ch = (ch / 2).max(1);
+    }
+    if o != b.len() {
+        return None;
+    }
+    let rgba = levels.remove(0);
+    Some((w, h, rgba, levels))
+}
+
 // ---------------------------------------------------------------- timers
 
 /// True inside a Web Worker (the tile builders), false on the page.
@@ -195,6 +266,88 @@ pub async fn get(url: &str, timeout: Duration) -> Result<Vec<u8>, String> {
     Ok(r.body)
 }
 
+// ---------------------------------------------------------------- tile cache
+
+/// Cache Storage for map and elevation tiles (beyond the HTTP cache, which
+/// is small and evicts early): kept across visits, trimmed to
+/// [`TILE_CACHE_MAX`] entries, oldest first. The name carries a version: a
+/// change of format starts a fresh cache.
+const TILE_CACHE: &str = "skyward-tiles-1";
+const TILE_CACHE_MAX: u32 = 4000;
+
+fn js_get(o: &JsValue, k: &str) -> Option<JsValue> {
+    js_sys::Reflect::get(o, &JsValue::from_str(k)).ok().filter(|v| !v.is_undefined() && !v.is_null())
+}
+
+async fn call_async(o: &JsValue, method: &str, args: &[&JsValue]) -> Result<JsValue, JsValue> {
+    let f: js_sys::Function = js_get(o, method).ok_or_else(|| JsValue::from_str(method))?.dyn_into()?;
+    let a = js_sys::Array::new();
+    for x in args {
+        a.push(x);
+    }
+    let p: js_sys::Promise = f.apply(o, &a)?.dyn_into()?;
+    JsFuture::from(p).await
+}
+
+/// The tile cache (`caches` exists only in secure contexts).
+async fn tile_cache() -> Option<JsValue> {
+    let caches = js_get(&js_sys::global(), "caches")?;
+    call_async(&caches, "open", &[&JsValue::from_str(TILE_CACHE)]).await.ok()
+}
+
+/// GET through the tile cache: a cached answer if there is one, else the
+/// network (2xx and 404 answers are stored). Any status is returned.
+pub async fn fetch_cached(url: &str, timeout: Duration) -> Result<HttpResponse, String> {
+    let cache = tile_cache().await;
+    if let Some(c) = &cache {
+        if let Ok(r) = call_async(c, "match", &[&JsValue::from_str(url)]).await {
+            if let Ok(resp) = r.dyn_into::<web_sys::Response>() {
+                if let Ok(p) = resp.array_buffer() {
+                    if let Ok(buf) = JsFuture::from(p).await {
+                        return Ok(HttpResponse { status: resp.status(), body: js_sys::Uint8Array::new(&buf).to_vec() });
+                    }
+                }
+            }
+        }
+    }
+    let r = fetch(url, timeout).await?;
+    if let Some(c) = &cache {
+        if (200..300).contains(&r.status) || r.status == 404 {
+            let init = web_sys::ResponseInit::new();
+            init.set_status(r.status);
+            let body = js_sys::Uint8Array::from(&r.body[..]);
+            if let Ok(resp) = web_sys::Response::new_with_opt_buffer_source_and_init(Some(&body), &init) {
+                // Not awaited: storing must not delay the tile.
+                let c = c.clone();
+                let url = url.to_string();
+                spawn_local(async move {
+                    let _ = call_async(&c, "put", &[&JsValue::from_str(&url), &resp]).await;
+                });
+            }
+        }
+    }
+    Ok(r)
+}
+
+/// Keep the tile cache under its cap (once, at start): drop the oldest
+/// entries (Cache Storage lists keys in insertion order).
+pub fn trim_tile_cache() {
+    spawn_local(async {
+        let Some(c) = tile_cache().await else { return };
+        let Ok(keys) = call_async(&c, "keys", &[]).await else { return };
+        let keys: js_sys::Array = keys.unchecked_into();
+        let n = keys.length();
+        if n <= TILE_CACHE_MAX {
+            return;
+        }
+        let drop_n = n - TILE_CACHE_MAX * 3 / 4;
+        log(&format!("tile cache: {n} entries, dropping the oldest {drop_n}"));
+        for i in 0..drop_n {
+            let _ = call_async(&c, "delete", &[&keys.get(i)]).await;
+        }
+    });
+}
+
 // ---------------------------------------------------------------- page
 
 /// `localStorage[key]`.
@@ -245,6 +398,8 @@ struct AssetState {
     manifest: Option<Vec<(String, u64)>>,
     /// Other files the build shipped (e.g. `data/ourairports.tsv.gz`).
     extras: Vec<String>,
+    /// Aircraft with a pre-rendered thumbnail (`thumbs/<id>.jpg`).
+    thumbs: Vec<String>,
     /// Asset directories fully loaded / being loaded.
     loaded: std::collections::HashSet<String>,
     loading: std::collections::HashMap<String, (u64, u64)>,
@@ -264,11 +419,13 @@ pub async fn load_manifest() -> Result<(), String> {
     let v: serde_json::Value = serde_json::from_slice(&b).map_err(|e| e.to_string())?;
     let files = v.get("files").and_then(|f| f.as_object()).ok_or("manifest has no files")?;
     let list = files.iter().map(|(k, v)| (k.clone(), v.as_u64().unwrap_or(0))).collect();
-    let extras = v.get("extras").and_then(|e| e.as_array()).map(|e| e.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+    let strings = |k: &str| -> Vec<String> { v.get(k).and_then(|e| e.as_array()).map(|e| e.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default() };
+    let (extras, thumbs) = (strings("extras"), strings("thumbs"));
     ASSETS.with(|a| {
         let mut a = a.borrow_mut();
         a.manifest = Some(list);
         a.extras = extras;
+        a.thumbs = thumbs;
     });
     Ok(())
 }
@@ -346,6 +503,7 @@ async fn preload(dir: &str) -> Result<(), String> {
     ASSETS.with(|a| a.borrow_mut().loading.insert(dir.to_string(), (0, total)));
     // A few requests at a time.
     let mut done = 0u64;
+    let mut decodes = Vec::new();
     for chunk in files.chunks(6) {
         // Started together (the browser runs them in parallel), awaited in turn.
         let mut started = Vec::new();
@@ -360,11 +518,77 @@ async fn preload(dir: &str) -> Result<(), String> {
                 return Err(format!("HTTP {} for {url}", r.status));
             }
             done += r.body.len() as u64;
+            // Textures are decoded and their mip chains built in a tile
+            // worker meanwhile (on the page: seconds of stall at flight start).
+            if p.ends_with(".jpg") || p.ends_with(".png") {
+                if let Some(f) = offload_begin("texture", r.body.clone()) {
+                    decodes.push((p.clone(), f));
+                }
+            }
             crate::assets::insert(&p, r.body);
-            ASSETS.with(|a| a.borrow_mut().loading.insert(dir.to_string(), (done, total)));
+            ASSETS.with(|a| a.borrow_mut().loading.insert(dir.to_string(), (done.min(total.saturating_sub(1)), total)));
         }
     }
+    let t = Instant::now();
+    let n = decodes.len();
+    for (p, f) in decodes {
+        if let Some(px) = f.await {
+            crate::assets::insert(&format!("{p}#rgba"), px);
+        }
+    }
+    if n > 0 {
+        log(&format!("assets: {dir}: {n} textures decoded in workers ({:.0} ms after the download)", t.elapsed().as_secs_f32() * 1000.0));
+    }
     Ok(())
+}
+
+// ---------------------------------------------------------------- thumbnails
+
+/// Aircraft-card thumbnails: pre-rendered JPEGs next to the page
+/// (`thumbs/<id>.jpg`, listed in the manifest's "thumbs"; natively they are
+/// rendered over the live scenery, which here would mean downloading every
+/// aircraft). Decoded in a worker when one is free.
+#[derive(Default)]
+struct Thumbs {
+    started: bool,
+    done: Vec<(String, u32, u32, Vec<u8>)>,
+}
+
+thread_local! {
+    static THUMBS: RefCell<Thumbs> = RefCell::new(Thumbs::default());
+}
+
+/// Start loading the thumbnails of these aircraft (once).
+pub fn thumbs_start(defs: &[crate::flight::AircraftDef]) {
+    if THUMBS.with(|t| std::mem::replace(&mut t.borrow_mut().started, true)) {
+        return;
+    }
+    let ids: Vec<String> = defs.iter().map(|d| d.id.to_string()).collect();
+    spawn_local(async move {
+        if load_manifest().await.is_err() {
+            return;
+        }
+        let shipped: Vec<String> = ASSETS.with(|a| a.borrow().thumbs.clone());
+        for id in ids.into_iter().filter(|id| shipped.contains(id)) {
+            spawn_local(async move {
+                let Ok(jpg) = get(&format!("thumbs/{id}.jpg"), Duration::from_secs(60)).await else { return };
+                let px = match offload_begin("image", jpg.clone()) {
+                    Some(f) => f.await,
+                    None => None,
+                }
+                .or_else(|| decode_image_job(&jpg));
+                let Some(px) = px.filter(|p| p.len() > 8) else { return };
+                let w = u32::from_le_bytes(px[0..4].try_into().unwrap());
+                let h = u32::from_le_bytes(px[4..8].try_into().unwrap());
+                THUMBS.with(|t| t.borrow_mut().done.push((id, w, h, px[8..].to_vec())));
+            });
+        }
+    });
+}
+
+/// Thumbnails decoded since the last call: (aircraft id, width, height, RGBA8).
+pub fn thumbs_take() -> Vec<(String, u32, u32, Vec<u8>)> {
+    THUMBS.with(|t| std::mem::take(&mut t.borrow_mut().done))
 }
 
 /// Install the panic hook (panics → console.error + the page's error box).
@@ -392,4 +616,37 @@ pub fn scene_size(w: u32, h: u32) -> (u32, u32) {
     }
     let s = FIXED.with(|f| *f).unwrap_or_else(|| (1.6e6 / (w as f32 * h as f32).max(1.0)).sqrt().min(1.0));
     (((w as f32 * s).round() as u32).max(1), ((h as f32 * s).round() as u32).max(1))
+}
+
+// ---------------------------------------------------------------- build-time data
+
+/// Build step (scripts/web-data.mjs runs this module in Node): OurAirports
+/// CSVs → the compact gzipped lists the page loads instead (`data/*.tsv.gz`,
+/// what native runs keep in `cache/`). `kind`: "airports" (airports.csv,
+/// runways.csv), "frequencies" or "navaids" (one CSV). None if the list
+/// looks wrong (too short).
+#[wasm_bindgen]
+pub fn skyward_compact_data(kind: &str, a: &[u8], b: &[u8]) -> Option<Vec<u8>> {
+    use std::io::Write;
+    let text = |x: &[u8]| String::from_utf8_lossy(x).into_owned();
+    let gz = |s: String| -> Option<Vec<u8>> {
+        let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+        e.write_all(s.as_bytes()).ok()?;
+        e.finish().ok()
+    };
+    match kind {
+        "airports" => {
+            let list = crate::airports::parse_csv(&text(a), &text(b));
+            (list.len() >= 1000).then(|| gz(crate::airports::encode(&list)))?
+        }
+        "frequencies" => {
+            let list = crate::atc::freqs::parse_csv(&text(a));
+            (list.len() >= 1000).then(|| crate::atc::freqs::compact(&list).ok())?
+        }
+        "navaids" => {
+            let list = crate::nav::db::parse_csv(&text(a));
+            (list.len() >= 1000).then(|| crate::nav::db::compact_bytes(&list).ok())?
+        }
+        _ => None,
+    }
 }

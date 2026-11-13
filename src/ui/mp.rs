@@ -1,6 +1,6 @@
 //! In-flight multiplayer interface: name tags over other aircraft
-//! (distance-faded, F8 toggles), the chat (Enter), the player list with
-//! spectating (F7), the quick-chat wheel (F9 / hold a controller's View
+//! (distance-faded, Num * toggles), the chat (Enter), the player list with
+//! spectating (F11), the quick-chat wheel (Backspace / Num 0 / hold a controller's View
 //! button), the connection chip, other aircraft on the moving map and
 //! TCAS-style traffic on the navigation display.
 
@@ -295,8 +295,9 @@ fn players(ctx: &egui::Context, st: &mut UiState, sim: &Sim, screen: Rect) {
         {
             close = true;
         }
-        let tags = if st.mp.tags { "Name tags: on (F8)" } else { "Name tags: off (F8)" };
-        if super::menus::button(ui, Rect::from_min_size(Pos2::new(r.min.x + 24.0, by), Vec2::new(190.0, 36.0)), "players_tags", tags, super::menus::Btn::Secondary, true).clicked()
+        let key = st.settings.controls.keys_of(crate::sim::Key::NameTags).first().map(|c| format!(" ({})", crate::input::keys::label(*c))).unwrap_or_default();
+        let tags = format!("Name tags: {}{key}", if st.mp.tags { "on" } else { "off" });
+        if super::menus::button(ui, Rect::from_min_size(Pos2::new(r.min.x + 24.0, by), Vec2::new(190.0, 36.0)), "players_tags", &tags, super::menus::Btn::Secondary, true).clicked()
         {
             st.mp.tags = !st.mp.tags;
         }
