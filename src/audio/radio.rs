@@ -35,6 +35,8 @@ impl Voice {
 
 macro_rules! pack {
     ($($v:literal),*) => {
+        // (The browser build downloads the voices instead: `prepare`.)
+        #[cfg(not(target_arch = "wasm32"))]
         const OGG: [&[u8]; 6] = [$(include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/audio/atc/", $v, ".ogg"))),*];
         const IDX: [&str; 6] = [$(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/audio/atc/", $v, ".idx"))),*];
     };
@@ -68,11 +70,16 @@ fn parse_index(i: usize) -> (f32, usize, HashMap<u16, (u32, u32)>) {
     (rate, total, clips)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn decode(i: usize) -> Pack {
+    decode_bytes(i, OGG[i])
+}
+
+fn decode_bytes(i: usize, ogg: &[u8]) -> Pack {
     let (rate_i, total, clips) = parse_index(i);
     let mut pcm: Vec<f32> = Vec::with_capacity(total + 4096);
     let mut rate = rate_i;
-    match lewton::inside_ogg::OggStreamReader::new(std::io::Cursor::new(OGG[i])) {
+    match lewton::inside_ogg::OggStreamReader::new(std::io::Cursor::new(ogg)) {
         Ok(mut r) => {
             rate = r.ident_hdr.audio_sample_rate as f32;
             let ch = r.ident_hdr.audio_channels.max(1) as usize;
@@ -96,19 +103,62 @@ pub fn pack(v: Voice) -> Option<&'static Pack> {
 }
 
 /// Decode every voice now (offline renders, tests).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn prepare_blocking() {
     for (i, p) in PACKS.iter().enumerate() {
         p.get_or_init(|| decode(i));
     }
 }
 
+/// Worker job "radio" (tiles_web.rs): voice index (u32) + its Vorbis file →
+/// rate (f32) + PCM (f32s).
+#[allow(dead_code)]
+pub fn decode_job(data: &[u8]) -> Option<Vec<u8>> {
+    let i = u32::from_le_bytes(data.get(..4)?.try_into().ok()?) as usize;
+    if i >= PACKS.len() {
+        return None;
+    }
+    let p = decode_bytes(i, &data[4..]);
+    let mut out = p.rate.to_le_bytes().to_vec();
+    out.extend_from_slice(bytemuck::cast_slice(&p.pcm));
+    Some(out)
+}
+
 /// Decode the voices off the audio thread: a worker natively; in the
-/// browser one voice per call (per frame), so no single long stall.
+/// browser each voice is downloaded (`assets/audio/atc/`, not compiled in)
+/// and decoded in a tile worker (else on the page between frames).
 pub fn prepare() {
     #[cfg(target_arch = "wasm32")]
     {
-        if let Some(i) = PACKS.iter().position(|p| p.get().is_none()) {
-            PACKS[i].get_or_init(|| decode(i));
+        use crate::platform::web;
+        static STARTED: OnceLock<()> = OnceLock::new();
+        if STARTED.set(()).is_err() {
+            return;
+        }
+        for i in 0..PACKS.len() {
+            web::spawn_local(async move {
+                let url = format!("assets/audio/atc/{}.ogg", VOICE_FILES[i]);
+                let bytes = match web::get(&url, web_time::Duration::from_secs(90)).await {
+                    Ok(b) => b,
+                    Err(e) => return web::log(&format!("audio: radio voice {}: {e}", VOICE_FILES[i])),
+                };
+                let mut job = (i as u32).to_le_bytes().to_vec();
+                job.extend_from_slice(&bytes);
+                if let Some(f) = web::offload_begin("radio", job) {
+                    if let Some(b) = f.await.filter(|b| b.len() >= 4) {
+                        let rate = f32::from_le_bytes(b[..4].try_into().unwrap());
+                        let mut pcm = vec![0f32; (b.len() - 4) / 4];
+                        let n = pcm.len() * 4;
+                        bytemuck::cast_slice_mut::<f32, u8>(&mut pcm).copy_from_slice(&b[4..4 + n]);
+                        let (_, _, clips) = parse_index(i);
+                        let _ = PACKS[i].set(Pack { rate, pcm, clips });
+                        return;
+                    }
+                }
+                web::defer(Box::new(move || {
+                    PACKS[i].get_or_init(|| decode_bytes(i, &bytes));
+                }));
+            });
         }
     }
     #[cfg(not(target_arch = "wasm32"))]

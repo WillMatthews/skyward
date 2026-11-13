@@ -303,7 +303,10 @@ impl Overview {
         {
             let tx = self._tx.clone();
             crate::platform::web::spawn_local(async move {
-                let t = crate::tiles::fetch_any_async(id).await.ok().map(|b| decode(id, &b));
+                let t = match crate::tiles::fetch_any_async(id).await {
+                    Ok(b) => Some(web::decode_off_page(id, b).await),
+                    Err(_) => None,
+                };
                 let _ = tx.send((id, t));
             });
         }
@@ -509,5 +512,86 @@ fn colours(dark: bool) -> (Color32, [Color32; 6], [(Color32, f32); 4]) {
             [c(0xD9E8C6), c(0xBFDAA8), c(0xF1E7C8), c(0xF8FBFC), c(0xE2DDD8), c(0xA9CFEC)],
             [(c(0x9CC6E8), 1.0), (c(0xE8B26A), 1.3), (c(0xB9AEC0), 0.8), (c(0x8F8299), 1.4)],
         )
+    }
+}
+
+/// Browser: tiles are decoded (triangulated) in a tile worker, not on the
+/// page (tens of ms each: hitches while the map pans).
+#[cfg(target_arch = "wasm32")]
+pub mod web {
+    use super::*;
+    use crate::platform::wire::{self, R, Res, W, Wire};
+
+    fn fill_code(f: Fill) -> u8 {
+        FILLS.iter().position(|x| *x == f).unwrap_or(0) as u8
+    }
+    fn line_code(l: Line) -> u8 {
+        LINES.iter().position(|x| *x == l).unwrap_or(0) as u8
+    }
+
+    impl Wire for OvTile {
+        fn put(&self, w: &mut W) {
+            self.fills.len().put(w);
+            for (f, v, i) in &self.fills {
+                fill_code(*f).put(w);
+                wire::put_pod(w, v);
+                wire::put_pod(w, i);
+            }
+            self.lines.len().put(w);
+            for (l, parts) in &self.lines {
+                line_code(*l).put(w);
+                parts.len().put(w);
+                for p in parts {
+                    wire::put_pod(w, p);
+                }
+            }
+            self.labels.len().put(w);
+            for l in &self.labels {
+                l.pos.put(w);
+                l.text.put(w);
+                l.kind.put(w);
+                l.rank.put(w);
+            }
+        }
+        fn get(r: &mut R) -> Res<Self> {
+            let mut t = OvTile::default();
+            for _ in 0..usize::get(r)? {
+                let f = *FILLS.get(u8::get(r)? as usize).ok_or("overview: fill")?;
+                t.fills.push((f, wire::get_pod(r)?, wire::get_pod(r)?));
+            }
+            for _ in 0..usize::get(r)? {
+                let l = *LINES.get(u8::get(r)? as usize).ok_or("overview: line")?;
+                let mut parts = Vec::new();
+                for _ in 0..usize::get(r)? {
+                    parts.push(wire::get_pod(r)?);
+                }
+                t.lines.push((l, parts));
+            }
+            for _ in 0..usize::get(r)? {
+                t.labels.push(Label { pos: <[f32; 2]>::get(r)?, text: String::get(r)?, kind: u8::get(r)?, rank: u8::get(r)? });
+            }
+            Ok(t)
+        }
+    }
+
+    /// Worker job "overview" (tiles_web.rs): (z, x, y) + the vector tile → the decoded tile.
+    pub fn decode_job(data: &[u8]) -> Option<Vec<u8>> {
+        let mut r = R::new(data);
+        let id = TileId { z: u32::get(&mut r).ok()?, x: u32::get(&mut r).ok()?, y: u32::get(&mut r).ok()? };
+        Some(wire::encode(&decode(id, &data[12..])))
+    }
+
+    pub(super) async fn decode_off_page(id: TileId, bytes: Vec<u8>) -> OvTile {
+        let mut w = W::default();
+        id.z.put(&mut w);
+        id.x.put(&mut w);
+        id.y.put(&mut w);
+        w.0.extend_from_slice(&bytes);
+        if let Some(f) = crate::platform::web::offload_begin("overview", w.0) {
+            if let Some(t) = f.await.and_then(|b| wire::decode::<OvTile>(&b).ok()) {
+                return t;
+            }
+        }
+        decode(id, &bytes)
     }
 }

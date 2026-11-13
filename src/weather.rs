@@ -1019,17 +1019,110 @@ fn open_meteo_url(lat: f64, lon: f64) -> String {
     )
 }
 
+/// Browser METAR source: VATSIM's public METAR service (`metar.vatsim.net`,
+/// which sends `Access-Control-Allow-Origin: *`; aviationweather.gov sends no
+/// CORS headers). It serves raw METARs by ICAO code, so the stations asked
+/// for are the airports nearest the place (from the airport database, once
+/// loaded), and the answer is rewritten as aviationweather.gov's JSON
+/// (`[{"rawOb", "lat", "lon"}]`) so [`Fetched::decode`] reads both. `first`
+/// is always asked for (a departure airport). None: no station reported.
+#[cfg(target_arch = "wasm32")]
+pub(crate) async fn web_metars(lat: f64, lon: f64, km: f64, first: Option<&str>) -> Result<Option<String>, String> {
+    use crate::platform::web;
+    // The airport database arrives within seconds of the start.
+    let t0 = Instant::now();
+    let db = loop {
+        if let Some(db) = crate::terrain::airport_db() {
+            break db;
+        }
+        if t0.elapsed() > Duration::from_secs(30) {
+            return Err("no airport database for METAR stations".into());
+        }
+        web::sleep(Duration::from_millis(250)).await;
+    };
+    let mut ids: Vec<(String, f64, f64)> = Vec::new();
+    let icao = |s: &str| s.len() == 4 && s.chars().all(|c| c.is_ascii_alphanumeric());
+    if let Some(a) = first.and_then(|f| db.get(f)) {
+        if icao(&a.icao) {
+            ids.push((a.icao.clone(), a.lat, a.lon));
+        }
+    }
+    // Reporting stations are mostly the larger fields: the nearest of those,
+    // then the nearest small ones.
+    let near = db.near(lat, lon, km);
+    for big in [true, false] {
+        let cap = if big { 24 } else { 32 };
+        for &(i, _) in &near {
+            let a = &db.airports[i];
+            let is_big = matches!(a.kind, crate::airports::Kind::Large | crate::airports::Kind::Medium);
+            if is_big == big && icao(&a.icao) && !ids.iter().any(|x| x.0 == a.icao) {
+                ids.push((a.icao.clone(), a.lat, a.lon));
+                if ids.len() >= cap {
+                    break;
+                }
+            }
+        }
+    }
+    if ids.is_empty() {
+        return Ok(None);
+    }
+    let list: Vec<&str> = ids.iter().map(|x| x.0.as_str()).collect();
+    let body = web::get(&format!("{WEB_METAR_URL}{}", list.join(",")), Duration::from_secs(15)).await?;
+    let text = String::from_utf8_lossy(&body);
+    let mut out = Vec::new();
+    for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        let Some(id) = line.split_whitespace().next() else { continue };
+        if let Some((_, la, lo)) = ids.iter().find(|x| x.0 == id) {
+            out.push(serde_json::json!({ "icaoId": id, "rawOb": line, "lat": la, "lon": lo }));
+        }
+    }
+    Ok((!out.is_empty()).then(|| serde_json::Value::Array(out).to_string()))
+}
+
+/// VATSIM's METAR service; append comma-separated ICAO codes.
+#[cfg(target_arch = "wasm32")]
+pub const WEB_METAR_URL: &str = "https://metar.vatsim.net/";
+
+/// Await two futures together (both start at once).
+#[cfg(target_arch = "wasm32")]
+async fn futures_join<A: std::future::Future, B: std::future::Future>(a: A, b: B) -> (A::Output, B::Output) {
+    let mut a = std::pin::pin!(a);
+    let mut b = std::pin::pin!(b);
+    let (mut ra, mut rb) = (None, None);
+    std::future::poll_fn(|cx| {
+        if ra.is_none() {
+            if let std::task::Poll::Ready(v) = a.as_mut().poll(cx) {
+                ra = Some(v);
+            }
+        }
+        if rb.is_none() {
+            if let std::task::Poll::Ready(v) = b.as_mut().poll(cx) {
+                rb = Some(v);
+            }
+        }
+        if ra.is_some() && rb.is_some() { std::task::Poll::Ready(()) } else { std::task::Poll::Pending }
+    })
+    .await;
+    (ra.unwrap(), rb.unwrap())
+}
+
 impl Fetched {
-    /// Browser: Open-Meteo only — aviationweather.gov sends no CORS headers,
-    /// so pages cannot read its METARs (the weather is built from the
-    /// forecast model alone, as natively when METAR is down).
+    /// Browser: METARs from VATSIM's mirror ([`web_metars`]: aviationweather.gov
+    /// sends no CORS headers, so pages cannot read it) and Open-Meteo.
     #[cfg(target_arch = "wasm32")]
     async fn fetch_web(lat: f64, lon: f64) -> Result<Fetched, String> {
         use crate::platform::web;
         let t = Duration::from_secs(15);
         let mut f = Fetched { unix: unix_now(), lat, lon, ..Default::default() };
         let mut errs = Vec::new();
-        match web::get(&open_meteo_url(lat, lon), t).await.map(|b| String::from_utf8_lossy(&b).into_owned()) {
+        // Both requests at once.
+        let (metar, om) = futures_join(web_metars(lat, lon, 180.0, None), web::get(&open_meteo_url(lat, lon), t)).await;
+        match metar {
+            Ok(Some(j)) => f.metar_json = Some(j),
+            Ok(None) => {}
+            Err(e) => errs.push(format!("METAR: {e}")),
+        }
+        match om.map(|b| String::from_utf8_lossy(&b).into_owned()) {
             Ok(b) if b.contains("\"current\"") => f.om_json = Some(b),
             Ok(b) => errs.push(format!("Open-Meteo: {}", b.chars().take(120).collect::<String>())),
             Err(e) => errs.push(format!("Open-Meteo: {e}")),

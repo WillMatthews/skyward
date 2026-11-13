@@ -1,8 +1,9 @@
 # The browser version (wasm32 + WebGPU) on GitHub Pages.
 #
 #   build   — manual runs, and pushes to main once PAGES_ENABLED is 'true': scripts/web-build.sh → dist/
-#             (page, wasm, aircraft assets, licence + credits), uploaded as the
-#             Pages artifact. (ci.yml's wasm job checks the web build on every push.)
+#             (page, content-hashed wasm + glue + worker, aircraft / audio assets,
+#             thumbnails, compact airport data from OurAirports, licence + credits),
+#             uploaded as the Pages artifact. (ci.yml's wasm job checks the web build on every push.)
 #   deploy  — publishes that artifact. Runs only when the repository variable
 #             PAGES_ENABLED is 'true', so the workflow stays green until the
 #             owner turns Pages on:
@@ -65,6 +66,12 @@ jobs:
           if ! wasm-opt --version >/dev/null 2>&1; then
             cargo install wasm-opt --version "$WASM_OPT_VERSION" --locked
           fi
+
+      # scripts/web-data.mjs runs the built module in Node to compact
+      # OurAirports' airport / frequency / navaid lists for the page.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
 
       - name: build dist/
         run: scripts/web-build.sh

@@ -968,11 +968,24 @@ fn fetch_metar(id: &str, lat: f64, lon: f64) -> Result<(crate::weather::Metar, f
     parse(&b).into_iter().find(|m| m.1 < 80.0).ok_or_else(|| "no METAR nearby".to_string())
 }
 
-/// Browser: aviationweather.gov sends no CORS headers, so a page cannot
-/// read METARs (the departure screen says so).
+/// Browser: the airport's own METAR, else the nearest within 80 km, from
+/// VATSIM's CORS-enabled METAR service (weather::web_metars).
 #[cfg(target_arch = "wasm32")]
-async fn fetch_metar_web(_id: &str, _lat: f64, _lon: f64) -> Result<(crate::weather::Metar, f64), String> {
-    Err("live METARs are not available in the browser".into())
+async fn fetch_metar_web(id: &str, lat: f64, lon: f64) -> Result<(crate::weather::Metar, f64), String> {
+    let json = crate::weather::web_metars(lat, lon, 80.0, Some(id)).await?.ok_or("no METAR nearby")?;
+    let Ok(serde_json::Value::Array(a)) = serde_json::from_str::<serde_json::Value>(&json) else { return Err("no METAR nearby".into()) };
+    let mut v: Vec<(crate::weather::Metar, f64, bool)> = a
+        .iter()
+        .filter_map(|s| {
+            let raw = s.get("rawOb")?.as_str()?;
+            let (la, lo) = (s.get("lat")?.as_f64()?, s.get("lon")?.as_f64()?);
+            let own = s.get("icaoId").and_then(|x| x.as_str()) == Some(id);
+            Some((crate::weather::Metar::parse(raw)?, distance_km((lat, lon), (la, lo)), own))
+        })
+        .collect();
+    // Its own report first, then by distance.
+    v.sort_by(|a, b| b.2.cmp(&a.2).then(a.1.total_cmp(&b.1)));
+    v.into_iter().find(|m| m.2 || m.1 < 80.0).map(|m| (m.0, m.1)).ok_or_else(|| "no METAR nearby".to_string())
 }
 
 // ---------------------------------------------------------------- sun

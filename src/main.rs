@@ -1093,6 +1093,19 @@ fn render_thumbs(gpu: &Gpu, renderer: &mut Renderer, ui: &mut Ui, s: &Session, f
         for c in px.chunks_mut(4) {
             c[3] = 255;
         }
+        // `SKYWARD_THUMBS_OUT=web/thumbs`: also write them as JPEGs (the
+        // browser build ships these instead of downloading every aircraft).
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(dir) = std::env::var_os("SKYWARD_THUMBS_OUT") {
+            let rgb: Vec<u8> = px.chunks(4).flat_map(|c| [c[0], c[1], c[2]]).collect();
+            let path = std::path::Path::new(&dir).join(format!("{}.jpg", def.id));
+            let r = std::fs::File::create(&path).map_err(|e| e.to_string()).and_then(|f| {
+                image::codecs::jpeg::JpegEncoder::new_with_quality(std::io::BufWriter::new(f), 82).encode(&rgb, w, h, image::ExtendedColorType::Rgb8).map_err(|e| e.to_string())
+            });
+            if let Err(e) = r {
+                eprintln!("thumbnail {}: {e}", path.display());
+            }
+        }
         let img = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &px);
         let handle = ui.ctx.load_texture(format!("thumb_{}", def.id), img, egui::TextureOptions::LINEAR);
         ui.st.thumbs.insert(def.id, handle.id());
@@ -2853,6 +2866,20 @@ impl App {
         if !platform::WEB && matches!(r.ui.st.screen, Screen::Aircraft | Screen::Main | Screen::Missions | Screen::Briefing) && r.ui.thumbs.is_empty() {
             if let Some(s) = r.session.as_ref().filter(|s| s.sim.is_some()) {
                 render_thumbs(&r.gpu, &mut r.renderer, &mut r.ui, s, r.format);
+            }
+        }
+        // (The browser loads pre-rendered ones: platform::web::thumbs_start.)
+        #[cfg(target_arch = "wasm32")]
+        {
+            if matches!(r.ui.st.screen, Screen::Aircraft | Screen::Main) {
+                platform::web::thumbs_start(&r.ui.st.defs);
+            }
+            for (id, w, h, px) in platform::web::thumbs_take() {
+                let Some(def) = r.ui.st.defs.iter().find(|d| d.id == id) else { continue };
+                let img = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &px);
+                let handle = r.ui.ctx.load_texture(format!("thumb_{id}"), img, egui::TextureOptions::LINEAR);
+                r.ui.st.thumbs.insert(def.id, handle.id());
+                r.ui.thumbs.push(handle);
             }
         }
         #[cfg(target_arch = "wasm32")]

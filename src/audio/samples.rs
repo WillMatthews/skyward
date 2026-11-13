@@ -22,6 +22,9 @@ macro_rules! embed {
     ($($n:literal),* $(,)?) => {
         /// Sample names, index = sample id.
         pub const NAMES: &[&str] = &[$($n),*];
+        /// The Vorbis files (natively compiled in; the browser build
+        /// downloads them when an aircraft needs them, see [`prepare`]).
+        #[cfg(not(target_arch = "wasm32"))]
         static FILES: &[&[u8]] = &[$(include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/audio/samples/", $n, ".ogg"))),*];
     };
 }
@@ -184,7 +187,12 @@ fn index_row(name: &str) -> Option<(f32, usize, bool, f32)> {
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn decode(i: usize) -> Pcm {
+    decode_bytes(i, FILES[i])
+}
+
+fn decode_bytes(i: usize, file: &[u8]) -> Pcm {
     let name = NAMES[i];
     let (rate_i, frames, looped, att) = index_row(name).unwrap_or((22050.0, 0, false, 0.0));
     let mut raw: Vec<i16> = Vec::with_capacity(frames + 1024);
@@ -192,7 +200,7 @@ fn decode(i: usize) -> Pcm {
     // Undo the build script's extra attenuation (headroom for the i16
     // decode); the common -1.5 dB is part of the calibration.
     let scale = 10f32.powf(-att / 20.0) / 32768.0;
-    match lewton::inside_ogg::OggStreamReader::new(std::io::Cursor::new(FILES[i])) {
+    match lewton::inside_ogg::OggStreamReader::new(std::io::Cursor::new(file)) {
         Ok(mut r) => {
             rate = r.ident_hdr.audio_sample_rate as f32;
             let ch = r.ident_hdr.audio_channels.max(1) as usize;
@@ -240,18 +248,33 @@ fn decode(i: usize) -> Pcm {
 }
 
 /// Decode `names` now (blocking). Already-decoded samples are skipped.
+/// (Browser: only the samples already downloaded, see [`prepare`].)
 pub fn prepare_blocking(names: &[&'static str]) {
     let _ = kernel();
     for n in names {
         let i = id(n);
+        #[cfg(not(target_arch = "wasm32"))]
         PCM[i].get_or_init(|| decode(i));
+        #[cfg(target_arch = "wasm32")]
+        if let Ok(b) = crate::assets::read(&web::path(i)) {
+            PCM[i].get_or_init(|| decode_bytes(i, &b));
+        }
     }
 }
 
-/// Decode `names` in the background (natively) or now (wasm32).
+/// Decode `names` in the background: natively on a thread; in the browser
+/// each file is downloaded (`assets/audio/samples/`, not compiled in: it
+/// keeps the first download small) and decoded in a tile worker.
 pub fn prepare(names: &'static [&'static str]) {
     if names.iter().all(|n| pcm(id(n)).is_some()) {
         return;
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = kernel();
+        for n in names {
+            web::start(id(n));
+        }
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -262,8 +285,83 @@ pub fn prepare(names: &'static [&'static str]) {
         {
             return;
         }
+        prepare_blocking(names);
     }
-    prepare_blocking(names);
+}
+
+/// Worker job "sample" (tiles_web.rs): sample index (u32) + its Vorbis file
+/// → the decoded sample ([`web::decode_wire`]).
+#[allow(dead_code)]
+pub fn decode_job(data: &[u8]) -> Option<Vec<u8>> {
+    let i = u32::from_le_bytes(data.get(..4)?.try_into().ok()?) as usize;
+    if i >= N {
+        return None;
+    }
+    let p = decode_bytes(i, &data[4..]);
+    let mut out = Vec::with_capacity(17 + p.data.len() * 2);
+    out.extend_from_slice(&p.rate.to_le_bytes());
+    out.extend_from_slice(&p.scale.to_le_bytes());
+    out.extend_from_slice(&(p.len as u64).to_le_bytes());
+    out.push(p.looped as u8);
+    out.extend_from_slice(bytemuck::cast_slice(&p.data));
+    Some(out)
+}
+
+#[cfg(target_arch = "wasm32")]
+mod web {
+    use super::*;
+    use crate::platform::web as w;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[allow(clippy::declare_interior_mutable_const)]
+    const IDLE: AtomicBool = AtomicBool::new(false);
+    static STARTED: [AtomicBool; N] = [IDLE; N];
+
+    pub fn path(i: usize) -> String {
+        format!("audio/samples/{}.ogg", NAMES[i])
+    }
+
+    /// The worker's answer → a sample.
+    fn decode_wire(b: &[u8]) -> Option<Pcm> {
+        let rate = f32::from_le_bytes(b.get(0..4)?.try_into().ok()?);
+        let scale = f32::from_le_bytes(b.get(4..8)?.try_into().ok()?);
+        let len = u64::from_le_bytes(b.get(8..16)?.try_into().ok()?) as usize;
+        let looped = *b.get(16)? != 0;
+        let raw = b.get(17..)?;
+        let mut data = vec![0i16; raw.len() / 2];
+        let n = data.len() * 2;
+        bytemuck::cast_slice_mut::<i16, u8>(&mut data).copy_from_slice(&raw[..n]);
+        (data.len() == len + 2 * PAD).then_some(Pcm { rate, data, scale, len, looped })
+    }
+
+    /// Download sample `i` and decode it (a worker, else the page between
+    /// frames). Until then it is silent.
+    pub fn start(i: usize) {
+        if pcm(i).is_some() || STARTED[i].swap(true, Ordering::Relaxed) {
+            return;
+        }
+        w::spawn_local(async move {
+            let bytes = match w::get(&format!("assets/{}", path(i)), web_time::Duration::from_secs(60)).await {
+                Ok(b) => b,
+                Err(e) => {
+                    w::log(&format!("audio: sample {}: {e}", NAMES[i]));
+                    STARTED[i].store(false, Ordering::Relaxed);
+                    return;
+                }
+            };
+            let mut job = (i as u32).to_le_bytes().to_vec();
+            job.extend_from_slice(&bytes);
+            if let Some(f) = w::offload_begin("sample", job) {
+                if let Some(p) = f.await.as_deref().and_then(decode_wire) {
+                    let _ = PCM[i].set(p);
+                    return;
+                }
+            }
+            w::defer(Box::new(move || {
+                PCM[i].get_or_init(|| decode_bytes(i, &bytes));
+            }));
+        });
+    }
 }
 
 /// True once every sample of `names` is decoded.
