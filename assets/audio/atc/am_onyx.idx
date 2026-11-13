@@ -1,4 +1,4 @@
-12000	1582410
+12000	1844760
 zero	0	3990
 one	4470	2700
 two	7650	2520
@@ -186,3 +186,34 @@ climb flight level	1532250	12960
 contact radar	1545690	11940
 climb straight ahead	1558110	12240
 backtrack runway	1570830	11100
+nine	1582410	3330
+ten	1586220	2580
+eleven	1589280	3870
+twelve	1593630	3420
+o'clock	1597530	5880
+opposite direction	1603890	12120
+same direction	1616490	10140
+crossing left to right	1627110	13380
+crossing right to left	1640970	13560
+same level	1655010	7380
+above	1662870	5580
+below	1668930	5340
+airbus	1674750	6060
+boeing	1681290	5880
+embraer	1687650	6060
+regional jet	1694190	10260
+turboprop	1704930	7620
+business jet	1713030	9540
+light aircraft	1723050	9120
+helicopter	1732650	8820
+military jet	1741950	10560
+military transport	1752990	13740
+airliner	1767210	7800
+glider	1775490	5460
+drone	1781430	5310
+concorde	1787220	7890
+extend downwind	1795590	11700
+vectors for spacing	1807770	13980
+number	1822230	5190
+following	1827900	6840
+on final	1835220	9060

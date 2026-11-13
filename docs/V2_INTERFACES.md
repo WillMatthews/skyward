@@ -33,6 +33,10 @@ the user is working on this machine; render offscreen and inspect PNGs.
 | hercules | (v3) Lockheed C-130H Hercules | Airliner (turboprop; role "Military transport") | 4 turboprops, high wing, tandem main gear, STOL / rough field |
 | galaxy | (v3) Lockheed C-5M Super Galaxy | Airliner (jet; role "Strategic airlifter") | 4 underwing turbofans, T-tail, 4 six-wheel bogies |
 | vulcan | (v3) Avro Vulcan B.2 | Airliner (jet; role "Delta-wing bomber") | tailless delta, 4 buried turbojets, elevons, flap lever = airbrakes |
+| triple7 | (H2a) Boeing 777-300ER | Airliner (jet; role "Widebody airliner") | widebody twin, 2 × GE90-115B, six-wheel bogies, FBW |
+| crj700 | (H2a) Bombardier CRJ700 | Airliner (jet; role "Regional jet") | rear-mounted CF34s, T-tail |
+| citationx | (H2a) Cessna Citation X | Airliner (jet; role "Business jet") | Mach 0.92 bizjet, rear-mounted AE3007s, T-tail |
+| concorde | (H2a) Aerospatiale/BAC Concorde | Airliner (jet; role "Supersonic airliner") | ogival delta, 4 × Olympus 593 with reheat, droop nose / visor on the flap lever, FBW |
 | extra500 | (v3 H2b) Extra EA-500 | Trainer (turboprop; role "Turboprop tourer") | low-wing turboprop single, retractable gear, glass IFDs |
 | cub | (v3 H2b) Piper PA-18 Super Cub | Trainer (piston; role "Bush plane") | high-wing tube-and-fabric taildragger, fixed-pitch prop |
 | zlin | (v3 H2b) Zlin Z-50 LX | Trainer (piston; role "Aerobatic") | single-seat aerobat, symmetric wing, no flaps, `smoke_system` |

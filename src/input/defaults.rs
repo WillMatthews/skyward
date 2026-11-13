@@ -75,6 +75,21 @@ pub fn keyboard() -> Vec<(Key, Vec<K>)> {
         (Key::Failures, vec![K::KeyO, K::F2]),
         (Key::Mute, vec![K::KeyN]),
         (Key::Assist, vec![K::F6]),
+        (Key::Chat, vec![K::Enter, K::NumpadEnter]),
+        (Key::PlayerList, vec![K::F11]),
+        (Key::NameTags, vec![K::NumpadMultiply]),
+        (Key::QuickChat, vec![K::Backspace, K::Numpad0]),
+        // Weapons (armed aircraft): Space fires the selected weapon in the
+        // air (it stays the wheel brakes on the ground); the F5–F10 cluster
+        // is shared with the split-throttle keys, which single-engine
+        // fighters don't use.
+        (Key::GunTrigger, vec![K::Space]),
+        (Key::WeaponRelease, vec![K::AltRight, K::NumpadDivide]),
+        (Key::WeaponSelect, vec![K::F5]),
+        (Key::TargetLock, vec![K::F7]),
+        (Key::Countermeasures, vec![K::F8]),
+        (Key::SightMode, vec![K::F9]),
+        (Key::Eject, vec![K::F10]),
     ]
 }
 

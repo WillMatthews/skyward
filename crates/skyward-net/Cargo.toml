@@ -1,0 +1,27 @@
+[package]
+name = "skyward-net"
+version = "0.1.0"
+edition = "2024"
+description = "Skyward multiplayer: wire protocol, UDP reliability layer, clock sync, snapshot interpolation, LAN discovery (shared by the game and skyward-server)"
+license = "GPL-2.0-or-later"
+publish = false
+
+# No dependencies on the game (wgpu / winit / audio): the dedicated server
+# links only this crate. The protocol, reliability, clock and interpolation
+# code is sans-IO (plain bytes in, bytes out) and builds for wasm32 too; the
+# socket helpers are native only.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# SO_REUSEADDR / SO_REUSEPORT for the shared discovery and mDNS ports.
+socket2 = { version = "0.6", features = ["all"] }
+
+[target.'cfg(unix)'.dependencies]
+# getifaddrs: subnet broadcast addresses of the local interfaces.
+libc = "0.2"
+
+[lints.clippy]
+# (As the game crate: nested `if let` reads better here than let-chains.)
+collapsible_if = "allow"
+collapsible_match = "allow"
+chunks_exact_to_as_chunks = "allow"
+too_many_arguments = "allow"
+type_complexity = "allow"

@@ -1,0 +1,28 @@
+[package]
+name = "skyward-server"
+version = "0.1.0"
+edition = "2024"
+description = "Skyward dedicated multiplayer server (headless; no graphics or audio)"
+license = "GPL-2.0-or-later"
+publish = false
+
+[[bin]]
+name = "skyward-server"
+path = "src/main.rs"
+
+[dependencies]
+skyward-net = { path = "../skyward-net" }
+
+# Native only (the browser build compiles a stub).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Optional config file.
+toml = { version = "1", default-features = false, features = ["std", "parse", "serde"] }
+# Live METAR for the server's airport (aviationweather.gov, the game's source too).
+ureq = "2"
+# Graceful shutdown on Ctrl-C / SIGTERM.
+signal-hook = { version = "0.4", default-features = false }
+
+[lints.clippy]
+# (As the game crate: nested `if let` reads better here than let-chains.)
+collapsible_if = "allow"
+collapsible_match = "allow"

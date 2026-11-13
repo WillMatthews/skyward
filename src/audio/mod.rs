@@ -37,11 +37,13 @@ mod sampled;
 pub mod samples;
 mod soundsets;
 pub mod synth;
+mod traffic;
 #[cfg(test)]
 mod scenarios;
 #[cfg(test)]
 mod tests;
 mod voice;
+pub mod weapons;
 
 pub use synth::Settings;
 
@@ -56,9 +58,22 @@ pub struct Audio {
     events: Vec<Event>,
     settings: Settings,
     retry_in: f32,
+    /// Output device id from the settings ("" = the system default).
+    device: String,
     status: String,
     clock: f32,
     stats_at: f32,
+    /// Multiplayer: other aircraft, and the spectator's ear (overrides the sim's).
+    traffic: [params::TrafficFrame; params::MAX_TRAFFIC],
+    listener: Option<Listener>,
+}
+
+/// A listener placed by the caller (multiplayer spectator camera).
+#[derive(Clone, Copy, Debug)]
+pub struct Listener {
+    pub pos: glam::Vec3,
+    pub fwd: glam::Vec3,
+    pub up: glam::Vec3,
 }
 
 impl Audio {
@@ -81,16 +96,19 @@ impl Audio {
             events: Vec::with_capacity(64),
             settings,
             retry_in: 0.0,
+            device: String::new(),
             status: String::new(),
             clock: 0.0,
             stats_at: 10.0,
+            traffic: Default::default(),
+            listener: None,
         };
         a.try_open();
         a
     }
 
     fn try_open(&mut self) {
-        match output::Output::open(self.shared.clone()) {
+        match output::Output::open(self.shared.clone(), &self.device) {
             Ok(o) => {
                 self.status = format!("{} · {} Hz", o.name, o.sample_rate);
                 eprintln!("audio: {}", self.status);
@@ -112,8 +130,24 @@ impl Audio {
         &self.status
     }
 
+    /// Switch the output device (Settings › Sound): reopens the stream.
+    pub fn set_device(&mut self, id: &str) {
+        if self.device != id {
+            self.device = id.to_string();
+            self.out = None;
+            self.try_open();
+        }
+    }
+
     pub fn set_settings(&mut self, s: Settings) {
         self.settings = s;
+    }
+
+    /// Other aircraft for the next `update` (multiplayer); `listener`: the
+    /// spectator camera (no own aircraft) or None.
+    pub fn set_traffic(&mut self, t: [params::TrafficFrame; params::MAX_TRAFFIC], listener: Option<Listener>) {
+        self.traffic = t;
+        self.listener = listener;
     }
 
     /// A UI click (menu).
@@ -137,10 +171,16 @@ impl Audio {
                 self.try_open();
             }
         }
-        let frame = match sim {
-            Some(s) => self.director.capture(s, world, dt, menu, &mut self.events),
-            None => Frame { active: false, warp: 1.0, ..Frame::default() },
+        let mut frame = match (sim, self.listener) {
+            (Some(_), Some(l)) => {
+                // Spectating: the world from the spectator camera, no own aircraft.
+                let right = l.fwd.cross(l.up).normalize_or(glam::Vec3::X);
+                Frame { active: false, spectator: true, menu, warp: 1.0, ear_pos: l.pos, ear_right: right, ear_up: l.up, ear_fwd: l.fwd, ear_agl: 100.0, day: 1.0, ..Frame::default() }
+            }
+            (Some(s), None) => self.director.capture(s, world, dt, menu, &mut self.events),
+            (None, _) => Frame { active: false, warp: 1.0, ..Frame::default() },
         };
+        frame.traffic = self.traffic;
         if let Ok(mut sh) = self.shared.lock() {
             sh.frame = frame;
             sh.seq = sh.seq.wrapping_add(1);
@@ -191,4 +231,9 @@ pub fn menu_window(ctx: &egui::Context, s: &mut Settings, status: &str) -> bool 
             ui.label(egui::RichText::new(status).size(11.0).color(egui::Color32::GRAY));
         });
     ctx.input(|i| i.pointer.any_click())
+}
+
+/// Output devices as (id, name), for Settings › Sound (slow on some hosts: call off the UI thread).
+pub fn output_devices() -> Vec<(String, String)> {
+    output::devices()
 }

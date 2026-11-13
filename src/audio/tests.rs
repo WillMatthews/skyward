@@ -112,7 +112,7 @@ fn doppler_matches_moving_source_formula() {
 
 #[test]
 fn every_family_is_finite_and_limited() {
-    for id in ["kestrel", "swift", "peregrine", "lancer", "aerolink", "meridian190", "meridian320", "hercules", "galaxy", "vulcan", "ec130", "fpv", "extra500", "cub", "zlin", "otter", "dc3"] {
+    for id in ["kestrel", "swift", "peregrine", "lancer", "aerolink", "meridian190", "meridian320", "hercules", "galaxy", "vulcan", "ec130", "fpv", "triple7", "crj700", "citationx", "concorde", "extra500", "cub", "zlin", "otter", "dc3"] {
         let mut f = frame_for(id);
         f.rain = 1.0;
         f.buffet = 1.0;
@@ -195,7 +195,7 @@ fn null_device_stream_runs() {
     let mut f = frame_for("meridian320");
     f.ear_pos = Vec3::new(0.0, 2.0, 30.0);
     let shared = Arc::new(Mutex::new(Shared { frame: f, seq: 1, events: Vec::new(), settings: super::Settings::default(), cpu_ns: 0, cpu_audio_s: 0.0 }));
-    let out = Output::open(shared.clone()).expect("open null device");
+    let out = Output::open(shared.clone(), "").expect("open null device");
     eprintln!("opened {} @ {} Hz", out.name, out.sample_rate);
     for i in 0..20 {
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -216,15 +216,28 @@ fn null_device_stream_runs() {
 fn switching_aircraft_is_cheap_on_the_audio_thread() {
     // Voices (incl. their band-limited wavetables) are built inside the
     // callback when the aircraft changes: keep that well under a buffer.
-    let mut s = Synth::new(SR);
+    //
+    // The best of five trials (each a fresh synth switching from the trainer,
+    // so every trial pays the full set-up): a busy machine pre-empting one
+    // trial does not fail the test, a slow set-up still does.
     let mut buf = vec![0.0f32; 512];
-    for id in ["kestrel", "peregrine", "aerolink", "lancer", "meridian190", "meridian320", "hercules", "galaxy", "vulcan", "dc3", "otter"] {
+    let base = frame_for("kestrel");
+    for id in ["kestrel", "peregrine", "aerolink", "lancer", "meridian190", "meridian320", "hercules", "galaxy", "vulcan", "triple7", "crj700", "citationx", "concorde", "dc3", "otter"] {
         let f = frame_for(id);
-        let t = std::time::Instant::now();
-        s.push_frame(&f);
-        s.render(&mut buf);
-        let ms = t.elapsed().as_secs_f64() * 1000.0;
-        eprintln!("{id}: voice set-up + first block {ms:.2} ms");
+        let ms = (0..5)
+            .map(|_| {
+                let mut s = Synth::new(SR);
+                if id != "kestrel" {
+                    s.push_frame(&base);
+                    s.render(&mut buf);
+                }
+                let t = std::time::Instant::now();
+                s.push_frame(&f);
+                s.render(&mut buf);
+                t.elapsed().as_secs_f64() * 1000.0
+            })
+            .fold(f64::MAX, f64::min);
+        eprintln!("{id}: voice set-up + first block {ms:.2} ms (best of 5)");
         assert!(ms < if cfg!(debug_assertions) { 80.0 } else { 8.0 }, "{id}: {ms} ms");
     }
 }
@@ -324,7 +337,7 @@ fn runup(id: &str, interior: f32) -> Vec<f32> {
 
 #[test]
 fn recorded_sets_have_no_clicks_through_the_power_range() {
-    for id in ["kestrel", "peregrine", "lancer", "aerolink", "meridian190", "meridian320", "vulcan", "dc3"] {
+    for id in ["kestrel", "peregrine", "lancer", "aerolink", "meridian190", "meridian320", "vulcan", "concorde", "dc3"] {
         for interior in [0.0, 1.0] {
             let x = runup(id, interior);
             save(&format!("runup_{id}_{interior}.wav"), &x);

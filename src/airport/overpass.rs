@@ -26,13 +26,15 @@ pub struct OsmAirport {
     pub holds: Vec<(f64, f64)>,
     /// Control towers: position and height (m) if tagged.
     pub towers: Vec<((f64, f64), Option<f32>)>,
+    /// Helipads: position and ref (the world map's start positions).
+    pub helipads: Vec<((f64, f64), String)>,
 }
 
 /// The Overpass QL query for a lat / lon box (south, west, north, east).
 pub fn query(b: (f64, f64, f64, f64)) -> String {
     let bb = format!("({:.5},{:.5},{:.5},{:.5})", b.0, b.1, b.2, b.3);
     format!(
-        "[out:json][timeout:60];(nwr[\"aeroway\"~\"^(parking_position|windsock|holding_position|control_tower|tower)$\"]{bb};nwr[\"man_made\"=\"tower\"][\"tower:type\"~\"^(observation|aircraft_control|communication)$\"]{bb};nwr[\"building\"=\"control_tower\"]{bb};nwr[\"service\"=\"aircraft_control\"]{bb};);out geom;"
+        "[out:json][timeout:60];(nwr[\"aeroway\"~\"^(parking_position|windsock|holding_position|control_tower|tower|helipad)$\"]{bb};nwr[\"man_made\"=\"tower\"][\"tower:type\"~\"^(observation|aircraft_control|communication)$\"]{bb};nwr[\"building\"=\"control_tower\"]{bb};nwr[\"service\"=\"aircraft_control\"]{bb};);out geom;"
     )
 }
 
@@ -91,6 +93,7 @@ pub fn parse(text: &str) -> Result<OsmAirport, String> {
             "parking_position" => out.stands.push((pts, tag("ref").to_string())),
             "windsock" => out.windsocks.push(centroid(&pts)),
             "holding_position" => out.holds.push(centroid(&pts)),
+            "helipad" => out.helipads.push((centroid(&pts), tag("ref").to_string())),
             "control_tower" | "tower" => out.towers.push((centroid(&pts), height)),
             _ => {
                 if tag("man_made") == "tower" || tag("building") == "control_tower" || tag("service") == "aircraft_control" {
@@ -168,6 +171,9 @@ pub fn fetch_blocking(ident: &str, bbox: (f64, f64, f64, f64), budget: std::time
 
 #[cfg(not(target_arch = "wasm32"))]
 fn fetch_inner(ident: &str, bbox: (f64, f64, f64, f64), budget: std::time::Duration) -> Result<Arc<OsmAirport>, String> {
+    if crate::platform::offline() {
+        return Err("offline mode".into());
+    }
     use std::io::Read;
     let t0 = web_time::Instant::now();
     let agent = ureq::AgentBuilder::new().timeout_connect(std::time::Duration::from_secs(8)).timeout(std::time::Duration::from_secs(70)).user_agent(USER_AGENT).build();
@@ -244,13 +250,15 @@ mod tests {
         let j = r#"{"elements":[
             {"type":"node","id":1,"lat":51.47,"lon":-0.45,"tags":{"aeroway":"windsock"}},
             {"type":"way","id":2,"geometry":[{"lat":51.471,"lon":-0.451},{"lat":51.4712,"lon":-0.4515}],"tags":{"aeroway":"parking_position","ref":"512"}},
-            {"type":"node","id":3,"lat":51.47,"lon":-0.46,"tags":{"man_made":"tower","tower:type":"observation","height":"87"}}
+            {"type":"node","id":3,"lat":51.47,"lon":-0.46,"tags":{"man_made":"tower","tower:type":"observation","height":"87"}},
+            {"type":"node","id":4,"lat":51.48,"lon":-0.47,"tags":{"aeroway":"helipad","ref":"H2"}}
         ]}"#;
         let a = super::parse(j).unwrap();
         assert_eq!(a.windsocks.len(), 1);
         assert_eq!(a.stands.len(), 1);
         assert_eq!(a.stands[0].1, "512");
         assert_eq!(a.towers[0].1, Some(87.0));
+        assert_eq!(a.helipads, vec![((51.48, -0.47), "H2".to_string())]);
         assert!(super::encode("a b\"").contains("%20"));
     }
 }

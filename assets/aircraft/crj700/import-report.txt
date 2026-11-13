@@ -1,0 +1,105 @@
+"crj700": 103 nodes (102 animated out of 103), 107 materials, 73 textures (3.5 MB), 222 chunks
+triangles: exterior 35095, interior 97862; vertices 187346; model.skac 2.0 MB; radius 17.7 m
+eye: Some(Vec3(0.528, 0.5897197, 12.444838))
+lights: 14
+channels used: aileron_l aileron_r alt_ft ap_alt_ft beacon_sw ctl_aileron ctl_elevator ctl_flaps ctl_gear ctl_rudder ctl_spoilers ctl_trim eng0_reverser eng0_rpm eng1_reverser eng1_rpm flaps gear0_comp_m gear0_roll_ms gear1_comp_m gear1_roll_ms gear2_comp_m gear2_roll_ms gear_pos hdg_bug_deg heading_deg ias_kt landing_light nav panel_light pitch_deg roll_deg rudder spoilers steer_norm strobe_sw taxi_light throttle
+texture-animated chunks: 4; display screens: 4
+animation types: [("", 18), ("material", 177), ("pick", 280), ("range", 21), ("rotate", 190), ("select", 346), ("spin", 5), ("texmultiple", 3), ("texrotate", 3), ("textranslate", 22), ("translate", 48)]
+unmapped properties (count):
+    10 <expr acos>
+     9 controls/lighting/display-norm
+     7 instrumentation/mfd[1]/page
+     7 instrumentation/mfd/page
+     4 surface-positions/spoiler-ground-pos-norm
+     4 controls/engines/engine[1]/thrust-mode
+     4 controls/engines/engine/thrust-mode
+     3 instrumentation/eicas[1]/page
+     3 instrumentation/eicas/page
+     3 controls/lighting/panel-overhead-norm
+     3 controls/lighting/panel-flood-norm
+     3 controls/autoflight/lateral-mode
+     2 surface-positions/right-wiper-pos-norm
+     2 surface-positions/left-wiper-pos-norm
+     2 sim/model/door-positions/overhead-bins/position-norm
+     2 instrumentation/standby/brightness-norm
+     2 instrumentation/mk-viii/outputs/discretes/gpws-warning
+     2 instrumentation/mk-viii/inputs/discretes/momentary-flap-override
+     2 instrumentation/mk-viii/inputs/discretes/gpws-inhibit
+     2 instrumentation/mfd[1]/wx
+     2 instrumentation/mfd[1]/tcas
+     2 instrumentation/mfd/wx
+     2 instrumentation/mfd/tcas
+     2 instrumentation/efis/mfd/mode-num
+     2 fcs/copilot/rudder-cmd-norm
+     2 controls/pneumatic/ram-air-turbine
+     2 controls/lighting/standby-compass
+     2 controls/fuel/gravity-xflow
+     2 controls/engines/engine[1]/starter
+     2 controls/engines/engine[1]/cutoff
+     2 controls/engines/engine/starter
+     2 controls/engines/engine/cutoff
+     2 controls/autoflight/yaw-damper[1]/engage
+     2 controls/autoflight/yaw-damper/engage
+     2 controls/autoflight/vertical-mode
+     2 controls/autoflight/nav-mode
+     2 controls/APU/off-on
+     2 controls/APU/electronic-control-unit
+     2 
+     1 sim/model/lights/seatbelt-sign
+     1 sim/model/lights/no-smoking-sign
+     1 sim/model/door-positions/pax-right/position-norm
+     1 sim/model/door-positions/flight-deck/position-norm
+     1 sim/alarms/master-warning
+     1 sim/alarms/master-caution
+     1 instrumentation/use-metric-altitude
+     1 instrumentation/radar[1]/range
+     1 instrumentation/nav/heading-needle-deflection-norm
+     1 instrumentation/nav/gs-needle-deflection-norm
+     1 instrumentation/efis/inputs/range
+     1 fcs/copilot/elevator-cmd-norm
+     1 fcs/copilot/aileron-cmd-norm
+     1 engines/engine[1]/on-fire
+     1 engines/engine/on-fire
+     1 engines/apu/on-fire
+     1 controls/switches/seatbelt-sign
+     1 controls/switches/no-smoking-sign
+     1 controls/pneumatic/ram-air-turbine-cover
+     1 controls/pneumatic/bleed-source
+     1 controls/lighting/wing-lights
+     1 controls/lighting/logo-lights
+     1 controls/lighting/cabin-norm
+     1 controls/gear/tiller-steer-deg
+     1 controls/flight/rudder-trim
+     1 controls/flight/ground-lift-dump
+     1 controls/flight/aileron-trim
+     1 controls/engines/engine[1]/reverser-armed
+     1 controls/engines/engine[1]/fire-bottle-discharge-cover
+     1 controls/engines/engine[1]/fire-bottle-discharge-armed
+     1 controls/engines/engine/reverser-armed
+     1 controls/engines/engine/fire-bottle-discharge-cover
+     1 controls/engines/engine/fire-bottle-discharge-armed
+     1 controls/electric/external-power
+     1 controls/electric/engine[1]/generator
+     1 controls/electric/engine/generator
+     1 controls/electric/battery-switch
+     1 controls/electric/APU-generator
+     1 controls/autoflight/vertical-speed-select
+     1 controls/autoflight/speed-select
+     1 controls/autoflight/mach-select
+     1 controls/autoflight/heading-select
+     1 controls/autoflight/flight-director/engage
+     1 controls/autoflight/disengage-pos-norm
+     1 controls/autoflight/bank-angle-select
+     1 controls/autoflight/autothrottle-engage
+     1 controls/autoflight/autopilot/engage
+     1 controls/anti-ice/wiper[1]
+     1 controls/anti-ice/wiper
+     1 controls/anti-ice/wing-heat
+     1 controls/anti-ice/engine[1]/inlet-heat
+     1 controls/anti-ice/engine/inlet-heat
+     1 controls/APU/fire-switch-cover
+     1 controls/APU/fire-switch-armed
+     1 autopilot/internal/target-pitch-deg
+log:
+  panel layer texture not found: Some("Aircraft/777/Models/Instruments/MFD/od_wxradar.png")
+  panel layer texture not found: Some("Aircraft/777/Models/Instruments/MFD/od_wxradar.png")
