@@ -6,7 +6,7 @@
 //! list (ui/settings_ui.rs draws it).
 
 use super::settings::HudMode;
-use super::settings::{Autobrake, DETAIL_NAMES, DefaultView, MapStyle, Palette, PressureUnit, RealismPreset, Settings, TempUnit, UI_SCALES};
+use super::settings::{Autobrake, DefaultView, MapStyle, Palette, PressureUnit, RealismPreset, Settings, TempUnit, UI_SCALES};
 use super::{AltUnit, SpeedUnit};
 
 /// Settings categories, in rail order.
@@ -359,33 +359,9 @@ pub fn items() -> &'static [Item] {
 
 fn build() -> Vec<Item> {
     let scale_opts: &'static [&'static str] = &["80 %", "90 %", "100 %", "115 %", "130 %", "150 %", "175 %", "200 %"];
-    vec![
-        // ---------------------------------------------------------- video (stub: GFX owns the tab)
-        Item {
-            kind: Kind::Choice(&["On", "Off"]),
-            ..choice!(
-                "vsync",
-                MAIN,
-                "Frame pacing",
-                "Vertical sync",
-                "Off gives the lowest latency but may tear or stutter",
-                "vsync tearing latency present fps",
-                &["On", "Off"],
-                BOOLS_YES,
-                |s| s.vsync
-            )
-        },
-        choice!(
-            "detail",
-            MAIN,
-            "Scenery",
-            "Scenery detail",
-            "How far detailed buildings and roads stream in",
-            "detail distance radius tiles buildings lod",
-            &DETAIL_NAMES,
-            DETAILS,
-            |s| s.detail
-        ),
+    // Video: the quality preset and every graphics knob (ui/settings_video.rs, GFX).
+    let mut out = super::settings_video::items();
+    out.extend(vec![
         // ---------------------------------------------------------- display & HUD
         choice!(
             "hud",
@@ -632,7 +608,6 @@ fn build() -> Vec<Item> {
             .auto_rudder),
         toggle!("auto_trim", FLIGHT, "Handling", "Auto-trim", "Trim holds the attitude when you let go of the stick", "trim elevator pitch hold assist", |s| s.realism.auto_trim),
         Item {
-            pending: Some("GH"),
             ..choice!(
                 "autobrake",
                 FLIGHT,
@@ -647,7 +622,6 @@ fn build() -> Vec<Item> {
         },
         // ---------------------------------------------------------- assists
         Item {
-            pending: Some("GH"),
             ..toggle!("taxi_ribbon", ASSISTS, "Ground", "Taxi ribbon", "A line along your cleared taxi route", "taxi route path ground guidance arrows", |s| s.assists.taxi_ribbon)
         },
         Item {
@@ -977,7 +951,8 @@ fn build() -> Vec<Item> {
             kind: Kind::Action { act: Act::Credits, button: "View", confirm: false },
             ..BASE
         },
-    ]
+    ]);
+    out
 }
 
 pub fn item(id: &str) -> Option<&'static Item> {

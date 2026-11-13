@@ -188,6 +188,10 @@ pub struct World {
     base_check_tiles: usize,
     /// Airport detail (airport/): layouts, bakes, stands, vehicles.
     pub airport_detail: crate::airport::AirportScene,
+    /// Runways / taxiways / aprons and their contamination, for the tyres (src/ground).
+    pub pavement: crate::ground::Pavement,
+    /// Runway condition forced by `--runway` / `SKYWARD_RUNWAY` (else from the weather).
+    pub runway_cond: Option<crate::ground::Contam>,
     /// Road traffic over the resident tiles' lane graphs (traffic/).
     pub traffic: crate::traffic::Traffic,
     /// Thunderstorms, lightning, mountain waves, wakes, turbulence setting (wx/).
@@ -250,6 +254,8 @@ impl World {
             base_check: None,
             base_check_tiles: 0,
             airport_detail: crate::airport::AirportScene::new(),
+            pavement: Default::default(),
+            runway_cond: std::env::var("SKYWARD_RUNWAY").ok().and_then(|s| crate::ground::Contam::parse(&s)),
             traffic: crate::traffic::Traffic::new(proj),
             wxs: crate::wx::WxSim::with_env(),
         }
@@ -573,6 +579,7 @@ impl World {
         }
 
         self.airport_detail.update();
+        self.refresh_pavement();
         let due = match self.last_schedule {
             None => true,
             Some((t, p)) => t.elapsed() > Duration::from_millis(250) || p.distance(self.focus) > 150.0,
@@ -580,6 +587,39 @@ impl World {
         if self.dirty || due {
             self.schedule();
         }
+    }
+
+    /// Rebuild the tyres' pavement map (src/ground/surface.rs) when the
+    /// runways, airport layouts, frame or runway condition change.
+    pub fn refresh_pavement(&mut self) {
+        let contam = self.runway_cond.unwrap_or_else(|| crate::ground::surface::from_weather(&self.wx));
+        let key = self.runway_version.wrapping_mul(0x9e37_79b9) ^ self.airport_detail.version.wrapping_mul(0x85eb_ca6b) ^ ((self.rebases as u64) << 40);
+        if key == self.pavement.key && contam == self.pavement.contam && self.pavement.key != 0 {
+            return;
+        }
+        let mut pv = crate::ground::Pavement { contam, key: key.max(1), off: crate::ground::Ground::Grass, ..Default::default() };
+        for r in &self.runways {
+            let g = if r.paved || r.surface.is_empty() { crate::ground::Ground::from_name(if r.surface.is_empty() { "Asphalt" } else { &r.surface }) } else { crate::ground::Ground::from_name(&r.surface) };
+            pv.runways.push((r.a, r.b, r.width * 0.5, g));
+        }
+        for l in self.airport_detail.layouts() {
+            let m = l.frame.map_to(&self.proj);
+            let hw = l.taxi_w * 0.5 + 1.0;
+            for (pl, _) in &l.taxiways {
+                for w in pl.windows(2) {
+                    pv.taxi.push((m.apply(w[0]), m.apply(w[1]), hw));
+                }
+            }
+            for a in &l.aprons {
+                let ring: Vec<Vec2> = a.iter().map(|p| m.apply(*p)).collect();
+                let lo = ring.iter().copied().fold(Vec2::splat(f32::MAX), Vec2::min);
+                let hi = ring.iter().copied().fold(Vec2::splat(f32::MIN), Vec2::max);
+                pv.aprons.push((ring, lo, hi));
+            }
+            let (lo, hi) = (m.apply(l.lo), m.apply(l.hi));
+            pv.known.push((lo.min(hi), lo.max(hi)));
+        }
+        self.pavement = pv;
     }
 
     /// Add a finished tile: collision now, GPU meshes via the upload queue.
@@ -909,6 +949,18 @@ impl World {
         crate::terrain::cached_height(lat, lon).unwrap_or(0.0)
     }
 
+    /// Ground height where terrain data is resident, None while it streams
+    /// (the bot's procedure planner re-plans once it is known).
+    pub fn ground_height_known(&self, xz: Vec2) -> Option<f32> {
+        for z in [ZOOM, FAR_ZOOM, crate::terrain::HORIZON_ZOOM] {
+            if let Some(t) = self.tiles.get(&TileId::at_world_z(&self.proj, xz, z)) {
+                return Some(t.grid.height(t.xf.inverse(xz)));
+            }
+        }
+        let (lat, lon) = self.proj.to_latlon(xz);
+        crate::terrain::cached_height(lat, lon)
+    }
+
     /// Water-surface height of the water body nearest `xz` within `r` (m).
     pub fn water_level_near(&self, xz: Vec2, r: f32) -> Option<f32> {
         let t = self.tiles.get(&TileId::at_world(&self.proj, xz))?;
@@ -1065,8 +1117,14 @@ impl Environment for World {
         self.tile_at(xz).is_some_and(|t| t.collision.is_water(t.xf.inverse(xz)))
     }
     fn updraft(&self, p: Vec3) -> f32 {
-        // Thermals, plus storm drafts and mountain waves (wx/).
-        self.clouds.updraft(p) + self.wxs.updraft(p, self.to_field(p))
+        // Thermals, storm drafts and mountain waves (wx/), plus slope lift where
+        // the wind meets rising ground (ridge.rs).
+        let xz = vec2(p.x, p.z);
+        let w = self.wind.mean(p.y - self.terrain_height(xz), 0.3);
+        self.clouds.updraft(p) + self.wxs.updraft(p, self.to_field(p)) + crate::ridge::slope_lift(|q| self.terrain_height(q), p, w)
+    }
+    fn surface(&self, xz: Vec2) -> crate::ground::Surface {
+        self.pavement.at(xz)
     }
     fn wind(&self, p: Vec3) -> Vec3 {
         let xz = vec2(p.x, p.z);

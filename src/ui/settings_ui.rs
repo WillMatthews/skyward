@@ -620,6 +620,12 @@ fn confirm_dialog(ui: &mut Ui, st: &mut UiState, c: Confirm, screen: Rect) {
 // ---------------------------------------------------------------- rows
 
 /// Draw `rows` (with their group headings) into a vertical `ui`; true when a value changed.
+/// One catalogue row in the shell's style (for categories drawn by their
+/// own module, ui/settings_video.rs); true when its value changed.
+pub fn setting_row(ui: &mut Ui, st: &mut UiState, it: &'static Item) -> bool {
+    row(ui, st, it, false)
+}
+
 pub fn rows_ui(ui: &mut Ui, st: &mut UiState, rows: &[&'static Item]) -> bool {
     let mut group = "";
     let mut changed = false;

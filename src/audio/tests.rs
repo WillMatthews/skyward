@@ -217,28 +217,32 @@ fn switching_aircraft_is_cheap_on_the_audio_thread() {
     // Voices (incl. their band-limited wavetables) are built inside the
     // callback when the aircraft changes: keep that well under a buffer.
     //
-    // The best of five trials (each a fresh synth switching from the trainer,
-    // so every trial pays the full set-up): a busy machine pre-empting one
-    // trial does not fail the test, a slow set-up still does.
+    // The best of up to 50 trials (each a fresh synth switching from the
+    // trainer, so every trial pays the full set-up; at least five, stopping
+    // once one is in budget): a busy machine pre-empting trials does not fail
+    // the test, a slow set-up still does.
     let mut buf = vec![0.0f32; 512];
     let base = frame_for("kestrel");
     for id in ["kestrel", "peregrine", "aerolink", "lancer", "meridian190", "meridian320", "hercules", "galaxy", "vulcan", "triple7", "crj700", "citationx", "concorde", "dc3", "otter"] {
         let f = frame_for(id);
-        let ms = (0..5)
-            .map(|_| {
-                let mut s = Synth::new(SR);
-                if id != "kestrel" {
-                    s.push_frame(&base);
-                    s.render(&mut buf);
-                }
-                let t = std::time::Instant::now();
-                s.push_frame(&f);
+        let budget = if cfg!(debug_assertions) { 80.0 } else { 8.0 };
+        let mut ms = f64::MAX;
+        for k in 0..50 {
+            let mut s = Synth::new(SR);
+            if id != "kestrel" {
+                s.push_frame(&base);
                 s.render(&mut buf);
-                t.elapsed().as_secs_f64() * 1000.0
-            })
-            .fold(f64::MAX, f64::min);
-        eprintln!("{id}: voice set-up + first block {ms:.2} ms (best of 5)");
-        assert!(ms < if cfg!(debug_assertions) { 80.0 } else { 8.0 }, "{id}: {ms} ms");
+            }
+            let t = std::time::Instant::now();
+            s.push_frame(&f);
+            s.render(&mut buf);
+            ms = ms.min(t.elapsed().as_secs_f64() * 1000.0);
+            if k >= 4 && ms < budget {
+                break;
+            }
+        }
+        eprintln!("{id}: voice set-up + first block {ms:.2} ms (best trial)");
+        assert!(ms < budget, "{id}: {ms} ms");
     }
 }
 

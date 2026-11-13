@@ -11,6 +11,7 @@ struct FogU {
     sun: vec4<f32>,             // xyz toward the sun, w = screen width
     screen: vec4<f32>,          // w, h, 1/w, 1/h
     lmap: vec4<f32>,            // ground light map: eye-relative centre x, z, 1 / size, w = pre-exposure (0 = off)
+    quality: vec4<f32>,         // x samples along the ray, y samples for the street-light glow (gfx quality)
 };
 
 @group(0) @binding(0) var<uniform> F: FogU;
@@ -82,7 +83,7 @@ fn fs_fog(in: FsOut) -> @location(0) vec4<f32> {
     // Optical depth: density depends on height only (8-point midpoint rule
     // over the slab part of the ray, enough for the smooth top profile).
     var od = 0.0;
-    let n = 8;
+    let n = i32(F.quality.x);
     let dt = (t1 - t0) / f32(n);
     for (var i = 0; i < n; i++) {
         let h = h0 + rd.y * (t0 + (f32(i) + 0.5) * dt);
@@ -114,7 +115,7 @@ fn fs_fog(in: FsOut) -> @location(0) vec4<f32> {
     if (F.lmap.w > 0.0) {
         let ta = t0;
         let tb = min(t1, t0 + 4000.0);
-        let ns = 8;
+        let ns = i32(F.quality.y);
         let dta = (tb - ta) / f32(ns);
         var oda = 0.0;
         for (var i = 0; i < ns; i++) {

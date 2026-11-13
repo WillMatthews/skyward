@@ -144,6 +144,10 @@ pub mod pilot;
 #[path = "missions/sim_glue.rs"]
 pub mod mission_glue;
 
+/// Ground handling in the sim (Track GH): ground keys, tug, chocks, ground power, taxi guidance.
+#[path = "ground/sim_glue.rs"]
+pub mod ground_glue;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Key {
     PitchDown,
@@ -227,6 +231,23 @@ pub enum Key {
     CommsNext,
     CommsPrev,
     CommsSelect,
+    /// Ground handling (src/ground): nose-wheel tiller left / right (held),
+    /// left / right toe brakes (held), parking brake, autobrake selector,
+    /// pushback (request / direction / stop), chocks + ground power,
+    /// tail-wheel lock, taxi guidance (route on the map + follow the greens).
+    TillerLeft,
+    TillerRight,
+    BrakeLeft,
+    BrakeRight,
+    ParkingBrake,
+    Autobrake,
+    Pushback,
+    GroundServices,
+    TailwheelLock,
+    TaxiGuide,
+    /// Ground menu (the comms panel's Ground page): pushback, chocks + GPU,
+    /// autobrake, tail-wheel lock, taxi guidance.
+    GroundMenu,
     /// Multiplayer (net/, ui/mp.rs): chat, player list, name tags, quick-chat wheel.
     Chat,
     PlayerList,
@@ -497,6 +518,8 @@ pub struct Sim {
     pub mission_pilot: Option<crate::missions::pilot::MissionPilot>,
     pub mission_mayday: bool,
     pub tenders: Option<crate::missions::tenders::Tenders>,
+    /// Ground operations (src/ground): pushback tug, chocks, ground power, taxi guidance.
+    pub ground: crate::ground::ops::GroundOps,
     /// The player's settings the simulation reads (ui/settings.rs; the app copies them every frame).
     pub prefs: crate::ui::settings::SimPrefs,
     /// The first-frame preferences (starting view, random failures) were applied.
@@ -638,6 +661,7 @@ impl Sim {
             mission_pilot: None,
             mission_mayday: false,
             tenders: None,
+            ground: crate::ground::ops::GroundOps::new(),
             prefs: Default::default(),
             prefs_init: false,
             brake_latch: false,
@@ -830,6 +854,11 @@ impl Sim {
             None => None,
         };
         let custom = self.custom_start.as_ref().and_then(|c| crate::startpos::spawn(&def, world, c));
+        // A stand start waits for the airport's layout (stands) to be built.
+        let stand_start = self.custom_start.as_ref().is_some_and(|c| matches!(c.spec, crate::startpos::Spec::Stand { .. }));
+        if stand_start && custom.is_none() {
+            self.needs_respawn = true;
+        }
         let (ac, ctl, flap_idx) = match custom {
             Some((ac, ctl, flap, rw)) => {
                 if rw.is_some() {
@@ -844,6 +873,12 @@ impl Sim {
         self.ac = ac;
         self.ctl = ctl;
         self.flap_idx = flap_idx;
+        self.ground.reset();
+        if stand_start && !self.needs_respawn {
+            // On the stand: chocks in, ground power on (src/ground).
+            self.ground.chocks = true;
+            self.ground.gpu = true;
+        }
         // Systems (systems/): ready to go, or cold and dark; armed failures are cleared.
         self.failures.clear();
         self.failures.random.on = self.prefs.random_failures && self.mission.is_none() && self.bot.is_none();
@@ -1052,6 +1087,7 @@ impl Sim {
             d.rebase(r.delta);
         }
         self.vfx.rebase(r.delta);
+        self.ground.rebase(r.delta);
         if let Some(c) = &mut self.combat {
             c.rebase(r.delta);
         }
@@ -1205,7 +1241,8 @@ impl Sim {
         self.eject_armed = (self.eject_armed - dt).max(0.0);
         for k in std::mem::take(&mut input.pressed) {
             match k {
-                Key::WeaponRelease => trig.release = true,
+                // (Right Alt is also the parking brake: weapons only in the air.)
+                Key::WeaponRelease if airborne => trig.release = true,
                 // Space: the selected weapon — a missile in SRM / MRM (the guns are held, below).
                 Key::GunTrigger if self.combat.as_ref().and_then(|c| c.local_unit()).is_some_and(|u| u.master != crate::weapons::Master::Gun) => trig.release = true,
                 Key::WeaponSelect => trig.select = true,
@@ -1381,7 +1418,10 @@ impl Sim {
                         self.say("Auto flight on — any control input takes over (J to hand back)", 4.0);
                     }
                 }
-                _ => {}
+                k => {
+                    // Ground handling (src/ground/sim_glue.rs).
+                    self.ground_key(world, k);
+                }
             }
         }
         // Camera orbit / head-look (input/sim_glue.rs), zoom.
@@ -1424,6 +1464,8 @@ impl Sim {
         }
         // Controllers: analog axes straight to the controls, levers when moved.
         self.apply_analog(input, dt);
+        // Tiller and toe brakes (src/ground/sim_glue.rs).
+        self.ground_controls(input, dt);
         if !bot_on {
             let key_brakes = if self.prefs.toggle_brakes { self.brake_latch as u8 as f32 } else { h(Key::Brakes) };
             self.ctl.brakes = key_brakes.max(pilot::toe_brakes(&input.analog));
@@ -1502,6 +1544,8 @@ impl Sim {
                 }
                 // Aircraft systems and failures (systems/), then the flight model
                 // (in the mission's air: a microburst, missions/wind.rs).
+                // The tug, chocks, ground power, pilot aids (src/ground/sim_glue.rs).
+                self.ground_step(DT);
                 // Settings › Flight & Realism: unlimited fuel (not for the bot / missions).
                 if self.bot.is_none() && self.mission.is_none() {
                     self.ac.sys.fuel_floor = if self.prefs.unlimited_fuel { 1.0 } else { 0.0 };
@@ -1551,6 +1595,9 @@ impl Sim {
         }
         self.combat_frame(world);
         self.systems_frame();
+        if !self.paused {
+            self.ground_frame(world, dt * self.warp as f32);
+        }
         // Air traffic control: the frequency, ATIS, the controllers (atc/).
         crate::atc::step(self, world, dt);
         // The windscreen, wipers, head shake and weather radar (wx/).
@@ -2167,6 +2214,10 @@ impl Sim {
         if let Some(t) = &self.tenders {
             t.mesh(&mut dynm, eye, self.time);
         }
+        // The pushback tug (src/ground/pushback.rs): the pilot's, or the bot's.
+        let bot_push = self.bot.as_ref().and_then(|b| b.ground()).and_then(|g| g.pushback()).cloned();
+        let push = self.ground.push.clone().or(bot_push);
+        self.ground.tug_mesh(&mut dynm, eye, push.as_ref());
         if std::env::var_os("SKYWARD_NO_VFX").is_none() {
             let vf = self.effects_frame(eye);
             if std::env::var_os("SKYWARD_VFX_STATS").is_some() {

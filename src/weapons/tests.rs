@@ -34,6 +34,11 @@ fn fight(a: &str, b: &str, da: ai::Difficulty, db: ai::Difficulty, secs: f32) ->
     df.cfg.difficulty = db;
     let ub = df.spawn(&mut c, ib, 1, "Red", Vec3::new(400.0, alt, -sep * 0.5), std::f32::consts::PI);
     let _ = (ua, ub);
+    // Fixed structural-strength seeds: the outcome must not depend on how many
+    // aircraft were built before (flight::next_seed is a running counter).
+    for (k, u) in c.units.iter_mut().enumerate() {
+        u.ai.as_mut().unwrap().ac.dmg.seed = 0x5EED_u32.wrapping_add(0x9E37_79B9_u32.wrapping_mul(k as u32 + 1));
+    }
     let dt = 1.0 / 120.0;
     let mut t = 0.0;
     let mut first = None;

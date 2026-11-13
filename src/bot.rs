@@ -35,6 +35,8 @@ use glam::{vec2, Vec2, Vec3};
 use std::collections::VecDeque;
 use std::f32::consts::{PI, TAU};
 
+mod mountain;
+
 const FT: f32 = 0.3048;
 const NM: f32 = 1852.0;
 
@@ -101,6 +103,11 @@ pub struct RunwayEnd {
     /// Runway surface height (m) at the threshold and at the far end (terrain.rs).
     pub elev: f32,
     pub elev_far: f32,
+    /// Displaced threshold (m past `thr`) of this end and of the far end:
+    /// the landing threshold is `thr + dir · disp` (the whole length is
+    /// available for the take-off).
+    pub disp: f32,
+    pub disp_far: f32,
 }
 
 impl RunwayEnd {
@@ -109,7 +116,10 @@ impl RunwayEnd {
         let (thr, far) = if reverse { (rw.b, rw.a) } else { (rw.a, rw.b) };
         let dir = (far - thr).normalize_or(vec2(0.0, -1.0));
         let (elev, elev_far) = (rw.height_at(thr), rw.height_at(far));
-        RunwayEnd { thr, dir, len: rw.length(), width: rw.width, name: rwy_number(heading_of(dir)), elev, elev_far }
+        let (disp, disp_far) = if reverse { (rw.displaced_b, rw.displaced_a) } else { (rw.displaced_a, rw.displaced_b) };
+        // (At most a third of the runway: bad data shouldn't land us at the far end.)
+        let lim = rw.length() / 3.0;
+        RunwayEnd { thr, dir, len: rw.length(), width: rw.width, name: rwy_number(heading_of(dir)), elev, elev_far, disp: disp.clamp(0.0, lim), disp_far: disp_far.clamp(0.0, lim) }
     }
     /// Runway surface height at `p` (level beyond the ends).
     pub fn elev_at(&self, p: Vec2) -> f32 {
@@ -135,7 +145,17 @@ impl RunwayEnd {
     }
     pub fn reversed(&self) -> RunwayEnd {
         let dir = -self.dir;
-        RunwayEnd { thr: self.far(), dir, len: self.len, width: self.width, name: rwy_number(heading_of(dir)), elev: self.elev_far, elev_far: self.elev }
+        RunwayEnd {
+            thr: self.far(),
+            dir,
+            len: self.len,
+            width: self.width,
+            name: rwy_number(heading_of(dir)),
+            elev: self.elev_far,
+            elev_far: self.elev,
+            disp: self.disp_far,
+            disp_far: self.disp,
+        }
     }
     pub fn same_runway(&self, rw: &Runway) -> bool {
         let m = (rw.a + rw.b) * 0.5;
@@ -216,7 +236,8 @@ pub fn best_takeoff_end(world: &World, rw: &Runway) -> RunwayEnd {
 pub fn best_landing_end(world: &World, rw: &Runway, aim: f32) -> (RunwayEnd, f32) {
     let a = RunwayEnd::of(rw, false);
     let b = RunwayEnd::of(rw, true);
-    let (sa, sb) = (approach_slope(world, &a, aim), approach_slope(world, &b, aim));
+    // (Aiming `aim` past the displaced threshold.)
+    let (sa, sb) = (approach_slope(world, &a, aim + a.disp), approach_slope(world, &b, aim + b.disp));
     let w = world.wind.surface;
     let ca = sa.to_degrees() + wind_penalty(w, a.dir);
     let cb = sb.to_degrees() + wind_penalty(w, b.dir);
@@ -544,6 +565,28 @@ fn touchdown_pitch(def: &AircraftDef) -> f32 {
     d.to_radians()
 }
 
+/// Wheel height (m) over the (displaced) threshold on the glidepath: 50 ft
+/// for transports, 30 ft for light types. On a steep path the aim point
+/// moves in so the touchdown stays in the touchdown zone.
+fn threshold_height(def: &AircraftDef) -> f32 {
+    match def.category {
+        Category::Trainer | Category::Glider => 9.0,
+        _ => 15.5,
+    }
+}
+
+/// Sink rate (m/s) to touch down with: firm enough to put it on in the
+/// touchdown zone (≈ 150-250 fpm for transports, softer for light types).
+fn touchdown_sink(def: &AircraftDef) -> f32 {
+    match def.category {
+        _ if heavy(def) => 1.1,
+        Category::Airliner => 0.9,
+        Category::FastJet => 1.2,
+        Category::Warbird => 0.8,
+        _ => 0.6,
+    }
+}
+
 /// The v3 heavies (C-130, C-5, Vulcan) and the H2a big jets (777,
 /// Concorde): slower pitch response, longer flares.
 fn heavy(def: &AircraftDef) -> bool {
@@ -585,6 +628,11 @@ pub struct BotStats {
     pub min_alt_airborne: f32,
     pub relaunches: u32,
     pub worst_touchdown: f32,
+    /// Lowest clearance (m) over the terrain / buildings while airborne more
+    /// than 2.5 km from any runway (the soak report's terrain margin), and
+    /// what the bot was doing then.
+    pub min_clear: f32,
+    pub min_clear_at: String,
 }
 
 // ------------------------------------------------------------------ the bot
@@ -624,7 +672,7 @@ impl Bot {
         };
         let mut b = Bot {
             status: "Auto flight".into(),
-            stats: BotStats { min_alt_airborne: f32::MAX, ..Default::default() },
+            stats: BotStats { min_alt_airborne: f32::MAX, min_clear: f32::MAX, ..Default::default() },
             events: Vec::new(),
             wants_relaunch: false,
             t: 0.0,
@@ -674,6 +722,15 @@ impl Bot {
             Kind::Rotor(r) => return r.route(),
         };
         tour.iter().skip(wp).map(|l| (l.name.clone(), l.pos)).collect()
+    }
+
+    /// Ground phases (src/ground/bot_taxi.rs): the tug's tow this step, the
+    /// pushback (for drawing the tug), the taxi route (for the map).
+    pub fn ground(&self) -> Option<&crate::ground::bot_taxi::BotGround> {
+        match &self.kind {
+            Kind::Powered(p) => p.ground.as_ref(),
+            _ => None,
+        }
     }
 
     /// ATC (atc/): hold at the runway until cleared for take-off.
@@ -738,6 +795,12 @@ impl Bot {
                     l.pos = r.ground(l.pos);
                 }
                 p.gate = r.ground(p.gate);
+                if let Some(g) = &mut p.ground {
+                    g.rebase(&|q| r.ground(q));
+                }
+                if let Some(m) = &mut p.mtn {
+                    m.rebase(r);
+                }
             }
             Kind::Rotor(b) => b.rebase(r),
         }
@@ -757,6 +820,12 @@ impl Bot {
             self.stats.max_alt = self.stats.max_alt.max(ac.pos.y);
             self.stats.min_alt_airborne = self.stats.min_alt_airborne.min(ac.pos.y);
             self.last_vs = ac.vertical_speed();
+            let p = xz(ac.pos);
+            let c = mountain::clearance(world, ac.pos);
+            if c < self.stats.min_clear && world.runways.iter().all(|r| seg_dist(p, r.a, r.b) > 2500.0) {
+                self.stats.min_clear = c;
+                self.stats.min_clear_at = format!("{} at {:.0} s", self.phase(), self.t);
+            }
         }
         if ac.on_ground && !self.was_on_ground {
             self.stats.worst_touchdown = self.stats.worst_touchdown.max(-self.last_vs);
@@ -798,6 +867,8 @@ enum GMode {
     Cruise,
     Search,
     Thermal,
+    /// Soaring the slope lift along a windward ridge face.
+    Ridge,
     FinalGlide,
     Landing,
     Landed,
@@ -877,10 +948,47 @@ struct Glider {
     wind_sfc: Vec2,
     /// Which tour variant this is (each launch / lap picks another route).
     tour_n: u32,
+    /// Ridge soaring (GMode::Ridge).
+    ridge: Option<RidgeState>,
+    /// Ridges tried recently (anchor, until when).
+    ridge_used: Vec<(Vec2, f32)>,
+    /// Height (m) needed here to glide home clear of the terrain on the way
+    /// (refreshed once a second; mountains).
+    terrain_need: f32,
+    /// Flying among mountains (relief > 600 m around the field).
+    mountains: bool,
 }
 
-/// Tours flown so far (all gliders): each new one is planned differently.
-static GLIDER_TOURS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// Ridge soaring: beats along the windward face of a ridge.
+struct RidgeState {
+    /// Where the beat is centred, and the contour direction there.
+    anchor: Vec2,
+    along: Vec2,
+    /// +1 / -1: which way along the contour this beat goes.
+    beat: f32,
+    /// Turning away from the slope onto the next beat until then.
+    turn_until: f32,
+    t0: f32,
+    alt0: f32,
+    /// (time, altitude) a minute ago, for the climb check.
+    check: (f32, f32),
+    /// Reached the face (no more gliding to the anchor).
+    arrived: bool,
+}
+
+/// Tours flown so far (all gliders on this thread): each new one is planned
+/// differently. Per thread so a run is reproducible whatever other threads
+/// (parallel tests, regress workers) fly.
+fn next_glider_tour() -> u32 {
+    thread_local! {
+        static TOURS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+    TOURS.with(|t| {
+        let n = t.get();
+        t.set(n.wrapping_add(1));
+        n
+    })
+}
 
 /// Cloud-base and cumulus information as a pilot would see it.
 fn sky(world: &World) -> &CloudField {
@@ -899,7 +1007,7 @@ impl Glider {
             v += 0.5;
         }
         let home = home.map(|r| (r.a + r.b) * 0.5).unwrap_or(xz(ac.pos));
-        let tour_n = GLIDER_TOURS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tour_n = next_glider_tour();
         let tour = glider_tour(world, home, tour_n);
         Glider {
             mode: if ac.on_ground { GMode::Landed } else { GMode::Cruise },
@@ -930,6 +1038,10 @@ impl Glider {
             wind: world.wind.mean(ac.pos.y, 0.3),
             wind_sfc: world.wind.surface,
             tour_n,
+            ridge: None,
+            ridge_used: Vec::new(),
+            terrain_need: f32::MIN,
+            mountains: false,
         }
     }
 
@@ -995,9 +1107,11 @@ impl Glider {
         let to = (field.a + field.b) * 0.5 - p;
         // The wind weakens on the way down: use the mean of here and the surface.
         let w = (self.wind + self.wind_sfc) * 0.5;
-        let ld = self.best_ld_wind(headwind(w, to)) * 0.65;
+        // (Mountain air — lee sink, rotor — costs more: half the glide ratio.)
+        let k = if self.mountains { 0.5 } else { 0.65 };
+        let ld = self.best_ld_wind(headwind(w, to)) * k;
         // (Absolute: above the field's runway.)
-        d / ld.max(6.0) + 250.0 + field.height_at(p)
+        d / ld.max(6.0) + if self.mountains { 400.0 } else { 250.0 } + field.height_at(p)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1161,6 +1275,12 @@ impl Glider {
                 speed = self.stf_wind(self.mc, netto.clamp(-3.0, 1.0), headwind(wind, dir_of(track)));
                 *status = label;
             }
+            GMode::Ridge => {
+                let (b, sp, label) = self.ridge_guidance(ac, world, t);
+                bank = b;
+                speed = sp;
+                *status = label;
+            }
             GMode::FinalGlide | GMode::Landing => {
                 let (b, s, br, label) = self.landing_guidance(def, ac, world, hands, ctl, ev, stats, t, dt);
                 bank = b;
@@ -1180,6 +1300,41 @@ impl Glider {
             }
             GMode::Landed => {}
         }
+        // Mountains: never circle or glide into a hillside. Rising ground just
+        // ahead (or too low over the slope): leave the thermal and turn
+        // downhill, away from the face.
+        let approach_low = matches!(self.land.as_ref().map(|l| l.phase), Some(LPhase::Final | LPhase::Flare | LPhase::Rollout));
+        if !matches!(self.mode, GMode::Landed) && !(self.mode == GMode::Landing && approach_low) {
+            let gh = |q: Vec2| world.ground_height(q);
+            let fwd = dir_of(ac.heading());
+            let agl = ac.pos.y - gh(p);
+            let ahead = gh(p + fwd * 250.0).max(gh(p + fwd * 500.0)).max(gh(p + fwd * 750.0) - 40.0);
+            let near = match self.mode {
+                GMode::Ridge => agl < 110.0 || ahead > ac.pos.y - 70.0,
+                // (On the way home low over a valley floor is normal.)
+                GMode::FinalGlide | GMode::Landing => ahead > ac.pos.y - 100.0 || (agl < 90.0 && gh(p + fwd * 1000.0) > gh(p) + 30.0),
+                _ => agl < 120.0 || ahead > ac.pos.y - 80.0,
+            };
+            if near {
+                if self.mode == GMode::Thermal {
+                    self.leave_thermal(ac, stats, ev, t, "terrain");
+                }
+                // Escape towards the lowest ground: downhill, upwind, or either
+                // way along the slope (at a crest "downhill" can be the lee).
+                let n = crate::ridge::contour(gh, p).map_or(fwd, |c| c.1);
+                let up = -self.wind.normalize_or(-fwd);
+                let esc = [-n, up, n.perp(), -n.perp(), fwd]
+                    .into_iter()
+                    .min_by(|a, b| {
+                        let ga = gh(p + *a * 400.0).max(gh(p + *a * 800.0));
+                        let gb = gh(p + *b * 400.0).max(gh(p + *b * 800.0));
+                        ga.total_cmp(&gb)
+                    })
+                    .unwrap();
+                bank = bank_for_heading(ac, heading_of(esc), 40f32.to_radians());
+                speed = speed.max(self.vs1 * 1.4);
+            }
+        }
         // Never fly into cloud: open the airbrakes and push on near the base.
         if ac.pos.y > base - 60.0 && self.mode != GMode::Landing {
             brake = brake.max(((ac.pos.y - (base - 60.0)) / 40.0).clamp(0.0, 1.0));
@@ -1192,6 +1347,97 @@ impl Glider {
         ctl.rudder = Hands::coord_rudder(ac);
         ctl.flaps = self.airbrake;
         ctl.brakes = 0.0;
+    }
+
+    /// The best windward slope within glide reach: (point on the face,
+    /// contour direction, expected lift m/s at ~120 m above it).
+    fn find_ridge(&self, ac: &Aircraft, world: &World, t: f32) -> Option<(Vec2, Vec2, f32)> {
+        let p = xz(ac.pos);
+        let w = world.wind.mean(150.0, 0.3);
+        if w.length() < 5.0 {
+            return None;
+        }
+        let ld = self.best_ld() * 0.6;
+        let reach = 8000.0f32.min((ac.pos.y - world.ground_height(p)) * ld);
+        let sink = self.sink_at(self.vs1 * 1.4);
+        let mut best: Option<(f32, Vec2, Vec2, f32)> = None;
+        let step = 400.0;
+        let n = (reach / step) as i32;
+        let gh = |q: Vec2| world.ground_height(q);
+        for iz in -n..=n {
+            for ix in -n..=n {
+                let q = p + vec2(ix as f32, iz as f32) * step;
+                let d = q.distance(p);
+                // (Not too far from home: a mountain land-out is a crash.)
+                if d > reach || q.distance(self.home) > 9000.0 || self.ridge_used.iter().any(|(a, until)| *until > t && a.distance(q) < 2500.0) {
+                    continue;
+                }
+                let g = gh(q);
+                // Arrive with 250 m to spare over the face.
+                if ac.pos.y - d / ld.max(1.0) < g + 250.0 {
+                    continue;
+                }
+                let lift = crate::ridge::slope_lift(gh, Vec3::new(q.x, g + 120.0, q.y), w);
+                if lift < sink + 1.0 {
+                    continue;
+                }
+                let Some((c, _)) = crate::ridge::contour(gh, q) else { continue };
+                let score = lift - d / 4000.0;
+                if best.is_none_or(|b| score > b.0) {
+                    best = Some((score, q, c, lift));
+                }
+            }
+        }
+        best.map(|b| (b.1, b.2, b.3))
+    }
+
+    /// Ridge soaring: beat along the face at ~120 m above the slope, turning
+    /// away from the hill at the end of each beat. (bank, speed, status)
+    fn ridge_guidance(&mut self, ac: &Aircraft, world: &World, t: f32) -> (f32, f32, String) {
+        let p = xz(ac.pos);
+        let tas = ac.tas().max(15.0);
+        let wind = self.wind;
+        let gh = |q: Vec2| world.ground_height(q);
+        let r = self.ridge.as_mut().unwrap();
+        let agl = ac.pos.y - gh(p);
+        let speed = self.vs1 * 1.45;
+        let to_anchor = p.distance(r.anchor);
+        // Glide to the ridge first.
+        if !r.arrived {
+            if to_anchor < 700.0 || agl < 300.0 || t - r.t0 > 600.0 {
+                r.arrived = true;
+            } else {
+                let b = bank_for_heading(ac, crab(heading_of(r.anchor - p), tas, wind), 30f32.to_radians());
+                return (b, speed, format!("Gliding to the ridge {:.1} km", to_anchor / 1000.0));
+            }
+        }
+        let w_hat = wind.normalize_or(-r.along.perp());
+        let up = -w_hat; // into wind: away from the windward face
+        let (c, n) = crate::ridge::contour(gh, p).unwrap_or((r.along, w_hat));
+        // Keep the beat direction consistent with the ridge at the anchor.
+        let dirc = if c.dot(r.along) >= 0.0 { c } else { -c } * r.beat;
+        let along = (p - r.anchor).dot(r.along) * r.beat;
+        // Windward face: the wind blows up the slope here.
+        let windward = wind.dot(n) > 0.2 * wind.length();
+        let fwd = dir_of(ac.heading());
+        let ahead = gh(p + fwd * 350.0).max(gh(p + fwd * 700.0));
+        if r.turn_until + 15.0 <= t && (along > 1800.0 || ahead > ac.pos.y - 40.0) {
+            r.beat = -r.beat;
+            r.turn_until = t + 10.0;
+        }
+        let (want, label) = if r.turn_until > t {
+            // Turn into wind (away from the face) onto the next beat.
+            ((up * 0.8 - dirc * 0.2).normalize_or(up), "turning away from the slope")
+        } else if !windward {
+            // Over the crest or round the corner (the lee sinks): back upwind.
+            ((up * 0.7 + dirc * 0.3).normalize_or(up), "back to the windward face")
+        } else {
+            // Along the face, ~220 m above the slope.
+            let a = ((agl - 220.0) / 150.0).atan().clamp(-0.6, 0.5);
+            ((dirc * a.cos() + n * a.sin()).normalize_or(dirc), "along the face")
+        };
+        let b = bank_for_heading(ac, crab(heading_of(want), tas, wind), 25f32.to_radians());
+        (b, speed, format!("Ridge soaring {:+.1} m/s, {:.0} m above the slope, {label} ({:+.0} m)", self.vario, agl, ac.pos.y - r.alt0))
     }
 
     /// Lift-weighted circle fit: shift the estimated centre toward where the lift was strongest.
@@ -1289,6 +1535,24 @@ impl Glider {
     fn plan(&mut self, def: &AircraftDef, ac: &Aircraft, world: &World, stats: &mut BotStats, ev: &mut Vec<String>, t: f32) {
         let p = xz(ac.pos);
         let field = self.nearest_field(world, p);
+        // Mountains: the glide home must clear every ridge on the way (each
+        // point of it 150 m above the ground there, at the safe glide ratio).
+        if let Some(f) = &field {
+            let c = (f.a + f.b) * 0.5;
+            let e = f.height_at(c);
+            self.mountains = (0..12).any(|k| world.ground_height(c + dir_of(k as f32 * TAU / 12.0) * 6000.0) > e + 600.0);
+        }
+        self.terrain_need = field.as_ref().map_or(f32::MIN, |f| {
+            let to = (f.a + f.b) * 0.5;
+            let ld = self.best_ld_wind(headwind((self.wind + self.wind_sfc) * 0.5, to - p)) * 0.65;
+            let n = (p.distance(to) / 300.0).ceil().max(1.0) as usize;
+            (1..=n)
+                .map(|k| {
+                    let q = p.lerp(to, k as f32 / n as f32);
+                    world.ground_height(q) + 250.0 + p.distance(q) / ld.max(6.0)
+                })
+                .fold(f32::MIN, f32::max)
+        });
         let base = sky(world).base();
         let _ = def;
 
@@ -1300,7 +1564,7 @@ impl Glider {
                 if self.wp >= self.tour.len() {
                     // Lap done: another route next time.
                     self.wp = 0;
-                    self.tour_n = GLIDER_TOURS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    self.tour_n = next_glider_tour();
                     self.tour = glider_tour(world, self.home, self.tour_n);
                     if let Some(f) = self.tour.first() {
                         ev.push(format!("new tour: {} first", f.name));
@@ -1309,7 +1573,7 @@ impl Glider {
             }
         }
         // Obstacles ahead when low (tall buildings).
-        if !matches!(self.mode, GMode::Landing | GMode::Thermal) {
+        if !matches!(self.mode, GMode::Landing | GMode::Thermal | GMode::Ridge) {
             self.avoid = avoid_obstacles(world, ac, 30.0, 110.0).map(|h| (h, t + 8.0)).or(self.avoid.filter(|a| a.1 > t));
         }
 
@@ -1326,7 +1590,7 @@ impl Glider {
                     self.leave_thermal(ac, stats, ev, t, "lost it");
                 } else if let Some(f) = &field {
                     // Drifted out of glide range of the field while circling in weak lift.
-                    if ac.pos.y < self.needed_height(p, f) && th.last_lap_climb < 0.5 && th.laps >= 2 {
+                    if ac.pos.y < self.needed_height(p, f).max(self.terrain_need) && th.last_lap_climb < 0.5 && th.laps >= 2 {
                         self.leave_thermal(ac, stats, ev, t, "too low");
                     }
                 }
@@ -1334,12 +1598,38 @@ impl Glider {
             }
             GMode::Landing => return,
             GMode::Landed => return,
+            GMode::Ridge => {
+                // Still climbing (or holding) on the ridge? Else move on.
+                let r = self.ridge.as_mut().unwrap();
+                if t - r.check.0 > 90.0 {
+                    let rate = (ac.pos.y - r.check.1) / (t - r.check.0);
+                    r.check = (t, ac.pos.y);
+                    if rate < -0.4 {
+                        let (a, alt0, t0) = (r.anchor, r.alt0, r.t0);
+                        ev.push(format!("ridge lift gone ({:+.1} m/s) — leaving the ridge, {:+.0} m in {:.0} s", rate, ac.pos.y - alt0, t - t0));
+                        self.ridge_used.push((a, t + 900.0));
+                        self.ridge = None;
+                        self.mode = GMode::Cruise;
+                    }
+                }
+                // (Final glide is decided below as usual.)
+                // (Not for the terrain on the way: the ridge is how to climb above it.)
+                if let Some(f) = &field {
+                    if ac.pos.y < self.needed_height(p, f) {
+                        self.ridge = None;
+                        self.mode = GMode::Cruise;
+                    }
+                }
+                if self.mode == GMode::Ridge {
+                    return;
+                }
+            }
             _ => {}
         }
 
         // Final glide decision.
         if let Some(f) = &field {
-            let need = self.needed_height(p, f);
+            let need = self.needed_height(p, f).max(self.terrain_need);
             if ac.pos.y < need && self.mode != GMode::FinalGlide {
                 self.mode = GMode::FinalGlide;
                 self.land = None;
@@ -1364,6 +1654,19 @@ impl Glider {
                 ev.push(if sky(world).visible() { "no lift under the cloud — moving on" } else { "no lift there — moving on" }.into());
                 self.mode = GMode::Cruise;
             } else {
+                return;
+            }
+        }
+
+        // No good cloud in reach but a wind on a slope: go and soar the ridge.
+        if self.mode == GMode::Cruise && self.target.as_ref().is_none_or(|tg| tg.est < 1.2) && t > 10.0 {
+            if let Some((a, along, lift)) = self.find_ridge(ac, world, t) {
+                ev.push(format!("ridge lift expected {:+.1} m/s {:.1} km away — ridge soaring", lift, p.distance(a) / 1000.0));
+                // Beat first the way the glider already points.
+                let beat = if along.dot(dir_of(ac.heading())) >= 0.0 { 1.0 } else { -1.0 };
+                self.ridge = Some(RidgeState { anchor: a, along, beat, turn_until: 0.0, t0: t, alt0: ac.pos.y, check: (t, ac.pos.y), arrived: false });
+                self.target = None;
+                self.mode = GMode::Ridge;
                 return;
             }
         }
@@ -1519,6 +1822,13 @@ impl Glider {
         let gate = end.thr - end.dir * 1800.0;
         let gate_h = (1800.0 + aim) * l.slope.tan();
         match l.phase {
+            LPhase::ToGate if self.mountains && p.distance(end.thr + end.dir * end.len * 0.5) > 2500.0 && h > gate_h + 150.0 => {
+                // Mountains: home down the valley to the field first (the line the
+                // terrain check flew), then round to the gate.
+                let c = end.thr + end.dir * end.len * 0.5;
+                let b = bank_for_heading(ac, crab(heading_of(c - p), tas, wind), 30f32.to_radians());
+                (b, v_glide.max(vapp), 0.0, format!("Final glide to {} — {:.1} km", l.field, p.distance(c) / 1000.0))
+            }
             LPhase::ToGate => {
                 let d = p.distance(gate);
                 // Close enough and lined up roughly: go straight onto final.
@@ -1555,9 +1865,14 @@ impl Glider {
                 let hdg = crab(end.course() + (-x / 120.0).atan().clamp(-0.6, 0.6), tas, wind);
                 let b = bank_for_heading(ac, hdg, 25f32.to_radians());
                 // Airbrakes fly the glidepath; nominal half brakes.
-                let brake = (0.5 + (h - gp) * 0.03).clamp(0.0, 1.0);
+                let mut brake = (0.5 + (h - gp) * 0.03).clamp(0.0, 1.0);
+                // Sinking hard (lee sink, rotor): brakes in, and no more than ~3 m/s.
+                if ac.vertical_speed() < -3.0 {
+                    brake = brake.min(((ac.vertical_speed() + 4.5) / 1.5).clamp(0.0, 1.0));
+                }
                 let wheels = agl - def.gear_height;
-                if wheels < 4.5 {
+                // (Flare higher when sinking fast: ~1 s of sink.)
+                if wheels < 4.5f32.max(-ac.vertical_speed() * 1.0) {
                     l.phase = LPhase::Flare;
                     self.flare_pitch = ac.pitch();
                     self.sink_i = 0.0;
@@ -1737,6 +2052,8 @@ pub enum PPhase {
     LineUp,
     GoAround,
     Stuck,
+    /// Mountain field: a planned valley departure / missed approach (and climb hold).
+    Departure,
 }
 
 /// Per-type numbers for the powered bot.
@@ -1777,6 +2094,9 @@ impl Profile {
                 p.rot_pitch = deg(9.0);
                 p.climb_pitch = deg(8.0);
                 p.flare_h = 10.0;
+                // Approach at ~1.25 Vs with 100 % flaps (96 kt): the def's Vref
+                // + 5 (130 kt) flies nose-down at a negative alpha and floats.
+                p.vapp = 120.0 * KT;
             }
             "galaxy" => {
                 // Flaps 40 % (16°) for take-off; long, stable finals; a slow,
@@ -2087,6 +2407,56 @@ struct Powered {
     /// Height (m) and sink rate (m/s) at the start of the flare.
     flare_h0: f32,
     flare_vs0: f32,
+    /// On the taxiway graph (src/ground/bot_taxi.rs): pushback, taxi to the
+    /// holding point / a stand; and when to retry planning it.
+    ground: Option<crate::ground::bot_taxi::BotGround>,
+    ground_try: f32,
+    /// Aim point (m) past the runway end's start: the type's aim past the displaced threshold.
+    aim: f32,
+    /// Mountain field: terrain grid and planned procedures (bot/mountain.rs).
+    mtn: Option<mountain::Mtn>,
+    /// The field was found not to be among mountains.
+    not_mountain: bool,
+    /// The departure for this take-off has been planned.
+    dep_planned: bool,
+    /// Why the bot won't depart (runway too short for the type here).
+    refused: Option<String>,
+    /// Re-positioning: intercept only from the gate (not straight in).
+    via_gate: bool,
+    /// Threshold crossing height (m) of the glidepath.
+    tch: f32,
+    /// Stabilised-approach criteria for the type, and where the approach is
+    /// against them (500 ft gate passed; configured by 1,000 ft).
+    stab: Stab,
+    gate_done: bool,
+    config_ok: bool,
+    /// Flown to instrument rules at mountain fields (airliners, jets, heavies:
+    /// minimum safe altitude until the procedure) rather than valley VFR.
+    ifr: bool,
+    /// Tried departing the other way (no terrain-clear departure this way).
+    dep_flipped: bool,
+}
+
+/// Stabilised-approach criteria (an SOP's "stable by 500 ft").
+#[derive(Clone, Copy, Debug)]
+struct Stab {
+    /// Speed band (kt) below / above the approach speed (gusts added).
+    slow: f32,
+    fast: f32,
+    /// Glidepath tolerance in ILS dots (0.35° each).
+    path_dots: f32,
+    /// Sink beyond the glidepath's (m/s).
+    sink: f32,
+}
+
+impl Stab {
+    fn of(def: &AircraftDef) -> Stab {
+        match def.category {
+            Category::Airliner => Stab { slow: 5.0, fast: 15.0, path_dots: 1.5, sink: 1.5 },
+            Category::FastJet => Stab { slow: 5.0, fast: 20.0, path_dots: 2.0, sink: 2.0 },
+            _ => Stab { slow: 5.0, fast: 20.0, path_dots: 2.0, sink: 2.0 },
+        }
+    }
 }
 
 impl Powered {
@@ -2108,7 +2478,12 @@ impl Powered {
             .or_else(|| world.spawn_runway(p).cloned());
         let field_name = field.as_ref().map(|f| field_name(world, f)).unwrap_or_else(|| "airfield".into());
         let home_p = field.as_ref().map(|f| (f.a + f.b) * 0.5).unwrap_or(p);
-        let tour = plan_tour(world, home_p, if def.category == Category::Trainer { 3000.0 } else { 4000.0 }, pf.tour_r, 4);
+        let tour = if def.category == Category::Trainer {
+            // Light types at a mountain field: a loop through the valleys.
+            mountain::valley_tour(world, home_p).unwrap_or_else(|| plan_tour(world, home_p, 3000.0, pf.tour_r, 4))
+        } else {
+            plan_tour(world, home_p, 4000.0, pf.tour_r, 4)
+        };
         let vapp0 = pf.vapp;
         let mut s = Powered {
             atc_wait: false,
@@ -2146,7 +2521,22 @@ impl Powered {
             turn_at: None,
             flare_h0: 0.0,
             flare_vs0: 0.0,
+            ground: None,
+            ground_try: 0.0,
+            aim: 0.0,
+            mtn: None,
+            not_mountain: false,
+            dep_planned: false,
+            refused: None,
+            via_gate: false,
+            tch: threshold_height(def),
+            stab: Stab::of(def),
+            gate_done: false,
+            config_ok: false,
+            ifr: matches!(def.category, Category::Airliner | Category::FastJet),
+            dep_flipped: false,
         };
+        s.aim = s.pf.aim;
         // Where are we?
         if ac.on_ground {
             if let Some(f) = s.field.clone() {
@@ -2168,6 +2558,10 @@ impl Powered {
                 } else {
                     PPhase::Taxi
                 };
+                if s.phase == PPhase::Taxi {
+                    // Off the runway (a stand / the apron): push back and taxi there (src/ground).
+                    s.try_ground(def, ac, world, false);
+                }
             } else {
                 s.phase = PPhase::Stuck;
             }
@@ -2179,6 +2573,10 @@ impl Powered {
             (on_final || (ac.gear_pos() > 0.5 && seg_dist(p, f.a, f.b) < 15_000.0)) && ac.pos.y - f.height_at(p) < 1200.0
         }) {
             s.start_approach(world, ac);
+            // (Re-planned for a mountain field on the first update.)
+            s.dep_planned = false;
+            s.not_mountain = false;
+            s.phase_t = -2.0;
         } else {
             s.phase = PPhase::Enroute;
         }
@@ -2186,8 +2584,36 @@ impl Powered {
     }
 
     fn set_phase(&mut self, ph: PPhase, t: f32) {
+        if ph == PPhase::Final {
+            self.gate_done = false;
+            self.config_ok = false;
+        }
         self.phase = ph;
         self.phase_t = t;
+    }
+
+    /// Ground phases on the taxiway graph (src/ground/bot_taxi.rs): from off
+    /// the runway to the departure hold (`arrive` = false), or after landing to
+    /// a stand first. Departs into wind next.
+    fn try_ground(&mut self, def: &AircraftDef, ac: &Aircraft, world: &World, arrive: bool) -> bool {
+        let Some(f) = self.field.clone() else { return false };
+        let end = best_takeoff_end(world, &f);
+        let g = if arrive {
+            crate::ground::bot_taxi::BotGround::arrive(def, ac, world, &f, end.thr, end.dir)
+                .or_else(|| crate::ground::bot_taxi::BotGround::depart(def, ac, world, &f, end.thr, end.dir))
+        } else {
+            let p = xz(ac.pos);
+            let on_runway = end.cross(p).abs() < end.width * 0.5 + 8.0 && end.along(p) > -60.0 && end.along(p) < end.len + 60.0;
+            if on_runway { None } else { crate::ground::bot_taxi::BotGround::depart(def, ac, world, &f, end.thr, end.dir) }
+        };
+        let ok = g.is_some();
+        if ok {
+            self.ground = g;
+            self.rw = Some(end);
+            self.backtrack = false;
+            self.turn_at = None;
+        }
+        ok
     }
 
     fn start_approach(&mut self, world: &World, ac: &Aircraft) {
@@ -2197,6 +2623,10 @@ impl Powered {
         };
         let (end, slope) = best_landing_end(world, &f, self.pf.aim);
         self.gs_angle = slope.clamp(3f32.to_radians(), self.pf.max_gs);
+        self.aim = end.disp + self.pf.aim.min(self.tch / self.gs_angle.tan());
+        if let Some(m) = &mut self.mtn {
+            m.arr = None;
+        }
         // Wind additive: half the steady headwind plus the full gust, at most 15 kt.
         let hw = headwind(world.wind.surface, end.dir).max(0.0);
         self.vapp = self.pf.vapp + (0.5 * hw + world.wind.gust).min(15.0 * KT);
@@ -2205,7 +2635,7 @@ impl Powered {
         let side = if end.cross(p) >= 0.0 { 1.0 } else { -1.0 };
         let pf = &self.pf;
         let back = pf.final_dist + pf.turn_r * 1.5;
-        let faf_h = ((pf.final_dist + pf.aim) * self.gs_angle.tan()).max(300.0);
+        let faf_h = ((pf.final_dist + self.aim) * self.gs_angle.tan()).max(300.0);
         // Gate on the side we are on, beyond the final approach fix — unless the
         // terrain there is above the approach (a valley field): then the other side,
         // or straight in down the extended centreline, further out if need be, where
@@ -2218,7 +2648,7 @@ impl Powered {
         let r_orbit = pf.turn_r.max(600.0) * 1.3 + 300.0;
         let need = |g: Vec2| circle_floor(world, g, r_orbit) + 300.0 - end.elev;
         // (None clear: the one with the least height to lose below the glidepath there.)
-        let excess = |g: Vec2, h: f32| h - (-end.along(g) + pf.aim) * self.gs_angle.tan();
+        let excess = |g: Vec2, h: f32| h - (-end.along(g) + self.aim) * self.gs_angle.tan();
         let mut best: Option<(Vec2, f32)> = None;
         for g in cands {
             let h = need(g);
@@ -2236,6 +2666,17 @@ impl Powered {
         self.orbit = false;
         self.rw = Some(end);
         self.phase = PPhase::Position;
+    }
+
+    /// Start an approach: a planned one at a mountain field, else the standard pattern.
+    fn start_approach_any(&mut self, def: &AircraftDef, world: &World, ac: &Aircraft, t: f32, ev: &mut Vec<String>) {
+        if let Some(m) = &mut self.mtn {
+            m.arr = None;
+        }
+        if !self.low_pass && self.mtn_start_approach(def, world, t, ev) {
+            return;
+        }
+        self.start_approach(world, ac);
     }
 
     fn set_flaps(&mut self, def: &AircraftDef, ctl: &mut Controls, idx: usize, t: f32) {
@@ -2263,6 +2704,12 @@ impl Powered {
         dt: f32,
     ) {
         let p = xz(ac.pos);
+        let fine = self.mtn_poll(def, ac, world, t, ev);
+        if self.phase == PPhase::Position && self.phase_t == -2.0 {
+            // Started in the air near a mountain field: plan its approach.
+            self.phase_t = 0.0;
+            self.start_approach_any(def, world, ac, t, ev);
+        }
         let pf = self.pf.clone();
         let ias = ac.airspeed();
         self.ias_f += (ias - self.ias_f) * (dt / 2.0).min(1.0);
@@ -2291,13 +2738,52 @@ impl Powered {
                 ap.engaged
             );
         }
+        // On the taxiway graph (src/ground/bot_taxi.rs). Off the runway with no
+        // route (yet): hold position and ask again, rather than cross the grass.
+        if self.phase == PPhase::Taxi && self.ground.is_none() {
+            if t > self.ground_try {
+                self.ground_try = t + 5.0;
+                self.try_ground(def, ac, world, false);
+            }
+            let off_runway = self.rw.as_ref().is_some_and(|e| {
+                let p = xz(ac.pos);
+                e.cross(p).abs() > e.width * 0.5 + 8.0 || e.along(p) < -60.0 || e.along(p) > e.len + 60.0
+            });
+            if self.ground.is_none() && off_runway && world.airport_detail.enabled {
+                ap.disengage();
+                ctl.throttle = 0.0;
+                ctl.brakes = 1.0;
+                *status = "Holding — waiting for a taxi route".into();
+                return;
+            }
+        }
+        if let Some(to_hold) = self.ground.as_ref().map(|g| matches!(g.stage, crate::ground::bot_taxi::Stage::Taxi(_, true))) {
+            ap.disengage();
+            self.set_flaps(def, ctl, if to_hold { pf.to_flap } else { 0 }, t);
+            let g = self.ground.as_mut().unwrap();
+            match g.update(def, ac, ctl, world, dt) {
+                crate::ground::bot_taxi::Step::Running => {
+                    *status = g.status.clone();
+                    return;
+                }
+                crate::ground::bot_taxi::Step::AtHold => {
+                    ev.push(format!("at the holding point for RWY {}", self.rw.as_ref().map(|r| r.name.clone()).unwrap_or_default()));
+                    self.ground = None;
+                    self.set_phase(PPhase::LineUp, t);
+                }
+                crate::ground::bot_taxi::Step::Failed => {
+                    self.ground = None;
+                    self.ground_try = t + 30.0;
+                }
+            }
+        }
         // Throttle never touched by the AP on the ground.
         match self.phase {
             PPhase::Stuck => {
                 ap.disengage();
                 ctl.throttle = 0.0;
                 ctl.brakes = 1.0;
-                *status = "No runway known — auto flight idle".into();
+                *status = self.refused.clone().unwrap_or_else(|| "No runway known — auto flight idle".into());
             }
             PPhase::Hold => {
                 ap.disengage();
@@ -2311,10 +2797,61 @@ impl Powered {
                 ctl.aileron = 0.0;
                 ctl.rudder = 0.0;
                 *status = format!("Ready for departure RWY {rwname}");
-                if t - self.phase_t > 5.0 && self.flap_idx == pf.to_flap && (!self.atc_wait || t - self.phase_t > 60.0) {
+                // Mountain field: plan the departure (re-planned while the terrain
+                // still streams in, for up to half a minute).
+                if !self.dep_planned {
+                    self.dep_planned = true;
+                    if let Some(end) = self.rw.clone() {
+                        self.mtn_plan_departure(def, world, &end, t, ev);
+                        // The type's runway rule (sim::min_runway) is strict at a
+                        // mountain / high field: no take-off from a short runway there.
+                        // No terrain-clear departure this way: backtrack and go the
+                        // other way (tailwind permitting), else stay on the ground.
+                        let no_dep = self.mtn.as_ref().is_some_and(|m| m.dep.is_none() && (m.fine || t - self.phase_t > 290.0));
+                        if no_dep {
+                            let tail = -headwind(world.wind.surface, -end.dir) / KT;
+                            if !self.dep_flipped && tail <= 10.0 {
+                                self.dep_flipped = true;
+                                ev.push(format!("no terrain-clear departure from RWY {} — backtracking to depart the other way", end.name));
+                                self.backtrack = false;
+                                self.turn_at = None;
+                                self.dep_planned = false;
+                                self.set_phase(PPhase::Taxi, t);
+                                return;
+                            }
+                            let why = format!("no terrain-clear departure from {} for the {} — not departing", self.field_name, def.name);
+                            ev.push(why.clone());
+                            self.refused = Some(why);
+                            self.set_phase(PPhase::Stuck, t);
+                            return;
+                        }
+                        let need = crate::sim::min_runway(def);
+                        if end.len < need && (self.mtn.is_some() || end.elev > 400.0) {
+                            let why = format!("RWY {} at {} is {:.0} m: the {} needs {:.0} m here — not departing", end.name, self.field_name, end.len, def.name, need);
+                            ev.push(why.clone());
+                            self.refused = Some(why);
+                            self.set_phase(PPhase::Stuck, t);
+                            return;
+                        }
+                    }
+                }
+                let grid_ok = self.mtn.as_ref().is_none_or(|m| m.grid.complete() && fine) || t - self.phase_t > 300.0;
+                if !grid_ok {
+                    *status = format!("Terrain survey for the departure from RWY {rwname}");
+                }
+                if grid_ok && !fine && self.mtn.as_ref().is_some_and(|m| m.dep.is_none()) && self.dep_planned {
+                    // The survey didn't come in time: plan on what is known, once.
+                    self.dep_planned = false;
+                    self.phase_t = t - 291.0;
+                    return;
+                }
+                if t - self.phase_t > 5.0 && grid_ok && self.flap_idx == pf.to_flap && (!self.atc_wait || t - self.phase_t > 60.0) {
                     self.set_phase(PPhase::TakeoffRoll, t);
                     ev.push(format!("take-off roll RWY {rwname} ({})", self.field_name));
                 }
+            }
+            PPhase::Departure => {
+                self.mtn_departure(def, ac, ctl, ap, world, ev, status, t, dt);
             }
             PPhase::TakeoffRoll | PPhase::Rotate => {
                 ap.disengage();
@@ -2373,6 +2910,7 @@ impl Powered {
                     *status = "Rotate".into();
                     if !ac.on_ground && t - self.phase_t > 1.0 && wheels > 3.0 {
                         stats.takeoffs += 1;
+                        self.dep_flipped = false;
                         ev.push(format!("airborne at {:.0} kt", ias / KT));
                         self.set_phase(PPhase::InitialClimb, t);
                     }
@@ -2405,7 +2943,9 @@ impl Powered {
                     self.set_flaps(def, ctl, pf.to_flap.max(pf.app_flap.min(1)), t);
                     *status = "Go-around".into();
                 } else {
-                    if ias > pf.flap_up_ias {
+                    // (A valley departure keeps the take-off flaps: slow, tight turns.)
+                    let keep = self.mtn.as_ref().is_some_and(|m| m.dep.is_some());
+                    if ias > pf.flap_up_ias && !keep {
                         self.set_flaps(def, ctl, 0, t);
                     } else {
                         ctl.flaps = flap_lever(def, self.flap_idx);
@@ -2419,11 +2959,25 @@ impl Powered {
                     ap.alt = Some((fe + pf.tour_alt).max(terrain_alt).max(ac.pos.y));
                     ap.ias = Some(pf.climb_ias);
                     ap.vs = None;
-                    if self.phase == PPhase::GoAround {
+                    let mtn_dep = self.mtn.as_ref().is_some_and(|m| m.dep.is_some());
+                    if self.phase == PPhase::GoAround && self.mtn.is_some() {
+                        // Mountain field: the missed approach is the planned departure
+                        // this way, then round again for another approach.
+                        let end = self.rw.clone().unwrap();
+                        self.mtn_plan_departure(def, world, &end, t, ev);
+                        if let Some(m) = &mut self.mtn {
+                            m.then_approach = true;
+                            m.arr = None;
+                        }
+                        self.set_phase(PPhase::Departure, t);
+                    } else if self.phase == PPhase::GoAround {
                         ap.alt = Some(fe + (pf.final_dist * self.gs_angle.tan()).max(450.0));
                         ap.ias = Some(pf.vapp + 25.0 * KT);
-                        let w = world;
-                        self.start_approach(w, ac);
+                        self.start_approach_any(def, world, ac, t, ev);
+                    } else if mtn_dep {
+                        self.wp = 0;
+                        self.low_pass_done = self.low_pass_done || def.category != Category::FastJet;
+                        self.set_phase(PPhase::Departure, t);
                     } else {
                         // A fresh tour each circuit (rotate the starting landmark for variety).
                         self.wp = 0;
@@ -2437,7 +2991,9 @@ impl Powered {
                 }
                 if t >= self.next_plan {
                     self.next_plan = t + 1.0;
-                    self.avoid = avoid_obstacles(world, ac, 30.0, 90.0).map(|h| (h, t + 10.0)).or(self.avoid.filter(|a| a.1 > t));
+                    // (A planned valley departure is terrain-checked: no dodging off it low down.)
+                    let planned = self.mtn.as_ref().is_some_and(|m| m.dep.is_some());
+                    self.avoid = if planned { None } else { avoid_obstacles(world, ac, 30.0, 90.0).map(|h| (h, t + 10.0)).or(self.avoid.filter(|a| a.1 > t)) };
                 }
             }
             PPhase::Enroute | PPhase::LowPass | PPhase::Position => {
@@ -2483,14 +3039,14 @@ impl Powered {
                             }
                             None => {
                                 // Tour done: home.
-                                if def.category == Category::FastJet && !self.low_pass_done {
+                                if def.category == Category::FastJet && !self.low_pass_done && self.mtn.is_none() {
                                     // A fast low pass flown down the approach path, then come round and land.
                                     self.low_pass = true;
-                                    self.start_approach(world, ac);
+                                    self.start_approach_any(def, world, ac, t, ev);
                                     ev.push(format!("low pass RWY {}", self.rw.as_ref().map(|r| r.name.clone()).unwrap_or_default()));
                                 } else {
                                     ev.push(format!("tour complete — returning to {}", self.field_name));
-                                    self.start_approach(world, ac);
+                                    self.start_approach_any(def, world, ac, t, ev);
                                 }
                                 hdg = ac.heading();
                             }
@@ -2501,7 +3057,19 @@ impl Powered {
                         } else {
                             alt = (fe + pf.tour_alt).max(terrain_alt);
                         }
-                        // Afterburner climb for the fighter, then cruise power.
+                        // Mountain field: the surveyed terrain on the way and ahead
+                        // (the world's far tiles smooth the ridges).
+                        let to = self.tour.get(self.wp).map(|l| l.pos);
+                        let floor = self.mtn_floor(p, to, vec2(ac.vel.x, ac.vel.z));
+                        alt = alt.max(floor);
+                        // Far below what the leg needs (a slow climber in a valley):
+                        // climb in a hold over the field first, not at the hillside.
+                        let leg = to.map_or(f32::MIN, |to| self.mtn_leg_floor(p, to));
+                        if let Some((h, a)) = self.mtn_climb_hold(def, ac, leg, t) {
+                            hdg = h;
+                            alt = a;
+                            *status = format!("Climbing in the hold over {} — {:.0} ft to {:.0} ft", self.field_name, ac.pos.y / FT, a / FT);
+                        }
                         spd = if ac.pos.y < alt - 60.0 { pf.climb_ias } else { pf.cruise_ias };
                         if self.ab_climb && ac.pos.y > alt - 100.0 {
                             self.ab_climb = false;
@@ -2534,20 +3102,27 @@ impl Powered {
                                 self.lp_inbound = false;
                                 self.ab_climb = true;
                                 ev.push(format!("low pass complete at {:.0} kt, {:.0} ft", ias / KT, ac.pos.y / FT));
-                                self.start_approach(world, ac);
+                                self.start_approach_any(def, world, ac, t, ev);
                             }
                         }
+                    }
+                    PPhase::Position if self.mtn_arriving() => {
+                        let (h, a, sp, st) = self.mtn_position(def, ac, ctl, world, ev, status, t);
+                        hdg = h;
+                        alt = a;
+                        spd = sp;
+                        steep = st;
                     }
                     _ => {
                         // Position: to the gate, then intercept the final course.
                         let end = self.rw.clone().unwrap();
                         let s = -end.along(p);
                         let x = end.cross(p);
-                        let faf_alt = (pf.final_dist + pf.aim) * self.gs_angle.tan();
+                        let faf_alt = (pf.final_dist + self.aim) * self.gs_angle.tan();
                         let to_gate = p.distance(self.gate);
                         let inbound = wrap_pi(end.course() - ac.heading()).abs() < 100f32.to_radians();
                         let capture = to_gate < pf.turn_r.max(600.0) * 1.2
-                            || (s > pf.final_dist * 0.5 && x.abs() < s * 0.8 && inbound && s < pf.final_dist + pf.turn_r * 1.6);
+                            || (!self.via_gate && s > pf.final_dist * 0.5 && x.abs() < s * 0.8 && inbound && s < pf.final_dist + pf.turn_r * 1.6);
                         // Mountain fields: orbit the gate until down to its height.
                         let r_orbit = pf.turn_r.max(600.0);
                         if !self.orbit && self.phase_t >= 0.0 && to_gate < r_orbit * 1.3 && ac.pos.y > self.gate_alt + 200.0 {
@@ -2566,6 +3141,7 @@ impl Powered {
                             *status = format!("Descending in the hold for RWY {} — {:.0} ft to lose", end.name, (ac.pos.y - self.gate_alt) / FT);
                         } else if capture || self.phase_t < 0.0 {
                             self.phase_t = -1.0; // latched: intercepting
+                            self.via_gate = false;
                             self.ab_climb = false; // (after a low pass: no more reheat)
                             let l = (pf.turn_r * 0.35).max(250.0);
                             hdg = crab(end.course() + (-x / l).atan().clamp(-0.8, 0.8), tas, wind);
@@ -2608,11 +3184,31 @@ impl Powered {
                         if s < pf.final_dist + 2500.0 && self.phase_t < 0.0 && !self.low_pass && ias < def.vle_kt * KT * 0.95 {
                             ctl.gear_down = true;
                         }
-                        // Glidepath capture from below.
-                        let gp = (s + pf.aim) * self.gs_angle.tan();
-                        if self.phase_t < 0.0 && x.abs() < 400.0 && ay >= gp - 15.0 && s < pf.final_dist + 3000.0 {
-                            ev.push(format!("established RWY {} at {:.1} nm, {:.0} ft (glidepath {:.1}°)", end.name, s / NM, ac.pos.y / FT, self.gs_angle.to_degrees()));
-                            self.set_phase(PPhase::Final, t);
+                        // Glidepath capture from below (or from just above). Well
+                        // above it (a tour ending on the extended centreline):
+                        // keep descending steeply on the localiser while the
+                        // height can still be lost before the 1,000 ft stable
+                        // gate; else orbit here down to the glidepath first.
+                        let gp = (s + self.aim) * self.gs_angle.tan();
+                        let excess = ay - gp;
+                        if self.phase_t < 0.0 && x.abs() < 400.0 && excess >= -15.0 && s < pf.final_dist + 3000.0 && !self.orbit {
+                            let s_gate = (305.0 / self.gs_angle.tan() - self.aim).max(0.0);
+                            if excess <= 60.0 {
+                                ev.push(format!("established RWY {} at {:.1} nm, {:.0} ft (glidepath {:.1}°)", end.name, s / NM, ac.pos.y / FT, self.gs_angle.to_degrees()));
+                                self.set_phase(PPhase::Final, t);
+                            } else if excess > (s - s_gate).max(0.0) * self.gs_angle.tan() * 0.8 {
+                                // Re-position: back out to a gate (orbiting there to lose height).
+                                ev.push(format!("{:.0} ft high at {:.1} nm on RWY {} — re-positioning", excess / FT, s / NM, end.name));
+                                self.start_approach_any(def, world, ac, t, ev);
+                                self.phase_t = t;
+                                self.via_gate = true;
+                            }
+                        } else if self.phase_t < 0.0 && s < 500.0 && !self.orbit {
+                            // Intercepting but already at the runway: come round again.
+                            ev.push(format!("over the runway intercepting RWY {} — re-positioning", end.name));
+                            self.start_approach_any(def, world, ac, t, ev);
+                            self.phase_t = t;
+                            self.via_gate = true;
                         }
                     }
                 }
@@ -2638,9 +3234,13 @@ impl Powered {
             }
             PPhase::Final => {
                 let end = self.rw.clone().unwrap();
-                let s = -end.along(p);
-                let x = end.cross(p);
-                let gp = (s + pf.aim) * self.gs_angle.tan() + def.gear_height;
+                // Straight in along the runway, or along a planned (curved) mountain path.
+                let geom = self.mtn_final_geom(p, gs(ac), fe);
+                let s = geom.map_or(-end.along(p), |g| g.0);
+                let x = geom.map_or(end.cross(p), |g| g.1);
+                let course = geom.map_or(end.course(), |g| g.2);
+                let gp = geom.map_or((s + self.aim) * self.gs_angle.tan(), |g| g.3) + def.gear_height;
+                let on_straight = geom.is_none_or(|g| g.4);
                 if self.low_pass {
                     // Down the approach path to 100 m, fast and clean, then reheat climb away.
                     if !ap.engaged {
@@ -2664,7 +3264,7 @@ impl Powered {
                         self.low_pass = false;
                         self.low_pass_done = true;
                         self.ab_climb = true;
-                        self.start_approach(world, ac);
+                        self.start_approach_any(def, world, ac, t, ev);
                     }
                     return;
                 }
@@ -2672,7 +3272,8 @@ impl Powered {
                 if ias < def.vle_kt * KT * 0.95 {
                     ctl.gear_down = true;
                 }
-                self.set_flaps(def, ctl, if s < pf.final_dist * 0.8 { pf.land_flap } else { pf.app_flap }, t);
+                // Landing flaps from ~0.8 of the final, or by 1,100 ft at the latest.
+                self.set_flaps(def, ctl, if s < pf.final_dist * 0.8 || ay < 335.0 { pf.land_flap } else { pf.app_flap }, t);
                 // The runway's ILS (nav/; NAV 1 is tuned to it by the sim): coupled
                 // LOC + G/S when it serves this runway end and its glidepath is
                 // no lower than the obstacle-clear one planned (and flyable).
@@ -2680,14 +3281,16 @@ impl Powered {
                     .nav
                     .loc
                     .as_ref()
-                    .filter(|b| b.valid && wrap_pi(b.course - end.course()).abs() < 3f32.to_radians() && (b.to_thr - s).abs() < 500.0 && x.abs() < 300.0)
-                    .and(ap.nav.gs.clone().filter(|g| g.valid && g.angle >= self.gs_angle - 0.25f32.to_radians() && g.angle <= pf.max_gs + 0.1f32.to_radians()));
+                    .filter(|b| on_straight && b.valid && wrap_pi(b.course - end.course()).abs() < 3f32.to_radians() && (b.to_thr - s).abs() < 500.0 && x.abs() < 300.0)
+                    .and(ap.nav.gs.clone().filter(|g| g.valid && g.angle >= self.gs_angle - 0.25f32.to_radians() && g.angle <= pf.max_gs + 0.1f32.to_radians()))
+                    // (A planned mountain approach: only a glideslope that matches its path.)
+                    .filter(|g| self.mtn.as_ref().and_then(|m| m.arr.as_ref()).is_none_or(|a| (g.angle - a.gp).abs() < 0.15f32.to_radians()));
                 // Descent rate for the glidepath from the ground speed along the runway (headwind → less).
                 let g_along = vec2(ac.vel.x, ac.vel.z).dot(end.dir).max(20.0);
                 let vs_gp = -g_along * self.gs_angle.tan();
                 let l = (pf.turn_r * 0.25).max(200.0).min(s * 0.3 + 120.0);
                 // Track the centreline: the cross-track law gives a track, the crab angle the heading.
-                let hdg = crab(end.course() + (-x / l).atan().clamp(-0.5, 0.5), tas, wind);
+                let hdg = crab(course + (-x / l).atan().clamp(-0.5, 0.5), tas, wind);
                 if !ap.engaged {
                     ap.engage_hold_current(ac);
                 }
@@ -2723,22 +3326,58 @@ impl Powered {
                 }
                 let coupled = if ils.is_some() { " · ILS" } else { "" };
                 *status = format!("Final approach RWY {}{coupled} — {:.1} nm, {:.0} ft", end.name, s / NM, wheels / FT);
-                // Stabilised-approach gate below 500 ft.
-                // (Height above the runway: the ground under a valley approach can be higher.)
-                if ay.min(wheels + 60.0) < 150.0 && wheels > pf.flare_h + 5.0 {
-                    let unstable = x.abs() > pf.stab_x
-                        || gp_err.abs() > 35.0
-                        || self.ias_f < self.vapp - 10.0 * KT
-                        || self.ias_f > self.vapp + 25.0 * KT
-                        || ac.gear_pos() < 0.99;
-                    if unstable {
-                        ev.push(format!(
-                            "go-around: unstable at {:.0} ft (x {:.0} m, gp {:+.0} m, {:.0} kt)",
-                            wheels / FT,
-                            x,
-                            ay - gp,
-                            ias / KT
-                        ));
+                // Stabilised-approach criteria (heights above the runway: the ground
+                // under a valley approach can be higher): configured by 1,000 ft;
+                // stable at the 500 ft gate (speed, path, sink, lateral); below it
+                // only gross deviations send it round.
+                let h_rw = ay.min(wheels + 60.0);
+                let reason = if wheels <= pf.flare_h + 5.0 {
+                    None
+                } else if h_rw < 305.0 && (ac.gear_pos() < 0.99 || self.flap_idx < pf.land_flap) && !self.config_ok {
+                    // (A crew would have the landing configuration by now: 1,000 ft for
+                    // transports, 500 ft for light types — some slack for the levers.)
+                    let by = if matches!(def.category, Category::Airliner | Category::FastJet) { 250.0 } else { 120.0 };
+                    (h_rw < by).then(|| format!("not configured ({})", if ac.gear_pos() < 0.99 { "gear" } else { "flaps" }))
+                } else {
+                    if h_rw < 305.0 {
+                        self.config_ok = true;
+                    }
+                    let gust = (world.wind.gust * 0.5).min(10.0 * KT);
+                    let to_aim = (s + self.aim).max(300.0);
+                    let dot = |n: f32| to_aim * (0.35f32 * n).to_radians().tan();
+                    let vs_req = -vec2(ac.vel.x, ac.vel.z).dot(end.dir).max(20.0) * self.gs_angle.tan();
+                    let sink_x = vs_req - ac.vertical_speed();
+                    let st = &self.stab;
+                    if h_rw < 152.0 && !self.gate_done {
+                        self.gate_done = true;
+                        if x.abs() > pf.stab_x {
+                            Some(format!("{:.0} m off the centreline", x))
+                        } else if gp_err.abs() > dot(st.path_dots).max(8.0) {
+                            Some(format!("{:+.0} m off the glidepath", gp_err))
+                        } else if self.ias_f < self.vapp - st.slow * KT {
+                            Some(format!("slow, {:.0} kt", self.ias_f / KT))
+                        } else if self.ias_f > self.vapp + (st.fast * KT + gust) {
+                            Some(format!("fast, {:.0} kt", self.ias_f / KT))
+                        } else if sink_x > st.sink {
+                            Some(format!("sinking {:.0} fpm", -ac.vertical_speed() / FT * 60.0))
+                        } else {
+                            None
+                        }
+                    } else if self.gate_done
+                        && (x.abs() > pf.stab_x * 1.6
+                            || gp_err.abs() > dot(st.path_dots * 2.0).max(15.0)
+                            || self.ias_f < self.vapp - (st.slow + 5.0) * KT
+                            || self.ias_f > self.vapp + (st.fast + 10.0) * KT + gust
+                            || sink_x > st.sink + 1.5)
+                    {
+                        Some(format!("deviation below 500 ft (x {:.0} m, gp {:+.0} m, {:.0} kt)", x, gp_err, self.ias_f / KT))
+                    } else {
+                        None
+                    }
+                };
+                if let Some(why) = reason {
+                    {
+                        ev.push(format!("go-around: unstable at {:.0} ft — {why}", wheels / FT));
                         stats.go_arounds += 1;
                         ap.disengage();
                         self.rot_pitch = ac.pitch();
@@ -2748,7 +3387,7 @@ impl Powered {
                 }
                 // Flare earlier on a steep / fast approach (fast jets: ~4 s of sink;
                 // the heavies' slow pitch response wants more).
-                let lead = if heavy(def) { 4.5 } else { 3.0 };
+                let lead = if def.id == "hercules" { 3.5 } else if heavy(def) { 4.5 } else { 3.0 };
                 if wheels < pf.flare_h.max(-ac.vertical_speed() * lead) {
                     ap.disengage();
                     self.flare_h0 = wheels;
@@ -2781,7 +3420,15 @@ impl Powered {
                     // (Heavies keep power until half-way down the flare.)
                     ctl.throttle = approach_to(ctl.throttle, 0.0, if heavy(def) { 0.3 } else { 0.6 }, dt);
                 }
-                let target_vs = -(0.45 + 0.28 * h).min(4.0);
+                // Sink-rate profile of a constant vertical deceleration from the
+                // flare entry (h0, vs0) to a touchdown sink v_td: the flare takes
+                // 2 h0 / (vs0 + v_td) seconds — no long exponential float on a
+                // steep approach (the TDZ is a few hundred metres long).
+                let v_td = touchdown_sink(def);
+                let (h0, s0) = (self.flare_h0.max(1.0), self.flare_vs0.max(v_td + 0.3));
+                // (Flown about a second ahead: the pitch response lags.)
+                let h_lead = (h - 1.0 * (-ac.vertical_speed()).max(0.0)).max(0.0);
+                let target_vs = -(v_td * v_td + (s0 * s0 - v_td * v_td) * (h_lead / h0).clamp(0.0, 1.0)).sqrt();
                 let err = target_vs - ac.vertical_speed();
                 // Pitch per m/s of sink error: gentler for faster aircraft (vs responds faster to pitch).
                 let k_vs = (1.8 / ac.tas().max(20.0)).clamp(0.015, 0.06);
@@ -2795,8 +3442,11 @@ impl Powered {
                     13f32.to_radians()
                 };
                 // Ease the nose up to the touchdown attitude as the wheels near the runway.
-                let td = touchdown_pitch(def);
-                let frac = (1.0 - h / pf.flare_h).clamp(0.0, 1.0);
+                // (At most ~6° above the approach attitude — a bigger change balloons —
+                // but nose up at the touchdown.)
+                let td = touchdown_pitch(def).min(self.flare_pitch + 6f32.to_radians()).max(1f32.to_radians());
+                // (Only in the last couple of metres: forcing the attitude higher up floats it.)
+                let frac = (1.0 - h / if heavy(def) { pf.flare_h } else { pf.flare_h.min(3.0) }).clamp(0.0, 1.0);
                 let min_pitch = self.flare_pitch + (td - self.flare_pitch).max(0.0) * frac;
                 let pitch_cmd = (self.flare_pitch + k_vs * err + self.sink_i).max(min_pitch).clamp(-0.05, max_pitch);
                 ctl.elevator = if def.category == Category::FastJet && Hands::fbw(def, ac) {
@@ -2843,6 +3493,7 @@ impl Powered {
                 }
                 if ac.on_ground {
                     stats.landings += 1;
+                    self.dep_planned = false;
                     let d = end.along(p);
                     ev.push(format!(
                         "touchdown RWY {} at {}: {:.0} m past threshold, {:.0} kt, sink {:.1} m/s",
@@ -2880,6 +3531,10 @@ impl Powered {
                     if g < 25.0 * KT { 1.0 } else { (3.0 * (6f32.to_radians() - ac.pitch()) - 0.8 * ac.rates().y).clamp(-1.0, 1.0) }
                 } else if tail {
                     if g < 45.0 * KT { 1.0 } else if ias < def.vs0_kt * KT * 1.05 { 0.4 } else { 0.0 }
+                } else if def.category == Category::Airliner && since < 5.0 && !Hands::fbw(def, ac) {
+                    // De-rotation: lower the nose gently onto the runway (~1.5°/s).
+                    let tgt = (touchdown_pitch(def) - since * 1.5f32.to_radians()).max(def.rest_pitch());
+                    hands.elevator(def, ac, tgt, dt).clamp(-0.2, 1.0)
                 } else if def.category == Category::Airliner {
                     0.0
                 } else {
@@ -2911,6 +3566,14 @@ impl Powered {
                     ctl.reverse = false;
                     stats.cycles += 1;
                     ev.push(format!("rollout complete, {:.0} m remaining", end.len - end.along(p)));
+                    // Vacate on the taxiway graph to a stand, then push back and
+                    // taxi out again (src/ground/bot_taxi.rs) — when the airport's
+                    // layout is known.
+                    if self.try_ground(def, ac, world, true) {
+                        ev.push("vacating: taxi to a stand".into());
+                        self.set_phase(PPhase::Taxi, t);
+                        return;
+                    }
                     // Take off into wind next time: if that is the way we landed,
                     // turn round here and backtrack to the threshold.
                     let next = self.field.as_ref().map(|f| best_takeoff_end(world, f));

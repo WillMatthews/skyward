@@ -93,6 +93,14 @@ pub fn keyboard() -> Vec<(Key, Vec<K>)> {
         // Wipers (airliners); the radar tilt shares Num / with weapon release (armed types).
         (Key::Wipers, vec![K::CapsLock]),
         (Key::RadarTilt, vec![K::NumpadDivide]),
+        // Ground handling (src/ground): the parking brake (Right Alt, shared with
+        // weapon release: one only on the ground, the other only in the air) and
+        // one key for the ground menu (pushback, chocks + ground power,
+        // autobrake, tail-wheel lock, taxi guidance). Tiller and toe brakes are
+        // axes (the rudder keys work the tiller at taxi speed); their keys, and
+        // each ground-menu action's, are unbound by default.
+        (Key::ParkingBrake, vec![K::AltRight]),
+        (Key::GroundMenu, vec![K::AltLeft]),
     ]
 }
 

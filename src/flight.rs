@@ -204,6 +204,11 @@ pub trait Environment {
     fn wind(&self, _p: Vec3) -> Vec3 {
         Vec3::ZERO
     }
+    /// What the ground is at `xz` for the tyres (pavement / grass ..., wet,
+    /// snow, ice: src/ground/surface.rs). Default: dry asphalt.
+    fn surface(&self, _xz: Vec2) -> crate::ground::Surface {
+        crate::ground::Surface::DRY
+    }
 }
 
 /// Rotational gusts (body frame: pitch, yaw, roll rates in rad/s) from the
@@ -263,6 +268,20 @@ pub struct Controls {
     /// Split throttles (Track M): per-engine lever positions 0..1, used only
     /// when `Some` (differential thrust); `None` = every engine on `throttle`.
     pub engine_throttle: Option<[f32; MAX_ENGINES]>,
+    // ---- ground handling (Track GH, src/ground) ----
+    /// Toe brakes, left / right main wheels 0..1 (each side brakes with the
+    /// larger of these and `brakes`).
+    pub brake_left: f32,
+    pub brake_right: f32,
+    /// Nose-wheel steering tiller −1..1 (+ = right): airliners steer with it
+    /// at taxi speeds; the rudder pedals give only a few degrees.
+    pub tiller: f32,
+    /// Parking brake set.
+    pub parking_brake: bool,
+    /// Autobrake selector (types with an autobrake).
+    pub autobrake: crate::ground::Autobrake,
+    /// Tail-wheel lock engaged (types with a lockable castering tail wheel).
+    pub tail_lock: bool,
 }
 
 impl Default for Controls {
@@ -280,6 +299,12 @@ impl Default for Controls {
             reverse: false,
             failed_engines: 0,
             engine_throttle: None,
+            brake_left: 0.0,
+            brake_right: 0.0,
+            tiller: 0.0,
+            parking_brake: false,
+            autobrake: crate::ground::Autobrake::Off,
+            tail_lock: true,
         }
     }
 }
@@ -303,6 +328,12 @@ impl Controls {
             reverse: self.reverse,
             failed_engines: self.failed_engines,
             engine_throttle: self.engine_throttle.map(|t| t.map(|x| finite_or(x, 0.0).clamp(0.0, 1.0))),
+            brake_left: finite_or(self.brake_left, 0.0).clamp(0.0, 1.0),
+            brake_right: finite_or(self.brake_right, 0.0).clamp(0.0, 1.0),
+            tiller: finite_or(self.tiller, 0.0).clamp(-1.0, 1.0),
+            parking_brake: self.parking_brake,
+            autobrake: self.autobrake,
+            tail_lock: self.tail_lock,
         }
     }
 
@@ -3161,9 +3192,20 @@ fn lower_first(s: &str) -> String {
 }
 
 /// Per-aircraft seed for the structural strength scatter.
+///
+/// Counted per thread, not per process: a process-wide counter made each
+/// aircraft's strength depend on how many aircraft *other* threads had built
+/// first, so a sim run (e.g. a test among parallel tests) was not reproducible
+/// and flipped outcomes with machine load.
 fn next_seed() -> u32 {
-    static SEED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x5EED);
-    SEED.fetch_add(0x9E37_79B9, std::sync::atomic::Ordering::Relaxed)
+    thread_local! {
+        static SEED: std::cell::Cell<u32> = const { std::cell::Cell::new(0x5EED) };
+    }
+    SEED.with(|s| {
+        let v = s.get();
+        s.set(v.wrapping_add(0x9E37_79B9));
+        v
+    })
 }
 
 /// Live state of one engine.
@@ -3244,6 +3286,10 @@ pub struct Aircraft {
     cg_aft: f32,
     /// Floats / hull on the water: sea state and the last contact (src/water.rs).
     pub water: crate::water::WaterState,
+    /// Tyres, wheels, brakes, steering, autobrake, tug and chocks (src/ground).
+    pub ground: crate::ground::GroundState,
+    /// This step's brake / steering commands (src/ground).
+    ground_cmd: crate::ground::Cmd,
     /// Damage / crash assists (settings; the sim sets them each step).
     pub assists: crate::damage::Assists,
     /// A crash the crash assists may let the flight survive: decided at the
@@ -3312,6 +3358,8 @@ impl Aircraft {
             rotor: Default::default(),
             cg_aft: 0.0,
             water: Default::default(),
+            ground: Default::default(),
+            ground_cmd: Default::default(),
             assists: Default::default(),
             pending_crash: None,
         };
@@ -3866,8 +3914,32 @@ impl Aircraft {
         if def.on_water() {
             self.water.update_sea(env, self.pos, dt);
         }
+        // Tyres / brakes / steering commands for this step (src/ground).
+        let gframe = crate::ground::Frame {
+            vel: self.vel,
+            rot: self.rot,
+            omega: self.omega,
+            on_ground: self.on_ground,
+            spoilers: self.surf.spoilers,
+            lever: (0..def.engines().max(1)).map(|i| c.lever(i)).fold(0.0, f32::max),
+            reverse: c.reverse,
+            oat: self.oat,
+            gear_locked: self.gear_locked(def),
+            nws: fx.steering,
+            brakes_fx: fx.brakes,
+        };
+        self.ground_cmd = self.ground.pre_step(def, &c, &gframe, dt);
         let gnd = self.ground(def, env, &c, dt);
         self.water.last = gnd.water_contact;
+        self.ground.post_step(def, &gframe, &gnd.wheels, dt);
+        if self.ground.burst_now != 0 {
+            // Fusible plugs / a flat-spotted tyre: a burst tyre (systems/failures.rs).
+            for (bit, side) in [(1u8, 0usize), (2, 1)] {
+                if self.ground.burst_now & bit != 0 {
+                    self.sys.fail.set(crate::systems::failures::Failure::new(crate::systems::failures::Kind::TyreBurst, side), true);
+                }
+            }
+        }
         // Only the floats on the water: no brakes, no tyres.
         let water_only = gnd.water && !gnd.land;
         if let Some(reason) = gnd.crash {
@@ -3881,12 +3953,14 @@ impl Aircraft {
         // Static friction of held brakes (the velocity-level tyre model alone
         // lets a stationary aircraft creep under idle thrust).
         let gs = Vec2::new(self.vel.x, self.vel.z);
-        if gnd.contact && !water_only && c.brakes > 0.3 && gs.length() < 0.3 {
+        let hold = self.ground_cmd.hold;
+        let chocks = self.ground.chocks && self.ground.tow.is_none();
+        if gnd.contact && !water_only && (hold > 0.3 || chocks) && gs.length() < 0.3 {
             let here = Vec2::new(self.pos.x, self.pos.z);
             let anchor = *self.brake_anchor.get_or_insert(here);
             let m = def.mass;
             let f = -(here - anchor) * (16.0 * m) - gs * (5.6 * m);
-            let cap = def.brake_mu * c.brakes * gnd.force_world.y.max(0.0) * 0.8;
+            let cap = (def.brake_mu * hold * 0.8).max(if chocks { 0.35 } else { 0.0 }) * gnd.force_world.y.max(0.0);
             if f.length() > cap {
                 self.brake_anchor = None;
             } else {
@@ -4457,12 +4531,10 @@ impl Aircraft {
         !def.retractable_gear || self.gear_pos >= 0.98
     }
 
-    fn ground(&self, def: &AircraftDef, env: &dyn Environment, c: &Controls, dt: f32) -> GroundOut {
+    fn ground(&self, def: &AircraftDef, env: &dyn Environment, _c: &Controls, dt: f32) -> GroundOut {
         let mut out = GroundOut::default();
         let inv = self.rot.conjugate();
         let ground_speed = Vec2::new(self.vel.x, self.vel.z).length();
-        let steer_max = def.nose_steer_deg.to_radians() / (1.0 + (ground_speed / 10.0).powi(2));
-        let steer = self.surf.rudder * steer_max;
         let locked = self.gear_locked(def);
 
         let mut torque_world = Vec3::ZERO;
@@ -4494,22 +4566,20 @@ impl Aircraft {
                     out.comp[i] = pen;
                 }
             }
-            // Differential braking with the rudder (as on the warbirds' brake
-            // lever + rudder bar, or toe brakes): the inside wheel brakes harder.
-            let brake = if gp.pos.x > 0.1 {
-                c.brakes * (1.0 - c.rudder).clamp(0.0, 1.0)
-            } else if gp.pos.x < -0.1 {
-                c.brakes * (1.0 + c.rudder).clamp(0.0, 1.0)
+            // A burst / deflated tyre runs on its rim: high drag, little grip, no braking.
+            let wi = def.gear.iter().position(|g| std::ptr::eq(g, gp)).unwrap_or(0);
+            let burst = self.sys.fx.tyre_burst(gp.pos.x) || self.ground.wheels.get(wi).is_some_and(|w| w.deflated);
+            let f = if let (ContactKind::Wheel { .. }, false, true) = (gp.kind, burst, wi < crate::ground::MAX_WHEELS) {
+                // Tyre model (src/ground): strut load here, then slip / spin / brakes / steering.
+                let v_cp = self.vel + self.rot * self.omega.cross(gp.pos);
+                let fz = strut_load(def, pen, gp.spring, gp.damping, v_cp.y);
+                let (f, w) = crate::ground::contact(def, &self.ground, &self.ground_cmd, wi, gp, self.rot, v_cp, fz, env.surface(cxz), dt);
+                out.wheels[wi] = w;
+                f
             } else {
-                c.brakes
+                let kind = if burst { ContactKind::Skid { friction: 0.35 } } else { gp.kind };
+                contact_force(self, def, gp.pos, pen, gp.spring, gp.damping, kind, 0.0, 0.0, dt)
             };
-            // A tail wheel steers the opposite way to a nose wheel (nose-wheel
-            // steering needs hydraulics: systems/).
-            let s = if gp.pos.z < 0.0 { -steer } else { steer * self.sys.fx.steering };
-            // A burst tyre runs on its rim: high drag, little grip, no braking.
-            let burst = self.sys.fx.tyre_burst(gp.pos.x);
-            let (kind, brake) = if burst { (ContactKind::Skid { friction: 0.35 }, 0.0) } else { (gp.kind, brake) };
-            let f = contact_force(self, def, gp.pos, pen, gp.spring, gp.damping, kind, s, brake, dt);
             out.force_world += f;
             torque_world += r.cross(f);
         }
@@ -4605,6 +4675,13 @@ impl Aircraft {
     }
 }
 
+/// Strut + tyre normal load: progressive spring (bottoming out) + damper
+/// (oleo: heavier on rebound, so a firm arrival does not bounce back); never pulls.
+fn strut_load(def: &AircraftDef, pen: f32, spring: f32, damping: f32, v_up: f32) -> f32 {
+    let c = if v_up > 0.0 { 2.5 * damping } else { damping };
+    (spring * pen * (1.0 + (pen / 0.15).powi(2)) - c * v_up).clamp(0.0, 40.0 * def.mass * GRAVITY)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn contact_force(
     a: &Aircraft,
@@ -4619,10 +4696,7 @@ fn contact_force(
     dt: f32,
 ) -> Vec3 {
     let v_cp = a.vel + a.rot * a.omega.cross(pos_b);
-    // Progressive spring (bottoming out) + damper (oleo: heavier on
-    // rebound, so a firm arrival does not bounce back); never pulls.
-    let c = if v_cp.y > 0.0 { 2.5 * damping } else { damping };
-    let fz = (spring * pen * (1.0 + (pen / 0.15).powi(2)) - c * v_cp.y).clamp(0.0, 40.0 * def.mass * GRAVITY);
+    let fz = strut_load(def, pen, spring, damping, v_cp.y);
     let vt = Vec3::new(v_cp.x, 0.0, v_cp.z);
 
     let (fwd_b, mu_long, mu_lat) = match kind {
@@ -4956,6 +5030,8 @@ struct GroundOut {
     /// The floats / hull touched the water (src/water.rs).
     water: bool,
     water_contact: crate::water::Contact,
+    /// Wheel states from the tyre model (src/ground); `contact` false = not touching.
+    wheels: [crate::ground::Wheel; crate::ground::MAX_WHEELS],
 }
 
 // ---------------------------------------------------------------------------
@@ -6049,7 +6125,8 @@ mod tests {
                 t += DT;
                 let gs = Vec2::new(a.vel.x, a.vel.z).length();
                 let rud = if t > 10.0 { 1.0 } else { 0.0 };
-                Controls { throttle: if gs < 8.0 { thr } else { 0.0 }, brakes: if gs > 10.0 { 0.3 } else { 0.0 }, rudder: rud, ..Default::default() }
+                // Airliners turn on the nose-wheel tiller (the pedals give only ±6°: src/ground).
+                Controls { throttle: if gs < 8.0 { thr } else { 0.0 }, brakes: if gs > 10.0 { 0.3 } else { 0.0 }, rudder: rud, tiller: rud, ..Default::default() }
             });
             let gs = Vec2::new(a.vel.x, a.vel.z).length();
             eprintln!("{id} taxi: {gs:.1} m/s, turn rate {:.1}°/s", a.turn_rate().to_degrees());
@@ -6144,7 +6221,8 @@ mod tests {
         // (id, flap lever, rotation pitch, ground-roll range m, lift-off speed range kt)
         let cases: [(&str, f32, f32, std::ops::Range<f32>, std::ops::Range<f32>); 5] = [
             ("peregrine", 0.0, 10.0, 230.0..420.0, 85.0..110.0),
-            ("lancer", 0.0, 12.0, 300.0..800.0, 135.0..185.0),
+            // (The wheels' spin inertia, src/ground, costs the F-16 ~0.2 kt at lift-off.)
+            ("lancer", 0.0, 12.0, 300.0..800.0, 135.0..187.0),
             ("aerolink", 0.5, 8.0, 700.0..1150.0, 105.0..130.0),
             ("meridian190", 0.27, 9.0, 800.0..1400.0, 125.0..155.0),
             ("meridian320", 0.25, 9.0, 1000.0..1600.0, 135.0..165.0),
@@ -6206,7 +6284,8 @@ mod tests {
         run(&mut a, def, &env, 60.0, |a| {
             tt += DT;
             if std::env::var("TRACE").map_or(false, |v| v == def.id) && (tt * 120.0).round() as i32 % 15 == 0 {
-                eprintln!("  t {tt:.2} ias {:.0} hdg {:.1} r {:.1} roll {:.1} pitch {:.1} x {:.1} gnd {} vs {:.1}", a.airspeed_kt(), a.heading().to_degrees(), a.rates().z.to_degrees(), a.roll().to_degrees(), a.pitch().to_degrees(), a.pos.x, a.on_ground, a.vertical_speed());
+                let w: Vec<String> = a.ground.wheels.iter().take(def.gear.len()).map(|w| format!("[k {:+.2} a {:+.3} st {:+.3} lk {} c{} fz {:5.0}]", w.kappa, w.alpha, w.steer, w.locked as u8, w.castering as u8, w.load)).collect();
+                eprintln!("  t {tt:.2} ias {:.0} hdg {:.1} r {:.1} roll {:.1} pitch {:.1} x {:.1} gnd {} vs {:.1} {}", a.airspeed_kt(), a.heading().to_degrees(), a.rates().z.to_degrees(), a.roll().to_degrees(), a.pitch().to_degrees(), a.pos.x, a.on_ground, a.vertical_speed(), w.join(" "));
             }
             if a.on_ground {
                 on_ground_time += DT;
@@ -6215,6 +6294,10 @@ mod tests {
                 // Taildragger: stick fully back, moderate braking (no nose-over).
                 let slow = a.airspeed() < 45.0 * KT;
                 let (brakes, elevator) = if tail { (if slow { 0.8 } else { 0.3 }, if slow { 1.0 } else { 0.4 }) } else { (1.0, 0.0) };
+                // Without anti-skid a pilot eases off a locking (skidding) wheel
+                // (the tyre model, src/ground, locks lightly loaded wheels).
+                let skid = a.ground.wheels.iter().any(|w| w.locked);
+                let brakes = if skid { brakes * 0.3 } else { brakes };
                 let rudder = if tail { -5.0 * a.heading() - 2.0 * a.rates().z } else { -2.0 * a.heading() };
                 let aileron = (-2.0 * a.roll()).clamp(-1.0, 1.0);
                 Controls { throttle: 0.0, brakes, elevator, aileron, rudder: rudder.clamp(-1.0, 1.0), ..base }
@@ -6452,6 +6535,7 @@ mod tests {
                             reverse: rng.next() > 0.8,
                             failed_engines: if rng.next() > 0.7 { 1 } else { 0 },
                             engine_throttle: None,
+                            ..Default::default()
                         };
                         if seed % 2 == 0 {
                             // Bang-bang extremes.
@@ -6495,6 +6579,13 @@ mod tests {
                         reverse: rng.next() > 0.5,
                         failed_engines: (rng.next().abs() * 4.0) as u8,
                         engine_throttle: None,
+                        // Ground handling (src/ground): toe brakes, tiller, parking brake, autobrake.
+                        brake_left: rng.next().max(0.0),
+                        brake_right: rng.next().max(0.0),
+                        tiller: rng.next(),
+                        parking_brake: rng.next() > 0.6,
+                        autobrake: [crate::ground::Autobrake::Off, crate::ground::Autobrake::Med, crate::ground::Autobrake::Rto][(rng.next().abs() * 2.99) as usize],
+                        tail_lock: rng.next() > 0.0,
                     };
                 }
                 a.step(&def, &c, &env, DT);
@@ -7093,7 +7184,10 @@ mod tests {
             if def.has_spoilers {
                 assert!(sp < plain * 0.95, "{id} spoilers {sp} vs {plain}");
             }
-            assert!(all < sp * 0.95, "{id} reversers {all} vs {sp}");
+            // With anti-skid holding the tyres near peak slip (src/ground), maximum
+            // manual braking already gives most of the deceleration on a dry
+            // runway; reverse adds a few per cent (FCOM: small dry-runway credit).
+            assert!(all < sp * 0.97, "{id} reversers {all} vs {sp}");
         }
         // In flight: spoilers steepen the idle descent at a given speed; the
         // reversers refuse to deploy.

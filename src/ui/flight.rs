@@ -163,6 +163,7 @@ pub fn draw(ctx: &egui::Context, st: &mut UiState, sim: &mut Sim, world: &World,
     let mut ty = sp::M;
     if mode != HudMode::Off {
         ty = auto_strip(&p, screen, sim, ty);
+        ty = taxi_strip(&p, screen, sim, ty);
     }
     st.toasts.draw(&p, screen, ty + 4.0);
     // ---- map
@@ -310,6 +311,29 @@ fn auto_strip(p: &egui::Painter, screen: Rect, sim: &Sim, y: f32) -> f32 {
     y
 }
 
+/// Taxi guidance / pushback strip (src/ground) under the auto-flight strip. Returns its bottom.
+fn taxi_strip(p: &egui::Painter, screen: Rect, sim: &Sim, y: f32) -> f32 {
+    let guiding = sim.ground.guide.as_ref().is_some_and(|g| g.active());
+    let text = if let Some(pb) = sim.ground.push.as_ref().filter(|p| !(guiding && matches!(p.phase, crate::ground::pushback::Phase::Leaving(_) | crate::ground::pushback::Phase::Done))) {
+        format!("PUSHBACK {} · {}", pb.dir.label().to_uppercase(), match pb.phase {
+            crate::ground::pushback::Phase::Connecting(_) => "TUG CONNECTING",
+            crate::ground::pushback::Phase::WaitBrake => "SET PARKING BRAKE",
+            crate::ground::pushback::Phase::Disconnecting(_) => "DISCONNECTING",
+            crate::ground::pushback::Phase::Leaving(_) | crate::ground::pushback::Phase::Done => "TUG CLEAR",
+            _ => "PUSHING",
+        })
+    } else if let Some((d, t)) = sim.ground.pending {
+        format!("PUSHBACK {} IN {:.0} S", d.label().to_uppercase(), t.ceil())
+    } else if let Some(g) = sim.ground.guide.as_ref().filter(|g| g.active()) {
+        g.status()
+    } else {
+        return y;
+    };
+    let col = Color32::from_rgb(90, 235, 130);
+    let r = chip(p, Pos2::new(screen.center().x, y), Align2::CENTER_TOP, &text, f_inst_b(13.0), col, Color32::from_rgba_premultiplied(10, 14, 12, 215));
+    r.max.y + 6.0
+}
+
 /// Annunciator strip centred above `y` (bottom). Returns its top.
 fn annunciators(p: &egui::Painter, screen: Rect, sim: &Sim, y: f32) -> f32 {
     let def = sim.def();
@@ -338,6 +362,13 @@ fn annunciators(p: &egui::Painter, screen: Rect, sim: &Sim, y: f32) -> f32 {
     }
     if def.smoke_system {
         items.push(("SMOKE".into(), pal::CYAN, sim.vfx.smoke));
+    }
+    // Ground handling (src/ground).
+    if sim.ctl.parking_brake {
+        items.push(("PARK BRK".into(), pal::AMBER, true));
+    }
+    if sim.ctl.autobrake != crate::ground::Autobrake::Off {
+        items.push((format!("A/BRK {}", sim.ctl.autobrake.label()), pal::GREEN, ac.ground.ab.active || blink));
     }
     if def.on_water() && ac.water.afloat() {
         // On the water: on the step (planing) or the water rudders down.
@@ -458,7 +489,8 @@ fn moving_map(ctx: &egui::Context, p: &egui::Painter, st: &mut UiState, sim: &mu
         }
     }
     if !st.map_zoom_override {
-        st.map.range += (target - st.map.range) * (st.dt * 8.0).min(1.0);
+        // (No frame clock in headless shots: go straight to the selected range.)
+        st.map.range += (target - st.map.range) * if st.dt > 0.0 { (st.dt * 8.0).min(1.0) } else { 1.0 };
     }
     let style = map_style(st.settings.map_style, sim);
     let pos = vec2(sim.ac.pos.x, sim.ac.pos.z);
@@ -555,6 +587,23 @@ fn moving_map(ctx: &egui::Context, p: &egui::Painter, st: &mut UiState, sim: &mu
             let off = usize::from(sim.nav.plan.origin.is_some());
             map::flight_plan(&mp, &view, pos, &all, sim.nav.plan.active + off, pal::MAGENTA, if dark { Color32::from_white_alpha(90) } else { Color32::from_black_alpha(90) });
         }
+    }
+    // Taxi route (src/ground/guide.rs): the pilot's guidance, or the bot's taxi.
+    let taxi_col = if dark { Color32::from_rgb(70, 235, 120) } else { Color32::from_rgb(10, 150, 60) };
+    if let Some(g) = sim.ground.guide.as_ref().filter(|g| g.active()) {
+        let remaining: Vec<glam::Vec2> = {
+            let mut v = vec![g.point_at(g.s)];
+            let mut s = g.s;
+            while s < g.length() {
+                s += 8.0;
+                v.push(g.point_at(s));
+            }
+            v
+        };
+        let turn = g.next_turn.map(|(d, _)| g.point_at(g.s + d + 20.0));
+        map::taxi_route(&mp, &view, pos, &remaining, turn, g.to_hold, &g.dest.to_uppercase(), taxi_col);
+    } else if let Some(bg) = sim.bot.as_ref().and_then(|b| b.ground()).filter(|g| g.route.len() > 1) {
+        map::taxi_route(&mp, &view, pos, &bg.route, None, true, "TAXI", taxi_col);
     }
     if edit {
         mp.text(Pos2::new(rect.min.x + 10.0, rect.max.y - 34.0), Align2::LEFT_BOTTOM, "EDIT ROUTE · click add · drag move · right-click delete", f_inst_b(10.5), pal::MAGENTA);

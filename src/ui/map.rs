@@ -668,6 +668,38 @@ pub fn route(p: &egui::Painter, view: &View, from: Vec2, pts: &[(String, Vec2)],
     }
 }
 
+/// Taxi route (src/ground/guide.rs): the remaining route as a bright line
+/// with a dark casing, the next turn as an arrow head, a stop bar at a
+/// holding point, the destination labelled.
+#[allow(clippy::too_many_arguments)]
+pub fn taxi_route(p: &egui::Painter, view: &View, from: Vec2, pts: &[Vec2], next_turn: Option<Vec2>, to_hold: bool, label: &str, col: Color32) {
+    if pts.len() < 2 {
+        return;
+    }
+    let mut line = vec![view.to_screen(from)];
+    line.extend(pts.iter().map(|w| view.to_screen(*w)));
+    p.add(Shape::line(line.clone(), Stroke::new(7.0, Color32::from_black_alpha(150))));
+    p.add(Shape::line(line, Stroke::new(3.6, col)));
+    if let Some(t) = next_turn {
+        let q = view.to_screen(t);
+        p.circle_filled(q, 6.5, Color32::from_black_alpha(160));
+        p.circle_stroke(q, 6.5, Stroke::new(2.2, Color32::WHITE));
+    }
+    let end = *pts.last().unwrap_or(&from);
+    let q = view.to_screen(end);
+    if to_hold {
+        let n = pts.len();
+        let d = (view.to_screen(pts[n - 1]) - view.to_screen(pts[n.saturating_sub(3)])).normalized();
+        let s = EVec2::new(-d.y, d.x) * 11.0;
+        p.line_segment([q - s, q + s], Stroke::new(4.0, Color32::from_rgb(235, 40, 30)));
+    } else {
+        p.circle_filled(q, 5.0, col);
+    }
+    if view.rect.expand(-4.0).contains(q) {
+        text_halo(p, q + EVec2::new(10.0, -10.0), Align2::LEFT_BOTTOM, label, f_semi(11.5), col);
+    }
+}
+
 /// Draw a canvas (if ready) into a rounded rect.
 pub fn show_canvas(p: &egui::Painter, id: Option<egui::TextureId>, rect: Rect, radius: u8, fallback: Color32) {
     match id {

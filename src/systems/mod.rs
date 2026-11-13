@@ -439,6 +439,9 @@ pub struct Systems {
     pub alt_gear_fail: bool,
     /// Wheel-brake effectiveness 0..1 (anti-skid / partial brakes).
     pub brake_factor: f32,
+    /// Ground power unit (and a ground air cart for jet starts) connected on
+    /// the stand (src/ground/sim_glue.rs).
+    pub ext_power: bool,
 }
 
 impl Default for Systems {
@@ -499,6 +502,7 @@ impl Default for Systems {
             cabin: cabin::Cabin::default(),
             alt_gear_fail: false,
             brake_factor: 1.0,
+            ext_power: false,
         }
     }
 }
@@ -853,7 +857,9 @@ impl Systems {
             }
         }
         let apu_gen = sd.apu && self.apu > 0.95;
-        let gens = self.gen_on.iter().any(|g| *g) || apu_gen;
+        // Ground power on the stand feeds the AC buses like a generator.
+        let gpu = self.ext_power && !airborne;
+        let gens = self.gen_on.iter().any(|g| *g) || apu_gen || gpu;
         // RAT: deploys automatically when all AC generation is lost in flight.
         if sd.rat && !gens && airborne && ias > 70.0 && n > 0 {
             if !self.rat_out {
@@ -1223,7 +1229,7 @@ impl Systems {
                 Starter::None => {}
                 st => {
                     let air = match st {
-                        Starter::JetApu => (self.sw.apu_bleed && self.apu > 0.95) || (0..self.n_eng).any(|k| k != i && self.eng[k].run),
+                        Starter::JetApu => (self.sw.apu_bleed && self.apu > 0.95) || (0..self.n_eng).any(|k| k != i && self.eng[k].run) || (self.ext_power && !airborne),
                         Starter::TurbopropBattery => self.power >= Power::Battery && self.volts > 0.85 * sd.batt_v,
                         Starter::Jfs => self.power >= Power::Battery,
                         _ => false,

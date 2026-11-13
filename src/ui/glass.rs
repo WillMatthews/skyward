@@ -1150,6 +1150,20 @@ pub fn ewd(p: &egui::Painter, r: Rect, sim: &Sim) {
     if ac.on_ground && sim.ctl.brakes > 0.5 {
         memo.push(("BRAKES".into(), GREEN));
     }
+    // Ground handling (src/ground): parking brake, autobrake, ground services.
+    if sim.ctl.parking_brake {
+        memo.push(("PARK BRK".into(), if ac.on_ground { GREEN } else { AMBER }));
+    }
+    if sim.ctl.autobrake != crate::ground::Autobrake::Off {
+        let decel = ac.ground.ab.active;
+        memo.push((format!("AUTO BRK {}{}", sim.ctl.autobrake.label(), if decel { "  DECEL" } else { "" }), GREEN));
+    }
+    if sim.ground.gpu || sim.ground.chocks {
+        memo.push((if sim.ground.gpu { "GND PWR · CHOCKS".into() } else { "CHOCKS".into() }, GREEN));
+    }
+    if sim.ground.push.is_some() {
+        memo.push(("PUSHBACK · NWS DISC".into(), GREEN));
+    }
     if sim.bot.is_some() {
         memo.push(("AUTO FLT".into(), MAG));
     }

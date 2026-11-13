@@ -145,13 +145,29 @@ impl NavState {
             }
         }
         // A synthetic glidepath must clear the terrain under its sector: else
-        // the facility is a localizer only (a published one would be offset or steeper).
+        // it is made steeper (as published ones at mountain fields are: up to
+        // 4.5°, the glideslope antenna moved to keep the 50 ft crossing
+        // height), and failing that the facility is a localizer only.
         for n in v.iter_mut() {
             if n.ils.as_ref().is_some_and(|i| i.synthetic && i.gs.is_some()) && !glidepath_clear(env, n) {
-                if let Some(i) = n.ils.as_mut() {
-                    i.gs = None;
+                let mut ok = false;
+                for deg in [3.5f32, 4.0, 4.5] {
+                    let mut t = n.clone();
+                    if let Some(i) = t.ils.as_mut() {
+                        set_gs_angle(i, deg.to_radians());
+                    }
+                    if glidepath_clear(env, &t) {
+                        *n = t;
+                        ok = true;
+                        break;
+                    }
                 }
-                n.kind = db::Kind::Loc;
+                if !ok {
+                    if let Some(i) = n.ils.as_mut() {
+                        i.gs = None;
+                    }
+                    n.kind = db::Kind::Loc;
+                }
             }
         }
         self.local = v;
@@ -313,6 +329,15 @@ impl NavState {
         let preds = self.plan.predictions(env, p, gs, fob, flow);
         preds.last().map(|l| (l.dist, l.eta, l.efob))
     }
+}
+
+/// Re-angle a synthetic glidepath: the antenna abeam the point the path
+/// crosses 50 ft above, 120 m to the side (as db.rs places it).
+fn set_gs_angle(i: &mut db::Ils, angle: f32) {
+    let along = 50.0 * 0.3048 / angle.tan();
+    let c = geo::gc_dest(i.thr, i.course, along as f64);
+    i.gs = Some(geo::gc_dest(c, geo::wrap_2pi(i.course - std::f32::consts::FRAC_PI_2), 120.0));
+    i.gs_angle = angle;
 }
 
 /// Does the glidepath of `n` clear the terrain (with a margin growing from

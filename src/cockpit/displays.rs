@@ -490,8 +490,119 @@ fn sd_page(sim: &Sim) -> &'static str {
         if t.starts_with("FUEL") {
             return "FUEL";
         }
+        if t.starts_with("BRAKE") || t.starts_with("WHEEL") {
+            return "WHEEL";
+        }
+    }
+    // Taxiing (engines running, below 60 kt) or hot brakes: the WHEEL page (src/ground).
+    let ac = &sim.ac;
+    let def = sim.def();
+    let n = def.engine_count.min(4);
+    let running = n > 0 && (0..n).all(|i| ac.engine_running(i));
+    let gs = (ac.vel.x * ac.vel.x + ac.vel.z * ac.vel.z).sqrt();
+    if ac.on_ground && ((running && gs < 31.0) || ac.ground.brakes_hot) {
+        return "WHEEL";
     }
     "ENGINE"
+}
+
+/// SD WHEEL page (src/ground): brake temperatures per wheel (hottest arc
+/// amber above the type's limit), anti-skid release, parking brake,
+/// autobrake, nose-wheel steering.
+fn sd_wheel_page(p: &egui::Painter, r: Rect, sim: &Sim) {
+    let u = r.width() / 100.0;
+    let ac = &sim.ac;
+    let def = sim.def();
+    let sp = crate::ground::spec::spec(def);
+    let g = &ac.ground;
+    let hot = sp.hot_c();
+    let legs: Vec<(usize, f32)> = def
+        .gear
+        .iter()
+        .enumerate()
+        .take(crate::ground::MAX_WHEELS)
+        .filter(|(_, gp)| matches!(gp.kind, crate::flight::ContactKind::Wheel { braked: true, .. }))
+        .map(|(i, gp)| (i, gp.pos.x))
+        .collect();
+    // Left to right as seen from the cockpit (+x = left wing).
+    let mut legs = legs;
+    legs.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let per = sp.wheels_per_leg.clamp(1, 2) as usize;
+    let n_w = legs.len() * per;
+    let y0 = r.min.y + 24.0 * u;
+    p.text(Pos2::new(r.min.x + 8.0 * u, y0 - 9.0 * u), Align2::LEFT_CENTER, "°C", fi(3.6 * u), pal::CYAN);
+    p.text(Pos2::new(r.min.x + 8.0 * u, y0 + 9.0 * u), Align2::LEFT_CENTER, "REL", fi(3.6 * u), pal::WHITE);
+    let mut k = 0;
+    for (i, _) in &legs {
+        let w = &g.wheels[*i];
+        for j in 0..per {
+            let x = r.min.x + r.width() * (0.22 + 0.62 * if n_w > 1 { k as f32 / (n_w - 1) as f32 } else { 0.5 });
+            // Inboard brakes run a little hotter (less cooling air).
+            let t = w.brake_c * if j == 0 { 1.0 } else { 0.96 };
+            let col = if t > hot { pal::AMBER } else { pal::GREEN };
+            p.text(Pos2::new(x, y0 - 9.0 * u), Align2::CENTER_CENTER, format!("{:.0}", (t / 5.0).round() * 5.0), fd(5.4 * u), col);
+            // Wheel symbol (green arc above the hottest when hot).
+            let c = Pos2::new(x, y0);
+            p.rect_stroke(
+                Rect::from_center_size(c, Vec2::new(7.0 * u, 9.0 * u)),
+                1.5 * u,
+                Stroke::new(1.2, if w.deflated { pal::AMBER } else { pal::WHITE }),
+                egui::StrokeKind::Inside,
+            );
+            p.text(c, Align2::CENTER_CENTER, format!("{}", k + 1), fi(4.0 * u), pal::WHITE);
+            if t > hot {
+                p.line_segment([c + Vec2::new(-3.5 * u, -6.0 * u), c + Vec2::new(3.5 * u, -6.0 * u)], Stroke::new(2.0, pal::AMBER));
+            }
+            if w.release > 0.05 && ac.on_ground {
+                p.text(Pos2::new(x, y0 + 9.0 * u), Align2::CENTER_CENTER, "REL", fi(3.4 * u), pal::GREEN);
+            }
+            k += 1;
+        }
+    }
+    let mut y = y0 + 20.0 * u;
+    let line = |p: &egui::Painter, y: f32, s: String, col: Color32| {
+        p.text(Pos2::new(r.center().x, y), Align2::CENTER_CENTER, s, fi(4.2 * u), col);
+    };
+    if sp.antiskid {
+        let fx = ac.sys.fx.brakes;
+        line(
+            p,
+            y,
+            if fx > 0.95 {
+                "ANTI SKID · NORM BRK".into()
+            } else if fx > 0.0 {
+                "ALTN BRK · ACCU".into()
+            } else {
+                "BRAKES FAULT".into()
+            },
+            if fx > 0.95 { pal::GREEN } else { pal::AMBER },
+        );
+        y += 6.5 * u;
+    }
+    if sim.ctl.autobrake != crate::ground::Autobrake::Off {
+        line(p, y, format!("AUTO BRK {}{}", sim.ctl.autobrake.label(), if g.ab.active { "  DECEL" } else { "" }), pal::GREEN);
+        y += 6.5 * u;
+    }
+    if sim.ctl.parking_brake {
+        line(p, y, "PARK BRK ON".into(), pal::AMBER);
+        y += 6.5 * u;
+    }
+    let disc = g.tow.is_some();
+    if matches!(sp.steer, crate::ground::Steer::Tiller { .. }) {
+        let ok = ac.sys.fx.steering > 0.5 && !disc;
+        line(
+            p,
+            y,
+            if disc {
+                "N/W STEERING DISC".into()
+            } else if ok {
+                format!("N/W STRG {:+.0}°", g.wheels[0].steer.to_degrees())
+            } else {
+                "N/W STEERING FAULT".into()
+            },
+            if ok { pal::GREEN } else { pal::AMBER },
+        );
+    }
 }
 
 /// SD pages for hydraulics, electrics and fuel (systems/).
@@ -569,7 +680,9 @@ fn system_display(p: &egui::Painter, r: Rect, sim: &Sim, world: &World) {
     let n = def.engine_count.clamp(1, 4);
     let page = sd_page(sim);
     p.text(Pos2::new(r.center().x, r.min.y + 5.0 * u), Align2::CENTER_CENTER, page, fi(5.0 * u), pal::WHITE);
-    if page != "ENGINE" {
+    if page == "WHEEL" {
+        sd_wheel_page(p, r, sim);
+    } else if page != "ENGINE" {
         sd_system_page(p, r, sim, page);
     }
     p.line_segment([Pos2::new(r.center().x - 9.0 * u, r.min.y + 8.0 * u), Pos2::new(r.center().x + 9.0 * u, r.min.y + 8.0 * u)], Stroke::new(1.2, pal::WHITE));

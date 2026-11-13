@@ -101,6 +101,31 @@ pub struct RotorBot {
     orbit_r: f32,
     orbit_a: f32,
     pub wind: Vec2,
+    /// Tours flown (each one another loop).
+    laps: u32,
+    /// Smoothed safe altitude en route (m).
+    alt_t: f32,
+}
+
+/// The helicopter's sightseeing tour: in the mountains a loop through the
+/// valleys (low routes between the lowest ground in four sectors — it never
+/// tries to out-climb a ridge), elsewhere the landmarks.
+fn heli_tour(world: &World, home: Vec2, lap: u32) -> Vec<Landmark> {
+    use crate::nav::procedures as pr;
+    let g = pr::Grid::build(|q| world.ground_height_known(q), home, 14_000.0, 150.0);
+    if pr::relief(&g, home, 8000.0) < 500.0 {
+        return plan_tour(world, home, 1500.0, 9000.0, 4);
+    }
+    let mut k = 0;
+    pr::valley_tour(&g, home, 4, 3000.0, 10_000.0, lap)
+        .into_iter()
+        .map(|(pos, main)| {
+            if main {
+                k += 1;
+            }
+            Landmark { name: if main { format!("Valley {k}") } else { "along the valley".into() }, pos }
+        })
+        .collect()
 }
 
 impl RotorBot {
@@ -108,7 +133,7 @@ impl RotorBot {
         let quad = def.rotor.as_ref().is_some_and(|r| r.quad().is_some());
         let p = xz(ac.pos);
         let gh = world.ground_height(p);
-        let tour = if quad { plan_tour(world, p, 0.0, 700.0, 1) } else { plan_tour(world, p, 1500.0, 9000.0, 4) };
+        let tour = if quad { plan_tour(world, p, 0.0, 700.0, 1) } else { heli_tour(world, p, 0) };
         let phase = if ac.on_ground {
             Phase::Ground
         } else if quad {
@@ -159,6 +184,8 @@ impl RotorBot {
             orbit_r: 60.0,
             orbit_a: 0.0,
             wind: Vec2::ZERO,
+            laps: 0,
+            alt_t: 0.0,
         }
     }
 
@@ -204,10 +231,13 @@ impl RotorBot {
     /// Height to fly at over `p`: above the terrain and the buildings ahead.
     fn safe_alt(world: &World, p: Vec2, dir: Vec2, agl: f32) -> f32 {
         let mut top = world.ground_height(p) + agl;
-        for k in 0..8 {
-            let q = p + dir * (k as f32 * 120.0);
+        // 2.4 km ahead (rising valleys: start the climb early), less needed
+        // the further it is (a ~9 % climb gradient is easy at 110 kt).
+        for k in 0..20 {
+            let d = k as f32 * 120.0;
+            let q = p + dir * d;
             let g = world.ground_height(q);
-            top = top.max(g + agl * 0.6);
+            top = top.max(g + agl * 0.6 - (d - 960.0).max(0.0) * 0.09);
             if let Some(b) = world.obstacle_top(q) {
                 top = top.max(b + 90.0);
             }
@@ -321,8 +351,12 @@ impl RotorBot {
                 pitch_t = heli_trim_pitch(v_t) + 0.010 * (v - v_t);
                 let h = heading_of(to);
                 roll_t = (1.0 * wrap_pi(h - hdg)).clamp(-0.45, 0.45);
-                let alt = Self::safe_alt(world, p, fwd, 300.0);
-                vs_t = (0.2 * (alt - ac.pos.y)).clamp(-5.0, 6.0);
+                // (The safe height falls no faster than 3 m/s — turning away from a
+                // hillside drops it suddenly, and a collective dump at speed is a
+                // negative-g push.)
+                let alt = Self::safe_alt(world, p, fwd, 300.0).max(self.alt_t - 3.0 * dt);
+                self.alt_t = alt;
+                vs_t = (0.2 * (alt - ac.pos.y)).clamp(-3.5, 6.0);
                 if d < 400.0 {
                     if self.wp < self.tour.len() {
                         ev.push(format!("passed {name}"));
@@ -403,7 +437,8 @@ impl RotorBot {
                 ctl.aileron = 0.0;
                 ctl.rudder = 0.0;
                 if self.t_phase > 10.0 {
-                    self.tour = plan_tour(world, p, 1500.0, 9000.0, 4);
+                    self.laps += 1;
+                    self.tour = heli_tour(world, p, self.laps);
                     self.wp = 0;
                     self.set(Phase::Ground, ev);
                 }

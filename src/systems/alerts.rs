@@ -358,6 +358,11 @@ pub fn alerts(sys: &Systems, def: &AircraftDef, ac: &Aircraft, ctl: &Controls) -
     if (sys.fx.tyre[0] || sys.fx.tyre[1]) && matches!(style, Alerting::Ecam | Alerting::Eicas) {
         o.add(Level::Advisory, "WHEEL TYRE LO PR", vec![]);
     }
+    // Hot brakes (src/ground: carbon / steel heat sinks).
+    if ac.ground.brakes_hot && matches!(style, Alerting::Ecam | Alerting::Eicas | Alerting::Atr) {
+        let title = if style == Alerting::Eicas { "BRAKE OVERHEAT" } else { "BRAKES HOT" };
+        o.add(Level::Caution, title, vec![l("PARK BRK", "PREFER CHOCKS", !ctl.parking_brake || ac.ground.chocks), l("DELAY T.O.", "FOR COOL", false)]);
+    }
     if sys.cockpit_smoke() > 0.05 && sys.fail.any_of(Kind::ElecFire) {
         let lines = vec![
             l("LAND ASAP", "", false),

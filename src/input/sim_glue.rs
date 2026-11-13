@@ -46,6 +46,7 @@ pub fn takeover_threshold(a: A) -> f32 {
         A::Flaps | A::Spoilers | A::Trim => 0.15,
         A::Brakes | A::BrakeLeft | A::BrakeRight => 0.5,
         A::LookX | A::LookY => f32::INFINITY,
+        A::Tiller => 0.35,
     }
 }
 
@@ -62,7 +63,7 @@ impl Pilot {
             let r = *self.auto_ref[i].get_or_insert(v);
             if (v - r).abs() > takeover_threshold(a) {
                 match a {
-                    A::Pitch | A::Roll | A::Yaw => t.stick = true,
+                    A::Pitch | A::Roll | A::Yaw | A::Tiller => t.stick = true,
                     A::Throttle | A::Throttle1 | A::Throttle2 => t.throttle = true,
                     _ => t.levers = true,
                 }
@@ -105,10 +106,10 @@ pub fn throttle_lever(an: &Analog) -> Option<f32> {
     })
 }
 
-/// Wheel brakes from the brake axes (toe brakes: the harder pressed; the
-/// flight model has one brake channel, differential braking comes from the rudder).
+/// Wheel brakes from the common brake axis (the left / right toe-brake axes
+/// drive `Controls::brake_left` / `brake_right`: src/ground/sim_glue.rs).
 pub fn toe_brakes(an: &Analog) -> f32 {
-    [A::Brakes, A::BrakeLeft, A::BrakeRight].into_iter().filter_map(|a| an.get(a)).fold(0.0f32, f32::max)
+    an.get(A::Brakes).unwrap_or(0.0)
 }
 
 impl Sim {

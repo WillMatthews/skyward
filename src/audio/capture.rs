@@ -490,7 +490,12 @@ impl Director {
 
         // Paved or grass under the wheels.
         let xz = Vec2::new(ac.pos.x, ac.pos.z);
-        let paved = world.runways.iter().any(|r| seg_dist(xz, r.a, r.b) < r.width * 0.5 + 4.0);
+        // (The tyres know: src/ground — runway, taxiway, apron or the grass.)
+        let paved = if ac.on_ground && ac.ground.wheels.iter().any(|w| w.contact) {
+            ac.ground.surface.paved()
+        } else {
+            world.runways.iter().any(|r| seg_dist(xz, r.a, r.b) < r.width * 0.5 + 4.0)
+        };
 
         // ---- discrete events
         if !frozen {
@@ -780,7 +785,8 @@ impl Director {
             on_ground: ac.on_ground,
             ground_speed: if ac.on_ground { gs } else { 0.0 },
             paved,
-            brakes: sim.ctl.brakes,
+            // Every brake source (pedals, toe brakes, parking, autobrake: src/ground).
+            brakes: ac.ground.wheels.iter().map(|w| w.brake_cmd).fold(sim.ctl.brakes, f32::max),
             shake: self.shake.min(1.5),
             crashed,
             // Helicopters: the low rotor-RPM horn instead of a stall warning.

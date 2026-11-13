@@ -184,7 +184,7 @@ fn axes_page(ui: &mut Ui, st: &mut UiState, area: Rect) {
             );
             ui.add_space(4.0);
         }
-        let groups = [("Flight", 0..3), ("Engines & levers", 3..12), ("View", 12..14)];
+        let groups = [("Flight", 0..3), ("Engines & levers", 3..12), ("View", 12..14), ("Ground", 14..15)];
         for (g, range) in groups {
             group_label(ui, g);
             for (a, binds) in &rows[range] {

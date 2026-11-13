@@ -515,7 +515,8 @@ impl AirportScene {
         self.sites.get(ident).and_then(|s| s.layout.clone())
     }
 
-    /// Every airport layout built so far (live-traffic taxiway snapping, `adsb/`).
+    /// Every airport layout built so far (live-traffic taxiway snapping,
+    /// `adsb/`; the tyres' pavement map, `ground/`).
     pub fn layouts(&self) -> Vec<Arc<Layout>> {
         self.sites.values().filter_map(|s| s.layout.clone()).collect()
     }

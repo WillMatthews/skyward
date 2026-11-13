@@ -168,7 +168,7 @@ pub struct Realism {
     pub auto_rudder: bool,
     /// Trim holds the attitude when the stick is released.
     pub auto_trim: bool,
-    /// Autobrake armed for landing by default. // owned by GH (ground handling): consumer pending.
+    /// Autobrake armed by default (src/ground: set on every new flight; Max arms the RTO on the ground).
     pub autobrake: Autobrake,
 }
 
@@ -217,7 +217,8 @@ fn damage_level(v: &Value, k: &str) -> crate::damage::Realism {
 /// Assists.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Assists {
-    /// A ribbon along the cleared taxi route. // owned by GH (ground handling): consumer pending.
+    /// A ribbon along the cleared taxi route: follow-the-greens + the route on the map, on
+    /// automatically with an ATC taxi clearance (src/ground).
     pub taxi_ribbon: bool,
     /// Glide-path guidance cue on final. // owned by GH / F follow-up: consumer pending.
     pub landing_guidance: bool,
@@ -396,6 +397,9 @@ pub struct Settings {
     pub last: Option<LastFlight>,
     pub recents: Vec<String>,
     pub favourites: Vec<String>,
+    /// Video: quality preset and knobs, display options (gfx/quality.rs, Settings › Video).
+    /// `detail` / `vsync` above mirror its scenery detail / present mode.
+    pub video: crate::gfx::quality::VideoSettings,
     /// Airframe damage: Realistic / Forgiving (limits ×1.5, no permanent set,
     /// no flutter) / Off (indestructible; warnings still show). damage.rs.
     pub structural_damage: crate::damage::Realism,
@@ -443,6 +447,7 @@ impl Default for Settings {
             last: None,
             recents: Vec::new(),
             favourites: Vec::new(),
+            video: crate::gfx::quality::VideoSettings::default(),
             structural_damage: crate::damage::Realism::Realistic,
             crashes: crate::damage::Realism::Realistic,
             extra: Map::new(),
@@ -523,6 +528,10 @@ pub struct SimPrefs {
     pub chase_lag: f32,
     pub cockpit_first: bool,
     pub toggle_brakes: bool,
+    /// Autobrake armed by default on types that have one (src/ground).
+    pub autobrake: crate::ground::Autobrake,
+    /// Taxi ribbon: follow-the-greens + the route on the map along an ATC taxi clearance (src/ground).
+    pub taxi_ribbon: bool,
 }
 
 impl Default for SimPrefs {
@@ -572,6 +581,7 @@ impl<'a> J<'a> {
 /// Top-level keys this build reads and writes (the rest is kept in `extra`).
 const KNOWN: &[&str] = &[
     "version",
+    "video",
     "live_traffic",
     "ui_scale",
     "hud",
@@ -698,6 +708,13 @@ impl Settings {
             chase_lag: c.chase_lag,
             cockpit_first: c.default_view == DefaultView::Cockpit,
             toggle_brakes: self.access.toggle_brakes,
+            autobrake: match r.autobrake {
+                Autobrake::Off => crate::ground::Autobrake::Off,
+                Autobrake::Low => crate::ground::Autobrake::Lo,
+                Autobrake::Medium => crate::ground::Autobrake::Med,
+                Autobrake::Max => crate::ground::Autobrake::Max,
+            },
+            taxi_ribbon: self.assists.taxi_ribbon,
         }
     }
 
@@ -747,6 +764,7 @@ impl Settings {
             "last": self.last.as_ref().map(|l| json!({ "aircraft": l.aircraft, "airport": l.airport, "start": l.start, "watch": l.watch })),
             "recents": self.recents,
             "favourites": self.favourites,
+            "video": self.video.to_json(),
             "structural_damage": self.structural_damage.name(),
             "crashes": self.crashes.name(),
             // owned by X (live traffic, adsb/)
@@ -787,6 +805,7 @@ impl Settings {
             let l = J(l);
             LastFlight { aircraft: l.s("aircraft").into(), airport: l.s("airport").into(), start: l.s("start").into(), watch: l.b("watch", false) }
         });
+        let video = crate::gfx::quality::VideoSettings::from_settings_json(v);
         let r = j.o("realism");
         let dr = &d.realism;
         let realism = Realism {
@@ -848,8 +867,9 @@ impl Settings {
                 "Off" => HudMode::Off,
                 _ => HudMode::Full,
             },
-            vsync: j.b("vsync", true),
-            detail: (j.f("detail", d.detail as f32).max(0.0) as u8).min(3),
+            // (Mirrors of the video settings.)
+            vsync: video.present == crate::gfx::quality::Present::Fifo,
+            detail: video.q.detail,
             speed: match j.s("speed") {
                 "kmh" => SpeedUnit::Kmh,
                 "mph" => SpeedUnit::Mph,
@@ -885,6 +905,7 @@ impl Settings {
             last,
             recents: list("recents"),
             favourites: list("favourites"),
+            video,
             structural_damage: damage_level(v, "structural_damage"),
             crashes: damage_level(v, "crashes"),
             extra,
@@ -900,6 +921,9 @@ mod tests {
     #[test]
     fn round_trip() {
         let mut s = Settings { hud: HudMode::Minimal, vsync: false, detail: 1, speed: SpeedUnit::Kmh, alt: AltUnit::Metres, ..Settings::default() };
+        // (`detail` / `vsync` mirror the video settings.)
+        s.video.apply_preset(crate::gfx::quality::Preset::Medium);
+        s.video.present = crate::gfx::quality::Present::Mailbox;
         s.push_recent("EGLL");
         s.push_recent("EGLC");
         s.push_recent("EGLL");

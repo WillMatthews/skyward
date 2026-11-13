@@ -17,6 +17,8 @@
 //! Controllers: --controllers [SECONDS] lists devices and prints their inputs (SKYWARD_FAKE_INPUT=xbox,x52,pedals,tca adds virtual ones)
 //! Sound:      --mute (N toggles in flight; volumes in Settings › Sound); offline: --audio-render out.wav --seconds S [--audio-script "2:cam=cockpit,9:gear"] [--audio-until Final]
 //! Display:    --vsync on|off (default on: FIFO present, smoothed frame step); SKYWARD_FRAME_LOG=file logs per-frame timing
+//! Graphics:   --preset low|medium|high|ultra  --aa taa|msaa4|fxaa|off  --render-scale 0.5..2 (override Settings › Video);
+//!             headless GPU benchmark: SKYWARD_BENCH_FRAMES=N (per-pass medians, timestamp queries); Ctrl+F3 = performance overlay
 //! Traffic:    --traffic off|low|medium|high (road traffic density; SKYWARD_NO_TRAFFIC=1 forces it off)
 //! Multiplayer: skyward --connect host[:port] --name CALLSIGN [--password PW]   (server: cargo run -p skyward-server -- --help)
 //! Live traffic: real aircraft from adsb.lol (default on; off with --no-live / --no-adsb; headless only with --adsb); --adsb-fixture rec.json replays a recording
@@ -38,6 +40,7 @@ mod damage;
 mod debris;
 mod flight;
 mod gfx;
+mod ground;
 mod gfx_aircraft;
 mod hud;
 mod jsbsim;
@@ -47,6 +50,7 @@ mod models;
 mod mvt;
 mod net;
 mod osm;
+mod ridge;
 mod rotor;
 mod scenario;
 mod scene;
@@ -165,6 +169,8 @@ struct Args {
     live: bool,
     live_given: bool,
     metar: Option<String>,
+    /// `--runway wet|flooded|snow|ice|...`: runway condition (src/ground/surface.rs).
+    runway: Option<String>,
     /// Test: render, move the floating origin 20 km away, render again, compare.
     rebase_check: bool,
     /// Sound (audio/): start muted; offline render to a WAV (+ PNG, report) and its cue script.
@@ -175,6 +181,10 @@ struct Args {
     audio_until: Option<String>,
     /// Present with vsync (None = the saved setting).
     vsync: Option<bool>,
+    /// Graphics overrides (Settings › Video): preset, anti-aliasing, render scale.
+    preset: Option<gfx::quality::Preset>,
+    aa: Option<gfx::quality::AaMode>,
+    render_scale: Option<f32>,
     /// Location given on the command line (skip the saved last flight).
     location_given: bool,
     /// Multiplayer (net/): join this server ("host[:port]") as `mp_name`.
@@ -303,12 +313,16 @@ fn parse_args_from(argv: Vec<String>) -> Args {
         live: true,
         live_given: false,
         metar: None,
+        runway: None,
         rebase_check: false,
         mute: false,
         audio_render: None,
         audio_script: String::new(),
         audio_until: None,
         vsync: None,
+        preset: None,
+        aa: None,
+        render_scale: None,
         location_given: false,
         mp_connect: None,
         mp_name: None,
@@ -461,6 +475,18 @@ fn parse_args_from(argv: Vec<String>) -> Args {
                 }
             }
             "--vsync" => a.vsync = Some(next(&mut i) != "off"),
+            "--preset" => a.preset = gfx::quality::Preset::from_name(&next(&mut i)),
+            "--aa" => {
+                use gfx::quality::AaMode;
+                a.aa = match next(&mut i).as_str() {
+                    "taa" => Some(AaMode::Taa),
+                    "msaa" | "msaa4" => Some(AaMode::Msaa4),
+                    "fxaa" => Some(AaMode::Fxaa),
+                    "off" => Some(AaMode::Off),
+                    _ => None,
+                }
+            }
+            "--render-scale" => a.render_scale = next(&mut i).parse().ok(),
             "--connect" | "--mp-connect" => a.mp_connect = Some(next(&mut i)),
             "--name" | "--mp-name" => a.mp_name = Some(next(&mut i)),
             "--password" | "--mp-password" => a.mp_password = next(&mut i),
@@ -488,6 +514,7 @@ fn parse_args_from(argv: Vec<String>) -> Args {
                 a.live_given = true;
             }
             "--metar" => a.metar = Some(next(&mut i)),
+            "--runway" => a.runway = Some(next(&mut i)),
             "--adsb-fixture" => a.adsb_fixture = Some(next(&mut i)),
             "--adsb" => a.adsb = Some(true),
             "--no-adsb" => a.adsb = Some(false),
@@ -605,6 +632,8 @@ struct Session {
     runway_version: u64,
     /// Airport detail lights uploaded (airport/ light version) and the runway lights they join.
     airport_lights: u64,
+    /// Follow-the-greens lights version uploaded (src/ground/guide.rs).
+    greens_lights: u64,
     runway_lights: Vec<lights::LightInst>,
     /// The last origin shift (consumed by the soak / realtime loggers).
     last_rebase: Option<world::Rebase>,
@@ -622,6 +651,9 @@ impl Session {
         let mut world = World::new(args.lat, args.lon, WORKERS);
         if let Some(r) = args.radius {
             world.radius = r;
+        }
+        if let Some(c) = args.runway.as_deref().and_then(crate::ground::Contam::parse) {
+            world.runway_cond = Some(c);
         }
         world.traffic.set_level(args.traffic.unwrap_or_else(traffic::Level::default_for_platform));
         if let Some(db) = db {
@@ -648,7 +680,7 @@ impl Session {
         world.set_focus(Vec2::ZERO, Vec2::ZERO);
         // Browser: start downloading the aircraft alongside the scenery.
         let _ = aircraft_assets(args.aircraft);
-        Session { world, sim: None, stage: Stage::Area, started: Instant::now(), runway_version: u64::MAX, airport_lights: u64::MAX, runway_lights: Vec::new(), last_rebase: None, catch_up: None, custom, args: args.clone() }
+        Session { world, sim: None, stage: Stage::Area, started: Instant::now(), runway_version: u64::MAX, airport_lights: u64::MAX, greens_lights: 0, runway_lights: Vec::new(), last_rebase: None, catch_up: None, custom, args: args.clone() }
     }
 
     /// Advance loading; returns a status line while still loading.
@@ -874,11 +906,18 @@ fn sync_gpu(s: &mut Session, renderer: &mut Renderer, ui: &mut Ui, gpu: &Gpu, bu
         renderer.set_runways(device, &scene::runway_mesh(&w.runways));
         s.runway_lights = lights::airport_lights_for(w);
     }
-    // Runway lights + the airport detail lights (taxiways, stop bars, floods), current frame.
-    if runways_changed || w.airport_detail.light_version != s.airport_lights {
+    // Runway lights + the airport detail lights (taxiways, stop bars, floods),
+    // current frame; plus follow-the-greens along a taxi route (src/ground/guide.rs).
+    let greens = s.sim.as_ref().and_then(|sim| sim.ground.guide.as_ref()).filter(|g| g.greens);
+    let greens_v = greens.map(|g| g.version).unwrap_or(0);
+    if runways_changed || w.airport_detail.light_version != s.airport_lights || greens_v != s.greens_lights {
         s.airport_lights = w.airport_detail.light_version;
+        s.greens_lights = greens_v;
         let mut all = s.runway_lights.clone();
         all.extend(w.airport_detail.lights(&w.proj));
+        if let Some(g) = greens {
+            all.extend(g.lights(&|p| crate::flight::Environment::ground_height(&*w, p)));
+        }
         renderer.set_airport_lights(device, &all);
     }
     // Weather (weather.rs / world.rs): live data + real time, wind drift, season.
@@ -957,6 +996,8 @@ struct Ui {
     audio_clicks: u32,
     audio_status: String,
     fps: f32,
+    /// HDR output: the interface goes through an sRGB texture (gfx/hdr_ui.rs).
+    hdr: Option<gfx::hdr_ui::HdrUi>,
 }
 
 impl Ui {
@@ -975,6 +1016,7 @@ impl Ui {
             audio_clicks: 0,
             audio_status: String::new(),
             fps: 0.0,
+            hdr: None,
         }
     }
 }
@@ -1095,6 +1137,8 @@ fn render_frame(
         Some(s) if flying => {
             let sim = s.sim.as_mut().unwrap();
             sim.qnh_hpa = s.world.wx.qnh_hpa;
+            // Settings › Video: quality knobs (live).
+            renderer.set_video(&ui.st.settings.video);
             // The player's settings the simulation reads (ui/settings.rs).
             sim.prefs = ui.st.settings.sim_prefs();
             if !sim.prefs_init {
@@ -1161,9 +1205,9 @@ fn render_frame(
                 ui.st.adsb.cam = Some((fv.eye, fv.view, fv.fov_y));
             }
             renderer.set_traffic(frames, lights);
-            // Browser: the scene may render below the output size (upscaled by the tonemap pass).
+            // Browser: the scene renders within a pixel budget (upscaled by the AA / tonemap pass).
             #[cfg(target_arch = "wasm32")]
-            let (w, h) = platform::web::scene_size(w, h);
+            renderer.set_scale_cap(platform::web::scene_size(w, h).0 as f32 / w.max(1) as f32);
             {
                 // Airport instances (parked aircraft, vehicles, windsocks in the real wind).
                 let wd = &s.world;
@@ -1249,6 +1293,10 @@ fn render_frame(
             }
             ui::draw_menus(&ctx, st, flying, li);
         }
+        // Performance overlay (Ctrl+F3, Settings › Video).
+        if st.settings.video.perf_overlay {
+            gfx::perf::overlay(&ctx, &st.perf);
+        }
     });
     let mut full = full;
     let t_tess = Instant::now();
@@ -1271,15 +1319,17 @@ fn render_frame(
         let now = Instant::now();
         eprintln!("ui: build {:.2} ms, tessellate {:.2} ms, canvases + upload {:.2} ms", ms(t_ui, t_tess), ms(t_tess, t_canvas), ms(t_canvas, now));
     }
+    // HDR output: the interface into its own sRGB target, composited below.
+    let ui_target = ui.hdr.as_mut().map(|hu| hu.target(device, w, h));
     {
         let mut pass = enc
             .begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("egui"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
+                    view: ui_target.as_ref().unwrap_or(target),
                     depth_slice: None,
                     resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                    ops: wgpu::Operations { load: if ui_target.is_some() { wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT) } else { wgpu::LoadOp::Load }, store: wgpu::StoreOp::Store },
                 })],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
@@ -1288,6 +1338,9 @@ fn render_frame(
             })
             .forget_lifetime();
         ui.renderer.render(&mut pass, &prims, &sd);
+    }
+    if let Some(hu) = &ui.hdr {
+        hu.composite(device, queue, &mut enc, target, ui.st.settings.video.paper_white);
     }
     queue.submit(extra.into_iter().chain([enc.finish()]));
     for id in &full.textures_delta.free {
@@ -1305,6 +1358,10 @@ fn render_thumbs(gpu: &Gpu, renderer: &mut Renderer, ui: &mut Ui, s: &Session, f
     if !ui.thumbs.is_empty() || s.sim.is_none() {
         return;
     }
+    // (HDR output: the thumbnails are sRGB images all the same.)
+    let hdr = format == wgpu::TextureFormat::Rgba16Float;
+    let format = if hdr { wgpu::TextureFormat::Rgba8UnormSrgb } else { format };
+    renderer.ldr = hdr;
     let (w, h) = (640u32, 400u32);
     let tex = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("thumb"),
@@ -1383,6 +1440,7 @@ fn render_thumbs(gpu: &Gpu, renderer: &mut Renderer, ui: &mut Ui, s: &Session, f
         ui.thumbs.push(handle);
     }
     renderer.reset_history();
+    renderer.ldr = false;
     eprintln!("aircraft thumbnails: {} in {:.0} ms", defs.len(), t0.elapsed().as_secs_f32() * 1000.0);
 }
 
@@ -1479,6 +1537,27 @@ fn apply_route(args: &Args, sim: &mut sim::Sim, world: &world::World) {
     }
 }
 
+/// The command line's graphics overrides over the video settings `v`.
+fn apply_video_args(args: &Args, v: &mut gfx::quality::VideoSettings) {
+    if let Some(p) = args.preset {
+        v.apply_preset(p);
+        v.detected = true;
+    }
+    if let Some(a) = args.aa {
+        v.q.aa = a;
+        v.knob_changed();
+    }
+    if let Some(s) = args.render_scale {
+        v.q.render_scale = s;
+        v.knob_changed();
+    }
+    // Any knob: SKYWARD_QUALITY="clouds=0,ao=3" (Settings › Video keys; captures, benchmarks).
+    if let Ok(spec) = std::env::var("SKYWARD_QUALITY") {
+        v.q = v.q.with_overrides(&spec);
+        v.knob_changed();
+    }
+}
+
 /// Live traffic for this session: a replayed recording (`--adsb-fixture`),
 /// or forced on / off (`--adsb`, `--no-adsb`; `--no-live` turns it off;
 /// headless captures leave it off unless asked).
@@ -1518,9 +1597,20 @@ fn headless(args: Args) -> Result<(), String> {
     let gpu = Gpu::new(None, Gpu::instance())?;
     eprintln!("GPU: {}", gpu.adapter_name());
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    // Headless captures use default settings (reproducible: the High preset),
+    // plus the flags (--preset / --aa / --render-scale).
+    let mut settings = ui::settings::Settings::default();
+    apply_video_args(&args, &mut settings.video);
+    settings.detail = settings.video.q.detail;
+    if args.preset.is_some() && args.radius.is_none() {
+        // (A preset's scenery detail: its tile radius, for benchmarks.)
+        args.radius = Some(ui::settings::detail_radius(settings.detail));
+    }
+    gfx::configure(&settings.video.q);
     let mut renderer = Renderer::new(&gpu.device, &gpu.queue, format);
-    // Headless captures use default settings (reproducible), plus the flags.
-    let mut ui = Ui::new(&gpu.device, format, ui::settings::Settings::default());
+    renderer.set_video(&settings.video);
+    let taa = settings.video.q.aa == gfx::quality::AaMode::Taa;
+    let mut ui = Ui::new(&gpu.device, format, settings);
     // Layout checks at a larger interface scale: SKYWARD_UI_SCALE=1.3.
     if let Some(v) = std::env::var("SKYWARD_UI_SCALE").ok().and_then(|v| v.parse::<f32>().ok()) {
         ui.st.settings.ui_scale = v.clamp(ui::settings::UI_SCALE_MIN, ui::settings::UI_SCALE_MAX);
@@ -1582,6 +1672,15 @@ fn headless(args: Args) -> Result<(), String> {
         ui.st.radio.tab = t;
     }
     ui.st.comms.open = args.comms_panel;
+    // Settings › Video: what the app would list (headless: no monitors).
+    ui.st.video_env = gfx::quality::VideoEnv {
+        adapter: gpu.adapter_name(),
+        present_modes: vec![wgpu::PresentMode::Fifo, wgpu::PresentMode::Mailbox, wgpu::PresentMode::Immediate],
+        output: (args.width, args.height),
+        running: Some(ui.st.settings.video.q),
+        detected: Some(gfx::quality::detect(&gpu.adapter.get_info(), false)),
+        ..Default::default()
+    };
     // (Captures neither enumerate audio devices nor walk the cache.)
     ui.st.settings_ui.headless = true;
     ui.st.gpu_name = gpu.adapter_name();
@@ -1690,9 +1789,18 @@ fn headless(args: Args) -> Result<(), String> {
         view_formats: &[],
     });
     let view = tex.create_view(&Default::default());
-    let raw = || egui::RawInput {
-        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w as f32, h as f32))),
-        ..Default::default()
+    // Menu captures further down a page: SKYWARD_UI_SCROLL=points (wheel over the centre).
+    let scroll_left = std::cell::Cell::new(std::env::var("SKYWARD_UI_SCROLL").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0));
+    let raw = || {
+        let mut events = Vec::new();
+        let left = scroll_left.get();
+        if left > 0.0 {
+            let d = left.min(300.0);
+            scroll_left.set(left - d);
+            events.push(egui::Event::PointerMoved(egui::pos2(w as f32 * 0.5, h as f32 * 0.5)));
+            events.push(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -d), phase: egui::TouchPhase::Move, modifiers: Default::default(), source: egui::MouseWheelSource::Wheel });
+        }
+        egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w as f32, h as f32))), events, ..Default::default() }
     };
     let mut ov = match (args.eye, args.look) {
         (Some(e), Some(l)) => Some((e, l)),
@@ -1760,6 +1868,15 @@ fn headless(args: Args) -> Result<(), String> {
         return soak_flight(&args, &gpu, &mut renderer, &mut ui, &mut s, &tex, &view, w, h, &raw, &mut input);
     } else if args.realtime {
         realtime_flight(&args, &gpu, &mut renderer, &mut ui, &mut s, &view, w, h, &raw, &mut input)?;
+        // SKYWARD_MOTION_SHOT=1: capture the last frame of the flight itself — in
+        // motion (TAA / motion blur as the player sees them), not re-converged.
+        if std::env::var_os("SKYWARD_MOTION_SHOT").is_some() {
+            let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+            let px = gfx::read_texture(&gpu, &tex, w, h);
+            image::save_buffer(&path, &px, w, h, image::ColorType::Rgba8).map_err(|e| e.to_string())?;
+            eprintln!("wrote {path} (in motion)");
+            return Ok(());
+        }
     } else {
         // Fast-forward the simulation; streaming keeps up in the background.
         // (`--audio-script` cues work here too: ATC requests for comms shots.)
@@ -1978,11 +2095,59 @@ fn headless(args: Args) -> Result<(), String> {
     }
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
     let t1 = Instant::now();
-    let n = 10;
-    for _ in 0..n {
+    // (TAA: enough frames for every jitter phase to land in the history — the
+    // capture is the converged image, deterministic frame to frame.)
+    let n = if taa { 16 } else { 10 };
+    // The performance overlay in a capture: SKYWARD_PERF_OVERLAY=1 (timed over 60 frames).
+    let overlay = std::env::var_os("SKYWARD_PERF_OVERLAY").is_some();
+    ui.st.settings.video.perf_overlay = overlay;
+    for _ in 0..if overlay { 60 } else { n } {
+        let tf = Instant::now();
         render_frame(&gpu, &mut renderer, &mut ui, Some(&mut s), &view, w, h, raw(), 1.0, 0.0, note, ov);
+        if overlay {
+            renderer.collect_timings_wait(&gpu.device, true);
+            let ms = tf.elapsed().as_secs_f32() * 1000.0;
+            let v = &ui.st.settings.video;
+            let st = &mut ui.st.perf;
+            st.push_frame(ms);
+            st.cpu = vec![("render + ui", ms)];
+            st.gpu = renderer.gpu_times().unwrap_or_default();
+            st.vram_mb = renderer.vram_estimate() as f32 / (1 << 20) as f32;
+            st.scene = renderer.scene_size;
+            st.output = (w, h);
+            st.preset = v.preset.name().into();
+            st.aa = v.q.aa.name().into();
+            st.present = "headless".into();
+        }
     }
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    // GPU benchmark: SKYWARD_BENCH_FRAMES=N more frames, per-pass medians (timestamp queries).
+    if let Some(nb) = std::env::var("SKYWARD_BENCH_FRAMES").ok().and_then(|v| v.parse::<usize>().ok()) {
+        renderer.bench_start();
+        let tb = Instant::now();
+        for _ in 0..nb {
+            render_frame(&gpu, &mut renderer, &mut ui, Some(&mut s), &view, w, h, raw(), 1.0, 0.0, note, ov);
+            renderer.collect_timings_wait(&gpu.device, true);
+        }
+        let v = &ui.st.settings.video;
+        match renderer.bench_medians() {
+            Some(m) => {
+                let parts: Vec<String> = m.iter().map(|(k, v)| format!("{k} {v:.3}")).collect();
+                eprintln!(
+                    "gpu bench: {} frames at {w}x{h} (scene {}x{}), preset {} aa {}: {} | cpu {:.2} ms/frame | vram est {:.0} MB",
+                    nb,
+                    renderer.scene_size.0,
+                    renderer.scene_size.1,
+                    v.preset.name(),
+                    v.q.aa.name(),
+                    parts.join(" | "),
+                    tb.elapsed().as_secs_f32() * 1000.0 / nb as f32,
+                    renderer.vram_estimate() as f64 / (1 << 20) as f64
+                );
+            }
+            None => eprintln!("gpu bench: timestamp queries unavailable"),
+        }
+    }
     let rs = renderer.stats;
     eprintln!(
         "render: warmup {:.0} ms, steady {:.2} ms/frame at {w}x{h}; tiles {} (drawn {}), trees drawn {}, GPU {:.0} MB",
@@ -2595,6 +2760,9 @@ fn soak_flight(
             st.cycles,
             st.worst_touchdown
         );
+        if st.min_clear < f32::MAX {
+            eprintln!("min terrain clearance {:.0} m (away from runways; {})", st.min_clear, st.min_clear_at);
+        }
         if st.thermals > 0 {
             eprintln!(
                 "thermals {} | {:.0} s circling, {:+.0} m gained, avg climb {:+.2} m/s",
@@ -2673,15 +2841,64 @@ impl FramePacer {
     }
 }
 
-fn present_mode(caps: &wgpu::SurfaceCapabilities, vsync: bool) -> wgpu::PresentMode {
-    if vsync {
-        wgpu::PresentMode::Fifo
-    } else if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
-        wgpu::PresentMode::Mailbox
-    } else if caps.present_modes.contains(&wgpu::PresentMode::Immediate) {
-        wgpu::PresentMode::Immediate
-    } else {
-        wgpu::PresentMode::Fifo
+fn present_mode(caps: &wgpu::SurfaceCapabilities, v: &gfx::quality::VideoSettings) -> wgpu::PresentMode {
+    v.present.pick(&caps.present_modes)
+}
+
+/// Settings › Video window mode / monitor / video mode → the window (native).
+#[cfg(not(target_arch = "wasm32"))]
+fn apply_window_mode(window: &Window, v: &gfx::quality::VideoSettings) {
+    use gfx::quality::WindowMode;
+    use winit::window::Fullscreen;
+    let monitor = v.monitor.as_ref().and_then(|name| window.available_monitors().find(|m| m.name().as_deref() == Some(name.as_str()))).or_else(|| window.current_monitor());
+    let fs = match v.window {
+        WindowMode::Windowed => None,
+        WindowMode::Borderless => Some(Fullscreen::Borderless(monitor)),
+        WindowMode::Exclusive => {
+            let mode = monitor.as_ref().and_then(|m| {
+                let modes: Vec<_> = m.video_modes().collect();
+                let want = v.mode;
+                modes
+                    .iter()
+                    .find(|vm| want.is_some_and(|(w, h, r)| vm.size().width == w && vm.size().height == h && vm.refresh_rate_millihertz() == r))
+                    .or_else(|| modes.iter().max_by_key(|vm| (vm.size().width * vm.size().height, vm.refresh_rate_millihertz())))
+                    .cloned()
+            });
+            match mode {
+                Some(m) => Some(Fullscreen::Exclusive(m)),
+                None => Some(Fullscreen::Borderless(monitor)),
+            }
+        }
+    };
+    window.set_fullscreen(fs);
+}
+
+/// What Settings › Video lists: monitors, the chosen monitor's modes, present modes, HDR.
+fn video_env(r: &Running) -> gfx::quality::VideoEnv {
+    let v = &r.ui.st.settings.video;
+    #[cfg(not(target_arch = "wasm32"))]
+    let (monitors, modes) = {
+        let mons: Vec<_> = r.window.available_monitors().collect();
+        let names: Vec<String> = mons.iter().enumerate().map(|(i, m)| m.name().unwrap_or_else(|| format!("Display {}", i + 1))).collect();
+        let cur = v.monitor.as_ref().and_then(|n| names.iter().position(|x| x == n)).or_else(|| r.window.current_monitor().and_then(|c| mons.iter().position(|m| *m == c))).unwrap_or(0);
+        let mut modes: Vec<(u32, u32, u32)> = mons.get(cur).map(|m| m.video_modes().map(|vm| (vm.size().width, vm.size().height, vm.refresh_rate_millihertz())).collect()).unwrap_or_default();
+        modes.sort_by_key(|a| std::cmp::Reverse((a.0 * a.1, a.2)));
+        modes.dedup();
+        (names, modes)
+    };
+    #[cfg(target_arch = "wasm32")]
+    let (monitors, modes) = (Vec::new(), Vec::new());
+    gfx::quality::VideoEnv {
+        adapter: r.gpu.adapter_name(),
+        monitors,
+        modes,
+        present_modes: r.caps.present_modes.clone(),
+        hdr_supported: r.caps.formats.contains(&wgpu::TextureFormat::Rgba16Float),
+        output: (r.config.width, r.config.height),
+        running: Some(r.started_q),
+        running_hdr: r.format == wgpu::TextureFormat::Rgba16Float,
+        dyn_scale: v.q.dynamic_res.then_some(r.dynres.scale),
+        detected: Some(gfx::quality::detect(&r.gpu.adapter.get_info(), platform::WEB)),
     }
 }
 
@@ -2710,6 +2927,12 @@ struct Running {
     cam_hold: Option<f32>,
     saved_at: Instant,
     applied: ui::settings::Settings,
+    /// Graphics: the quality the renderer was built with (MSAA, samplers),
+    /// frame limiter, dynamic resolution, the display's refresh rate (Hz).
+    started_q: gfx::quality::Quality,
+    limiter: gfx::perf::Limiter,
+    dynres: gfx::perf::DynRes,
+    display_hz: Option<f32>,
     /// The window has the keyboard focus (Settings › Sound › Mute in background).
     focused: bool,
     /// Browser diagnostics: the longest frame since the last report.
@@ -2803,6 +3026,12 @@ fn ui_action(r: &mut Running, k: Key, flying: bool) -> bool {
             st.comms.page = 0;
             st.comms.sel = 0;
         }
+        // The comms panel's Ground page (src/ground): pushback, chocks, autobrake, taxi guidance.
+        Key::GroundMenu => {
+            st.comms.open = !(st.comms.open && st.comms.page == 2);
+            st.comms.page = 2;
+            st.comms.sel = 0;
+        }
         Key::CommsNext | Key::CommsPrev if st.comms.open => st.comms.nav += if k == Key::CommsNext { 1 } else { -1 },
         Key::CommsSelect if st.comms.open => st.comms.select = true,
         Key::CommsNext | Key::CommsPrev | Key::CommsSelect => {}
@@ -2844,7 +3073,10 @@ impl App {
         }
         if let Some(v) = self.args.vsync {
             settings.vsync = v;
+            settings.video.present = if v { gfx::quality::Present::Fifo } else { gfx::quality::Present::Mailbox };
         }
+        apply_video_args(&self.args, &mut settings.video);
+        settings.detail = settings.video.q.detail;
         if self.args.live_given || self.args.hours.is_some() || self.args.metar.is_some() || self.args.weather.is_some() {
             let c = &mut settings.conditions;
             c.live = self.args.live && self.args.hours.is_none() && self.args.metar.is_none() && self.args.weather.is_none();
@@ -2952,17 +3184,40 @@ impl App {
     fn finish_init(&mut self, window: Arc<Window>, surface: wgpu::Surface<'static>, gpu: Gpu, settings: ui::settings::Settings, loader: airports::Loader) {
         let db = loader.db.clone();
         eprintln!("GPU: {}", gpu.adapter_name());
+        // First run: pick the graphics preset for this GPU.
+        let mut settings = settings;
+        let detected = !settings.video.detected;
+        if detected {
+            let p = gfx::quality::detect(&gpu.adapter.get_info(), platform::WEB);
+            settings.video.apply_preset(p);
+            settings.video.detected = true;
+            settings.detail = settings.video.q.detail;
+            eprintln!("graphics: the {} preset for {}", p.name(), gpu.adapter_name());
+        }
+        // (MSAA and texture sampling are built into the pipelines.)
+        gfx::configure(&settings.video.q);
+        let started_q = settings.video.q;
+        #[cfg(not(target_arch = "wasm32"))]
+        if settings.video.window != gfx::quality::WindowMode::Windowed {
+            apply_window_mode(&window, &settings.video);
+        }
+        let display_hz = window.current_monitor().and_then(|m| m.refresh_rate_millihertz()).map(|m| m as f32 / 1000.0);
         let size = window.inner_size();
         let caps = surface.get_capabilities(&gpu.adapter);
-        let surface_format = caps.formats.iter().copied().find(|f| f.is_srgb()).unwrap_or(caps.formats[0]);
+        // HDR output (Settings › Video, native): an scRGB (Rgba16Float) swapchain where offered.
+        let hdr = !platform::WEB && settings.video.hdr && caps.formats.contains(&wgpu::TextureFormat::Rgba16Float);
+        let surface_format = if hdr { wgpu::TextureFormat::Rgba16Float } else { caps.formats.iter().copied().find(|f| f.is_srgb()).unwrap_or(caps.formats[0]) };
         // WebGPU canvases have no sRGB formats: render through an sRGB view.
         let format = surface_format.add_srgb_suffix();
+        if hdr {
+            eprintln!("HDR output: scRGB swapchain, paper white {:.0} nits", settings.video.paper_white);
+        }
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
             width: size.width.max(1),
             height: size.height.max(1),
-            present_mode: present_mode(&caps, settings.vsync),
+            present_mode: present_mode(&caps, &settings.video),
             desired_maximum_frame_latency: 2,
             alpha_mode: caps.alpha_modes[0],
             view_formats: if format != surface_format { vec![format] } else { vec![] },
@@ -2970,9 +3225,15 @@ impl App {
         };
         eprintln!("present mode {:?}", config.present_mode);
         surface.configure(&gpu.device, &config);
-        let renderer = Renderer::new(&gpu.device, &gpu.queue, format);
+        let mut renderer = Renderer::new(&gpu.device, &gpu.queue, format);
+        renderer.set_video(&settings.video);
         let applied = settings.clone();
-        let mut ui = Ui::new(&gpu.device, format, settings);
+        let dynres = gfx::perf::DynRes::new(settings.video.q.render_scale);
+        let mut ui = Ui::new(&gpu.device, if hdr { gfx::hdr_ui::UI_FORMAT } else { format }, settings);
+        if hdr {
+            ui.hdr = Some(gfx::hdr_ui::HdrUi::new(&gpu.device, format));
+        }
+        ui.st.settings_dirty = detected;
         let egui_state = egui_winit::State::new(ui.ctx.clone(), egui::ViewportId::ROOT, &window, Some(window.scale_factor() as f32), None, None);
         // Game controllers (hot-plug), plus virtual ones for testing (SKYWARD_FAKE_INPUT).
         ui.st.input.start();
@@ -3059,6 +3320,10 @@ impl App {
             cam_hold: None,
             saved_at: Instant::now(),
             applied,
+            started_q,
+            limiter: Default::default(),
+            dynres,
+            display_hz,
             focused: true,
             #[cfg(target_arch = "wasm32")]
             web_max_ms: 0.0,
@@ -3106,6 +3371,13 @@ impl ApplicationHandler for App {
                                 r.ui.st.input.captured = Some(input::Captured::Key(k, code));
                             }
                         }
+                        return;
+                    }
+                    // Ctrl+F3: the performance overlay.
+                    if pressed && code == KeyCode::F3 && r.ui.ctx.input(|i| i.modifiers.ctrl) {
+                        let v = &mut r.ui.st.settings.video;
+                        v.perf_overlay = !v.perf_overlay;
+                        r.ui.st.settings_dirty = true;
                         return;
                     }
                     // The comms menu (F4) takes the number keys while it is open (ui/comms.rs).
@@ -3394,6 +3666,9 @@ impl App {
             let flying = r.ui.st.screen == Screen::Flying && r.session.as_ref().is_some_and(|s| s.sim.is_some() && s.catch_up.is_none());
             platform::web::set_budget_ms(if flying { 6.0 } else { 28.0 });
         }
+        // Frame-rate limit (Settings › Video).
+        let cap = r.ui.st.settings.video.frame_cap.hz(r.display_hz);
+        r.limiter.wait(cap);
         let now = Instant::now();
         let raw_dt = (now - r.last).as_secs_f32();
         r.last = now;
@@ -3560,7 +3835,14 @@ impl App {
         let ppp = r.window.scale_factor() as f32;
         let (w, h) = (r.config.width, r.config.height);
         let fps = r.ui.fps;
+        if r.ui.st.screen == Screen::Settings && r.ui.st.frame_no % 30 == 0 {
+            let env = video_env(r);
+            r.ui.st.video_env = env;
+        }
+        let t_render = Instant::now();
+        let update_ms = (t_render - now).as_secs_f32() * 1000.0;
         render_frame(&r.gpu, &mut r.renderer, &mut r.ui, r.session.as_mut(), &view, w, h, raw, ppp, fps, notice.as_deref(), None);
+        let render_ms = t_render.elapsed().as_secs_f32() * 1000.0;
         // Sound: menu clicks, settings, this frame's sim state (camera set by render_frame).
         if r.ui.audio_clicks > 0 {
             r.audio.click();
@@ -3598,6 +3880,33 @@ impl App {
         }
         r.window.pre_present_notify();
         r.gpu.queue.present(frame);
+        // GPU pass times (non-blocking), dynamic resolution, the performance overlay.
+        r.renderer.collect_timings(&r.gpu.device);
+        {
+            let v = &r.ui.st.settings.video;
+            let flying_now = r.ui.st.screen == Screen::Flying && r.session.as_ref().is_some_and(|s| s.sim.is_some());
+            if v.q.dynamic_res && flying_now {
+                let ms = r.renderer.gpu_frame_ms().unwrap_or(raw_dt * 1000.0);
+                let target = v.frame_cap.hz(r.display_hz).or(r.display_hz).unwrap_or(60.0);
+                let sc = r.dynres.update(ms, raw_dt, target, v.q.render_scale);
+                r.renderer.set_dynamic_scale(Some(sc));
+            } else if !v.q.dynamic_res {
+                r.dynres.scale = v.q.render_scale;
+                r.renderer.set_dynamic_scale(None);
+            }
+            if v.perf_overlay {
+                let st = &mut r.ui.st.perf;
+                st.push_frame(raw_dt * 1000.0);
+                st.cpu = vec![("update", update_ms), ("render + ui", render_ms), ("frame", now.elapsed().as_secs_f32() * 1000.0)];
+                st.gpu = r.renderer.gpu_times().unwrap_or_default();
+                st.vram_mb = r.renderer.vram_estimate() as f32 / (1 << 20) as f32;
+                st.scene = r.renderer.scene_size;
+                st.output = (r.config.width, r.config.height);
+                st.preset = v.preset.name().into();
+                st.aa = v.q.aa.name().into();
+                st.present = format!("{:?}{}", r.config.present_mode, cap.map(|c| format!(" · cap {c:.0}")).unwrap_or_default());
+            }
+        }
         #[cfg(target_arch = "wasm32")]
         {
             // Diagnostics for test harnesses (window.skywardStats).
@@ -3697,10 +4006,15 @@ impl App {
         // Settings: apply what changed, save (debounced).
         let Some(r) = self.run.as_mut() else { return };
         let s = r.ui.st.settings.clone();
-        if s.vsync != r.applied.vsync {
-            r.config.present_mode = present_mode(&r.caps, s.vsync);
+        if s.video.present != r.applied.video.present {
+            r.config.present_mode = present_mode(&r.caps, &s.video);
             r.surface.configure(&r.gpu.device, &r.config);
             eprintln!("present mode {:?}", r.config.present_mode);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if (s.video.window, &s.video.monitor, s.video.mode) != (r.applied.video.window, &r.applied.video.monitor, r.applied.video.mode) {
+            apply_window_mode(&r.window, &s.video);
+            r.display_hz = r.window.current_monitor().and_then(|m| m.refresh_rate_millihertz()).map(|m| m as f32 / 1000.0);
         }
         if s.detail != r.applied.detail {
             if let Some(sess) = r.session.as_mut() {

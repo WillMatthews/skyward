@@ -151,3 +151,27 @@ pub fn find_lane(env, near, radius, min_len, width) -> Option<(Vec2, Vec2)>; // 
 - In `Aircraft::step` it runs for `def.hulls` (floatplanes) inside `ground()`; `ac.water: WaterState` keeps the sea-state clock / estimate and the last `Contact` (spray, planing, rudders) for the VFX, HUD and audio.
 - **Ditching (missions):** build `Hull::fuselage(..)` from the airliner's geometry, call `water_contact` in place of the "Ditched in the water" crash, and judge the outcome from `slam_g` (structural limit), `bow_buried` (nose dug in at speed), the bank at contact and `max_immersion` / `displaced` (floating or sinking).
 
+
+## Ground contact API (Track GH, `src/ground/`) — tyres, brakes, steering, ground ops
+```rust
+// Controls (flight.rs) new fields: brake_left / brake_right: f32 (toe brakes, 0..1; each side brakes
+//   with max(brakes, its toe brake)), tiller: f32 (−1..1, + right), parking_brake: bool,
+//   autobrake: ground::Autobrake {Off, Lo, Med, Max, Rto}, tail_lock: bool (default true).
+// Environment (flight.rs): fn surface(&self, xz) -> ground::Surface { ground: Ground, contam: Contam }
+//   (default dry asphalt; World: runways / taxiways / aprons + weather or --runway).
+// Aircraft::ground: ground::GroundState { wheels: [Wheel; 8] (omega, steer, castering, brake_c, rim_c,
+//   kappa, alpha, load, mu, planing, brake_cmd, release, locked, skid_m, deflated, scrub, contact,
+//   surface, brake_power_w), ab: AutobrakeState, chocks, tow: Option<Tow>, decel, max_brake_c,
+//   brakes_hot, surface, shimmy, note_seq / note }.
+// ground::spec::spec(def) -> GroundSpec (tyre psi / radius / inertia, wheels per leg, steel / carbon
+//   heat sink, anti-skid, autobrake rates, Steer::{Fixed, Tiller, Pedal, Caster, TailSteer, TailCaster}).
+// ground::pushback::Pushback (tug: Tow on the nose gear), ground::guide::Guide (taxi route, greens
+//   lights), ground::bot_taxi::{Taxi, BotGround} (route following; the bot's stand ↔ hold phases).
+```
+- In `Aircraft::step`: `GroundState::pre_step` (autobrake, measured deceleration, steering angles,
+  brake commands) → `ground()` (wheels through `ground::contact` → `tyre::step`, skids / hard points
+  as before) → `post_step` (brake / rim heat, fusible plugs, locked-wheel bursts → systems
+  `TyreBurst` failures). The strut load is unchanged (`strut_load`), so rest heights are too.
+- Sim glue (`src/ground/sim_glue.rs`): the ground keys, tiller / toe-brake axes, the tug / chocks /
+  ground power each step, the rudder–tiller link below ~30 kt without a tiller axis, the skid release
+  on types without anti-skid, the crew (chocks + GPU when parked), taxi guidance; `Sim::ground`.

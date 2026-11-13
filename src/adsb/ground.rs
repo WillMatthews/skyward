@@ -212,6 +212,8 @@ mod tests {
             stands: Vec::new(),
             holds: Vec::new(),
             taxiways: Vec::new(),
+            taxi_w: 23.0,
+            aprons: Vec::new(),
             lo: Vec2::ZERO,
             hi: Vec2::ZERO,
             tiles: Vec::new(),

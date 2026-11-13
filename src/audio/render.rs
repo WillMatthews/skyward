@@ -147,6 +147,11 @@ pub fn apply(what: &str, sim: &mut Sim, input: &mut Input, world: &World) {
                 input.held.remove(&k);
             }
         }
+        // Any bound action by its settings id ("press=parking_brake", "press=taxi_guide").
+        "press" => match crate::input::key_from_id(v) {
+            Some(k) => input.pressed.push(k),
+            None => eprintln!("audio-script: unknown key {v}"),
+        },
         "nobot" => sim.disable_bot("script"),
         "bot" => sim.enable_bot(world),
         "atc" => {

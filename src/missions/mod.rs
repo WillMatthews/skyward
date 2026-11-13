@@ -110,6 +110,9 @@ impl Environment for AirEnv<'_> {
     fn is_water(&self, xz: Vec2) -> bool {
         self.inner.is_water(xz)
     }
+    fn surface(&self, xz: Vec2) -> crate::ground::Surface {
+        self.inner.surface(xz)
+    }
     fn updraft(&self, p: Vec3) -> f32 {
         let base = self.inner.updraft(p);
         match self.run {

@@ -83,7 +83,9 @@ fn loopback_session_and_probe() {
     sc.probe(addr, now(), Via::Direct);
     sc.request_details(addr);
     let (mut info, mut details) = (None, None);
-    let deadline = Instant::now() + Duration::from_secs(3);
+    // Generous: the loop ends as soon as both replies are in; the deadline
+    // only matters on a heavily loaded machine.
+    let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline && (info.is_none() || details.is_none()) {
         for e in sc.poll(now()) {
             match e {

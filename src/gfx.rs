@@ -1,7 +1,14 @@
 //! wgpu renderer: physically based atmosphere (sky, aerial perspective,
-//! ambient, exposure), volumetric clouds with cloud shadows, 4 blended shadow
-//! cascades, planar water reflection, MSAA HDR scene, bloom and AgX tonemap.
-//! Works with a window surface or headless.
+//! ambient, exposure), volumetric clouds with cloud shadows, up to 4 blended
+//! shadow cascades, planar water reflection, HDR scene (TAA / TAAU, MSAA or
+//! FXAA: gfx/taa.rs), motion blur, depth of field, bloom, lens effects and
+//! AgX tonemap. Every quality knob comes from [`quality::Quality`]
+//! ([`Renderer::set_quality`]). Works with a window surface or headless.
+
+pub mod hdr_ui;
+pub mod perf;
+pub mod quality;
+pub mod taa;
 
 use crate::atmosphere::{self, AtmosFrame, Atmosphere};
 use crate::clouds::{CloudField, CloudFrame, CloudRenderer};
@@ -16,11 +23,39 @@ pub const HDR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// Eye distance (m) written by every scene pass (clouds depth-test against it).
 pub const DIST: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
-pub const MSAA: u32 = 4;
-/// Shadow cascade resolution (lower in the browser: GPU budget, memory).
+/// Scene sample count (MSAA 4× or 1: TAA / FXAA / off), fixed at startup
+/// ([`configure`]) — every scene pipeline (here, aircraft, airport, lights)
+/// is built for it.
+static SAMPLES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+/// Texture sampling (aircraft / airport): anisotropy, minimum mip level.
+static TEX_ANISO: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(8);
+static TEX_LOD: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The scene's MSAA sample count (pipelines must match it).
+pub fn msaa() -> u32 {
+    SAMPLES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// (anisotropy clamp, minimum mip level) for material texture samplers.
+pub fn texture_sampling() -> (u16, f32) {
+    (TEX_ANISO.load(std::sync::atomic::Ordering::Relaxed) as u16, f32::from_bits(TEX_LOD.load(std::sync::atomic::Ordering::Relaxed)))
+}
+
+/// Settings fixed when the renderer is built (call before [`Renderer::new`]):
+/// MSAA sample count and texture sampling.
+pub fn configure(q: &quality::Quality) {
+    use std::sync::atomic::Ordering::Relaxed;
+    SAMPLES.store(q.aa.samples(), Relaxed);
+    TEX_ANISO.store(q.aniso.clamp(1, 16) as u32, Relaxed);
+    TEX_LOD.store([1.0f32, 0.5, 0.0][q.textures.min(2) as usize].to_bits(), Relaxed);
+}
+
+/// Largest shadow cascade resolution (lower in the browser: GPU budget, memory).
 pub const SHADOW_RES: u32 = if cfg!(target_arch = "wasm32") { 2048 } else { 4096 };
 const CASCADES: usize = 4;
-const SPLITS: [f32; 5] = [0.3, 45.0, 220.0, 1100.0, 6000.0];
+/// Cascade far distances (m) by the number of cascades drawn (2, 3, 4),
+/// before the shadow-distance multiplier.
+const SPLITS_BY_COUNT: [[f32; 5]; 3] = [[0.3, 200.0, 4000.0, 4000.0, 4000.0], [0.3, 80.0, 600.0, 6000.0, 6000.0], [0.3, 45.0, 220.0, 1100.0, 6000.0]];
 /// Fraction of each cascade over which it blends into the next.
 const CASCADE_BLEND: f32 = 0.15;
 const BLOOM_LEVELS: usize = 6;
@@ -163,8 +198,11 @@ struct Globals {
     misc2: [f32; 4],
     /// Aircraft spot / point lights (see lights::gpu::pack_spots).
     alights: [[f32; 4]; 3 * crate::lights::place::AC_SPOTS],
-    /// x pre-exposure (radiances written to the HDR targets are x this), y its inverse.
+    /// x pre-exposure (radiances written to the HDR targets is x this), y its inverse,
+    /// z mirror plane height, w alpha-dither frame (0 = MSAA).
     pre: [f32; 4],
+    /// Quality (gfx/quality.rs): x soft shadows (1 = PCF), yzw unused.
+    gq: [f32; 4],
 }
 
 #[repr(C)]
@@ -185,6 +223,12 @@ const AO_STRENGTH: f32 = 1.4;
 struct PostU {
     params: [f32; 4],
     texel: [f32; 4],
+    /// Tonemap: x sharpen (CAS), y lens flare, z lens dirt, w chromatic aberration.
+    fx: [f32; 4],
+    /// Tonemap: x film grain, y frame time (s), z brightness, w display gamma.
+    fx2: [f32; 4],
+    /// Tonemap: x HDR output on, y paper white / 80 nits, z peak / paper white, w unused.
+    hdr: [f32; 4],
 }
 
 const UNIFORM_STRIDE: u64 = 256;
@@ -199,6 +243,8 @@ struct FogU {
     screen: [f32; 4],
     /// Ground light map (street lights glowing in the fog).
     lmap: [f32; 4],
+    /// x samples along the ray, y samples for the street-light glow.
+    quality: [f32; 4],
 }
 
 #[repr(C)]
@@ -383,41 +429,6 @@ struct TreeMeshes {
     m: [[GpuMesh; 2]; 2],
 }
 
-/// Optional GPU pass timing (env `SKYWARD_GPU_TIMING=1`, needs timestamp
-/// queries): prints a per-pass breakdown averaged over 120 frames.
-struct Profiler {
-    set: wgpu::QuerySet,
-    resolve: wgpu::Buffer,
-    read: wgpu::Buffer,
-    period: f32,
-    n: u32,
-    sums: Vec<f64>,
-    frames: u32,
-}
-
-const PROF_MARKS: [&str; 8] = ["start", "atmos+cloudmaps", "shadows", "reflection", "main", "ao", "clouds", "post"];
-
-impl Profiler {
-    fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Self> {
-        if std::env::var("SKYWARD_GPU_TIMING").is_err() || !device.features().contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS) {
-            return None;
-        }
-        let n = PROF_MARKS.len() as u32;
-        let set = device.create_query_set(&wgpu::QuerySetDescriptor { label: Some("prof"), ty: wgpu::QueryType::Timestamp, count: n });
-        let size = 8 * n as u64;
-        let resolve = device.create_buffer(&wgpu::BufferDescriptor { label: Some("prof"), size, usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false });
-        let read = device.create_buffer(&wgpu::BufferDescriptor { label: Some("prof read"), size, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
-        Some(Profiler { set, resolve, read, period: queue.get_timestamp_period(), n, sums: vec![0.0; n as usize], frames: 0 })
-    }
-    fn mark(&self, encoder: &mut wgpu::CommandEncoder, i: usize) {
-        encoder.write_timestamp(&self.set, i as u32);
-    }
-    fn finish(&self, encoder: &mut wgpu::CommandEncoder) {
-        encoder.resolve_query_set(&self.set, 0..self.n, &self.resolve, 0);
-        encoder.copy_buffer_to_buffer(&self.resolve, 0, &self.read, 0, 8 * self.n as u64);
-    }
-}
-
 /// Per-frame render statistics.
 #[derive(Default, Clone, Copy, Debug)]
 pub struct RenderStats {
@@ -498,12 +509,16 @@ impl DynMesh {
     }
 }
 
+/// Scene-resolution targets.
 struct Targets {
     width: u32,
     height: u32,
-    hdr_msaa: wgpu::TextureView,
+    /// Reflection resolution divisor (1, 2, 4).
+    refl_div: u32,
+    /// Multisampled colour / distance (MSAA only; resolved into `hdr` / `dist`).
+    hdr_msaa: Option<wgpu::TextureView>,
     hdr: wgpu::TextureView,
-    dist_msaa: wgpu::TextureView,
+    dist_msaa: Option<wgpu::TextureView>,
     dist: wgpu::TextureView,
     depth: wgpu::TextureView,
     refl: wgpu::TextureView,
@@ -515,13 +530,20 @@ struct Targets {
     ao_size: (u32, u32),
     ao_bg: wgpu::BindGroup,
     ao_blur_bg: wgpu::BindGroup,
-    bloom: Vec<(wgpu::TextureView, u32, u32)>,
     main_bg: wgpu::BindGroup,
     refl_bg: wgpu::BindGroup,
-    /// bind groups for bloom down passes (src = previous level), up passes, tonemap
+    /// Size of all of the above (VRAM estimate).
+    bytes: u64,
+}
+
+/// Bloom chain at the post-processing size (the AA output's).
+struct Bloom {
+    width: u32,
+    height: u32,
+    levels: Vec<(wgpu::TextureView, u32, u32)>,
+    /// Down passes 1.. (src = previous level), up passes.
     down_bgs: Vec<wgpu::BindGroup>,
     up_bgs: Vec<wgpu::BindGroup>,
-    tonemap_bg: wgpu::BindGroup,
 }
 
 pub struct Renderer {
@@ -544,6 +566,10 @@ pub struct Renderer {
     bloom_down: wgpu::RenderPipeline,
     bloom_up: wgpu::RenderPipeline,
     tonemap: wgpu::RenderPipeline,
+    /// With an HDR output: the tonemap for an sRGB target too (thumbnails, [`Renderer::ldr`]).
+    tonemap_ldr: Option<wgpu::RenderPipeline>,
+    /// Render the next frames into an `Rgba8UnormSrgb` target (HDR output only).
+    pub ldr: bool,
     globals_buf: wgpu::Buffer,
     refl_globals_buf: wgpu::Buffer,
     shadow_buf: wgpu::Buffer,
@@ -576,6 +602,23 @@ pub struct Renderer {
     traffic: Vec<crate::gfx_aircraft::AircraftFrame>,
     traffic_lights: Vec<crate::lights::LightInst>,
     targets: Option<Targets>,
+    bloom: Option<Bloom>,
+    /// Quality knobs and display effects (set_video).
+    q: quality::Quality,
+    video: quality::VideoSettings,
+    /// TAA / FXAA / motion blur / depth of field.
+    post: taa::Post,
+    /// Current shadow-map resolution (q.shadow_res once applied).
+    shadow_res: u32,
+    /// Dynamic-resolution scale (None = the quality's render scale), and the
+    /// largest scale allowed (the browser's pixel budget).
+    dyn_scale: Option<f32>,
+    scale_cap: f32,
+    /// Last frame's pre-exposure (the TAA history is rescaled when it changes).
+    prev_pre: f32,
+    /// This frame's scene and output sizes.
+    pub scene_size: (u32, u32),
+    pub out_size: (u32, u32),
     atmos: Atmosphere,
     clouds: CloudRenderer,
     /// Last frame's camera (eye, forward) to detect cuts.
@@ -583,10 +626,15 @@ pub struct Renderer {
     ao_pipe: wgpu::RenderPipeline,
     ao_blur_pipe: wgpu::RenderPipeline,
     ao_buf: wgpu::Buffer,
-    prof: Option<Profiler>,
+    prof: Option<perf::GpuProfiler>,
     /// Last frame's view-projection, once an AO result for it exists.
     /// Last frame's rotation-only view-projection and eye (AO reprojection).
     prev_vp: Option<(Mat4, Vec3)>,
+    /// The same for TAA / motion blur / velocities: kept when only the render
+    /// targets are re-created (dynamic resolution), dropped on camera cuts.
+    cam_prev: Option<(Mat4, Vec3)>,
+    /// Last frame's time (s): road-traffic motion over the frame interval.
+    prev_time: Option<f32>,
     /// Current floating-origin frame and pattern space (set_frame).
     proj: Proj,
     pattern: [f32; 4],
@@ -652,6 +700,25 @@ fn tex(device: &wgpu::Device, label: &str, w: u32, h: u32, format: wgpu::Texture
             view_formats: &[],
         })
         .create_view(&Default::default())
+}
+
+/// The shadow cascades (`res`² × CASCADES depth array): per-layer views, array view.
+fn shadow_maps(device: &wgpu::Device, res: u32) -> (Vec<wgpu::TextureView>, wgpu::TextureView) {
+    let shadow_tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("shadow map"),
+        size: wgpu::Extent3d { width: res, height: res, depth_or_array_layers: CASCADES as u32 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: DEPTH,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let array = shadow_tex.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() });
+    let layers = (0..CASCADES as u32)
+        .map(|i| shadow_tex.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2), base_array_layer: i, array_layer_count: Some(1), ..Default::default() }))
+        .collect();
+    (layers, array)
 }
 
 fn bgl_tex(binding: u32, dim: wgpu::TextureViewDimension) -> wgpu::BindGroupLayoutEntry {
@@ -775,7 +842,7 @@ impl Renderer {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: true,
-                        min_binding_size: wgpu::BufferSize::new(32),
+                        min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<PostU>() as u64),
                     },
                     count: None,
                 },
@@ -852,13 +919,13 @@ impl Renderer {
         };
         use wgpu::CompareFunction as C;
         // Reverse-Z: larger depth = nearer.
-        let sky_main = scene_pipe("sky", "vs_sky", "fs_sky", false, C::Always, false, MSAA);
-        let flat_base = scene_pipe("flat base", "vs_main", "fs_main", true, C::GreaterEqual, true, MSAA);
-        let flat_over = scene_pipe("flat over", "vs_over", "fs_main", true, C::GreaterEqual, false, MSAA);
-        let solid_main = scene_pipe("solid", "vs_main", "fs_main", true, C::GreaterEqual, true, MSAA);
+        let sky_main = scene_pipe("sky", "vs_sky", "fs_sky", false, C::Always, false, msaa());
+        let flat_base = scene_pipe("flat base", "vs_main", "fs_main", true, C::GreaterEqual, true, msaa());
+        let flat_over = scene_pipe("flat over", "vs_over", "fs_main", true, C::GreaterEqual, false, msaa());
+        let solid_main = scene_pipe("solid", "vs_main", "fs_main", true, C::GreaterEqual, true, msaa());
         let sky_refl = scene_pipe("sky refl", "vs_sky", "fs_sky", false, C::Always, false, 1);
         let solid_refl = scene_pipe("solid refl", "vs_main", "fs_main", true, C::GreaterEqual, true, 1);
-        let tree_main = scene_pipe("tree", "vs_tree", "fs_main", true, C::GreaterEqual, true, MSAA);
+        let tree_main = scene_pipe("tree", "vs_tree", "fs_main", true, C::GreaterEqual, true, msaa());
         let tree_refl = scene_pipe("tree refl", "vs_tree", "fs_main", true, C::GreaterEqual, true, 1);
 
         let shadow_variant = |label: &str, vs: &str, buffers: &[Option<wgpu::VertexBufferLayout>]| {
@@ -922,6 +989,7 @@ impl Renderer {
         let bloom_down = post_pipe("bloom down", "fs_down", HDR, None);
         let bloom_up = post_pipe("bloom up", "fs_up", HDR, Some(additive));
         let tonemap = post_pipe("tonemap", "fs_tonemap", output_format, None);
+        let tonemap_ldr = (output_format != wgpu::TextureFormat::Rgba8UnormSrgb).then(|| post_pipe("tonemap ldr", "fs_tonemap", wgpu::TextureFormat::Rgba8UnormSrgb, None));
 
         let ubuf = |label: &str, size: u64| {
             device.create_buffer(&wgpu::BufferDescriptor {
@@ -948,30 +1016,7 @@ impl Renderer {
         });
         let post_buf = ubuf("post u", UNIFORM_STRIDE * (2 * BLOOM_LEVELS as u64 + 2));
 
-        let shadow_tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("shadow map"),
-            size: wgpu::Extent3d { width: SHADOW_RES, height: SHADOW_RES, depth_or_array_layers: CASCADES as u32 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: DEPTH,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let shadow_array = shadow_tex.create_view(&wgpu::TextureViewDescriptor {
-            dimension: Some(wgpu::TextureViewDimension::D2Array),
-            ..Default::default()
-        });
-        let shadow_layers = (0..CASCADES as u32)
-            .map(|i| {
-                shadow_tex.create_view(&wgpu::TextureViewDescriptor {
-                    dimension: Some(wgpu::TextureViewDimension::D2),
-                    base_array_layer: i,
-                    array_layer_count: Some(1),
-                    ..Default::default()
-                })
-            })
-            .collect();
+        let (shadow_layers, shadow_array) = shadow_maps(device, SHADOW_RES);
         let shadow_samp = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("shadow"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -1063,6 +1108,8 @@ impl Renderer {
             bloom_down,
             bloom_up,
             tonemap,
+            tonemap_ldr,
+            ldr: false,
             globals_buf,
             refl_globals_buf,
             shadow_buf,
@@ -1081,14 +1128,26 @@ impl Renderer {
             tree_meshes,
             dynamic: DynMesh::new(device, 1 << 16, 1 << 17),
             targets: None,
+            bloom: None,
+            q: quality::Quality::default(),
+            video: quality::VideoSettings::default(),
+            post: taa::Post::new(device),
+            shadow_res: SHADOW_RES,
+            dyn_scale: None,
+            scale_cap: 2.0,
+            prev_pre: 1.0,
+            scene_size: (1, 1),
+            out_size: (1, 1),
             atmos,
             clouds,
             last_cam: None,
             ao_pipe,
             ao_blur_pipe,
             ao_buf,
-            prof: Profiler::new(device, queue),
+            prof: perf::GpuProfiler::new(device, queue),
             prev_vp: None,
+            cam_prev: None,
+            prev_time: None,
             proj: Proj::new(0.0, 0.0),
             pattern: [1.0, 0.0, 0.0, 0.0],
             anchor: (0.0, 0.0),
@@ -1279,6 +1338,9 @@ impl Renderer {
     /// The origin moved by `delta` (world points p → p + delta): keep the
     /// temporal history (cloud reprojection, last camera) valid.
     pub fn rebase(&mut self, delta: Vec3) {
+        if let Some((_, e)) = &mut self.cam_prev {
+            *e += delta;
+        }
         if let Some((_, e)) = &mut self.prev_vp {
             *e += delta;
         }
@@ -1292,28 +1354,22 @@ impl Renderer {
     /// Forget temporal history (camera cut / teleport).
     pub fn reset_history(&mut self) {
         self.clouds.reset_history();
+        self.cam_prev = None;
+        self.post.reset();
+        self.aircraft.reset_motion();
     }
 
-    /// With `SKYWARD_GPU_TIMING=1`: read back the last frame's pass timings
-    /// (call after the frame was submitted; blocks on the GPU).
+    /// GPU pass timings (timestamp queries, where supported): read back the
+    /// finished frames' times without waiting (call after each submit).
+    /// `SKYWARD_GPU_TIMING=1` also prints 120-frame averages.
     pub fn collect_timings(&mut self, device: &wgpu::Device) {
-        let Some(p) = &mut self.prof else { return };
-        let slice = p.read.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |_| {});
-        let _ = device.poll(wgpu::PollType::wait_indefinitely());
-        let t: Vec<u64> = bytemuck::cast_slice::<u8, u64>(&slice.get_mapped_range().expect("prof map")).to_vec();
-        p.read.unmap();
-        for i in 1..t.len() {
-            p.sums[i] += t[i].saturating_sub(t[i - 1]) as f64 * p.period as f64 * 1e-6;
-        }
-        p.sums[0] += t[t.len() - 1].saturating_sub(t[0]) as f64 * p.period as f64 * 1e-6;
-        p.frames += 1;
-        if p.frames == 120 {
-            let f = p.frames as f64;
-            let parts: Vec<String> = (1..t.len()).map(|i| format!("{} {:.2}", PROF_MARKS[i], p.sums[i] / f)).collect();
-            eprintln!("gpu ms: total {:.2} | {}", p.sums[0] / f, parts.join(", "));
-            p.sums.iter_mut().for_each(|s| *s = 0.0);
-            p.frames = 0;
+        self.collect_timings_wait(device, false);
+    }
+
+    /// As `collect_timings`; `wait`: block until this frame's times are in.
+    pub fn collect_timings_wait(&mut self, device: &wgpu::Device, wait: bool) {
+        if let Some(p) = &mut self.prof {
+            p.collect(device, wait);
         }
     }
 
@@ -1356,25 +1412,30 @@ impl Renderer {
     }
 
     fn ensure_targets(&mut self, device: &wgpu::Device, w: u32, h: u32) {
+        let refl_div = [4, 2, 1][self.q.reflections.min(2) as usize];
         if let Some(t) = &self.targets {
-            if t.width == w && t.height == h {
+            if t.width == w && t.height == h && t.refl_div == refl_div {
                 return;
             }
         }
+        let samples = msaa();
         let ra = wgpu::TextureUsages::RENDER_ATTACHMENT;
         let rt = ra | wgpu::TextureUsages::TEXTURE_BINDING;
-        let hdr_msaa = tex(device, "hdr msaa", w, h, HDR, MSAA, ra);
+        let ms = samples > 1;
+        let hdr_msaa = ms.then(|| tex(device, "hdr msaa", w, h, HDR, samples, ra));
         let hdr = tex(device, "hdr", w, h, HDR, 1, rt);
-        let dist_msaa = tex(device, "dist msaa", w, h, DIST, MSAA, ra);
+        let dist_msaa = ms.then(|| tex(device, "dist msaa", w, h, DIST, samples, ra));
         let dist = tex(device, "dist", w, h, DIST, 1, rt);
-        let depth = tex(device, "depth", w, h, DEPTH, MSAA, ra);
-        let (rw, rh) = ((w / 2).max(1), (h / 2).max(1));
+        let depth = tex(device, "depth", w, h, DEPTH, samples, ra);
+        let (rw, rh) = ((w / refl_div).max(1), (h / refl_div).max(1));
         let refl = tex(device, "refl", rw, rh, HDR, 1, rt);
         let refl_dist = tex(device, "refl dist", rw, rh, DIST, 1, rt);
         let refl_depth = tex(device, "refl depth", rw, rh, DEPTH, 1, ra);
         let (aw, ah) = ((w / 2).max(1), (h / 2).max(1));
         let ao_raw = tex(device, "ao raw", aw, ah, wgpu::TextureFormat::Rg16Float, 1, rt);
         let ao = tex(device, "ao", aw, ah, wgpu::TextureFormat::R8Unorm, 1, rt);
+        let px = w as u64 * h as u64;
+        let bytes = px * (8 + 2 + 4) * samples as u64 + if ms { px * 10 } else { 0 } + (rw * rh) as u64 * 14 + (aw * ah) as u64 * 5;
         let ao_bg_for = |pipe: &wgpu::RenderPipeline, src: Option<&wgpu::TextureView>| {
             let e = match src {
                 Some(v) => vec![wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(v) }],
@@ -1387,13 +1448,6 @@ impl Renderer {
         };
         let ao_bg = ao_bg_for(&self.ao_pipe, None);
         let ao_blur_bg = ao_bg_for(&self.ao_blur_pipe, Some(&ao_raw));
-        let mut bloom = Vec::new();
-        let (mut bw, mut bh) = (w, h);
-        for i in 0..BLOOM_LEVELS {
-            bw = (bw / 2).max(1);
-            bh = (bh / 2).max(1);
-            bloom.push((tex(device, &format!("bloom{i}"), bw, bh, HDR, 1, rt), bw, bh));
-        }
         use wgpu::BindingResource as R;
         let globals_bg = |buf: &wgpu::Buffer, refl_view: &wgpu::TextureView, ap: &wgpu::TextureView, ao_view: &wgpu::TextureView| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1417,32 +1471,6 @@ impl Renderer {
         };
         let main_bg = globals_bg(&self.globals_buf, &refl, &self.atmos.ap_main, &ao);
         let refl_bg = globals_bg(&self.refl_globals_buf, &self.dummy_refl, &self.atmos.ap_refl, &self.dummy_ao);
-        let post_bg = |src: &wgpu::TextureView, bloom_src: &wgpu::TextureView| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("post"),
-                layout: &self.post_bgl,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: R::TextureView(src) },
-                    wgpu::BindGroupEntry { binding: 1, resource: R::Sampler(&self.lin_samp) },
-                    wgpu::BindGroupEntry { binding: 2, resource: R::TextureView(bloom_src) },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: R::Buffer(wgpu::BufferBinding { buffer: &self.post_buf, offset: 0, size: wgpu::BufferSize::new(32) }),
-                    },
-                    wgpu::BindGroupEntry { binding: 4, resource: self.atmos.out.as_entire_binding() },
-                ],
-            })
-        };
-        let mut down_bgs = Vec::new();
-        for i in 0..BLOOM_LEVELS {
-            let src = if i == 0 { &hdr } else { &bloom[i - 1].0 };
-            down_bgs.push(post_bg(src, &self.dummy_refl));
-        }
-        let mut up_bgs = Vec::new();
-        for i in (1..BLOOM_LEVELS).rev() {
-            up_bgs.push(post_bg(&bloom[i].0, &self.dummy_refl));
-        }
-        let tonemap_bg = post_bg(&hdr, &bloom[0].0);
         self.clouds.reset_history();
         self.prev_vp = None;
         self.lights.bind(
@@ -1461,6 +1489,7 @@ impl Renderer {
         self.targets = Some(Targets {
             width: w,
             height: h,
+            refl_div,
             hdr_msaa,
             hdr,
             dist_msaa,
@@ -1475,16 +1504,110 @@ impl Renderer {
             ao_size: (aw, ah),
             ao_bg,
             ao_blur_bg,
-            bloom,
             main_bg,
             refl_bg,
-            down_bgs,
-            up_bgs,
-            tonemap_bg,
+            bytes,
         });
     }
 
-    /// Render one frame into `out` (format must equal `output_format`).
+    fn post_bg(&self, device: &wgpu::Device, src: &wgpu::TextureView, bloom_src: &wgpu::TextureView) -> wgpu::BindGroup {
+        use wgpu::BindingResource as R;
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("post"),
+            layout: &self.post_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: R::TextureView(src) },
+                wgpu::BindGroupEntry { binding: 1, resource: R::Sampler(&self.lin_samp) },
+                wgpu::BindGroupEntry { binding: 2, resource: R::TextureView(bloom_src) },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: R::Buffer(wgpu::BufferBinding { buffer: &self.post_buf, offset: 0, size: wgpu::BufferSize::new(std::mem::size_of::<PostU>() as u64) }),
+                },
+                wgpu::BindGroupEntry { binding: 4, resource: self.atmos.out.as_entire_binding() },
+            ],
+        })
+    }
+
+    /// The bloom chain for a post-processing image of `w`×`h`.
+    fn ensure_bloom(&mut self, device: &wgpu::Device, w: u32, h: u32) {
+        if self.bloom.as_ref().is_some_and(|b| b.width == w && b.height == h) {
+            return;
+        }
+        let rt = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
+        let mut levels = Vec::new();
+        let (mut bw, mut bh) = (w, h);
+        for i in 0..BLOOM_LEVELS {
+            bw = (bw / 2).max(1);
+            bh = (bh / 2).max(1);
+            levels.push((tex(device, &format!("bloom{i}"), bw, bh, HDR, 1, rt), bw, bh));
+        }
+        let down_bgs = (1..BLOOM_LEVELS).map(|i| self.post_bg(device, &levels[i - 1].0, &self.dummy_refl)).collect();
+        let up_bgs = (1..BLOOM_LEVELS).rev().map(|i| self.post_bg(device, &levels[i].0, &self.dummy_refl)).collect();
+        self.bloom = Some(Bloom { width: w, height: h, levels, down_bgs, up_bgs });
+    }
+
+    /// Video settings for the coming frames (quality knobs apply live,
+    /// except what [`quality::Quality::restart_diff`] lists).
+    pub fn set_video(&mut self, v: &quality::VideoSettings) {
+        if self.video.q.aa != v.q.aa || (self.video.q.render_scale - v.q.render_scale).abs() > 1e-4 {
+            self.post.reset();
+        }
+        self.video = v.clone();
+        self.q = v.q;
+    }
+
+    /// Dynamic resolution: the scale to render at (None = the quality's).
+    pub fn set_dynamic_scale(&mut self, s: Option<f32>) {
+        self.dyn_scale = s;
+    }
+
+    /// The largest render scale allowed (the browser's pixel budget).
+    pub fn set_scale_cap(&mut self, cap: f32) {
+        self.scale_cap = cap.clamp(0.25, 2.0);
+    }
+
+    /// The render scale in effect.
+    pub fn render_scale(&self) -> f32 {
+        self.dyn_scale.unwrap_or(self.q.render_scale).min(self.scale_cap).clamp(0.25, 2.0)
+    }
+
+    /// GPU timings (smoothed, total first) when timestamp queries are available.
+    pub fn gpu_times(&self) -> Option<Vec<(&'static str, f32)>> {
+        self.prof.as_ref().map(|p| perf::MARKS.iter().enumerate().map(|(i, k)| (if i == 0 { "total" } else { *k }, p.smooth[i])).collect())
+    }
+
+    /// The last GPU frame time (ms), when measured.
+    pub fn gpu_frame_ms(&self) -> Option<f32> {
+        self.prof.as_ref().map(|p| p.last[0]).filter(|t| *t > 0.0)
+    }
+
+    /// Benchmark mode: keep every frame's GPU times (see `bench_medians`).
+    pub fn bench_start(&mut self) {
+        if let Some(p) = self.prof.as_mut() {
+            p.bench = Some(Vec::new());
+        }
+    }
+
+    /// Per-pass medians since `bench_start` (labels, total first).
+    pub fn bench_medians(&self) -> Option<Vec<(&'static str, f32)>> {
+        let m = self.prof.as_ref()?.bench_medians()?;
+        Some(perf::MARKS.iter().zip(m).enumerate().map(|(i, (k, v))| (if i == 0 { "total" } else { *k }, v)).collect())
+    }
+
+    /// Estimated GPU memory (bytes): scenery buffers, render targets, shadow
+    /// maps, post-processing and the fixed LUTs / cloud volumes.
+    pub fn vram_estimate(&self) -> u64 {
+        let targets = self.targets.as_ref().map_or(0, |t| t.bytes);
+        let bloom = self.bloom.as_ref().map_or(0, |b| b.levels.iter().map(|l| l.1 as u64 * l.2 as u64 * 8).sum());
+        let shadows = self.shadow_res as u64 * self.shadow_res as u64 * 4 * CASCADES as u64;
+        // Cloud noise volumes, weather / shadow maps, atmosphere LUTs, light map (measured once).
+        const FIXED: u64 = 96 << 20;
+        self.gpu_bytes() + targets + bloom + shadows + self.post.bytes() + FIXED
+    }
+
+    /// Render one frame into `out` (format must equal `output_format`) of
+    /// `width`×`height` pixels. The scene renders at the render scale
+    /// (quality / dynamic resolution) and is upscaled by the AA pass.
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
@@ -1498,7 +1621,30 @@ impl Renderer {
         // Dynamic geometry (the aircraft), already relative to `fv.eye`.
         dynamic: &MeshData,
     ) {
+        let (out_w, out_h) = (width.max(1), height.max(1));
+        let q = self.q;
+        // A new shadow-map resolution: new maps (the scene bind groups follow).
+        if q.shadow_res != self.shadow_res {
+            (self.shadow_layers, self.shadow_array) = shadow_maps(device, q.shadow_res);
+            self.shadow_res = q.shadow_res;
+            self.targets = None;
+        }
+        let scale = self.render_scale();
+        let (width, height) = (((out_w as f32 * scale).round() as u32).max(1), ((out_h as f32 * scale).round() as u32).max(1));
+        self.scene_size = (width, height);
+        self.out_size = (out_w, out_h);
         self.ensure_targets(device, width, height);
+        // Post-processing runs at the output size after TAA(U), else at the scene's.
+        if q.aa == quality::AaMode::Taa {
+            self.ensure_bloom(device, out_w, out_h);
+        } else {
+            self.ensure_bloom(device, width, height);
+        }
+        if let Some(p) = self.prof.as_mut() {
+            p.begin();
+        }
+        self.clouds.set_quality(q.clouds);
+        self.vfx.quality = q.vfx;
         // Moving landmark parts (London Eye), eye-relative like the aircraft.
         let lm = crate::landmarks::animated(&self.proj, fv.eye, fv.time, &|p| self.ground_at(p).unwrap_or(0.0));
         if lm.idx.is_empty() {
@@ -1536,6 +1682,9 @@ impl Renderer {
             if e.distance(fv.eye) > 300.0 || f.dot(fwd) < 0.8 {
                 self.clouds.reset_history();
                 self.prev_vp = None;
+                self.cam_prev = None;
+                self.post.reset();
+                self.aircraft.reset_motion();
             }
         }
         self.last_cam = Some((fv.eye, fwd));
@@ -1548,6 +1697,11 @@ impl Renderer {
         }
         let aspect = width as f32 / height.max(1) as f32;
         let proj = glam::camera::rh::proj::directx::perspective_infinite_reverse(fv.fov_y, aspect, NEAR);
+        // TAA: the scene is drawn with a sub-pixel jitter (Halton); culling,
+        // clouds, reprojection and the previous frame stay unjittered.
+        let taa_on = q.aa == quality::AaMode::Taa;
+        let jit = if taa_on { taa::jitter(self.post.frame, taa::phases(out_w as f32 / width as f32)) } else { Vec2::ZERO };
+        let proj_j = taa::jitter_proj(proj, jit, width, height);
         let vp = proj * fv.view;
         // Eye-relative (rotation-only) view-projection: screen rays are
         // reconstructed with it. Using the full matrix and subtracting the eye
@@ -1556,6 +1710,7 @@ impl Renderer {
         // world origin.
         let view_rot = Mat4::from_cols(fv.view.x_axis, fv.view.y_axis, fv.view.z_axis, Vec4::W);
         let vp_rot = proj * view_rot;
+        let vp_rot_j = proj_j * view_rot;
         let sun = fv.sun_dir.normalize();
         let field = self.clouds.field();
         let cover = field.sky_cover();
@@ -1612,14 +1767,22 @@ impl Renderer {
         let cloud_base = field.base();
 
         // Cascades: each one also covers the blend band before its near split.
+        // (Fewer cascades: the last ones are left clear, the shadow fades out
+        // at the end of the last drawn one.)
+        let n_casc = q.cascades.clamp(2, CASCADES as u8) as usize;
+        let splits: [f32; 5] = {
+            let b = SPLITS_BY_COUNT[n_casc - 2];
+            [b[0], b[1] * q.shadow_dist, b[2] * q.shadow_dist, b[3] * q.shadow_dist, b[4] * q.shadow_dist]
+        };
+        let shadow_res = self.shadow_res;
         let mut shadow_mats = [[[0f32; 4]; 4]; CASCADES];
         let mut texel = [0f32; 4];
-        for i in 0..CASCADES {
-            let near = if i == 0 { SPLITS[0] } else { SPLITS[i] - (SPLITS[i] - SPLITS[i - 1]) * CASCADE_BLEND };
+        for i in 0..n_casc {
+            let near = if i == 0 { splits[0] } else { splits[i] - (splits[i] - splits[i - 1]) * CASCADE_BLEND };
             let anchor = glam::DVec3::new(self.anchor.0 - ex, -ey, self.anchor.1 - ez);
-            let (m, radius) = cascade_matrix(view_rot, fv.fov_y, aspect, near, SPLITS[i + 1], key, anchor);
+            let (m, radius) = cascade_matrix(view_rot, fv.fov_y, aspect, near, splits[i + 1], key, anchor, shadow_res);
             shadow_mats[i] = m.to_cols_array_2d();
-            texel[i] = radius * 2.0 / SHADOW_RES as f32;
+            texel[i] = radius * 2.0 / shadow_res as f32;
             queue.write_buffer(&self.shadow_buf, UNIFORM_STRIDE * i as u64, bytemuck::cast_slice(&m.to_cols_array()));
             let leaf = self.wxr.season.leaf;
             queue.write_buffer(&self.shadow_buf, UNIFORM_STRIDE * i as u64 + 64, bytemuck::cast_slice(&[leaf, 0.0f32, 0.0, 0.0]));
@@ -1641,15 +1804,16 @@ impl Renderer {
         };
         // Last frame's camera, relative to this frame's eye.
         let prev_rel = self.prev_vp.map(|(m, e)| m * Mat4::from_translation(fv.eye - e)).unwrap_or(vp_rot);
+        let ao_on = q.ao > 0;
         let globals = Globals {
-            view_proj: vp_rot.to_cols_array_2d(),
-            inv_view_proj: vp_rot.inverse().to_cols_array_2d(),
+            view_proj: vp_rot_j.to_cols_array_2d(),
+            inv_view_proj: vp_rot_j.inverse().to_cols_array_2d(),
             shadow: shadow_mats,
             cam_pos: [fv.eye.x, fv.eye.y, fv.eye.z, fv.time],
             sun_dir: [key.x, key.y, key.z, cover],
             sun_e: [key_e.x * pre, key_e.y * pre, key_e.z * pre, haze],
-            splits: [SPLITS[1], SPLITS[2], SPLITS[3], SPLITS[4]],
-            shadow_info: [SHADOW_RES as f32, 0.0, CASCADE_BLEND, if self.prev_vp.is_some() { 1.0 } else { 0.0 }],
+            splits: [splits[1], splits[2], splits[3], splits[4]],
+            shadow_info: [shadow_res as f32, 0.0, CASCADE_BLEND, if self.prev_vp.is_some() && ao_on { 1.0 } else { 0.0 }],
             screen: [width as f32, height as f32, 1.0 / width as f32, 1.0 / height as f32],
             cloud: self.clouds.shadow_params(),
             texel,
@@ -1670,13 +1834,16 @@ impl Renderer {
             misc: [airport_level, beacon, wx.fog_ext, wx.fog_top],
             misc2: [night.traffic * self.traffic_density, n_spots as f32, night.moon_alpha, self.traffic_radius],
             alights: spots,
-            pre: [pre, 1.0 / pre, plane_h, 0.0],
+            // w: 1 = no MSAA — alpha-tested / translucent surfaces dither (TAA resolves it).
+            pre: [pre, 1.0 / pre, plane_h, if msaa() > 1 { 0.0 } else { 1.0 + (self.post.frame % 64) as f32 }],
+            gq: [if q.soft_shadows { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
         };
         let px_per_m = height as f32 * 0.5 / (fv.fov_y * 0.5).tan();
         let aou = AoU {
-            inv_view_proj: vp_rot.inverse().to_cols_array_2d(),
-            eye: [fv.eye.x, fv.eye.y, fv.eye.z, 0.0],
-            params: [AO_RADIUS, px_per_m, AO_STRENGTH, 0.0],
+            inv_view_proj: vp_rot_j.inverse().to_cols_array_2d(),
+            // w: frame index (high quality rotates the samples per frame; TAA averages).
+            eye: [fv.eye.x, fv.eye.y, fv.eye.z, if q.ao >= 3 { (self.post.frame % 64) as f32 } else { 0.0 }],
+            params: [AO_RADIUS, px_per_m, AO_STRENGTH, [6.0, 6.0, 12.0, 16.0][q.ao.min(3) as usize]],
             size: [width as f32, height as f32, (width / 2) as f32, (height / 2) as f32],
         };
         queue.write_buffer(&self.ao_buf, 0, bytemuck::bytes_of(&aou));
@@ -1696,32 +1863,17 @@ impl Renderer {
             pattern: [pat[0], pat[1], pat[2], 2.0 * eh],
             inv_view_proj: rvp_rot.inverse().to_cols_array_2d(),
             cam_pos: [reye.x, reye.y, reye.z, fv.time],
-            shadow_info: [SHADOW_RES as f32, 1.0, CASCADE_BLEND, 0.0],
+            shadow_info: [shadow_res as f32, 1.0, CASCADE_BLEND, 0.0],
             screen: [rw as f32, rh as f32, 1.0 / rw as f32, 1.0 / rh as f32],
             sky: [globals.sky[0], globals.sky[1], globals.sky[2], rh as f32 * 0.5 / (fv.fov_y * 0.5).tan()],
             // (Aircraft lights are eye-relative to the real eye: not in the mirror.)
             misc2: [globals.misc2[0], 0.0, globals.misc2[2], globals.misc2[3]],
+            pre: [globals.pre[0], globals.pre[1], globals.pre[2], 0.0],
             ..globals
         };
         queue.write_buffer(&self.refl_globals_buf, 0, bytemuck::bytes_of(&rglobals));
 
-        // Post uniforms: [0..L) down, [L..2L) up, 2L tonemap.
-        for i in 0..BLOOM_LEVELS {
-            let (sw, sh) = if i == 0 { (width, height) } else { (t.bloom[i - 1].1, t.bloom[i - 1].2) };
-            let u = PostU { params: [0.0, 0.0, if i == 0 { 1.0 } else { 0.0 }, 0.0], texel: [1.0 / sw as f32, 1.0 / sh as f32, 0.0, 0.0] };
-            queue.write_buffer(&self.post_buf, UNIFORM_STRIDE * i as u64, bytemuck::bytes_of(&u));
-        }
-        for (k, i) in (1..BLOOM_LEVELS).rev().enumerate() {
-            let (sw, sh) = (t.bloom[i].1, t.bloom[i].2);
-            let u = PostU { params: [0.0; 4], texel: [1.0 / sw as f32, 1.0 / sh as f32, 0.0, 0.0] };
-            queue.write_buffer(&self.post_buf, UNIFORM_STRIDE * (BLOOM_LEVELS + k) as u64, bytemuck::bytes_of(&u));
-        }
-        // Tonemap: manual exposure, bloom strength, AgX look power, saturation.
-        // (A little more bloom at night: glare around the lights.)
-        let tone = PostU { params: [fv.exposure, 0.04 + 0.035 * night_k, 1.22, 1.18], texel: [0.0, 0.0, 1.0 / pre, 0.0] };
-        queue.write_buffer(&self.post_buf, UNIFORM_STRIDE * (2 * BLOOM_LEVELS) as u64, bytemuck::bytes_of(&tone));
-
-        if let Some(p) = &self.prof {
+        if let Some(p) = self.prof.as_ref() {
             p.mark(encoder, 0);
         }
         // Atmosphere LUTs / froxels / ambient for this frame.
@@ -1792,6 +1944,10 @@ impl Renderer {
         let refl_f = Frustum::new(rvp);
         // (Cascade matrices are eye-relative; culling boxes are world-space.)
         let shadow_f: Vec<Frustum> = shadow_mats.iter().map(|m| Frustum::new(Mat4::from_cols_array_2d(m) * Mat4::from_translation(-fv.eye))).collect();
+        // Draw distances (quality).
+        let tree_dist = TREE_DIST * q.tree_dist;
+        let tree_lod0 = TREE_LOD0 * q.tree_dist;
+        let building_dist = crate::world::FAR_RADIUS * q.building_dist;
         {
             let af = self.airport_frame.take();
             let eye = fv.eye;
@@ -1829,21 +1985,25 @@ impl Renderer {
             pass.set_index_buffer(m.ib.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..m.n, 0, 0..1);
         }
-        // Instanced trees for one tile: (mesh lod per kind).
-        fn draw_trees(pass: &mut wgpu::RenderPass<'_>, xfs: &Xforms, t: &GpuTile, tm: &TreeMeshes, lod: usize) -> usize {
+        // Instanced trees for one tile: (mesh lod per kind), the first
+        // `density` of each kind's instances (they are in random order).
+        fn draw_trees(pass: &mut wgpu::RenderPass<'_>, xfs: &Xforms, t: &GpuTile, tm: &TreeMeshes, lod: usize, density: f32) -> usize {
             let Some((buf, split, n)) = &t.trees else { return 0 };
             xfs.set(pass, &t.xf);
             pass.set_vertex_buffer(1, buf.slice(..));
-            for (kind, range) in [(0usize, 0..*split), (1, *split..*n)] {
+            let part = |a: u32, b: u32| a..a + ((b - a) as f32 * density).ceil().min((b - a) as f32) as u32;
+            let mut drawn = 0;
+            for (kind, range) in [(0usize, part(0, *split)), (1, part(*split, *n))] {
                 if range.is_empty() {
                     continue;
                 }
+                drawn += range.len();
                 let m = &tm.m[kind][lod];
                 pass.set_vertex_buffer(0, m.vb.slice(..));
                 pass.set_index_buffer(m.ib.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..m.n, 0, range);
             }
-            *n as usize
+            drawn
         }
 
         // 1. Shadow cascades (cleared only when the key light is a moon too
@@ -1862,7 +2022,7 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            if !cast_shadows {
+            if !cast_shadows || i >= n_casc {
                 continue;
             }
             let f = &shadow_f[i];
@@ -1895,7 +2055,7 @@ impl Renderer {
                     }
                 }
             }
-            self.airport.draw_objects(&mut pass, &xfs, &resident, false, SPLITS[i + 1] * 1.2);
+            self.airport.draw_objects(&mut pass, &xfs, &resident, false, splits[i + 1] * 1.2);
             if let Some((vb, ib, n)) = dynamic {
                 place(&mut pass, &DYN);
                 pass.set_vertex_buffer(0, vb.slice(..));
@@ -1909,8 +2069,8 @@ impl Renderer {
             for t in &tiles {
                 let (lo, hi) = t.tree_box();
                 let d = t.dist(eye2);
-                if d < SPLITS[i + 1] * 1.1 && d < TREE_DIST && f.aabb(lo, hi) {
-                    draw_trees(&mut pass, &xfs, t, tm, if i == 0 { 0 } else { 1 });
+                if d < splits[i + 1] * 1.1 && d < tree_dist && f.aabb(lo, hi) {
+                    draw_trees(&mut pass, &xfs, t, tm, if i == 0 { 0 } else { 1 }, q.tree_density);
                 }
             }
         }
@@ -1995,8 +2155,8 @@ impl Renderer {
             pass.set_pipeline(&self.tree_refl);
             for tile in &tiles {
                 let (lo, hi) = tile.tree_box();
-                if tile.dist(eye2) < TREE_REFL_DIST && refl_f.aabb(lo, hi) {
-                    draw_trees(&mut pass, &xfs, tile, tm, 1);
+                if tile.dist(eye2) < TREE_REFL_DIST * q.tree_dist && refl_f.aabb(lo, hi) {
+                    draw_trees(&mut pass, &xfs, tile, tm, 1, q.tree_density);
                 }
             }
             self.lights.draw_sprites(&mut pass, &tile_draws, world_xf, true, street > 0.0 || night_k > 0.0);
@@ -2008,20 +2168,29 @@ impl Renderer {
 
         // 3. Main HDR pass.
         {
+            // MSAA: draw multisampled, resolve; else straight into the targets.
+            let att = |ms: &Option<wgpu::TextureView>, single: &wgpu::TextureView| -> (wgpu::TextureView, Option<wgpu::TextureView>, wgpu::StoreOp) {
+                match ms {
+                    Some(m) => (m.clone(), Some(single.clone()), wgpu::StoreOp::Discard),
+                    None => (single.clone(), None, wgpu::StoreOp::Store),
+                }
+            };
+            let (hv, hr, hs) = att(&t.hdr_msaa, &t.hdr);
+            let (dv, dr, ds) = att(&t.dist_msaa, &t.dist);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main"),
                 color_attachments: &[
                     Some(wgpu::RenderPassColorAttachment {
-                        view: &t.hdr_msaa,
+                        view: &hv,
                         depth_slice: None,
-                        resolve_target: Some(&t.hdr),
-                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Discard },
+                        resolve_target: hr.as_ref(),
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: hs },
                     }),
                     Some(wgpu::RenderPassColorAttachment {
-                        view: &t.dist_msaa,
+                        view: &dv,
                         depth_slice: None,
-                        resolve_target: Some(&t.dist),
-                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Discard },
+                        resolve_target: dr.as_ref(),
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: ds },
                     }),
                 ],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -2083,7 +2252,7 @@ impl Renderer {
             for tile in &tiles {
                 if let Some(m) = &tile.buildings {
                     let (lo, hi) = tile.solid_box();
-                    if main_f.aabb(lo, hi) {
+                    if main_f.aabb(lo, hi) && (!tile.id.is_far() || tile.dist(eye2) < building_dist) {
                         place(&mut pass, &tile.xf);
                         draw_mesh(&mut pass, m);
                     }
@@ -2103,8 +2272,8 @@ impl Renderer {
             for tile in &tiles {
                 let d = tile.dist(eye2);
                 let (lo, hi) = tile.tree_box();
-                if d < TREE_DIST && main_f.aabb(lo, hi) {
-                    stats.tree_instances += draw_trees(&mut pass, &xfs, tile, tm, if d < TREE_LOD0 { 0 } else { 1 });
+                if d < tree_dist && main_f.aabb(lo, hi) {
+                    stats.tree_instances += draw_trees(&mut pass, &xfs, tile, tm, if d < tree_lod0 { 0 } else { 1 }, q.tree_density);
                 }
             }
             // Lights, traffic and stars (additive, depth-tested).
@@ -2118,8 +2287,21 @@ impl Renderer {
         if let Some(p) = self.prof.as_ref() {
             p.mark(encoder, 4);
         }
+        // Object motion for TAA / motion blur: the aircraft's velocity pass.
+        if taa_on || q.motion_blur > 0 {
+            let prev = self.cam_prev.map(|(m, _)| m).unwrap_or(vp_rot);
+            let (ac, rt) = (&self.aircraft, &self.road_traffic);
+            let (eye_dt, dt) = match (self.cam_prev, self.prev_time) {
+                (Some((_, e)), Some(t0)) => (fv.eye - e, (fv.time - t0).clamp(0.0, 0.25)),
+                _ => (Vec3::ZERO, 0.0),
+            };
+            self.post.velocity_pass(device, queue, encoder, width, height, vp_rot_j, vp_rot, prev, eye_dt.extend(dt), dynamic, |pass, bg| {
+                ac.draw_velocity(pass, bg);
+                rt.draw_velocity(pass, bg);
+            });
+        }
         // SSAO from this frame's distances, used (reprojected) next frame.
-        for (view, pipe, bg) in [(&t.ao_raw, &self.ao_pipe, &t.ao_bg), (&t.ao, &self.ao_blur_pipe, &t.ao_blur_bg)] {
+        for (view, pipe, bg) in [(&t.ao_raw, &self.ao_pipe, &t.ao_bg), (&t.ao, &self.ao_blur_pipe, &t.ao_blur_bg)].into_iter().filter(|_| ao_on) {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("ao"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -2179,13 +2361,14 @@ impl Renderer {
             }
             if wx.fog_ext > 0.0 && wx.fog_top > 1.0 {
                 let u = FogU {
-                    inv_view_proj: vp_rot.inverse().to_cols_array_2d(),
+                    inv_view_proj: vp_rot_j.inverse().to_cols_array_2d(),
                     eye: [fv.eye.x, fv.eye.y, fv.eye.z, wx.fog_ext],
                     fog: [wx.fog_top, cover, key_e.y * pre, haze],
                     sun: [key.x, key.y, key.z, width as f32],
                     screen: [width as f32, height as f32, 1.0 / width as f32, 1.0 / height as f32],
                     // (w: pre-exposure when the map is on.)
                     lmap: [globals.lmap[0], globals.lmap[1], globals.lmap[2], globals.lmap[3] * pre],
+                    quality: [[4.0, 6.0, 8.0, 12.0][q.fog.min(3) as usize], [4.0, 6.0, 8.0, 12.0][q.fog.min(3) as usize], 0.0, 0.0],
                 };
                 queue.write_buffer(&wp.fog_buf, 0, bytemuck::bytes_of(&u));
                 use wgpu::BindingResource as R;
@@ -2215,7 +2398,7 @@ impl Renderer {
                 let snow = wx.snow > wx.rain;
                 let focal = height as f32 * 0.5 / (fv.fov_y * 0.5).tan();
                 let u = RainU {
-                    view_proj: vp_rot.to_cols_array_2d(),
+                    view_proj: vp_rot_j.to_cols_array_2d(),
                     eye: [fv.eye.x, fv.eye.y, fv.eye.z, fv.time],
                     cam_vel: [wp.cam_vel.x, wp.cam_vel.y, wp.cam_vel.z, 1.0 / 60.0],
                     params: [precip, if snow { 1.0 } else { 0.0 }, wx.wind.x, wx.wind.y],
@@ -2254,7 +2437,92 @@ impl Renderer {
             p.mark(encoder, 6);
         }
 
-        // 4. Bloom chain.
+        // 4. Anti-aliasing (TAA / TAAU at the output size, or FXAA), then
+        // the camera effects, all on the HDR image.
+        let pre_ratio = if self.prev_pre > 0.0 { pre / self.prev_pre } else { 1.0 };
+        self.prev_pre = pre;
+        let scene_in = taa::SceneIn { dist: &t.dist, clouds: self.clouds.history(0) };
+        let prev_eye = self.cam_prev.map(|(_, e)| e).unwrap_or(fv.eye);
+        let cam_rel = self.cam_prev.map(|(m, e)| m * Mat4::from_translation(fv.eye - e)).unwrap_or(vp_rot);
+        let tu = taa::TaaU {
+            inv_vp: vp_rot.inverse().to_cols_array_2d(),
+            prev_vp: cam_rel.to_cols_array_2d(),
+            jitter: [jit.x, jit.y, if self.cam_prev.is_some() { 1.0 } else { 0.0 }, pre_ratio],
+            in_size: [width as f32, height as f32, 1.0 / width as f32, 1.0 / height as f32],
+            eye_delta: [fv.eye.x - prev_eye.x, fv.eye.y - prev_eye.y, fv.eye.z - prev_eye.z, if scene_in.clouds.is_some() { 1.0 } else { 0.0 }],
+            // Blend: 1/16 of this frame when still (converges, ~16 jitter phases), up to 1/5 when moving fast.
+            params: [0.0625, 0.2, 0.0, 0.0],
+            ..Default::default()
+        };
+        let (mut src, post_w, post_h) = match q.aa {
+            quality::AaMode::Taa => {
+                if self.cam_prev.is_none() {
+                    self.post.reset();
+                }
+                self.post.taa(device, queue, encoder, &t.hdr, &scene_in, (out_w, out_h), tu);
+                (taa::Input::Taa, out_w, out_h)
+            }
+            quality::AaMode::Fxaa => {
+                self.post.fxaa(device, queue, encoder, &t.hdr, &scene_in, width, height, 1.0);
+                (taa::Input::Fxaa, width, height)
+            }
+            _ => (taa::Input::Ext(&t.hdr), width, height),
+        };
+        let mut slot = 0;
+        if q.motion_blur > 0 && self.cam_prev.is_some() {
+            // Shutter: half the frame interval (180°), at most 32 px.
+            let u = taa::TaaU { params: [0.0, 0.0, 0.5, 0.0], focus: [0.0, 32.0 * post_w as f32 / 2560.0, if q.motion_blur >= 2 { 1.0 } else { 0.0 }, self.post.frame as f32], ..tu };
+            self.post.effect(device, queue, encoder, 2, src, &scene_in, post_w, post_h, slot, u);
+            src = taa::Input::Fx(slot);
+            slot += 1;
+        }
+        if q.dof > 0 {
+            // External: focus on the aircraft; cockpit: auto-focus on the centre of the view.
+            let ac_dist = fv.aircraft.as_ref().and_then(|a| a.draws.first()).map(|d| d.model.w_axis.truncate().length());
+            let cockpit = ac_dist.is_some_and(|d| d < 4.0);
+            let on = if cockpit { q.dof & 1 != 0 } else { q.dof & 2 != 0 };
+            if on {
+                let focus = if cockpit { 0.0 } else { ac_dist.unwrap_or(0.0) };
+                // Aperture: blur (px) per unit of normalised defocus.
+                // (Subtle: the scenery at infinity blurs ~4 px at 1440p.)
+                let aperture = if cockpit { 4.5 } else { 3.5 } * post_h as f32 / 1440.0;
+                let u = taa::TaaU { params: [0.0, 0.0, aperture, 0.0], focus: [focus, 8.0 * post_h as f32 / 1440.0, 0.0, 0.0], ..tu };
+                self.post.effect(device, queue, encoder, 3, src, &scene_in, post_w, post_h, slot, u);
+                src = taa::Input::Fx(slot);
+            }
+        }
+        if let Some(p) = self.prof.as_ref() {
+            p.mark(encoder, 7);
+        }
+
+        // 5. Bloom chain (at the post-processing size).
+        let bloom = self.bloom.as_ref().unwrap();
+        // Post uniforms: [0..L) down, [L..2L) up, 2L tonemap.
+        for i in 0..BLOOM_LEVELS {
+            let (sw, sh) = if i == 0 { (post_w, post_h) } else { (bloom.levels[i - 1].1, bloom.levels[i - 1].2) };
+            let u = PostU { params: [0.0, 0.0, if i == 0 { 1.0 } else { 0.0 }, 0.0], texel: [1.0 / sw as f32, 1.0 / sh as f32, 0.0, 0.0], ..bytemuck::Zeroable::zeroed() };
+            queue.write_buffer(&self.post_buf, UNIFORM_STRIDE * i as u64, bytemuck::bytes_of(&u));
+        }
+        for (k, i) in (1..BLOOM_LEVELS).rev().enumerate() {
+            let (sw, sh) = (bloom.levels[i].1, bloom.levels[i].2);
+            let u = PostU { texel: [1.0 / sw as f32, 1.0 / sh as f32, 0.0, 0.0], ..bytemuck::Zeroable::zeroed() };
+            queue.write_buffer(&self.post_buf, UNIFORM_STRIDE * (BLOOM_LEVELS + k) as u64, bytemuck::bytes_of(&u));
+        }
+        // Tonemap: exposure (× the player's EV), bloom strength, AgX look
+        // power, saturation; lens / film effects; display brightness, gamma, HDR.
+        // (A little more bloom at night: glare around the lights.)
+        let v = &self.video;
+        let ldr = self.ldr && self.tonemap_ldr.is_some();
+        let hdr_out = self.output_format == wgpu::TextureFormat::Rgba16Float && v.hdr && !ldr;
+        let sharpen = if matches!(q.aa, quality::AaMode::Taa) { q.sharpen } else { 0.0 };
+        let tone = PostU {
+            params: [fv.exposure * 2f32.powf(v.exposure_ev), (0.04 + 0.035 * night_k) * q.bloom, 1.22, 1.18],
+            texel: [1.0 / post_w as f32, 1.0 / post_h as f32, 1.0 / pre, 0.0],
+            fx: [sharpen, if q.lens_flare { 1.0 } else { 0.0 }, if q.lens_dirt { 1.0 } else { 0.0 }, q.chroma as f32],
+            fx2: [q.grain, fv.time, v.brightness, v.gamma],
+            hdr: [if hdr_out { 1.0 } else { 0.0 }, v.paper_white / 80.0, 1000.0 / v.paper_white, 0.0],
+        };
+        queue.write_buffer(&self.post_buf, UNIFORM_STRIDE * (2 * BLOOM_LEVELS) as u64, bytemuck::bytes_of(&tone));
         let fullscreen = |encoder: &mut wgpu::CommandEncoder,
                           label: &str,
                           view: &wgpu::TextureView,
@@ -2280,21 +2548,32 @@ impl Renderer {
             pass.draw(0..3, 0..1);
         };
         let clear = wgpu::LoadOp::Clear(wgpu::Color::BLACK);
-        for i in 0..BLOOM_LEVELS {
-            fullscreen(encoder, "bloom down", &t.bloom[i].0, clear, &self.bloom_down, &t.down_bgs[i], i);
+        let src_view = self.post.view(src);
+        let bloom_on = q.bloom > 0.0 || q.lens_flare || q.lens_dirt;
+        if bloom_on {
+            let down0 = self.post_bg(device, src_view, &self.dummy_refl);
+            for i in 0..BLOOM_LEVELS {
+                let bg = if i == 0 { &down0 } else { &bloom.down_bgs[i - 1] };
+                fullscreen(encoder, "bloom down", &bloom.levels[i].0, clear, &self.bloom_down, bg, i);
+            }
+            for (k, i) in (1..BLOOM_LEVELS).rev().enumerate() {
+                fullscreen(encoder, "bloom up", &bloom.levels[i - 1].0, wgpu::LoadOp::Load, &self.bloom_up, &bloom.up_bgs[k], BLOOM_LEVELS + k);
+            }
         }
-        for (k, i) in (1..BLOOM_LEVELS).rev().enumerate() {
-            fullscreen(encoder, "bloom up", &t.bloom[i - 1].0, wgpu::LoadOp::Load, &self.bloom_up, &t.up_bgs[k], BLOOM_LEVELS + k);
-        }
-        // 5. Tonemap to output.
-        fullscreen(encoder, "tonemap", out, clear, &self.tonemap, &t.tonemap_bg, 2 * BLOOM_LEVELS);
-        if let Some(p) = self.prof.as_ref() {
-            p.mark(encoder, 7);
+        // 6. Tonemap to output.
+        let tonemap_bg = self.post_bg(device, src_view, if bloom_on { &bloom.levels[0].0 } else { &self.dummy_refl });
+        let tonemap = if ldr { self.tonemap_ldr.as_ref().unwrap() } else { &self.tonemap };
+        fullscreen(encoder, "tonemap", out, clear, tonemap, &tonemap_bg, 2 * BLOOM_LEVELS);
+        if let Some(p) = self.prof.as_mut() {
+            p.mark(encoder, 8);
             p.finish(encoder);
         }
+        self.post.frame += 1;
         drop(tiles);
         xfs.flush(queue);
         self.prev_vp = Some((vp_rot, fv.eye));
+        self.cam_prev = Some((vp_rot, fv.eye));
+        self.prev_time = Some(fv.time);
         self.stats = stats;
     }
 }
@@ -2347,7 +2626,8 @@ fn ground_runs(t: &GpuTile, tiles: &HashMap<TileId, GpuTile>) -> (Vec<(u32, u32)
 /// Light matrix for one cascade of `view` (eye-relative: rotation only).
 /// `anchor` (the world origin, eye-relative) fixes the texel snapping to the
 /// world, so shadows don't crawl as the camera moves.
-fn cascade_matrix(view: Mat4, fov_y: f32, aspect: f32, near: f32, far: f32, sun: Vec3, anchor: glam::DVec3) -> (Mat4, f32) {
+#[allow(clippy::too_many_arguments)]
+fn cascade_matrix(view: Mat4, fov_y: f32, aspect: f32, near: f32, far: f32, sun: Vec3, anchor: glam::DVec3, res: u32) -> (Mat4, f32) {
     let inv_view = view.inverse();
     let th = (fov_y * 0.5).tan();
     let mut corners = Vec::with_capacity(8);
@@ -2367,7 +2647,7 @@ fn cascade_matrix(view: Mat4, fov_y: f32, aspect: f32, near: f32, far: f32, sun:
     let m = proj * light_view;
     // (In f64: the anchor may be far away in light space.)
     let origin = m.as_dmat4() * anchor.extend(1.0);
-    let half = SHADOW_RES as f64 * 0.5;
+    let half = res as f64 * 0.5;
     let o2 = glam::DVec2::new(origin.x, origin.y);
     let off = (o2 * half).round() / half - o2;
     proj.w_axis.x += off.x as f32;

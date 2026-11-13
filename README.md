@@ -94,7 +94,13 @@ painted over or composited.
 ### Rendering
 
 - **Physically based sky.** Hillaire-style atmosphere with aerial perspective, AgX tonemapping,
-  bloom, cascaded shadows, SSAO, planar water reflections and MSAA HDR.
+  bloom, cascaded shadows, SSAO and planar water reflections, in HDR.
+- **Temporal anti-aliasing and upscaling.** Jittered frames reprojected with motion vectors for the
+  camera, the aircraft and the clouds, variance clipping and sharpening — stable at 250 m/s, with
+  crisp cockpit displays — plus MSAA and FXAA options, dynamic resolution and a frame limiter.
+- **Quality presets.** Low / Medium / High / Ultra (auto-detected from the GPU) drive every option
+  in Settings › Video, each with a one-line explanation and its GPU cost; HDR output, motion blur,
+  depth of field, lens flare and a performance overlay (Ctrl+F3).
 - **Volumetric clouds.** Ray-marched cumulus, stratus and cirrus with temporal reprojection and
   cloud shadows on the ground.
 - **Weather and seasons.** Rain, snow, fog and wet ground; leaf fall, autumn colours and crop
@@ -123,6 +129,17 @@ painted over or composited.
 - **Structure and crashes.** Wings flex with load. There are limit and ultimate load factors,
   flutter and overspeeds, and parts that tear off and change the aerodynamics. Survivable accidents
   slide to a stop; fatal ones break into rigid-body debris that tumbles, burns and sinks.
+- **Ground handling.** Every wheel has a tyre model: slip ratio with the wheel's spin (spin-up
+  smoke at touchdown, locked-wheel skids, anti-skid), slip angle and the friction ellipse, oleo
+  struts, rolling resistance. Friction depends on the surface and the weather: dry / wet /
+  flooded asphalt and concrete, grass, gravel, dirt, slush, snow and ice, with **hydroplaning**
+  above 9·√p kt. Steel and carbon brakes heat up, fade, show on the ECAM / EICAS WHEEL page and
+  melt their fusible plugs. Autobrake LO / MED / MAX / RTO, parking brake, chocks, ground power,
+  **nose-wheel tillers** (pedals steer only a few degrees), castering nose wheels and tail wheels
+  with differential braking, a lockable DC-3 tail wheel — and real ground loops in taildraggers.
+  **Pushback** by a tug (straight, tail left / right), **taxi guidance** with
+  **follow-the-greens** centreline lights and the route on the moving map, and an auto-flight
+  bot that pushes back and taxis the taxiway network to the holding point and back to a stand.
 - **Live weather and wind.** The nearest METAR plus Open-Meteo drive clouds, visibility,
   precipitation, the wind gradient and winds aloft up to the jet, gusts and drifting thermals.
   Real local time and date, re-fetched along long flights.
@@ -364,6 +381,7 @@ Every key can be rebound in **Settings › Controls**. Press **H** or **F1** in 
 | **M** | Moving map | **F3** / **F4** | Radios & flight plan / ATC comms |
 | **Space** (armed, in the air) | Fire | **F5 / F7 / F8** | Weapon · lock · flares |
 | **Esc** | Pause menu | **O** / **F2** | Systems & failures |
+| **Right Alt** | Parking brake (on the ground) | **Left Alt** | Ground menu: pushback, chocks, autobrake, taxi guidance |
 
 <details>
 <summary><b>Full keyboard reference</b></summary>
@@ -378,7 +396,10 @@ Every key can be rebound in **Settings › Controls**. Press **H** or **F1** in 
 | G | landing gear up / down (3 green = down and locked, red = in transit) |
 | / and \ (or ') | spoilers / speed brake out / in one step |
 | T | thrust reverse on / off (ground only; throttle then sets reverse power) |
-| B or Space (hold) | brakes |
+| B or Space (hold) | brakes (single-lever types split them with the rudder) |
+| Right Alt | parking brake set / release (on the ground; in the air it is weapon release on armed types) |
+| Left Alt | **ground menu** (the comms panel's Ground page; 1–9 pick): push back straight / tail left / tail right (stop during the push; set the parking brake when told and the tug disconnects), parking brake, chocks + ground power, autobrake OFF → LO → MED → MAX (Embraer: RTO too; pedal braking or thrust disarms it), DC-3 tail-wheel lock, taxi guidance (route to the departure holding point — or after a flight a free stand — on the moving map, follow-the-greens lights, next turn and speed). Also on F4 › Ground crew & taxi |
+| (unbound) | toe brakes left / right, nose-wheel tiller left / right, and each ground-menu action as its own key: bind them in Settings › Controls › Ground. Without a tiller the rudder keys work it below ~30 kt; with B or Space the rudder splits the brakes on light types |
 | [ / ] | trim nose down / up |
 | Z | autopilot on (holds heading, altitude, speed) / off; a mouse AP panel appears |
 | Ins / Del, Home / End, 9 / 0 | autopilot heading ∓5°, altitude ±100 ft, speed ∓5 kt |
@@ -388,7 +409,7 @@ Every key can be rebound in **Settings › Controls**. Press **H** or **F1** in 
 | F5 / F7–F10 | **split throttles**: F7/F8 left engines −/+, F9/F10 right engines −/+, F5 brings the levers back together |
 | F4 | **ATC comms menu**: the requests for the unit on COM 1 (1–9 pick, 0 = tune a station, Esc closes), read-back / assist / subtitle / COM 2 options |
 | Space (in the air) | **weapons** (Spitfire, F-16): fire the selected weapon — guns (held), a missile in SRM / MRM (press); still the wheel brakes on the ground |
-| Right Alt | Spitfire: cannon only (the second button); F-16: weapon release (pickle) |
+| Right Alt | Spitfire: cannon only (the second button); F-16: weapon release (pickle) — in the air (on the ground it is the parking brake) |
 | F5 / F7 / F8 / F9 | armed single-engine types: master mode GUN → SRM → MRM (Spitfire: cannon + MG / cannon / MG), radar lock / AIM-9 uncage, flares + chaff, gun harmonisation range |
 | F10 twice | eject (F-16 ACES II) / bail out (Spitfire) |
 | ; | navigation display: ROSE ILS → ROSE VOR → ROSE NAV → ARC → PLAN |
@@ -437,7 +458,8 @@ first time it's seen:
 - **Sticks** (T.16000M, X52, Extreme 3D...). Twist is rudder, the slider / Z axis is throttle, the hat
   glances.
 - **Throttles** (TCA quadrant, X56). One lever per engine.
-- **Pedals.** Rudder plus toe brakes.
+- **Pedals.** Rudder plus left / right toe brakes (each brakes its own main wheels). A
+  **Nose-wheel tiller** axis can be bound in Settings › Controls (Ground).
 
 Layouts are saved per device in the settings file.
 
@@ -508,10 +530,18 @@ the real flight model through the controls and autopilot. Nothing is scripted or
   2. Tours landmarks.
   3. Flies an obstacle-checked approach, coupling to the ILS where there is one.
   4. Flares and rolls out with spoilers, reversers and brakes.
-  5. Taxis, turns round and repeats.
+  5. Where the airport's taxiway layout is known: vacates, taxis to a free stand, parks, is pushed
+     back by a tug and taxis the taxiway network to the holding point (slow in the turns, main
+     gear on the centreline), lines up and goes again. Elsewhere it taxis the runway, turns round
+     and repeats.
 - **Wind.** Every leg is flown as a track. The bot picks the runway end by headwind and adds half
   the headwind plus the gust to the approach speed. It de-crabs with rudder and holds the centreline
   wing-low in the flare.
+- **Mountains.** At a field among mountains the bot surveys the terrain and flies synthetic,
+  terrain-checked procedures: a valley departure on the engine-out climb gradient (climbing in a
+  hold to the safe altitude when no valley leads out), a descent hold, then a straight, curved or
+  circling-type approach down the valley. It won't take off without a terrain-clear way out.
+  Helicopters tour the valleys; gliders soar the ridges in the slope lift.
 - **Radio.** In watch mode the bot also does its own radio work with ATC.
 
 </details>
@@ -523,7 +553,8 @@ the real flight model through the controls and autopilot. Nothing is scripted or
 |---|---|
 | `--lat L --lon L` | start point (default EGLC 51.5045, 0.0300) |
 | `--airport CODE` | start at an airport (OurAirports ident / ICAO / IATA / name; Nominatim fallback) |
-| `--start-at SPEC` | `runway:27L`, `final:27L:5` (NM), `apron`, `air:LAT:LON:ALT_M:HDG`, `thermal` |
+| `--start-at SPEC` | `runway:27L`, `final:27L:5` (NM), `apron`, `stand` / `stand:NAME` (parked nose-in: push back to leave), `air:LAT:LON:ALT_M:HDG`, `thermal` |
+| `--runway COND` | runway condition: `dry` `damp` `wet[:MM]` `flooded[:MM]` `slush[:MM]` `snow[:MM]` `ice` `wet-ice` (default: from the weather) |
 | `--start S` | `runway` `approach` `city` `thermal` |
 | `--aircraft ID` | `kestrel` `swift` `peregrine` `lancer` `aerolink` `meridian190` `meridian320` `hercules` `galaxy` `vulcan` `ec130` `fpv` `extra500` `cub` `zlin` `otter` `dc3` `triple7` `crj700` `citationx` `concorde` (or `c172` `ask21` `spitfire` `f16` `atr72` `e190` `a320` `c130` `c5` `heli` `quad` `drone` `ea500` `pa18` `z50` `dhc3` `777` `crj` `citation` `sst`) |
 | `--no-menu` | fly straight away (skip the main menu) |
@@ -537,6 +568,7 @@ the real flight model through the controls and autopilot. Nothing is scripted or
 | `--fail pitot,vacuum,fire2@30` | systems failures by id, optionally armed `@S` seconds in |
 | `--cold-dark` | start cold and dark |
 | `--vsync on\|off` | present with vsync (default on) / mailbox or immediate |
+| `--preset low\|medium\|high\|ultra`, `--aa taa\|msaa4\|fxaa\|off`, `--render-scale S` | graphics overrides (Settings › Video) |
 | `--hud full\|minimal\|off`, `--map corner\|large\|off` | instrument / map mode |
 | `--radius-km R`, `--map-zoom N` | detailed-tile load radius, moving-map zoom step 0–5 |
 | `--traffic off\|low\|medium\|high` | road traffic density (default: the Settings choice; captures simulate it in-thread and settle it, reproducibly) |
@@ -582,9 +614,13 @@ skyward --shot m.png --aircraft meridian320 --bot --soak --seconds 4200 --warp 8
 | `SKYWARD_COCKPIT_FOV=deg` | cockpit field of view for captures |
 | `SKYWARD_NO_VFX`, `SKYWARD_NO_AIRPORTS`, `SKYWARD_NO_OVERPASS`, `SKYWARD_NO_LANDMARKS`, `SKYWARD_NO_TRAFFIC`, `SKYWARD_FLAT_TERRAIN` | switch layers off |
 | `SKYWARD_GPU_TIMING`, `SKYWARD_UI_TIMING`, `SKYWARD_VFX_STATS` | per-pass GPU timing, UI CPU cost, effect counts |
+| `SKYWARD_BENCH_FRAMES=N` | headless GPU benchmark: N more frames, per-pass medians (timestamp queries) |
+| `SKYWARD_MOTION_SHOT=1` (with `--realtime`) | capture the last frame of the flight, in motion (TAA / motion blur as seen) |
+| `SKYWARD_PERF_OVERLAY=1`, `SKYWARD_UI_SCROLL=points` | performance overlay in a capture; scroll a menu page first |
+| `SKYWARD_QUALITY="clouds=0,ao=3,aa=fxaa"` | any Settings › Video knob (its `settings.json` key) for captures / benchmarks |
 | `SKYWARD_TRAFFIC_INLINE`, `SKYWARD_TRAFFIC_GPU_REPEAT=N` | road traffic: simulate in the render thread (as in the browser); draw it N times (GPU cost measurement) |
 | `SKYWARD_FRAME_LOG=file`, `SKYWARD_SOAK_LOG=10`, `SKYWARD_REBASE_LOG` | frame times, soak log interval, origin shifts |
-| `SKYWARD_AIRPORT_DEBUG`, `SKYWARD_TERRAIN_DEBUG`, `SKYWARD_DEBUG_DEBRIS`, `BOT_TRACE=Final,Flare` | debug logging |
+| `SKYWARD_AIRPORT_DEBUG`, `SKYWARD_TERRAIN_DEBUG`, `SKYWARD_DEBUG_DEBRIS`, `BOT_TRACE=Final,Flare`, `SKYWARD_PROC_DEBUG` | debug logging (the last: the bot's procedure planner and holds) |
 | `SKYWARD_UI_SCRIPT="4:aircraft,7:departure,10:airport=EGKK,12:fly"` | drive the menus for tests |
 
 </details>
@@ -821,7 +857,63 @@ A shift costs well under 0.1 ms.
 The window presents with vsync (FIFO) by default. The simulation advances by the median of recent
 frame times, so hitches pass through and a slow correction keeps sim time on wall time. The physics
 pose is interpolated between 120 Hz steps, so motion is even at any refresh rate. `--vsync off` or
-Settings › Video switches to mailbox / immediate for the lowest latency.
+Settings › Video switches to mailbox (fast sync) / immediate for the lowest latency; the frame-rate
+limit (30 / 60 / 120 / 144 / the display's refresh) sleeps and then spins the last half millisecond.
+
+</details>
+
+<details>
+<summary><b>Graphics settings and performance</b></summary>
+
+**Settings › Video** (`src/ui/settings_video.rs`, knobs in `src/gfx/quality.rs`) has a preset —
+Low, Medium, High, Ultra, or Custom once anything is changed — picked on first run from the GPU
+(laptop GPUs one step down; Low / Medium in the browser), and every option it drives, grouped as
+Display, Image quality, Lighting & shadows, World detail, Effects and Camera. Each has a one-line
+explanation and its measured GPU cost at the current resolution. Everything applies live except
+switching to / from MSAA, anisotropic filtering / texture detail and HDR output (marked
+"restart"). Saved in `settings.json` under `"video"` (or `localStorage` in the browser); files from
+before it existed migrate from their scenery-detail level.
+
+| | Low | Medium | High | Ultra |
+|---|---|---|---|---|
+| Anti-aliasing, render scale | FXAA, 75 % + dynamic res | TAA(U), 85 % + dynamic res | TAA, 100 % | TAA, 100 % |
+| Shadows | 1024², 2 cascades, 60 %, hard | 2048², 3 cascades, 80 % | 4096², 4 cascades | 4096², 4 cascades, 115 % |
+| AO / clouds / fog | off / low / low | low / medium / medium | medium / high / high | high / ultra / ultra |
+| Water reflections, scenery detail | quarter, Low | quarter, Medium | half, High | half, Ultra |
+| Trees (density × distance) | 50 % × 60 % | 75 % × 80 % | 100 % × 100 % | 100 % × 120 % |
+| Anisotropic filtering, effects | 2×, low | 4×, medium | 8×, high | 16×, high, lens flare |
+
+Motion blur (camera, or camera + objects), depth of field (cockpit auto-focus / external on the
+aircraft), lens dirt, chromatic aberration and film grain are off in every preset.
+
+**Anti-aliasing.** TAA (`src/gfx/taa.rs`, `src/shaders/taa.wgsl`) jitters the projection by a
+Halton(2, 3) sequence and accumulates frames: static scenery is reprojected from the eye-distance
+buffer through last frame's camera — eye-relative, so the floating origin moving changes nothing —
+the aircraft (yours, multiplayer and live traffic, including moving parts and the cockpit) and road
+vehicles write their own motion in a velocity pass, missiles / tracers / flames are a reactive mask
+(mostly the new frame), and clouds move with their own distance. History is sampled with a
+Catmull-Rom filter and variance-clipped in YCoCg (loosely for still pixels, so wires and markings
+converge; tightly in motion); disocclusions (judged against the history's distances) take more of
+the new frame. Below 100 % render scale the same pass upscales (TAAU), and contrast-adaptive
+sharpening follows. Without MSAA, aircraft glass is alpha-blended and foliage / prop discs dither.
+MSAA 4× and FXAA remain as options. Headless captures render 16 frames of a still view before
+writing the PNG, so goldens are the converged image.
+
+**GPU time per preset** (RTX 5090 Laptop, 135 W, Vulkan, 2560×1440, `SKYWARD_BENCH_FRAMES=90`:
+per-pass timestamp medians, best of two runs on a shared machine; scene res = render scale, no
+dynamic resolution):
+
+| Scene | Low | Medium | High | Ultra | High + MSAA 4× | High, TAAU 67 % |
+|---|---|---|---|---|---|---|
+| London by day (chase, 300 m) | 3.1 ms | 5.6 ms | 6.4 ms | 7.4 ms | 7.4 ms | 4.5 ms |
+| London at night | 3.1 ms | 4.3 ms | 6.0 ms | 6.2 ms | 7.1 ms | 3.6 ms |
+| Under cumulus (SCT025 BKN040, 1100 m) | 3.7 ms | 5.8 ms | 8.5 ms | 10.1 ms | 9.3 ms | 5.6 ms |
+| Heathrow (airport detail) | 2.5 ms | 3.9 ms | 5.4 ms | 6.3 ms | 5.5 ms | 3.8 ms |
+
+High holds ≥ 120 fps of GPU time over London; TAA costs ~0.28 ms and saves ~1 ms over MSAA 4×.
+The **performance overlay** (Ctrl+F3, or Settings › Video) shows FPS, a frame-time graph, CPU
+times, the GPU time per pass (timestamp queries, read back without stalling; not in the browser),
+the render / output resolution and a VRAM estimate.
 
 </details>
 
