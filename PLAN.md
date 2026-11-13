@@ -46,13 +46,14 @@ item lands; keep entries one line.
 - [ ] **P2** Night follow-ups: light pools beyond 4 km, halos behind clouds, README/help for L key
 - [x] Supersonic + atmospheric VFX: vapour cone, shock diamonds, heat haze, Schmidt–Appleman contrails, vortex / wing condensation (L)
 - [x] Crash VFX: fireball, fuel fire + smoke column, dust, spray, sparks, tyre / engine smoke; GPU particles lit by sun/moon/fires (L)
-- [ ] **P1** VFX follow-ups: vapour cone ray-march costs ~1.2 ms at 1440p when it fills the screen (half-res option); wing-surface fog low-contrast on white airliners; smoke at night only lit by fire ambient (no volumetric glow); fire streaks on still-sliding wrecks; particles drawn over clouds (no cloud depth); haze strength untuned for props
-- [ ] **P1** TAA/upscaling (DLSS-class quality via own TAA + sharpening) with MSAA fallback
+- [ ] **P1** VFX follow-ups: vapour cone ray-march costs ~1.2 ms at 1440p when it fills the screen (Effects quality Low / Medium now march 50 / 75 % of the steps, GFX; a half-res pass is still open); wing-surface fog low-contrast on white airliners; smoke at night only lit by fire ambient (no volumetric glow); fire streaks on still-sliding wrecks; particles drawn over clouds (no cloud depth); haze strength untuned for props
+- [x] **P1** TAA / TAAU (jittered Halton, camera + aircraft + cloud motion vectors, floating-origin-safe reprojection, Catmull-Rom history, YCoCg variance clipping, disocclusion test, CAS sharpening, converged headless shots) with MSAA 4× and FXAA options; aircraft glass alpha-blended and foliage dithered without MSAA; motion blur, depth of field, lens flare / dirt, chromatic aberration, film grain, HDR (scRGB) output (GFX)
+- [ ] **P1** GFX follow-ups: SSR for glass towers / wet runways (not started: planar water + puddle reflections only); GTAO; a reactive mask for particles / rain (no motion vectors: TAA clips them); motion vectors for road traffic, airport vehicles and the dynamic mesh (afterburner flames, tenders: treated as static); dynamic resolution re-creates the scene targets per 5 % step (resets cloud history: a viewport-based scheme would not); HDR untested on a real HDR display; runway edge-line segments from two meshes disagree by ~1 px at some sub-pixel offsets (a kink with TAA at rest, crawl with MSAA in motion)
 - [ ] **P1** Screen-space or ray-traced reflections for glass towers/wet streets
 - [ ] **P1** Rain on canopy/windscreen droplets + wipers; icing on airframe
 - [ ] **P1** Lightning/thunderstorms (CB clouds), rain shafts, rainbows
 - [ ] **P2** Photo mode (free cam, DOF, exposure, filters)
-- [ ] **P2** Quality presets (Low → Ultra) and dynamic resolution
+- [x] **P2** Quality presets Low / Medium / High / Ultra / Custom (auto-detected from the GPU), every knob in Settings › Video with cost hints, render scale 50–200 %, dynamic resolution, frame limiter, present modes, window modes, performance overlay (Ctrl+F3) with per-pass GPU timestamps (GFX)
 
 ## 3. Aircraft
 - [x] Real aircraft from FlightGear (GPL): C172, ASK 21, Spitfire IX, F-16, ATR 72, E190, A320 — textured models, cockpits, animations, neutral liveries (N)
@@ -124,7 +125,7 @@ item lands; keep entries one line.
 - [x] **P1** CI: fmt (formatted paths) + clippy -D warnings + tests + release build + wasm32 check on push; lavapipe smoke render nightly; local golden image/audio regression `scripts/regress.sh` (P)
 - [ ] **P2** CI follow-ups: one-shot `cargo fmt` of the tree when no track is active → `cargo fmt --check`; burn down the crate-wide clippy allows in Cargo.toml
 - [ ] **P1** Native release packages (Linux AppImage/Flatpak, Windows, macOS)
-- [ ] **P1** Performance budgets enforced in CI (GPU timing on soak runs)
+- [ ] **P1** Performance budgets enforced in CI (GPU timing on soak runs) — the measuring is there (`SKYWARD_BENCH_FRAMES`, GFX)
 - [ ] **P1** Licence/attribution audit for every asset and data source (OSM/OpenMapTiles, FlightGear, OurAirports, fonts, audio)
 - [ ] **P1** 8-hour soak (bot) with memory/VRAM leak checks; offline mode test
 - [ ] **P2** Settings/save persistence, crash logs, opt-in diagnostics (no tracking by default)
@@ -159,3 +160,4 @@ item lands; keep entries one line.
 | H2a | Jets: 777-300ER, CRJ700, Citation X, Concorde (+ importer: 2D panels, path-scoped excludes, forced submodels, planar screen UVs, interior shells; JSBSim `aero_ref_pt_shift_x`) | ✅ |
 | H2b | Five more propeller types (Extra 500, Super Cub, Zlin Z-50 LX, Otter floats, DC-3) + water operations (`src/water.rs`) | ✅ |
 | next | H2 extra aircraft (proposed) | ⏳ awaiting decision |
+| GFX | TAA / TAAU, MSAA / FXAA, presets + Settings › Video, dynamic resolution, frame limiter, motion blur / DOF / lens effects, HDR output, performance overlay (`src/gfx/`, `src/ui/settings_video.rs`) | ✅ |

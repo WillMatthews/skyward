@@ -30,10 +30,11 @@ struct Globals {
     city: vec4<f32>,      // x street lights on, y office windows lit, z home windows lit, w local hours
     lmap: vec4<f32>,      // ground light map: eye-relative centre x, z, 1 / size, enabled
     misc: vec4<f32>,      // x airport lights level, y beacons on, z ground fog extinction (/km), w fog top (m)
-    misc2: vec4<f32>,     // x traffic density, y aircraft lights count, z moon phase angle, w unused
+    misc2: vec4<f32>,     // x traffic density, y aircraft lights count, z moon phase angle, w soft shadows (1 = PCF)
     alights: array<vec4<f32>, 12>, // aircraft lights: [pos, range], [dir, cos outer], [rgb cd, cos inner]
     pre: vec4<f32>,       // x pre-exposure: every radiance written to the HDR targets is x this
-                          // (sun_e, sky.x and the SH ambient already include it), y 1 / x
+                          // (sun_e, sky.x and the SH ambient already include it), y 1 / x,
+                          // z mirror plane height, w = 0 with MSAA, else 1 + frame index (alpha dither)
 };
 
 // Absolute radiance (scene units) → what the HDR targets hold.
@@ -189,6 +190,19 @@ fn is_refl() -> bool {
     return g.shadow_info.y > 0.5;
 }
 
+// Without MSAA (TAA / FXAA) there is no alpha-to-coverage: partly
+// transparent surfaces (foliage twigs, prop discs) keep a fraction `a` of
+// their pixels instead — interleaved gradient noise shifted every frame, so
+// TAA resolves the dither into the blend. True = discard this fragment.
+fn alpha_dither(a: f32, px: vec2<f32>) -> bool {
+    if (g.pre.w < 0.5 || a >= 0.999) {
+        return false;
+    }
+    let q = px + vec2<f32>(5.588238, 3.236068) * g.pre.w;
+    let n = fract(52.9829189 * fract(dot(q, vec2<f32>(0.06711056, 0.00583715))));
+    return a <= n;
+}
+
 // ---------------------------------------------------------------- atmosphere
 
 fn eye_r() -> f32 {
@@ -315,6 +329,10 @@ fn cascade_sample(idx: i32, wpos: vec3<f32>, n: vec3<f32>) -> f32 {
         return 1.0;
     }
     let ts = 1.0 / g.shadow_info.x;
+    if (g.misc2.w < 0.5) {
+        // Hard shadows (low quality): one bilinear comparison (2x2 PCF).
+        return textureSampleCompareLevel(shadow_map, shadow_samp, uv, idx, p.z - 0.00002);
+    }
     // 16-tap bilinear PCF over a 5x5 texel footprint with tent weights (Castano).
     let base = uv * g.shadow_info.x - 0.5;
     let bf = floor(base);

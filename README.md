@@ -90,7 +90,13 @@ painted over or composited.
 ### Rendering
 
 - **Physically based sky.** Hillaire-style atmosphere with aerial perspective, AgX tonemapping,
-  bloom, cascaded shadows, SSAO, planar water reflections and MSAA HDR.
+  bloom, cascaded shadows, SSAO and planar water reflections, in HDR.
+- **Temporal anti-aliasing and upscaling.** Jittered frames reprojected with motion vectors for the
+  camera, the aircraft and the clouds, variance clipping and sharpening — stable at 250 m/s, with
+  crisp cockpit displays — plus MSAA and FXAA options, dynamic resolution and a frame limiter.
+- **Quality presets.** Low / Medium / High / Ultra (auto-detected from the GPU) drive every option
+  in Settings › Video, each with a one-line explanation and its GPU cost; HDR output, motion blur,
+  depth of field, lens flare and a performance overlay (Ctrl+F3).
 - **Volumetric clouds.** Ray-marched cumulus, stratus and cirrus with temporal reprojection and
   cloud shadows on the ground.
 - **Weather and seasons.** Rain, snow, fog and wet ground; leaf fall, autumn colours and crop
@@ -447,6 +453,7 @@ the real flight model through the controls and autopilot. Nothing is scripted or
 | `--fail pitot,vacuum,fire2@30` | systems failures by id, optionally armed `@S` seconds in |
 | `--cold-dark` | start cold and dark |
 | `--vsync on\|off` | present with vsync (default on) / mailbox or immediate |
+| `--preset low\|medium\|high\|ultra`, `--aa taa\|msaa4\|fxaa\|off`, `--render-scale S` | graphics overrides (Settings › Video) |
 | `--hud full\|minimal\|off`, `--map corner\|large\|off` | instrument / map mode |
 | `--radius-km R`, `--map-zoom N` | detailed-tile load radius, moving-map zoom step 0–5 |
 | `--mute` | start muted |
@@ -490,6 +497,10 @@ skyward --shot m.png --aircraft meridian320 --bot --soak --seconds 4200 --warp 8
 | `SKYWARD_COCKPIT_FOV=deg` | cockpit field of view for captures |
 | `SKYWARD_NO_VFX`, `SKYWARD_NO_AIRPORTS`, `SKYWARD_NO_OVERPASS`, `SKYWARD_NO_LANDMARKS`, `SKYWARD_FLAT_TERRAIN` | switch layers off |
 | `SKYWARD_GPU_TIMING`, `SKYWARD_UI_TIMING`, `SKYWARD_VFX_STATS` | per-pass GPU timing, UI CPU cost, effect counts |
+| `SKYWARD_BENCH_FRAMES=N` | headless GPU benchmark: N more frames, per-pass medians (timestamp queries) |
+| `SKYWARD_MOTION_SHOT=1` (with `--realtime`) | capture the last frame of the flight, in motion (TAA / motion blur as seen) |
+| `SKYWARD_PERF_OVERLAY=1`, `SKYWARD_UI_SCROLL=points` | performance overlay in a capture; scroll a menu page first |
+| `SKYWARD_QUALITY="clouds=0,ao=3,aa=fxaa"` | any Settings › Video knob (its `settings.json` key) for captures / benchmarks |
 | `SKYWARD_FRAME_LOG=file`, `SKYWARD_SOAK_LOG=10`, `SKYWARD_REBASE_LOG` | frame times, soak log interval, origin shifts |
 | `SKYWARD_AIRPORT_DEBUG`, `SKYWARD_TERRAIN_DEBUG`, `SKYWARD_DEBUG_DEBRIS`, `BOT_TRACE=Final,Flare` | debug logging |
 | `SKYWARD_UI_SCRIPT="4:aircraft,7:departure,10:airport=EGKK,12:fly"` | drive the menus for tests |
@@ -693,7 +704,62 @@ A shift costs well under 0.1 ms.
 The window presents with vsync (FIFO) by default. The simulation advances by the median of recent
 frame times, so hitches pass through and a slow correction keeps sim time on wall time. The physics
 pose is interpolated between 120 Hz steps, so motion is even at any refresh rate. `--vsync off` or
-Settings › Display switches to mailbox / immediate for the lowest latency.
+Settings › Video switches to mailbox (fast sync) / immediate for the lowest latency; the frame-rate
+limit (30 / 60 / 120 / 144 / the display's refresh) sleeps and then spins the last half millisecond.
+
+</details>
+
+<details>
+<summary><b>Graphics settings and performance</b></summary>
+
+**Settings › Video** (`src/ui/settings_video.rs`, knobs in `src/gfx/quality.rs`) has a preset —
+Low, Medium, High, Ultra, or Custom once anything is changed — picked on first run from the GPU
+(laptop GPUs one step down; Low / Medium in the browser), and every option it drives, grouped as
+Display, Image quality, Lighting & shadows, World detail, Effects and Camera. Each has a one-line
+explanation and its measured GPU cost at the current resolution. Everything applies live except
+switching to / from MSAA, anisotropic filtering / texture detail and HDR output (marked
+"restart"). Saved in `settings.json` under `"video"` (or `localStorage` in the browser); files from
+before it existed migrate from their scenery-detail level.
+
+| | Low | Medium | High | Ultra |
+|---|---|---|---|---|
+| Anti-aliasing, render scale | FXAA, 75 % + dynamic res | TAA(U), 85 % + dynamic res | TAA, 100 % | TAA, 100 % |
+| Shadows | 1024², 2 cascades, 60 %, hard | 2048², 3 cascades, 80 % | 4096², 4 cascades | 4096², 4 cascades, 115 % |
+| AO / clouds / fog | off / low / low | low / medium / medium | medium / high / high | high / ultra / ultra |
+| Water reflections, scenery detail | quarter, Low | quarter, Medium | half, High | half, Ultra |
+| Trees (density × distance) | 50 % × 60 % | 75 % × 80 % | 100 % × 100 % | 100 % × 120 % |
+| Anisotropic filtering, effects | 2×, low | 4×, medium | 8×, high | 16×, high, lens flare |
+
+Motion blur (camera, or camera + objects), depth of field (cockpit auto-focus / external on the
+aircraft), lens dirt, chromatic aberration and film grain are off in every preset.
+
+**Anti-aliasing.** TAA (`src/gfx/taa.rs`, `src/shaders/taa.wgsl`) jitters the projection by a
+Halton(2, 3) sequence and accumulates frames: static scenery is reprojected from the eye-distance
+buffer through last frame's camera — eye-relative, so the floating origin moving changes nothing —
+the aircraft (yours and multiplayer traffic, including moving parts and the cockpit) write their own
+motion in a velocity pass, and clouds move with their own distance. History is sampled with a
+Catmull-Rom filter and variance-clipped in YCoCg (loosely for still pixels, so wires and markings
+converge; tightly in motion); disocclusions (judged against the history's distances) take more of
+the new frame. Below 100 % render scale the same pass upscales (TAAU), and contrast-adaptive
+sharpening follows. Without MSAA, aircraft glass is alpha-blended and foliage / prop discs dither.
+MSAA 4× and FXAA remain as options. Headless captures render 16 frames of a still view before
+writing the PNG, so goldens are the converged image.
+
+**GPU time per preset** (RTX 5090 Laptop, 135 W, Vulkan, 2560×1440, `SKYWARD_BENCH_FRAMES=90`:
+per-pass timestamp medians, best of two runs on a shared machine; scene res = render scale, no
+dynamic resolution):
+
+| Scene | Low | Medium | High | Ultra | High + MSAA 4× | High, TAAU 67 % |
+|---|---|---|---|---|---|---|
+| London by day (chase, 300 m) | 3.1 ms | 5.6 ms | 6.4 ms | 7.4 ms | 7.4 ms | 4.5 ms |
+| London at night | 3.1 ms | 4.3 ms | 6.0 ms | 6.2 ms | 7.1 ms | 3.6 ms |
+| Under cumulus (SCT025 BKN040, 1100 m) | 3.7 ms | 5.8 ms | 8.5 ms | 10.1 ms | 9.3 ms | 5.6 ms |
+| Heathrow (airport detail) | 2.5 ms | 3.9 ms | 5.4 ms | 6.3 ms | 5.5 ms | 3.8 ms |
+
+High holds ≥ 120 fps of GPU time over London; TAA costs ~0.28 ms and saves ~1 ms over MSAA 4×.
+The **performance overlay** (Ctrl+F3, or Settings › Video) shows FPS, a frame-time graph, CPU
+times, the GPU time per pass (timestamp queries, read back without stalling; not in the browser),
+the render / output resolution and a VRAM estimate.
 
 </details>
 

@@ -87,6 +87,9 @@ pub struct Settings {
     pub last: Option<LastFlight>,
     pub recents: Vec<String>,
     pub favourites: Vec<String>,
+    /// Video: quality preset and knobs, display options (gfx/quality.rs, Settings › Video).
+    /// `detail` / `vsync` above mirror its scenery detail / present mode.
+    pub video: crate::gfx::quality::VideoSettings,
 }
 
 impl Default for Settings {
@@ -107,6 +110,7 @@ impl Default for Settings {
             last: None,
             recents: Vec::new(),
             favourites: Vec::new(),
+            video: crate::gfx::quality::VideoSettings::default(),
         }
     }
 }
@@ -193,6 +197,7 @@ impl Settings {
             "last": self.last.as_ref().map(|l| json!({ "aircraft": l.aircraft, "airport": l.airport, "start": l.start, "watch": l.watch })),
             "recents": self.recents,
             "favourites": self.favourites,
+            "video": self.video.to_json(),
         })
     }
 
@@ -228,6 +233,7 @@ impl Settings {
             start: l.get("start").and_then(|x| x.as_str()).unwrap_or("").into(),
             watch: l.get("watch").and_then(|x| x.as_bool()).unwrap_or(false),
         });
+        let video = crate::gfx::quality::VideoSettings::from_settings_json(v);
         Settings {
             ui_scale: f("ui_scale", 1.0).clamp(0.7, 1.6),
             hud: match st("hud").as_str() {
@@ -235,8 +241,9 @@ impl Settings {
                 "Off" => HudMode::Off,
                 _ => HudMode::Full,
             },
-            vsync: b("vsync", true),
-            detail: (f("detail", if crate::platform::WEB { 0.0 } else { 2.0 }) as u8).min(3),
+            // (Mirrors of the video settings.)
+            vsync: video.present == crate::gfx::quality::Present::Fifo,
+            detail: video.q.detail,
             speed: match st("speed").as_str() {
                 "kmh" => SpeedUnit::Kmh,
                 "mph" => SpeedUnit::Mph,
@@ -255,6 +262,7 @@ impl Settings {
             last,
             recents: list("recents"),
             favourites: list("favourites"),
+            video,
         }
     }
 }
@@ -266,6 +274,9 @@ mod tests {
     #[test]
     fn round_trip() {
         let mut s = Settings { hud: HudMode::Minimal, vsync: false, detail: 1, speed: SpeedUnit::Kmh, alt: AltUnit::Metres, ..Settings::default() };
+        // (`detail` / `vsync` mirror the video settings.)
+        s.video.apply_preset(crate::gfx::quality::Preset::Medium);
+        s.video.present = crate::gfx::quality::Present::Mailbox;
         s.push_recent("EGLL");
         s.push_recent("EGLC");
         s.push_recent("EGLL");

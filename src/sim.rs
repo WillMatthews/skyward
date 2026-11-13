@@ -409,6 +409,8 @@ pub struct Sim {
     /// Bounding radius of the model (m): drives camera distances.
     pub size: f32,
     pub last_view: Option<FrameView>,
+    /// Vertical field of view (degrees): external (chase) camera, cockpit (Settings › Video).
+    pub fov_deg: (f32, f32),
     /// Runway used for the current start (also anchors the tower camera).
     pub runway: Option<Runway>,
     /// Set when the chosen airfield's scenery is not loaded yet: re-spawn once it is.
@@ -562,6 +564,7 @@ impl Sim {
             model,
             size,
             last_view: None,
+            fov_deg: (crate::gfx::quality::FOV_EXTERNAL, crate::gfx::quality::FOV_COCKPIT),
             runway: None,
             needs_respawn: false,
             map_zoom: 2,
@@ -1702,7 +1705,7 @@ impl Sim {
     pub fn frame(&mut self, aspect: f32) -> (FrameView, MeshData) {
         (self.rpos, self.rrot) = self.pose();
         let pos = self.rpos;
-        let mut fov = 60f32.to_radians();
+        let mut fov = self.fov_deg.0.to_radians();
         let show_aircraft = true;
         let (eye, target, cam_up) = match self.cam {
             CamMode::Chase => {
@@ -1729,7 +1732,7 @@ impl Sim {
                 // SKYWARD_COCKPIT_FOV=<deg>: narrower view for instrument close-ups (captures).
                 static FOV: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
                 let f = *FOV.get_or_init(|| std::env::var("SKYWARD_COCKPIT_FOV").ok().and_then(|v| v.parse::<f32>().ok()).filter(|v| (5.0..=120.0).contains(v)));
-                fov = f.unwrap_or(72.0).to_radians();
+                fov = f.unwrap_or(self.fov_deg.1).to_radians();
                 let e = pos + self.rrot * self.model.eye;
                 // Head-look (input/sim_glue.rs).
                 let head = self.rrot * self.pilot.look_rot();

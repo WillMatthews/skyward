@@ -3,7 +3,7 @@
 //! the loading screen.
 
 use super::overview::{self, View as OView};
-use super::settings::{HudMode, MapStyle, DETAIL_NAMES};
+use super::settings::{HudMode, MapStyle};
 use super::{alpha, f_display, f_inst, f_inst_b, f_mono, f_semi, f_ui, gradient_rect, hhmm, pal, panel, panel_with, sp, thousands, Action, AltUnit, Screen, SpeedUnit, UiState};
 use crate::airports::{self, Airport, Db, Kind};
 use crate::flight::{AircraftDef, Category, EngineKind};
@@ -1701,8 +1701,9 @@ pub fn settings(ui: &mut Ui, st: &mut UiState, in_flight: bool) {
         let page_r = Rect::from_min_max(body.min, Pos2::new(card.max.x - 12.0, body.max.y));
         let tab = st.settings_tab;
         let audio_status = st.audio_status.clone();
+        let video_env = st.video_env.clone();
         let s = &mut st.settings;
-        super::scroll::page(ui, page_r, ["settings_display", "settings_units", "settings_sound"][tab.min(2)], pal::PANEL_SOLID, |ui, o, _| {
+        super::scroll::page(ui, page_r, ["settings_display", "settings_units", "settings_sound"][tab.min(2)], pal::PANEL_SOLID, |ui, o, pw| {
             let p = ui.painter().clone();
             let mut y = o.y;
             match tab {
@@ -1721,16 +1722,6 @@ pub fn settings(ui: &mut Ui, st: &mut UiState, in_flight: bool) {
                         s.hud = [HudMode::Full, HudMode::Minimal, HudMode::Off][i];
                     }
                     y += row_h;
-                    label(&p, y, "Scenery detail", "Detailed scenery radius");
-                    if let Some(i) = segmented(ui, ctrl(y), "detail", &DETAIL_NAMES, s.detail as usize) {
-                        s.detail = i as u8;
-                    }
-                    y += row_h;
-                    label(&p, y, "Vertical sync", "Off: lowest latency, may stutter");
-                    if let Some(i) = segmented(ui, ctrl(y), "vsync", &["On", "Off"], if s.vsync { 0 } else { 1 }) {
-                        s.vsync = i == 0;
-                    }
-                    y += row_h;
                     label(&p, y, "Map style", "Auto follows the sun");
                     let cur = [MapStyle::Auto, MapStyle::Day, MapStyle::Night].iter().position(|m| *m == s.map_style).unwrap_or(0);
                     if let Some(i) = segmented(ui, ctrl(y), "mapstyle", &["Auto", "Day", "Night"], cur) {
@@ -1741,6 +1732,9 @@ pub fn settings(ui: &mut Ui, st: &mut UiState, in_flight: bool) {
                     if let Some(i) = segmented(ui, ctrl(y), "north", &["North up", "Track up"], if s.north_up { 0 } else { 1 }) {
                         s.north_up = i == 0;
                     }
+                    // Video: presets, display, every graphics option (ui/settings_video.rs).
+                    y += row_h + 6.0;
+                    y += super::settings_video::video_tab(ui, Pos2::new(x, y), pw - (x - o.x), s, &video_env);
                 }
                 1 => {
                     label(&p, y, "Speed", "Panels and the status card; dials keep the aircraft's own units");

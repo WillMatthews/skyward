@@ -26,6 +26,7 @@ pub mod overview;
 pub mod radio;
 pub mod scroll;
 pub mod settings;
+pub mod settings_video;
 pub mod toast;
 
 use egui::{epaint, Align2, Color32, CornerRadius, FontFamily, FontId, Pos2, Rect, Shape, Stroke, Vec2};
@@ -522,6 +523,10 @@ pub struct UiState {
     /// Comms menu / subtitles (ui/comms.rs).
     pub comms: comms::CommsUi,
     pub audio_status: String,
+    /// What Settings › Video needs from the app: monitors, modes, GPU (main.rs fills it).
+    pub video_env: crate::gfx::quality::VideoEnv,
+    /// Performance overlay data (Ctrl+F3; gfx/perf.rs).
+    pub perf: crate::gfx::perf::Stats,
     /// Game controllers, rebinding and the mouse yoke (input/).
     pub input: crate::input::InputSystem,
     /// Settings › Controls: sub-page and the expanded axis row.
@@ -566,6 +571,8 @@ impl UiState {
             radio: Default::default(),
             comms: Default::default(),
             audio_status: String::new(),
+            video_env: Default::default(),
+            perf: Default::default(),
             input: crate::input::InputSystem::new(),
             controls_page: 0,
             controls_axis: None,

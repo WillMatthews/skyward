@@ -173,7 +173,7 @@ impl AirportRenderer {
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
-                multisample: wgpu::MultisampleState { count: crate::gfx::MSAA, mask: !0, alpha_to_coverage_enabled: true },
+                multisample: wgpu::MultisampleState { count: crate::gfx::msaa(), mask: !0, alpha_to_coverage_enabled: crate::gfx::msaa() > 1 },
                 fragment: Some(wgpu::FragmentState {
                     module: &module,
                     entry_point: Some(fs),
@@ -218,7 +218,8 @@ impl AirportRenderer {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
-            anisotropy_clamp: 8,
+            anisotropy_clamp: crate::gfx::texture_sampling().0,
+            lod_min_clamp: crate::gfx::texture_sampling().1,
             ..Default::default()
         });
         let white = upload_texture(device, queue, 1, 1, &[255, 255, 255, 255], &[]);

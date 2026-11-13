@@ -5,7 +5,7 @@
 
 use super::place::{TileLights, TrafficSeg, AC_SPOTS};
 use super::{kind, LightInst};
-use crate::gfx::{DEPTH, DIST, HDR, MSAA};
+use crate::gfx::{DEPTH, DIST, HDR, msaa};
 use glam::{Mat3, Vec2, Vec3};
 use wgpu::util::DeviceExt;
 
@@ -295,11 +295,11 @@ impl LightRenderer {
                 cache: None,
             })
         };
-        let sprite_main = scene_pipe("light sprites", "vs_sprite", &light_vb, MSAA);
+        let sprite_main = scene_pipe("light sprites", "vs_sprite", &light_vb, msaa());
         let sprite_refl = scene_pipe("light sprites refl", "vs_sprite", &light_vb, 1);
-        let traffic_main = scene_pipe("traffic", "vs_traffic", &traffic_vb, MSAA);
+        let traffic_main = scene_pipe("traffic", "vs_traffic", &traffic_vb, msaa());
         let traffic_refl = scene_pipe("traffic refl", "vs_traffic", &traffic_vb, 1);
-        let star_main = scene_pipe("stars", "vs_star", &star_vb, MSAA);
+        let star_main = scene_pipe("stars", "vs_star", &star_vb, msaa());
         let halo = full_pipe("light halos", "vs_halo", "fs_halo", &light_vb, HDR);
         let beams = full_pipe("light beams", "vs_full", "fs_beams", &[], HDR);
         let map_pipe = full_pipe("light map", "vs_map", "fs_map", &light_vb, HDR);

@@ -140,11 +140,22 @@ struct Slot {
     prepared: Prepared,
     /// Per prepared draw: the display bind group to use (index into `disp_bgs`).
     disp_of: Vec<Option<usize>>,
+    /// Velocity pass (TAA / motion blur): last frame's transform per instance.
+    prev_buf: wgpu::Buffer,
+    prev_bg: wgpu::BindGroup,
+    /// (chunk, occurrence) → last frame's eye-relative transform, and the
+    /// asset it belonged to (a different model starts without motion).
+    hist: std::collections::HashMap<(u32, u32), [[f32; 4]; 4]>,
+    hist_asset: usize,
 }
 
 pub struct AircraftRenderer {
     main_cull: wgpu::RenderPipeline,
     main_twosided: wgpu::RenderPipeline,
+    /// Translucent glass without MSAA (TAA / FXAA): alpha-blended over the
+    /// scene, no depth / distance writes — the eye distance (and so the
+    /// motion vectors) stay the scenery's behind the canopy.
+    main_blend: wgpu::RenderPipeline,
     refl: wgpu::RenderPipeline,
     shadow: wgpu::RenderPipeline,
     inst_bgl: wgpu::BindGroupLayout,
@@ -162,6 +173,9 @@ pub struct AircraftRenderer {
     disp_sampler: wgpu::Sampler,
     /// (generation, per display kind: bind group).
     disp_bgs: Option<(u64, Vec<(String, wgpu::BindGroup)>)>,
+    /// Velocity pass (gfx/taa.rs): pipeline and its last-frame transforms' layout.
+    vel_pipe: wgpu::RenderPipeline,
+    prev_bgl: wgpu::BindGroupLayout,
 }
 
 /// Scene radiance of fully lit cockpit backlighting / annunciators (× the
@@ -255,7 +269,7 @@ impl AircraftRenderer {
             bind_group_layouts: &[Some(shadow_bgl), Some(&inst_bgl)],
             immediate_size: 0,
         });
-        let pipe = |label: &str, cull: Option<wgpu::Face>, samples: u32| {
+        let pipe = |label: &str, cull: Option<wgpu::Face>, samples: u32, blend: bool| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&layout),
@@ -263,29 +277,30 @@ impl AircraftRenderer {
                 primitive: wgpu::PrimitiveState { cull_mode: cull, ..Default::default() },
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: crate::gfx::DEPTH,
-                    depth_write_enabled: Some(true),
+                    depth_write_enabled: Some(!blend),
                     depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
-                multisample: wgpu::MultisampleState { count: samples, mask: !0, alpha_to_coverage_enabled: samples > 1 },
+                multisample: wgpu::MultisampleState { count: samples, mask: !0, alpha_to_coverage_enabled: samples > 1 && !blend },
                 fragment: Some(wgpu::FragmentState {
                     module: &module,
                     entry_point: Some("fs_aircraft"),
                     compilation_options: Default::default(),
                     targets: &[
-                        Some(wgpu::ColorTargetState { format: crate::gfx::HDR, blend: None, write_mask: wgpu::ColorWrites::ALL }),
-                        Some(wgpu::ColorTargetState { format: crate::gfx::DIST, blend: None, write_mask: wgpu::ColorWrites::ALL }),
+                        Some(wgpu::ColorTargetState { format: crate::gfx::HDR, blend: blend.then_some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL }),
+                        Some(wgpu::ColorTargetState { format: crate::gfx::DIST, blend: None, write_mask: if blend { wgpu::ColorWrites::empty() } else { wgpu::ColorWrites::ALL } }),
                     ],
                 }),
                 multiview_mask: None,
                 cache: None,
             })
         };
-        let main_cull = pipe("aircraft", Some(wgpu::Face::Back), crate::gfx::MSAA);
-        let main_twosided = pipe("aircraft 2-sided", None, crate::gfx::MSAA);
+        let main_cull = pipe("aircraft", Some(wgpu::Face::Back), crate::gfx::msaa(), false);
+        let main_twosided = pipe("aircraft 2-sided", None, crate::gfx::msaa(), false);
+        let main_blend = pipe("aircraft glass", None, crate::gfx::msaa(), true);
         // The mirrored reflection flips the winding: draw both sides there.
-        let refl = pipe("aircraft refl", None, 1);
+        let refl = pipe("aircraft refl", None, 1, false);
         let shadow = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("aircraft shadow"),
             layout: Some(&shadow_layout),
@@ -315,6 +330,63 @@ impl AircraftRenderer {
             multiview_mask: None,
             cache: None,
         });
+        // Velocity pass: screen motion of every aircraft fragment (gfx/taa.rs).
+        let prev_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("aircraft prev"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None },
+                count: None,
+            }],
+        });
+        let vel_pipe = {
+            let vel_mod = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("aircraft velocity"),
+                source: wgpu::ShaderSource::Wgsl(format!("{}\n{}", include_str!("shaders/aircraft_dyn.wgsl"), include_str!("shaders/aircraft_vel.wgsl")).into()),
+            });
+            let vel_bgl = crate::gfx::taa::vel_bgl(device);
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("aircraft velocity"),
+                bind_group_layouts: &[Some(&vel_bgl), Some(&inst_bgl), Some(&prev_bgl)],
+                immediate_size: 0,
+            });
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("aircraft velocity"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &vel_mod,
+                    entry_point: Some("vs_vel"),
+                    compilation_options: Default::default(),
+                    buffers: &[
+                        Some(wgpu::VertexBufferLayout {
+                            array_stride: std::mem::size_of::<crate::aircraft_asset::Vertex>() as u64,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                            attributes: &[wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 0, shader_location: 0 }],
+                        }),
+                        Some(part_layout(1)),
+                    ],
+                },
+                primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: crate::gfx::DEPTH,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &vel_mod,
+                    entry_point: Some("fs_vel"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState { format: crate::gfx::taa::VEL, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let tex_q = crate::gfx::texture_sampling();
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("aircraft"),
             address_mode_u: wgpu::AddressMode::Repeat,
@@ -322,7 +394,8 @@ impl AircraftRenderer {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
-            anisotropy_clamp: 8,
+            anisotropy_clamp: tex_q.0,
+            lod_min_clamp: tex_q.1,
             ..Default::default()
         });
         let disp_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -332,15 +405,16 @@ impl AircraftRenderer {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
-            anisotropy_clamp: 8,
+            anisotropy_clamp: tex_q.0.max(8),
             ..Default::default()
         });
         let white = upload_texture(device, queue, 1, 1, &[255, 255, 255, 255], &[]);
         let white_bg = tex_bg(device, &tex_bgl, &white, &sampler);
-        let main = new_slot(device, &inst_bgl);
+        let main = new_slot(device, &inst_bgl, &prev_bgl);
         AircraftRenderer {
             main_cull,
             main_twosided,
+            main_blend,
             refl,
             shadow,
             inst_bgl,
@@ -353,6 +427,8 @@ impl AircraftRenderer {
             n_traffic: 0,
             disp_sampler,
             disp_bgs: None,
+            vel_pipe,
+            prev_bgl,
         }
     }
 
@@ -379,7 +455,7 @@ impl AircraftRenderer {
     /// aircraft of the same type.
     pub fn prepare_traffic(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frames: &[AircraftFrame]) {
         while self.traffic.len() < frames.len() {
-            self.traffic.push(new_slot(device, &self.inst_bgl));
+            self.traffic.push(new_slot(device, &self.inst_bgl, &self.prev_bgl));
         }
         let mut slots = std::mem::take(&mut self.traffic);
         for (slot, f) in slots.iter_mut().zip(frames) {
@@ -455,9 +531,13 @@ impl AircraftRenderer {
         slot.prepared.opaque.clear();
         slot.prepared.shadow.clear();
         slot.disp_of.clear();
-        let Some(f) = frame else { return };
+        let Some(f) = frame else {
+            slot.hist.clear();
+            return;
+        };
         slot.model = self.model_for(device, queue, f);
         if slot.model.is_none() {
+            slot.hist.clear();
             return;
         }
         let disp_lum = if displays { f.displays.as_ref().map(|d| d.brightness) } else { None };
@@ -465,7 +545,16 @@ impl AircraftRenderer {
         if f.draws.len() > slot.inst_cap {
             slot.inst_cap = f.draws.len().next_power_of_two();
             (slot.inst_buf, slot.inst_bg) = make_inst(device, &self.inst_bgl, slot.inst_cap, &slot.dyn_buf);
+            (slot.prev_buf, slot.prev_bg) = make_prev(device, &self.prev_bgl, slot.inst_cap);
         }
+        // Last frame's transforms (velocity pass): matched by chunk and occurrence.
+        let asset_key = Arc::as_ptr(a) as usize;
+        if slot.hist_asset != asset_key {
+            slot.hist.clear();
+            slot.hist_asset = asset_key;
+        }
+        let mut hist = std::collections::HashMap::with_capacity(f.draws.len());
+        let mut prevs: Vec<[[f32; 4]; 4]> = Vec::with_capacity(f.draws.len());
         let dynamics = f.dynamics.as_deref().copied().unwrap_or_default();
         queue.write_buffer(&slot.dyn_buf, 0, bytemuck::bytes_of(&dynamics));
         let mut insts = Vec::with_capacity(f.draws.len());
@@ -521,8 +610,17 @@ impl AircraftRenderer {
                 (Some(_), Some(lum)) => (3, [0.04, 0.12, 3.0, lum]),
                 _ => (mode, [f0, rough, mode as f32, if textured { 1.0 } else { 0.0 }]),
             };
+            let model = d.model.to_cols_array_2d();
+            let mut occ = 0;
+            while hist.contains_key(&(d.chunk, occ)) {
+                occ += 1;
+            }
+            hist.insert((d.chunk, occ), model);
+            // (A jump of more than 200 m is a different aircraft in a reused slot: no motion.)
+            let prev = slot.hist.get(&(d.chunk, occ)).copied().filter(|p| (glam::Vec3::from_slice(&p[3][..3]) - d.model.w_axis.truncate()).length() < 200.0);
+            prevs.push(prev.unwrap_or(model));
             insts.push(Inst {
-                model: d.model.to_cols_array_2d(),
+                model,
                 color: col.to_array(),
                 emis: [emis.x, emis.y, emis.z, if c.interior || c.backlight { 1.0 } else { 0.0 }],
                 params,
@@ -537,6 +635,39 @@ impl AircraftRenderer {
         }
         if !insts.is_empty() {
             queue.write_buffer(&slot.inst_buf, 0, bytemuck::cast_slice(&insts));
+            queue.write_buffer(&slot.prev_buf, 0, bytemuck::cast_slice(&prevs));
+        }
+        slot.hist = hist;
+    }
+
+    /// Forget last frame's transforms (camera cut): no motion next frame.
+    pub fn reset_motion(&mut self) {
+        for s in std::iter::once(&mut self.main).chain(self.traffic.iter_mut()) {
+            s.hist.clear();
+        }
+    }
+
+    /// Velocity pass (group 0 = the velocity uniforms, `gfx::taa`): every
+    /// aircraft's screen motion, eye distance now and last frame.
+    pub fn draw_velocity(&self, pass: &mut wgpu::RenderPass<'_>, vel_bg: &wgpu::BindGroup) {
+        pass.set_pipeline(&self.vel_pipe);
+        pass.set_bind_group(0, vel_bg, &[]);
+        for s in self.slots() {
+            let Some(gm) = s.model.and_then(|i| self.models.get(i)) else { continue };
+            if s.prepared.opaque.is_empty() {
+                continue;
+            }
+            let a = &gm.asset;
+            pass.set_bind_group(1, &s.inst_bg, &[]);
+            pass.set_bind_group(2, &s.prev_bg, &[]);
+            pass.set_vertex_buffer(0, gm.vb.slice(..));
+            pass.set_vertex_buffer(1, gm.pv.slice(..));
+            pass.set_index_buffer(gm.ib.slice(..), wgpu::IndexFormat::Uint32);
+            for &(ci, ii) in &s.prepared.opaque {
+                let c = &a.chunks[ci as usize];
+                let (first, count) = gm.ranges[ci as usize];
+                pass.draw_indexed(first..first + count, c.base_vertex as i32, ii..ii + 1);
+            }
         }
     }
 
@@ -552,14 +683,26 @@ impl AircraftRenderer {
         pass.set_vertex_buffer(1, gm.pv.slice(..));
         pass.set_index_buffer(gm.ib.slice(..), wgpu::IndexFormat::Uint32);
         let mut cur_pipe = 255u8;
+        let blend_glass = crate::gfx::msaa() == 1;
         for &(ci, ii) in list {
             let c = &a.chunks[ci as usize];
             let m = &a.materials[c.material];
-            let p = if refl { 2 } else if m.two_sided || m.translucent { 1 } else { 0 };
+            // (Glass displays are opaque screens behind their cover glass.)
+            let glass = m.translucent && blend_glass && slot.disp_of.get(ii as usize).copied().flatten().is_none();
+            let p = if refl {
+                2
+            } else if glass {
+                3
+            } else if m.two_sided || m.translucent {
+                1
+            } else {
+                0
+            };
             if p != cur_pipe {
                 pass.set_pipeline(match p {
                     0 => &self.main_cull,
                     1 => &self.main_twosided,
+                    3 => &self.main_blend,
                     _ => &self.refl,
                 });
                 cur_pipe = p;
@@ -614,7 +757,13 @@ impl AircraftRenderer {
     }
 }
 
-fn new_slot(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout) -> Slot {
+fn make_prev(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout, cap: usize) -> (wgpu::Buffer, wgpu::BindGroup) {
+    let buf = device.create_buffer(&wgpu::BufferDescriptor { label: Some("aircraft prev"), size: (cap * 64) as u64, usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+    let bg = device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("aircraft prev"), layout: bgl, entries: &[wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() }] });
+    (buf, bg)
+}
+
+fn new_slot(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout, prev_bgl: &wgpu::BindGroupLayout) -> Slot {
     let inst_cap = 256;
     let dyn_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("aircraft dynamics"),
@@ -622,13 +771,26 @@ fn new_slot(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout) -> Slot {
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
     });
     let (inst_buf, inst_bg) = make_inst(device, bgl, inst_cap, &dyn_buf);
-    Slot { inst_buf, inst_cap, inst_bg, dyn_buf, model: None, prepared: Prepared::default(), disp_of: Vec::new() }
+    let (prev_buf, prev_bg) = make_prev(device, prev_bgl, inst_cap);
+    Slot { inst_buf, inst_cap, inst_bg, dyn_buf, model: None, prepared: Prepared::default(), disp_of: Vec::new(), prev_buf, prev_bg, hist: Default::default(), hist_asset: 0 }
 }
 
 impl Slot {
     /// A stand-in while `main` is borrowed out (shares its buffers; never drawn).
     fn placeholder(s: &Slot) -> Slot {
-        Slot { inst_buf: s.inst_buf.clone(), inst_cap: s.inst_cap, inst_bg: s.inst_bg.clone(), dyn_buf: s.dyn_buf.clone(), model: None, prepared: Prepared::default(), disp_of: Vec::new() }
+        Slot {
+            inst_buf: s.inst_buf.clone(),
+            inst_cap: s.inst_cap,
+            inst_bg: s.inst_bg.clone(),
+            dyn_buf: s.dyn_buf.clone(),
+            model: None,
+            prepared: Prepared::default(),
+            disp_of: Vec::new(),
+            prev_buf: s.prev_buf.clone(),
+            prev_bg: s.prev_bg.clone(),
+            hist: Default::default(),
+            hist_asset: 0,
+        }
     }
 }
 

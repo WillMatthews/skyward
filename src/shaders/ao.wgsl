@@ -5,7 +5,7 @@
 struct AoU {
     inv_view_proj: mat4x4<f32>,
     eye: vec4<f32>,      // xyz eye, w frame index
-    params: vec4<f32>,   // x radius (m), y px per (m at 1 m distance), z strength, w unused
+    params: vec4<f32>,   // x radius (m), y px per (m at 1 m distance), z strength, w samples (quality)
     size: vec4<f32>,     // full w, h, ao w, h
 };
 
@@ -68,8 +68,9 @@ fn fs_ao(in: FsOut) -> @location(0) vec4<f32> {
         return vec4<f32>(1.0);
     }
     // Interleaved gradient noise rotates the sample spiral per pixel.
-    let ign = fract(52.9829189 * fract(dot(in.pos.xy, vec2<f32>(0.06711056, 0.00583715))));
-    let N = 12;
+    // (eye.w: frame index — high quality rotates the spiral every frame, TAA averages.)
+    let ign = fract(52.9829189 * fract(dot(in.pos.xy + vec2<f32>(5.588238, 3.236068) * A.eye.w, vec2<f32>(0.06711056, 0.00583715))));
+    let N = i32(A.params.w);
     var occ = 0.0;
     for (var i = 0; i < N; i++) {
         let t = (f32(i) + 0.5) / f32(N);

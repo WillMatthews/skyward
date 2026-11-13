@@ -1,12 +1,17 @@
-// Bloom (downsample / upsample chain) and final tonemap.
+// Bloom (downsample / upsample chain) and final tonemap (+ contrast-adaptive
+// sharpening after TAA, lens flare / dirt, chromatic aberration, film grain,
+// display brightness / gamma, HDR output).
 
 @group(0) @binding(0) var src: texture_2d<f32>;
 @group(0) @binding(1) var samp: sampler;
 @group(0) @binding(2) var bloom_tex: texture_2d<f32>;
 
 struct PostU {
-    params: vec4<f32>, // x exposure, y bloom strength, z first-downsample flag, w unused
-    texel: vec4<f32>,  // xy = 1/size of src
+    params: vec4<f32>, // x exposure, y bloom strength, z first-downsample flag (tonemap: look power), w saturation
+    texel: vec4<f32>,  // xy = 1/size of src, z = 1 / pre-exposure
+    fx: vec4<f32>,     // tonemap: x sharpen 0..1, y lens flare, z lens dirt, w chromatic aberration
+    fx2: vec4<f32>,    // tonemap: x film grain, y time (s), z brightness, w display gamma
+    hdr: vec4<f32>,    // tonemap: x HDR output, y paper white / 80 nits, z peak / paper white
 };
 @group(0) @binding(3) var<uniform> pu: PostU;
 struct AtmosOut {
@@ -147,10 +152,101 @@ fn night_vision(c: vec3<f32>) -> vec3<f32> {
     return mix(c, blue * scot, s * 0.78);
 }
 
+// Contrast-adaptive sharpening (AMD CAS) on the HDR image: weights from the
+// tonemapped-ish neighbourhood, applied to HDR values.
+fn sharpened(uv: vec2<f32>, amount: f32) -> vec3<f32> {
+    let t = pu.texel.xy;
+    let c = s(uv);
+    if (amount <= 0.0) {
+        return c;
+    }
+    let n = s(uv + vec2<f32>(0.0, -t.y));
+    let so = s(uv + vec2<f32>(0.0, t.y));
+    let e = s(uv + vec2<f32>(t.x, 0.0));
+    let w = s(uv + vec2<f32>(-t.x, 0.0));
+    let k = atmos.expo.x;
+    let lc = luma_t(c, k);
+    let ln = luma_t(n, k);
+    let ls = luma_t(so, k);
+    let le = luma_t(e, k);
+    let lw = luma_t(w, k);
+    let mn = min(lc, min(min(ln, ls), min(le, lw)));
+    let mx = max(lc, max(max(ln, ls), max(le, lw)));
+    let amp = sqrt(clamp(min(mn, 1.0 - mx) / max(mx, 1e-4), 0.0, 1.0));
+    let wgt = -amp / mix(8.0, 5.0, amount);
+    let res = (c + (n + so + e + w) * wgt) / (1.0 + 4.0 * wgt);
+    return max(res, vec3<f32>(0.0));
+}
+
+fn luma_t(c: vec3<f32>, k: f32) -> f32 {
+    let l = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722)) * k;
+    return l / (1.0 + l);
+}
+
+fn hash2(p: vec2<f32>) -> f32 {
+    return fract(sin(dot(p, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+}
+
+// Lens dirt: soft round smudges of random size and strength, one per cell
+// (jittered), over a 3×3 cell neighbourhood.
+fn smudges(p: vec2<f32>) -> f32 {
+    let c = floor(p);
+    var acc = 0.0;
+    for (var y = -1; y <= 1; y++) {
+        for (var x = -1; x <= 1; x++) {
+            let cell = c + vec2<f32>(f32(x), f32(y));
+            let h = vec3<f32>(hash2(cell), hash2(cell + 17.31), hash2(cell + 41.7));
+            let centre = cell + vec2<f32>(h.x, h.y);
+            let r = 0.25 + 0.6 * h.z;
+            let d = length(p - centre) / r;
+            let w = 1.0 - smoothstep(0.0, 1.0, d);
+            acc += w * w * (0.3 + 0.7 * hash2(cell + 5.13));
+        }
+    }
+    return clamp(acc, 0.0, 1.0);
+}
+
+// Pseudo lens flare (Chapman): ghosts of the very brightest parts of the
+// bloom mirrored through the centre, and a halo ring; tinted by position.
+fn lens_flare(uv: vec2<f32>, expo: f32) -> vec3<f32> {
+    let tuv = vec2<f32>(1.0) - uv;
+    let gv = (vec2<f32>(0.5) - tuv) * 0.42;
+    var acc = vec3<f32>(0.0);
+    for (var i = 0; i < 4; i++) {
+        let o = fract(tuv + gv * f32(i));
+        let d = length(vec2<f32>(0.5) - o) / 0.7071;
+        let w = pow(max(1.0 - d, 0.0), 8.0);
+        let b = textureSampleLevel(bloom_tex, samp, o, 0.0).rgb * expo;
+        // Only what is far brighter than white (the sun, landing lights).
+        acc += max(b - vec3<f32>(6.0), vec3<f32>(0.0)) * w;
+    }
+    let hv = normalize(gv + vec2<f32>(1e-5)) * 0.45;
+    let hb = textureSampleLevel(bloom_tex, samp, fract(tuv + hv), 0.0).rgb * expo;
+    let hw = pow(max(1.0 - length(vec2<f32>(0.5) - fract(tuv + hv)) / 0.7071, 0.0), 5.0);
+    acc += max(hb - vec3<f32>(8.0), vec3<f32>(0.0)) * hw * 0.5;
+    let tint = mix(vec3<f32>(1.0, 0.82, 0.62), vec3<f32>(0.6, 0.8, 1.0), length(uv - 0.5) * 1.4);
+    return acc * tint * 0.0045 / max(expo, 1e-6);
+}
+
 @fragment
 fn fs_tonemap(in: FsOut) -> @location(0) vec4<f32> {
-    let hdr = textureSampleLevel(src, samp, in.uv, 0.0).rgb;
-    let bloom = textureSampleLevel(bloom_tex, samp, in.uv, 0.0).rgb;
+    var hdr = sharpened(in.uv, pu.fx.x);
+    if (pu.fx.w > 0.0) {
+        // Chromatic aberration: red and blue pulled apart toward the edges.
+        let d = (in.uv - 0.5) * 0.0022 * pu.fx.w;
+        hdr = vec3<f32>(s(in.uv + d).r, hdr.g, s(in.uv - d).b);
+    }
+    var bloom = textureSampleLevel(bloom_tex, samp, in.uv, 0.0).rgb;
+    let k_expo = atmos.expo.x * pu.params.x;
+    if (pu.fx.y > 0.0) {
+        hdr += lens_flare(in.uv, k_expo) * pu.fx.y;
+    }
+    if (pu.fx.z > 0.0) {
+        // Dirt on the lens, lit by the glare around it.
+        let q = in.uv * vec2<f32>(pu.texel.y / pu.texel.x, 1.0);
+        let dirt = smudges(q * 5.0) * 0.7 + smudges(q * 13.0 + 3.7) * 0.3;
+        bloom *= 1.0 + dirt * 3.5 * pu.fx.z;
+    }
     let expo = atmos.expo.x * pu.params.x;
     // Night: the eye adapts locally (lit windows don't blind it, the dark
     // sky stays readable): compress the range around mid grey, more the
@@ -177,8 +273,29 @@ fn fs_tonemap(in: FsOut) -> @location(0) vec4<f32> {
     // subtle vignette
     let v = in.uv - 0.5;
     c *= 1.0 - dot(v, v) * 0.18;
+    // Display space: brightness (black lift / crush), gamma, grain, dither.
+    var d = pow(max(c, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
+    if (pu.fx2.z != 0.0) {
+        d = clamp(d + pu.fx2.z * 0.25 * (1.0 - d) * (1.0 - d), vec3<f32>(0.0), vec3<f32>(1.0));
+    }
+    if (pu.fx2.w > 0.0 && abs(pu.fx2.w - 2.2) > 0.001) {
+        d = pow(d, vec3<f32>(pu.fx2.w / 2.2));
+    }
+    if (pu.fx2.x > 0.0) {
+        // Film grain: luminance noise, strongest in the mid-tones, new every frame.
+        let gn = hash2(in.pos.xy + vec2<f32>(fract(pu.fx2.y * 7.31) * 913.0, fract(pu.fx2.y * 3.17) * 571.0)) - 0.5;
+        let mid = 4.0 * dot(d, vec3<f32>(0.333)) * (1.0 - dot(d, vec3<f32>(0.333)));
+        d += vec3<f32>(gn * 0.09 * pu.fx2.x * (0.35 + 0.65 * mid));
+    }
     // dither against banding (in display space: ~1/255 steps)
     let n = fract(sin(dot(in.pos.xy, vec2<f32>(12.9898, 78.233))) * 43758.5453) - 0.5;
-    c = pow(max(pow(c, vec3<f32>(1.0 / 2.2)) + n / 255.0, vec3<f32>(0.0)), vec3<f32>(2.2));
+    c = pow(max(d + n / 255.0, vec3<f32>(0.0)), vec3<f32>(2.2));
+    if (pu.hdr.x > 0.5) {
+        // HDR (scRGB, 1.0 = 80 nits): diffuse white at the paper white,
+        // the top of the AgX curve expanded toward the display's peak.
+        let l = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+        let boost = 1.0 + (pu.hdr.z - 1.0) * pow(smoothstep(0.6, 1.0, l), 2.0);
+        c = c * pu.hdr.y * boost;
+    }
     return vec4<f32>(c, 1.0);
 }
