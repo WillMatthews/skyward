@@ -115,6 +115,9 @@ fn load(z: u32, x: u32, y: u32) -> Result<DemTile, String> {
         }
     }
     let url = format!("{URL}/{z}/{x}/{y}.png");
+    if crate::platform::offline() {
+        return Err("offline mode: terrain not cached".into());
+    }
     let bytes = match DEM.agent.get(&url).call() {
         Ok(r) => {
             let mut b = Vec::with_capacity(100_000);

@@ -293,6 +293,8 @@ pub struct FrameView {
     pub aircraft: Option<crate::gfx_aircraft::AircraftFrame>,
     /// Particles, trails, vapour and heat haze (vfx/).
     pub vfx: Option<std::sync::Arc<crate::vfx::VfxFrame>>,
+    /// Other aircraft (the fight's AI / remote aircraft, weapons/), eye-relative like `aircraft`.
+    pub others: Vec<crate::gfx_aircraft::AircraftFrame>,
 }
 
 /// Trees are drawn up to this distance (m) from the eye; detailed within TREE_LOD0.
@@ -1487,7 +1489,9 @@ impl Renderer {
             self.dynamic.set(device, queue, &all);
         }
         self.aircraft.prepare(device, queue, fv.aircraft.as_ref());
-        let traffic = std::mem::take(&mut self.traffic);
+        let mut traffic = std::mem::take(&mut self.traffic);
+        // (Plus the fight's other aircraft, weapons/.)
+        traffic.extend(fv.others.iter().cloned());
         self.aircraft.prepare_traffic(device, queue, &traffic);
         if self.traffic_lights.is_empty() {
             self.lights.set_aircraft(queue, &fv.acl.sprites[..fv.acl.n_sprites]);

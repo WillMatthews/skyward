@@ -142,6 +142,17 @@ painted over or composited.
 - **Multiplayer.** A shared sky on your LAN: a headless dedicated server, a server browser that finds
   it by itself, everyone's real models, lights and engine sound, name tags, traffic on the map and
   TCAS on the ND, chat, a quick-chat wheel and spectating. Time and weather come from the server.
+- **Dogfights.** The Spitfire IX (2 × 20 mm Hispano + 4 × .303) and the F-16C (M61A1, AIM-9M,
+  AIM-120C, flares, chaff, radar and RWR) fire real ballistics: Mach-dependent drag, gravity,
+  dispersion and tracers. Missiles fly proportional navigation with IR or radar seekers that flares,
+  chaff, the sun and the Doppler notch can fool. Hits land on per-part hit volumes cut from the real
+  model and drive the structure and systems simulations: spars weaken, wings and tails tear off, the
+  engine loses power, catches fire or seizes when the glycol runs out, and tanks leak or burn. The
+  pilot can be wounded or killed, or can eject (ACES II) or bail out under a parachute. AI opponents
+  from rookie to ace fly the same flight model with BFM. Quick-start 1v1 or 2v2 from the main menu.
+  The HUD has a gun funnel and LCOS, seeker and ASE circles and launch zones; the Spitfire has a Mk II
+  gyro gunsight; the F-16 has an RWR with tones. Fights work in multiplayer too: hits are
+  claimed by the shooter, checked by the server and applied by the target (`--combat on|off` on the server).
 - **Sound.** Real FlightGear engine recordings mixed with Skyward's own synthesis: prop blade-pass,
   afterburner crackle, positional / Doppler mixing, sonic-boom N-waves, GPWS callouts, impacts.
 - **Instruments.** Full 3D cockpits with live needles and glass displays, a 2D glass or steam-gauge
@@ -154,6 +165,9 @@ painted over or composited.
   thermals under cumulus. Add the cinematic camera and leave it running.
 - **Menus.** Aircraft cards, a world-map airport picker with fuzzy search, runway diagrams with
   live crosswind, and conditions from live to any METAR.
+- **Settings.** Fourteen categories with search across all of them, Apply / Revert, realism presets,
+  assists, camera and units options, and colour-blind and high-contrast palettes. Every screen works
+  with a keyboard or a game controller, at interface scales from 80 to 200 %.
 
 ## Aircraft
 
@@ -267,6 +281,7 @@ cargo run --release -- --airport EGLL                     # any ICAO / IATA / na
 cargo run --release -- --airport EGKK --aircraft a320 --start-at final:26L:5 --no-menu
 cargo run --release -- --airport LOWI --aircraft c172     # Innsbruck, in the Alps
 cargo run --release -- --watch --aircraft vulcan          # sit back: AI pilot + cinematic camera
+cargo run --release -- --aircraft f16 --dogfight 2v2 --difficulty ace --no-menu   # guns, missiles, AI wingman
 ```
 
 ### Browser version
@@ -325,6 +340,7 @@ Every key can be rebound in **Settings › Controls**. Press **H** or **F1** in 
 | **C** | Camera: chase, cockpit, tower, fly-by, cinematic | **2** | APPR: ILS capture and autoland |
 | **Right-drag, wheel** | Look / orbit, zoom | **J** | Hand over to the AI pilot |
 | **M** | Moving map | **F3** / **F4** | Radios & flight plan / ATC comms |
+| **Space** (armed, in the air) | Fire | **F5 / F7 / F8** | Weapon · lock · flares |
 | **Esc** | Pause menu | **O** / **F2** | Systems & failures |
 
 <details>
@@ -349,6 +365,10 @@ Every key can be rebound in **Settings › Controls**. Press **H** or **F1** in 
 | F3 | **radios & flight plan** panel: COM / NAV / ADF frequencies, course, ident, transponder; route, destination + approach, direct-to, predictions |
 | F5 / F7–F10 | **split throttles**: F7/F8 left engines −/+, F9/F10 right engines −/+, F5 brings the levers back together |
 | F4 | **ATC comms menu**: the requests for the unit on COM 1 (1–9 pick, 0 = tune a station, Esc closes), read-back / assist / subtitle / COM 2 options |
+| Space (in the air) | **weapons** (Spitfire, F-16): fire the selected weapon — guns (held), a missile in SRM / MRM (press); still the wheel brakes on the ground |
+| Right Alt | Spitfire: cannon only (the second button); F-16: weapon release (pickle) |
+| F5 / F7 / F8 / F9 | armed single-engine types: master mode GUN → SRM → MRM (Spitfire: cannon + MG / cannon / MG), radar lock / AIM-9 uncage, flares + chaff, gun harmonisation range |
+| F10 twice | eject (F-16 ACES II) / bail out (Spitfire) |
 | ; | navigation display: ROSE ILS → ROSE VOR → ROSE NAV → ARC → PLAN |
 | K | engine-failure practice (fails engine 1, then 2, then restores) |
 | O / F2 | **systems & failures** panel: fail / arm / random failures, repair; systems (battery, generators, fuel, engine start, APU, hydraulics, anti-ice, alternate gear, fire handles) |
@@ -396,6 +416,51 @@ first time it's seen:
 - **Pedals.** Rudder plus toe brakes.
 
 Layouts are saved per device in the settings file.
+
+<details>
+<summary><b>Settings</b></summary>
+
+Open **Settings** from the main menu or the pause menu (Esc in flight). Categories run down the
+left. **Search** (Ctrl F, or /) finds any setting by name, description or keyword across every
+category, and key bindings by action name. Each row has a one-line description. A blue dot marks
+an unapplied change, and the rail shows which categories have one.
+
+- **Apply** saves your changes. **Revert** drops them. Changes preview live while you are on the
+  screen. If you leave with unapplied changes, you are asked whether to apply them.
+- **Reset category** and **Reset all** ask first. Reset all keeps your recent and favourite
+  airports and your player name.
+- Rows marked **Restart** take effect at the next start. Rows marked **Soon** are saved now but do
+  nothing until the feature lands.
+- Keyboard: ↑ ↓ move, ← → change a value, Enter selects, Tab / Shift+Tab change category, Esc goes
+  back. Controller: d-pad, A / B, LB / RB.
+
+| Category | Settings |
+|---|---|
+| Video | vertical sync, scenery detail (graphics presets come with the graphics update) |
+| Display & HUD | instruments, speed / altitude / pressure (hPa · inHg) / temperature (°C · °F) units, map style and orientation, name tags, subtitles, interface scale, colour palette, high contrast |
+| Camera | cockpit and outside field of view, head-look speed / invert, cockpit head motion, chase distance and lag, starting view |
+| Flight & Realism | realism preset (Casual / Standard / Hard), structural damage and crashes (Realistic / Forgiving / Off), engine damage, G-effects (grey-out, blackout, red-out), random failures (and the failures panel in flight), unlimited fuel, auto-rudder, auto-trim, autobrake |
+| Assists | taxi ribbon, landing guidance, on-screen STALL and OVERSPEED cues |
+| Weather & Time | default weather (live / fixed), fixed clouds, turbulence, time-acceleration limit |
+| Traffic | road traffic, parked aircraft, live (ADS-B) traffic and its radius |
+| Sound | mute, output device, mute in background, volumes (master, engines, environment, systems, callouts & cabin PA, ATC radio, interface) |
+| Controls | bindings, devices, curves, mouse and head-look (below) |
+| Multiplayer | player name, default port, name tags, chat filter |
+| Accessibility | interface scale, subtitles, colour palette (deuteranopia, protanopia, tritanopia), high contrast, reduced motion, hold or toggle brakes |
+| Interface & Language | language (English for now), interface scale, interface sounds |
+| Data & Storage | cache location and size, cache limit, clear map tiles / terrain, offline mode, settings file |
+| About | version, graphics adapter, licence, credits |
+
+The colour-blind palettes move the interface's status colours (green, red, amber, cyan, magenta)
+to versions that stay distinct for that kind of colour vision. Greys and text are unchanged.
+The tests check them with a colour-vision simulation and against WCAG AA text contrast.
+
+Settings are saved in `~/.config/skyward/settings.json`, or in `localStorage` in the browser.
+`SKYWARD_CONFIG_DIR` points somewhere else. Older files load with new settings at their defaults,
+and keys this version doesn't know are kept. Headless captures:
+`--menu-screen settings --settings-category camera [--settings-search fov] [--settings-from pause] [--palette deuteranopia] [--high-contrast]`.
+
+</details>
 
 **Settings › Controls** binds any axis or button when you move or press it. Each axis has a
 deadzone, response curve, sensitivity, invert and calibration, with a live response plot. You also
@@ -548,6 +613,10 @@ cargo run --release -- --connect 192.168.1.20 --name Alpha   # join without the 
   **Add by address** takes `host[:port]`; favourites and recent servers are remembered.
 - **Over the internet.** Forward UDP 47820 and use **Add by address**. Nothing is listed publicly:
   no master server, no telemetry.
+- **Air combat.** Spitfires and F-16s can fight: hits are claimed by the shooter, checked by the
+  server (combat on, both flying, in range, rate-limited) and applied by the target, which reports
+  its damage and who shot it down. `--combat off` (or `combat off` in the console) disarms everyone;
+  the browser shows the setting. The dogfight AI is single-player.
 - **Missions are single-player.** The Missions menu is disabled while you're connected.
 
 | Key (rebindable) | Action |
@@ -586,6 +655,7 @@ OPTIONS:
                              (clear, few, scattered, broken, overcast, rain, fog)
                              or a full METAR string                       [live]
         --tick-hz <N>        snapshot rate, 10-60 Hz              [30]
+        --combat <on|off>    air combat: weapons fire and do damage [on]
         --no-discovery       don't answer LAN discovery broadcasts (UDP 47821)
         --no-mdns            don't announce over mDNS (_skyward._udp)
         --ban-file <FILE>    banned addresses, one per line (ban / unban keep it updated)
@@ -602,7 +672,7 @@ PORTS (UDP; open them in a host firewall for LAN play):
 
 CONSOLE (type `help` while running):
     list · kick <player> [reason] · ban <player|ip> [reason] · unban <ip> · bans
-    say <text> · time real|HH:MM · weather live|own|<preset>|<METAR> · motd <text>
+    say <text> · combat on|off · time real|HH:MM · weather live|own|<preset>|<METAR> · motd <text>
     status · quit
 
 EXAMPLE:
@@ -610,7 +680,7 @@ EXAMPLE:
 ```
 
 `server.toml` uses the same keys (`name`, `port`, `bind`, `max_players`,
-`password`, `motd`, `airport`, `region`, `time`, `day`, `weather`, `tick_hz`,
+`password`, `motd`, `airport`, `region`, `time`, `day`, `weather`, `tick_hz`, `combat`,
 `ban_file`, `log_level`, and the switches `discovery`, `mdns`, `log_json`,
 `console`):
 
@@ -723,7 +793,7 @@ A shift costs well under 0.1 ms.
 The window presents with vsync (FIFO) by default. The simulation advances by the median of recent
 frame times, so hitches pass through and a slow correction keeps sim time on wall time. The physics
 pose is interpolated between 120 Hz steps, so motion is even at any refresh rate. `--vsync off` or
-Settings › Display switches to mailbox / immediate for the lowest latency.
+Settings › Video switches to mailbox / immediate for the lowest latency.
 
 </details>
 

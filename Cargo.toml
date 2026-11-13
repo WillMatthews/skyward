@@ -7,7 +7,8 @@ edition = "2024"
 # must build without the renderer / audio stack. `tools/` are standalone.
 [workspace]
 members = [".", "crates/skyward-net", "crates/skyward-server"]
-default-members = [".", "crates/skyward-net", "crates/skyward-server"]
+# `cargo run` / `cargo build` act on the game; use --workspace (CI) or -p skyward-server for the rest.
+default-members = ["."]
 exclude = ["tools/regress", "tools/fgimport"]
 
 [dependencies]

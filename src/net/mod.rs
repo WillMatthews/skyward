@@ -15,6 +15,7 @@
 
 pub mod browse;
 pub mod capture;
+pub mod combat;
 pub mod prefs;
 pub mod remote;
 
@@ -121,6 +122,8 @@ fn set_picture(v: Vec<Traffic>) {
 
 pub struct Mp {
     pub status: Status,
+    /// Port for addresses typed without one (Settings › Multiplayer).
+    pub default_port: u16,
     #[cfg(not(target_arch = "wasm32"))]
     conn: Option<skyward_net::udp::UdpClient>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -161,6 +164,9 @@ pub struct Mp {
     pub want_restart: bool,
     defs: Vec<AircraftDef>,
     nonce: u64,
+    /// Air combat (weapons/ ↔ the network, combat.rs) and its incoming messages.
+    pub combat: combat::Link,
+    combat_in: Vec<(u16, skyward_net::proto::CombatMsg)>,
 }
 
 impl Default for Mp {
@@ -196,6 +202,7 @@ impl Mp {
             spectate: None,
             spec_yaw: None,
             tags: true,
+            default_port: skyward_net::DEFAULT_PORT,
             show_players: false,
             chat_open: false,
             chat_open_frame: 0,
@@ -212,6 +219,8 @@ impl Mp {
             want_restart: false,
             defs: Vec::new(),
             nonce: seed ^ (std::process::id() as u64).rotate_left(32),
+            combat: Default::default(),
+            combat_in: Vec::new(),
         }
     }
 
@@ -281,11 +290,12 @@ impl Mp {
         {
             let (tx, rx) = std::sync::mpsc::channel();
             let a = addr.trim().to_string();
+            let port = self.default_port;
             // (Name lookups block: off the frame.)
             let ok = std::thread::Builder::new()
                 .name("mp-resolve".into())
                 .spawn(move || {
-                    let _ = tx.send(skyward_net::discovery::resolve(&a, skyward_net::DEFAULT_PORT));
+                    let _ = tx.send(skyward_net::discovery::resolve(&a, port));
                 })
                 .is_ok();
             if ok {
@@ -501,6 +511,14 @@ impl Mp {
                 }
             }
             Msg::World(w) => self.world = Some((w, self.now())),
+            Msg::Combat { from, msg } => {
+                if from != self.me {
+                    self.combat_in.push((from, msg));
+                    if self.combat_in.len() > 4096 {
+                        self.combat_in.drain(..1024);
+                    }
+                }
+            }
             Msg::Event { from, event } => {
                 let name = self.name_of(from);
                 match event {
@@ -567,6 +585,13 @@ impl Mp {
     /// `paused`: the sim is paused / the menu is open (others see us frozen).
     pub fn fly(&mut self, sim: &mut Sim, world: &mut World, paused: bool, dt: f32) {
         if !self.connected() {
+            // Left the server: the fight goes back to single player.
+            if !self.combat.units.is_empty() {
+                if let Some(c) = sim.combat.as_deref_mut() {
+                    self.combat.clear(c);
+                }
+                self.combat.units.clear();
+            }
             return;
         }
         // One shared timeline: no time warp in multiplayer.
@@ -622,6 +647,36 @@ impl Mp {
         #[cfg(target_arch = "wasm32")]
         let _ = (out, state, now);
         self.sample(world, dt);
+        self.fight(sim);
+    }
+
+    /// Air combat: the other players as units of the local fight, their
+    /// weapons / hits / damage in, ours out (net/combat.rs).
+    fn fight(&mut self, sim: &mut Sim) {
+        let on = self.world.as_ref().map(|w| w.0.combat).unwrap_or(true);
+        sim.ensure_combat();
+        let me = self.me;
+        let remotes: Vec<(u16, usize, Vec3, Quat, Vec3, bool)> =
+            self.remotes.values().map(|r| (r.id, r.def, r.pos, r.rot, r.vel, r.cur.is_some() && !r.spectating && !r.crashed)).collect();
+        let names: BTreeMap<u16, String> = self.remotes.values().map(|r| (r.id, r.name.clone())).collect();
+        let incoming = std::mem::take(&mut self.combat_in);
+        let def = sim.def().clone();
+        let Sim { combat, ac, .. } = sim;
+        let Some(c) = combat.as_deref_mut() else { return };
+        self.combat.sync(c, on, &remotes);
+        self.combat.name(c, &names);
+        for (from, m) in incoming {
+            self.combat.incoming(c, me, from, m, Some((&mut *ac, &def)));
+        }
+        let out = self.combat.outgoing(c, me);
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(conn) = self.conn.as_mut() {
+            for msg in out {
+                conn.client.send(Msg::Combat { from: 0, msg });
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = out;
     }
 
     /// Interpolate every remote aircraft to the playout time.

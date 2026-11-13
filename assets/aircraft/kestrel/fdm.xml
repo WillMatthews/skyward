@@ -1100,6 +1100,12 @@ The hydrodynamic interactions of the floats are modelled by
       </function>
       <function name="aero/coefficient/CLwbh">
         <description>Lift_due_to_alpha</description>
+        <!-- Skyward: the stock table stopped at -5 deg (held at CL -0.22, so a
+             push could never exceed about -0.5 g). Extended with the NACA 2412
+             wing's negative stall: linear to about -8 deg, CLmin -0.62 at -11 deg,
+             then post-stall. -0.62 puts the negative stall line through the
+             normal-category limit (-1.52 g) at about VA (99 KIAS), as the
+             FAR 23 V-n diagram is built. -->
         <product>
           <property>aero/qbar-psf</property>
           <property>metrics/Sw-sqft</property>
@@ -1109,6 +1115,12 @@ The hydrodynamic interactions of the floats are modelled by
             <independentVar lookup="column">aero/stall-hyst-norm</independentVar>
             <tableData>
 0.00    1.00
+                             -0.87   -0.60   -0.60
+                             -0.52   -0.60   -0.60
+                             -0.35   -0.54   -0.54
+                             -0.24   -0.57   -0.57
+                             -0.19   -0.62   -0.62
+                             -0.15   -0.55   -0.55
                              -0.09   -0.22   -0.22
                               0.00    0.25    0.25
                               0.09    0.73    0.73

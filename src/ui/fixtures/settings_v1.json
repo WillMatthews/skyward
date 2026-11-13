@@ -1,0 +1,38 @@
+{
+  "ui_scale": 1.15,
+  "hud": "Minimal",
+  "vsync": false,
+  "detail": 3,
+  "speed": "kmh",
+  "alt": "m",
+  "map_style": "night",
+  "north_up": false,
+  "sound": {
+    "muted": false,
+    "master": 0.55,
+    "engines": 1.2,
+    "environment": 0.9,
+    "systems": 1.0,
+    "voice": 1.1,
+    "ui": 0.6
+  },
+  "controls": {
+    "keys": {},
+    "devices": []
+  },
+  "conditions": {
+    "live": false,
+    "hours": 18.5,
+    "day": 300,
+    "preset": "Overcast",
+    "metar": ""
+  },
+  "last": {
+    "aircraft": "spitfire",
+    "airport": "EGKB",
+    "start": "runway:21",
+    "watch": false
+  },
+  "recents": ["EGLL", "EGKB"],
+  "favourites": ["LOWI"]
+}

@@ -26,6 +26,7 @@ OPTIONS:
                              (clear, few, scattered, broken, overcast, rain, fog)
                              or a full METAR string                       [live]
         --tick-hz <N>        snapshot rate, 10-60 Hz              [30]
+        --combat <on|off>    air combat: weapons fire and do damage [on]
         --no-discovery       don't answer LAN discovery broadcasts (UDP 47821)
         --no-mdns            don't announce over mDNS (_skyward._udp)
         --ban-file <FILE>    banned addresses, one per line (ban / unban keep it updated)
@@ -42,7 +43,7 @@ PORTS (UDP; open them in a host firewall for LAN play):
 
 CONSOLE (type `help` while running):
     list · kick <player> [reason] · ban <player|ip> [reason] · unban <ip> · bans
-    say <text> · time real|HH:MM · weather live|own|<preset>|<METAR> · motd <text>
+    say <text> · combat on|off · time real|HH:MM · weather live|own|<preset>|<METAR> · motd <text>
     status · quit
 
 EXAMPLE:
@@ -68,6 +69,8 @@ pub struct Config {
     pub log_level: String,
     pub log_json: bool,
     pub console: bool,
+    /// Air combat allowed (weapons, hits, kills).
+    pub combat: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -97,6 +100,7 @@ impl Default for Config {
             log_level: "info".into(),
             log_json: false,
             console: true,
+            combat: true,
         }
     }
 }
@@ -139,7 +143,7 @@ impl Config {
             Weather::Own => (String::new(), false),
             Weather::Metar(m) => (m.clone(), false),
         };
-        WorldSync { time: self.time.clone(), utc: 0.0, metar, live_weather: live }
+        WorldSync { time: self.time.clone(), utc: 0.0, metar, live_weather: live, combat: self.combat }
     }
 
     pub fn parse_weather(&self, v: &str) -> Result<Weather, String> {
@@ -183,6 +187,13 @@ impl Config {
             "day" => *day = Some(num(v)?.clamp(1, 366) as u16),
             "weather" => *weather = Some(v.to_string()),
             "tick_hz" | "tick-hz" => self.tick_hz = num(v)?.clamp(10, 60) as u8,
+            "combat" => {
+                self.combat = match v.trim().to_ascii_lowercase().as_str() {
+                    "on" | "true" | "yes" | "1" => true,
+                    "off" | "false" | "no" | "0" => false,
+                    _ => return Err(format!("combat: \"{v}\" — use on or off")),
+                }
+            }
             "ban_file" | "ban-file" => self.ban_file = Some(v.to_string()),
             "log_level" | "log-level" => {
                 if !["debug", "info", "warn"].contains(&v) {
@@ -216,6 +227,7 @@ impl Config {
                             "mdns" => c.mdns = *b,
                             "log_json" => c.log_json = *b,
                             "console" => c.console = *b,
+                            "combat" => c.combat = *b,
                             _ => return Err(format!("config {path}: \"{k}\" is not a switch")),
                         }
                         continue;
@@ -249,7 +261,7 @@ impl Config {
                 "-b" | "--bind" => c.set("bind", &val()?, &mut day, &mut time, &mut weather)?,
                 "-m" | "--max-players" => c.set("max_players", &val()?, &mut day, &mut time, &mut weather)?,
                 "-a" | "--airport" => c.set("airport", &val()?, &mut day, &mut time, &mut weather)?,
-                "--password" | "--motd" | "--region" | "--time" | "--day" | "--weather" | "--tick-hz" | "--ban-file" | "--log-level" => {
+                "--password" | "--motd" | "--region" | "--time" | "--day" | "--weather" | "--tick-hz" | "--ban-file" | "--log-level" | "--combat" => {
                     let v = val()?;
                     c.set(&a[2..], &v, &mut day, &mut time, &mut weather)?
                 }
