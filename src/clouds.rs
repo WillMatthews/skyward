@@ -632,7 +632,7 @@ struct Uniforms {
     drift: [f32; 4],    // field drift x, z (m), lowest base, 0
     gfog: [f32; 4],     // ground fog extinction (/km), top (km), 0, 0
     storm: [f32; 4],    // storm cells, rain-shaft bottom (world y), shaft slant x, z
-    storm2: [f32; 4],   // dryness, storm top (world y), 0, 0
+    storm2: [f32; 4],   // dryness, storm top (world y), checkerboard trace (storms below Ultra), 0
     lent: [f32; 4],     // lenticular grid origin x, z (world), size (m), lens level (world y)
     lent2: [f32; 4],    // on, half thickness (m), 0, 0
     flash: [[f32; 4]; 2], // eye-relative position, intensity
@@ -1090,7 +1090,7 @@ impl CloudRenderer {
             drift: [self.field.drift.x, self.field.drift.y, self.storm.cells.iter().take(MAX_STORM).map(|c| c.base).fold(self.field.base(), f32::min), 0.0],
             gfog: [frame.ground_fog[0], frame.ground_fog[1], self.cirrus_drift.x, self.cirrus_drift.y],
             storm: [self.storm.cells.len().min(MAX_STORM) as f32, self.storm.shaft_bottom, self.storm.shear.x, self.storm.shear.y],
-            storm2: [self.storm.dry, self.storm_top(), 0.0, 0.0],
+            storm2: [self.storm.dry, self.storm_top(), self.storm_checker(slot, blend) as u32 as f32, 0.0],
             lent: [self.lent.origin.x, self.lent.origin.y, self.lent.size.max(1.0), self.lent.alt],
             lent2: [if self.lent_on { 1.0 } else { 0.0 }, self.lent.thick, 0.0, 0.0],
             flash: std::array::from_fn(|i| {
@@ -1111,6 +1111,14 @@ impl CloudRenderer {
         } else {
             &calm[1]
         }
+    }
+
+    /// Storm weather below Ultra traces half the rays each frame (a
+    /// checkerboard; the temporal pass fills the rest from the history):
+    /// the storm march is the heaviest cloud work. Main view only, once
+    /// there is a history.
+    fn storm_checker(&self, slot: usize, blend: f32) -> bool {
+        !self.storm.cells.is_empty() && self.quality < 3 && slot == 0 && blend < 0.999
     }
 
     /// Highest storm top (world y), 0 without storms.
@@ -1365,7 +1373,8 @@ impl CloudRenderer {
                     views: &[&wgpu::TextureView],
                     load: bool,
                     pipe: &wgpu::RenderPipeline,
-                    bg: &wgpu::BindGroup| {
+                    bg: &wgpu::BindGroup,
+                    width: Option<u32>| {
             let atts: Vec<Option<wgpu::RenderPassColorAttachment>> = views
                 .iter()
                 .map(|v| {
@@ -1388,13 +1397,18 @@ impl CloudRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            if let Some(w) = width {
+                p.set_viewport(0.0, 0.0, w as f32, th as f32, 0.0, 1.0);
+            }
             p.set_pipeline(pipe);
             p.set_bind_group(0, bg, &[]);
             p.draw(0..3, 0..1);
         };
-        pass(encoder, "cloud trace", &[&s.trace_col, &s.trace_dep], false, self.pick(&self.trace_pipe, &self.trace_pipe_calm), &bg_trace);
-        pass(encoder, "cloud temporal", &[&next.0, &next.1], false, &self.temporal_pipe, &bg_temporal);
-        pass(encoder, "cloud composite", &[hdr], true, &self.composite_pipe, &bg_comp);
+        // (Storm checkerboard: half the rays, packed into the left half.)
+        let trace_w = self.storm_checker(slot, blend).then(|| tw.div_ceil(2));
+        pass(encoder, "cloud trace", &[&s.trace_col, &s.trace_dep], false, self.pick(&self.trace_pipe, &self.trace_pipe_calm), &bg_trace, trace_w);
+        pass(encoder, "cloud temporal", &[&next.0, &next.1], false, &self.temporal_pipe, &bg_temporal, None);
+        pass(encoder, "cloud composite", &[hdr], true, &self.composite_pipe, &bg_comp, None);
 
         let s = self.slots[slot].as_mut().unwrap();
         s.cur = 1 - s.cur;

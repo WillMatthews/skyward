@@ -273,8 +273,8 @@ fn fbm2(p0: vec2<f32>) -> f32 {
 
 struct WeatherOut {
     @location(0) w: vec4<f32>,
-    // Storms: (occupancy, first cell + 1, second cell + 1, rain 0..1) and
-    // (tower cover, third cell + 1, fourth cell + 1, anvil cover).
+    // Storms: (occupancy, low-level cells + 1 (2), rain 0..1) and (tower
+    // cover, high-level cells + 1 (2), raining cell + 1).
     @location(1) sa: vec4<f32>,
     @location(2) sb: vec4<f32>,
 };
@@ -310,8 +310,8 @@ fn storm_bake(xz: vec2<f32>) -> array<vec4<f32>, 2> {
     var occ = vec4<f32>(0.0);
     var ids = vec4<f32>(0.0);
     var occ_all = 0.0;
+    var rain_id = 0.0;
     var tower = 0.0;
-    var anvil = 0.0;
     var rain = 0.0;
     let n = u32(U.storm.x);
     for (var i = 0u; i < min(n, MAX_CELLS); i++) {
@@ -342,7 +342,11 @@ fn storm_bake(xz: vec2<f32>) -> array<vec4<f32>, 2> {
         let fall = max(c0.w - U.storm.y, 0.0);
         let dr = seg_dist(xz, rc, rc + U.storm.zw * fall);
         imp = max(imp, 1.0 - dr / (c3.x * 1.8));
-        rain = max(rain, c3.y * (1.0 - smoothstep(1.0, 1.4, dr / c3.x)));
+        let rv = c3.y * (1.0 - smoothstep(1.0, 1.4, dr / c3.x));
+        if (rv > rain) {
+            rain = rv;
+            rain_id = f32(i + 1u);
+        }
         var imp_h = imp_t;
         // Anvil: a plume from the tower top spreading downwind.
         if (c1.w > 0.0) {
@@ -352,7 +356,6 @@ fn storm_bake(xz: vec2<f32>) -> array<vec4<f32>, 2> {
             let W = R * 1.35 + max(s, 0.0) * 0.5;
             let along = max(-s - R * 1.7, s - c1.w);
             imp_h = max(imp_h, min(1.0 - nn / (W * 1.5), 1.0 - along / (R * 1.5)));
-            anvil = max(anvil, clamp(min(1.0 - nn / W, -along / R), 0.0, 1.0));
         }
         occ_all = max(occ_all, max(imp, imp_h));
         // Insert into the two most important of each list.
@@ -371,7 +374,7 @@ fn storm_bake(xz: vec2<f32>) -> array<vec4<f32>, 2> {
             }
         }
     }
-    return array<vec4<f32>, 2>(vec4<f32>(occ_all, ids.x, ids.y, rain), vec4<f32>(tower, ids.z, ids.w, anvil));
+    return array<vec4<f32>, 2>(vec4<f32>(occ_all, ids.x, ids.y, rain), vec4<f32>(tower, ids.z, ids.w, rain_id));
 }
 
 // RGBA: cumulus coverage, cumulus height (km), stratus coverage, mid-layer
@@ -684,14 +687,18 @@ fn storm_cell(i: u32, p: vec3<f32>, f: vec2<f32>, nz: StormNoise) -> StormCell {
             var rho = rho0 - rag;
             var lump = lump0;
             var pouch = smoothstep(0.35, 0.95, nz.big.z);
+            // The underside sags and bulges on the turret scale (no flat shelf).
+            var und = (nz.big.y - 0.5) * 700.0;
             if (v == 1) {
                 rho = rho0 - 0.26;
                 lump = lmax;
                 pouch = 1.0;
+                und = 350.0;
             } else if (v == 2) {
                 rho = rho0 + 0.26;
                 lump = -lmax;
                 pouch = 0.0;
+                und = -350.0;
             }
             if (rho >= 1.0) {
                 continue;
@@ -705,7 +712,7 @@ fn storm_cell(i: u32, p: vec3<f32>, f: vec2<f32>, nz: StormNoise) -> StormCell {
             var by = mix(ty - thick, ab - H * 0.12, funnel);
             // Mammatus: rounded pouches under the anvil downstream of the tower.
             let mm = smoothstep(0.08, 0.3, ds) * (1.0 - smoothstep(0.55, 0.9, rho + ds * 0.3)) * smoothstep(0.62, 0.85, inten);
-            by -= mm * 520.0 * pouch * pouch;
+            by -= mm * 520.0 * pouch * pouch + und * (1.0 - funnel);
             // Rounded (pillow) edges rather than a cut wall.
             let vy = (y - (ty + by) * 0.5) / max((ty - by) * 0.5, 50.0);
             let sc = min(W * 0.6, max(ty - by, 100.0) * 0.8);
@@ -725,7 +732,9 @@ fn storm_cell(i: u32, p: vec3<f32>, f: vec2<f32>, nz: StormNoise) -> StormCell {
                 // Ice: an order of magnitude less extinction than the tower's
                 // water droplets (soft, light passes through the thin parts).
                 o.dens = mix(o.dens, mix(0.3, 0.07, sqrt(ds)) * mix(1.0, 0.6 + 0.7 * nz.fib, smoothstep(0.1, 0.6, ds)), wa);
-                o.edge = mix(o.edge, mix(70.0, 420.0, ds), wa);
+                // (A soft underside: ice falling out, never a hard shelf.)
+                let under = 1.0 - smoothstep(-0.2, 0.3, vy);
+                o.edge = mix(o.edge, mix(mix(70.0, 420.0, ds), mix(260.0, 420.0, ds), under), wa);
                 o.anvil = wa;
                 o.field = max(o.field, fa);
             }
@@ -1074,9 +1083,9 @@ fn rain_cell(i: u32, p: vec3<f32>, f: vec2<f32>, curtain: f32) -> f32 {
 fn storm_sun_od(p: vec3<f32>) -> f32 {
     let sun = U.sun_dir.xyz;
     var od = 0.0;
-    var dists = array<f32, 2>(2000.0, 5500.0);
-    var lens = array<f32, 2>(2600.0, 5000.0);
-    for (var k = 0; k < 2; k++) {
+    var dists = array<f32, 3>(900.0, 2600.0, 6000.0);
+    var lens = array<f32, 3>(1100.0, 2600.0, 4800.0);
+    for (var k = 0; k < 3; k++) {
         let q = p + sun * dists[k];
         if (q.y > U.storm2.y) {
             break;
@@ -1095,20 +1104,31 @@ fn rain_at(p: vec3<f32>) -> f32 {
     if (sa.w < 0.003) {
         return 0.0;
     }
-    let ids = storm_ids(p.xz);
-    if (ids.x == 0u) {
+    // The cell raining most here (its own slot in the storm map: a tower
+    // nearby must not crowd the shaft out of the cell lists).
+    let uv = storm_uv(p.xz);
+    if (any(uv < vec2<f32>(0.0)) || any(uv >= vec2<f32>(1.0))) {
+        return 0.0;
+    }
+    let tc = vec2<i32>(uv * U.wmap.w);
+    let id = u32(textureLoad(storm_b_tex, tc, 0).w + 0.5);
+    if (id == 0u) {
         return 0.0;
     }
     let f = p.xz - U.drift.xy;
-    // Curtains: vertical streaks that sway and fall (stretched noise).
+    // Curtains: streaks that sway as they fall (warped, only mildly
+    // stretched noise: no rectangular columns).
     let q = vec3<f32>(f.x, p.y + U.eye.w * 9.0, f.y);
-    let n = textureSampleLevel(shape_tex, samp_rep, vec3<f32>(q.x / 2400.0, q.y / 12000.0, q.z / 2400.0), 0.0);
-    let n2 = textureSampleLevel(shape_tex, samp_rep, vec3<f32>(q.x / 700.0, q.y / 9000.0, q.z / 700.0) + vec3<f32>(0.3, 0.6, 0.1), 0.0);
-    let curtain = clamp(smoothstep(0.1, 0.9, n.x * 0.6 + n.y * 0.4) * 0.7 + (n2.z - 0.5) * 0.2 + 0.2, 0.0, 1.0);
-    // (Rain is in the low-level list.)
-    var r = rain_cell(ids.x - 1u, p, f, curtain);
-    if (ids.y > 0u) {
-        r = max(r, rain_cell(ids.y - 1u, p, f, curtain));
+    let wq = textureSampleLevel(shape_tex, samp_rep, vec3<f32>(q.x / 9000.0, q.y / 9000.0, q.z / 9000.0) + vec3<f32>(0.5, 0.2, 0.8), 0.0);
+    let qw = q + vec3<f32>(wq.y - 0.5, 0.0, wq.z - 0.5) * 1600.0;
+    let n = textureSampleLevel(shape_tex, samp_rep, vec3<f32>(qw.x / 2600.0, qw.y / 4600.0, qw.z / 2600.0), 0.0);
+    let curtain = clamp(smoothstep(0.15, 0.85, n.x * 0.5 + n.y * 0.3 + n.z * 0.2) * 0.65 + 0.3, 0.0, 1.0);
+    var r = rain_cell(id - 1u, p, f, curtain);
+    // A second shaft overlapping (two cells' rain): the low-level list.
+    let t = textureLoad(storm_a_tex, tc, 0);
+    let i2 = u32(t.y + 0.5);
+    if (i2 > 0u && i2 != id) {
+        r = max(r, rain_cell(i2 - 1u, p, f, curtain));
     }
     return r;
 }
@@ -1138,6 +1158,14 @@ fn cloud_shadow_at(p: vec3<f32>) -> f32 {
     let e = max(abs(uv.x - 0.5), abs(uv.y - 0.5));
     let s = textureSampleLevel(shadow_tex, samp_clamp, uv, 0.0).x;
     return mix(s, 1.0, smoothstep(0.4, 0.5, e));
+}
+
+fn cloud_shadow_round(p: vec3<f32>) -> f32 {
+    let sun = U.sun_dir.xyz;
+    let xz = p.xz - sun.xz * (p.y / max(sun.y, 0.05));
+    let uv = (xz - U.shadow.xy) * U.shadow.z + 0.5;
+    let s = textureSampleLevel(shadow_tex, samp_clamp, uv, 0.0).x;
+    return mix(s, 1.0, smoothstep(0.3, 0.48, length(uv - 0.5)));
 }
 
 struct GodRays {
@@ -1322,9 +1350,28 @@ struct TraceOut {
     @location(1) dep: vec2<f32>, // x = march limit (surface), y = mean cloud depth
 };
 
+// Storm weather below Ultra traces a checkerboard: half the rays per frame,
+// packed into the left half of the trace target (a half-width viewport:
+// whole warps skip work); fs_temporal unpacks and fills the gaps from the
+// neighbours and the history.
+fn cb_half() -> bool {
+    return U.storm2.z > 0.5;
+}
+fn cb_parity(y: i32) -> i32 {
+    return (y + i32(U.seed.y & 1u)) & 1;
+}
+// Is trace pixel q traced this frame, and where is it stored?
+fn cb_traced(q: vec2<i32>) -> bool {
+    return !cb_half() || (q.x & 1) == cb_parity(q.y);
+}
+fn cb_store(q: vec2<i32>) -> vec2<i32> {
+    return select(q, vec2<i32>(q.x >> 1, q.y), cb_half());
+}
+
 @fragment
 fn fs_trace(in: FsOut) -> TraceOut {
-    let px = vec2<i32>(in.pos.xy);
+    let fpx = vec2<i32>(in.pos.xy);
+    let px = select(fpx, vec2<i32>(fpx.x * 2 + cb_parity(fpx.y), fpx.y), cb_half());
     let uv = (vec2<f32>(px) + 0.5) / U.screen.zw;
     let rd = ray_dir(uv);
     let ro = U.eye.xyz;
@@ -1492,7 +1539,9 @@ fn fs_trace(in: FsOut) -> TraceOut {
                 let sig = rr * 3.2e-3;
                 // The low sun shines in under the anvil and lights the shafts
                 // (big drops scatter strongly forward); the storm above shades them.
-                var sun_vis = cloud_shadow_at(p) * smoothstep(-0.02, 0.05, sun.y);
+                // (The shadow map fades out radially here: its square edge
+                // would cut straight lines through the far shafts.)
+                var sun_vis = cloud_shadow_round(p) * smoothstep(-0.02, 0.05, sun.y);
                 if (sun_vis > 0.03) {
                     let sod = storm_sun_od(p);
                     sun_vis *= mix(exp(-sod), 1.0 / (1.0 + 0.2 * sod), 0.3);
@@ -1696,26 +1745,53 @@ fn fs_trace(in: FsOut) -> TraceOut {
 fn fs_temporal(in: FsOut) -> TraceOut {
     let px = vec2<i32>(in.pos.xy);
     let dims = vec2<i32>(textureDimensions(trace_col));
-    let cur = textureLoad(trace_col, px, 0);
-    let cd = textureLoad(trace_dep, px, 0).xy;
+    let skipped = !cb_traced(px);
+    var cur = vec4<f32>(0.0);
+    var cd = vec2<f32>(0.0);
+    if (!skipped) {
+        cur = textureLoad(trace_col, cb_store(px), 0);
+        cd = textureLoad(trace_dep, cb_store(px), 0).xy;
+    }
     var o: TraceOut;
+    // Neighbourhood statistics for variance clipping (traced rays only: in
+    // the storm checkerboard every other ray was skipped, a < 0).
+    var m1 = vec4<f32>(0.0);
+    var m2 = vec4<f32>(0.0);
+    var nn = 0.0;
+    var dsum = 0.0;
+    var dlim = 0.0;
+    var dn = 0.0;
+    for (var y = -1; y <= 1; y++) {
+        for (var x = -1; x <= 1; x++) {
+            let q = clamp(px + vec2<i32>(x, y), vec2<i32>(0), dims - 1);
+            if (!cb_traced(q)) {
+                continue;
+            }
+            let c = textureLoad(trace_col, cb_store(q), 0);
+            m1 += c;
+            m2 += c * c;
+            nn += 1.0;
+            if (abs(x) + abs(y) == 1) {
+                let qd = textureLoad(trace_dep, cb_store(q), 0);
+                dsum += qd.y;
+                dlim += qd.x;
+                dn += 1.0;
+            }
+        }
+    }
+    m1 /= max(nn, 1.0);
+    m2 /= max(nn, 1.0);
+    if (skipped) {
+        // Not traced this frame: the neighbours' mean stands in (and the
+        // history below carries the detail).
+        cur = m1;
+        cd = select(vec2<f32>(FAR_DEPTH), vec2<f32>(dlim, dsum) / max(dn, 1.0), dn > 0.0);
+    }
     if (U.sun_col.w >= 0.999) {
         o.col = cur;
         o.dep = cd;
         return o;
     }
-    // Neighbourhood statistics for variance clipping.
-    var m1 = vec4<f32>(0.0);
-    var m2 = vec4<f32>(0.0);
-    for (var y = -1; y <= 1; y++) {
-        for (var x = -1; x <= 1; x++) {
-            let c = textureLoad(trace_col, clamp(px + vec2<i32>(x, y), vec2<i32>(0), dims - 1), 0);
-            m1 += c;
-            m2 += c * c;
-        }
-    }
-    m1 /= 9.0;
-    m2 /= 9.0;
     let sd = sqrt(max(m2 - m1 * m1, vec4<f32>(0.0)));
 
     let uv = (vec2<f32>(px) + 0.5) / U.screen.zw;
@@ -1740,7 +1816,8 @@ fn fs_temporal(in: FsOut) -> TraceOut {
             let gamma = mix(3.0, 1.0, clamp(motion * 0.5, 0.0, 1.0));
             var h = textureSampleLevel(hist_col, samp_clamp, puv, 0.0);
             h = clamp(h, m1 - sd * gamma, m1 + sd * gamma);
-            res = mix(h, cur, U.sun_col.w);
+            // (An interpolated ray only nudges the history.)
+            res = mix(h, cur, select(U.sun_col.w, U.sun_col.w * 0.5, skipped));
             dep = vec2<f32>(cd.x, mix(hd.y, cd.y, 0.5));
         }
     }
