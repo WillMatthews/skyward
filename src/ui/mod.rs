@@ -9,6 +9,7 @@
 #![allow(deprecated)]
 
 pub mod canvas;
+pub mod comms;
 pub mod controls;
 pub mod failures;
 pub mod flight;
@@ -498,6 +499,8 @@ pub struct UiState {
     pub fail: failures::FailUi,
     /// Radios & flight-plan panel (ui/radio.rs).
     pub radio: radio::RadioUi,
+    /// Comms menu / subtitles (ui/comms.rs).
+    pub comms: comms::CommsUi,
     pub audio_status: String,
     /// Game controllers, rebinding and the mouse yoke (input/).
     pub input: crate::input::InputSystem,
@@ -534,6 +537,7 @@ impl UiState {
             ap_open: true,
             fail: Default::default(),
             radio: Default::default(),
+            comms: Default::default(),
             audio_status: String::new(),
             input: crate::input::InputSystem::new(),
             controls_page: 0,

@@ -138,6 +138,8 @@ const CALLOUTS: [(f32, Clip); 12] = [
 /// Watches the simulation from frame to frame.
 pub struct Director {
     now: f64,
+    /// Last ATC radio command passed on (atc/ sequence numbers).
+    radio_seq: u64,
     started: bool,
     type_id: u32,
     prev_eye: Vec3,
@@ -181,6 +183,7 @@ pub struct Director {
 impl Default for Director {
     fn default() -> Self {
         Director {
+            radio_seq: 0,
             now: 0.0,
             started: false,
             type_id: 0,
@@ -297,7 +300,7 @@ impl Director {
             }
             super::samples::prepare(super::soundsets::COMMON);
             // New aircraft / respawn of another type: reset all edge detectors.
-            *self = Director { now: self.now, prev_eye: eye, prev_ac: pos, prev_cam: Some(sim.cam), next_thunder: self.now + 15.0, ..Default::default() };
+            *self = Director { now: self.now, prev_eye: eye, prev_ac: pos, prev_cam: Some(sim.cam), next_thunder: self.now + 15.0, radio_seq: self.radio_seq, ..Default::default() };
             self.type_id = profile.type_id;
             self.prev_on_ground = ac.on_ground;
             self.prev_gear = ac.gear_pos();
@@ -404,6 +407,16 @@ impl Director {
             }
             // Wreckage: impacts, scrapes, separations, fires, explosions (debris.rs).
             events.extend(sim.audio_events.iter().copied());
+            // ATC / ATIS radio (atc/, audio/radio.rs).
+            for (seq, o) in sim.atc.out.iter() {
+                if *seq > self.radio_seq {
+                    events.push(match *o {
+                        crate::atc::RadioOut::Start(id) => Event::Radio(id),
+                        crate::atc::RadioOut::Cut(ch) => Event::RadioCut(ch),
+                    });
+                }
+            }
+            self.radio_seq = sim.atc.out_seq;
             // (With the systems running, their alerts own the chimes: below.)
             let sys_alerts = ac.sys.init && ac.sys.sd.alerting != crate::systems::defs::Alerting::Annunciators;
             for i in 0..n {

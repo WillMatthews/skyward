@@ -28,7 +28,13 @@ enum Trigger {
 /// `"td:cue"` / `"td+5:cue"` (after touchdown). Cues: `cam=chase|cockpit|...`,
 /// `throttle=X`, `gear`, `flaps+`/`flaps-`, `spoilers+`/`spoilers-`,
 /// `reverse`, `ap`, `ap_off`, `ap_alt=M`, `ap_vs=MS`, `ap_ias=KT`,
-/// `athr_off`, `fail`, `pause`, `warp=N`, `hold=KEY`/`release=KEY`, `nobot`.
+/// `athr_off`, `fail`, `pause`, `warp=N`, `hold=KEY`/`release=KEY`, `nobot`;
+/// ATC (atc/): `atc=REQ` (`clearance` `startup` `taxi` `ready` `checkin` `ils`
+/// `visual` `established` `field` `final` `goaround` `vacated` `mayday`
+/// `panpan` `sayagain` `readback`), `com1=MHZ` / `com2=MHZ`, `com2_rx`
+/// (listen on COM 2: the ATIS it is pre-tuned to), `atc_follow`
+/// (the autopilot flies the instructions), `jump=lineup` (to the departure
+/// runway: the taxi in fast-forward), `bot` (hand over to the auto-flight bot).
 pub struct Cues {
     list: Vec<(Trigger, String, bool)>,
     td_at: Option<f32>,
@@ -98,7 +104,7 @@ fn key_named(s: &str) -> Option<Key> {
 }
 
 /// Apply a cue to the sim.
-pub fn apply(what: &str, sim: &mut Sim, input: &mut Input) {
+pub fn apply(what: &str, sim: &mut Sim, input: &mut Input, world: &World) {
     let (k, v) = what.split_once('=').unwrap_or((what, ""));
     let num = |d: f32| v.parse::<f32>().unwrap_or(d);
     match k {
@@ -142,6 +148,40 @@ pub fn apply(what: &str, sim: &mut Sim, input: &mut Input) {
             }
         }
         "nobot" => sim.disable_bot("script"),
+        "bot" => sim.enable_bot(world),
+        "atc" => {
+            use crate::atc::Req;
+            let r = match v {
+                "clearance" => Req::Clearance,
+                "startup" => Req::StartUp,
+                "taxi" => Req::Taxi,
+                "ready" => Req::Ready,
+                "checkin" => Req::CheckIn,
+                "ils" => Req::RequestIls,
+                "visual" => Req::RequestVisual,
+                "established" => Req::Established,
+                "field" => Req::FieldInSight,
+                "final" => Req::Final,
+                "goaround" => Req::GoingAround,
+                "vacated" => Req::Vacated,
+                "mayday" => Req::Mayday,
+                "panpan" => Req::PanPan,
+                "sayagain" => Req::SayAgain,
+                "readback" => Req::Readback,
+                _ => {
+                    eprintln!("audio-script: unknown ATC request {v}");
+                    return;
+                }
+            };
+            crate::atc::request(sim, world, r);
+        }
+        "com1" | "com2" => {
+            let khz = (num(118.0) * 1000.0).round() as u32;
+            sim.nav.radios.com[(k == "com2") as usize].active = khz;
+        }
+        "atc_follow" => sim.atc.ap_follow = true,
+        "com2_rx" => sim.atc.com2_rx = true,
+        "jump" => crate::atc::jump_to_runway(sim, world),
         _ => eprintln!("audio-script: unknown cue {what}"),
     }
 }

@@ -1,0 +1,205 @@
+12000	1764360
+zero	0	4110
+one	4590	2820
+two	7890	2820
+three	11190	3780
+four	15450	2850
+five	18780	3660
+six	22920	3270
+seven	26670	4080
+eight	31230	2820
+niner	34530	4260
+alpha	39270	4110
+bravo	43860	4410
+charlie	48750	4260
+delta	53490	4050
+echo	58020	4020
+foxtrot	62520	4800
+golf	67800	3720
+hotel	72000	4920
+india	77400	4260
+juliett	82140	5520
+kilo	88140	4200
+lima	92820	4500
+mike	97800	3630
+november	101910	5820
+oscar	108210	4620
+papa	113310	3600
+quebec	117390	4020
+romeo	121890	5460
+sierra	127830	4740
+tango	133050	4560
+uniform	138090	6300
+victor	144870	4470
+whiskey	149820	4560
+x-ray	154860	5340
+yankee	160680	5100
+zulu	166260	4500
+hundred	171240	6480
+thousand	178200	7140
+decimal	185820	6660
+minus	192960	6120
+left	199560	5490
+right	205530	5160
+centre	211170	5880
+feet	217530	4410
+knots	222420	5640
+degrees	228540	7560
+runway	236580	6960
+heading	244020	5700
+altitude	250200	8220
+flight level	258900	7980
+squawk	267360	5610
+qnh	273450	9360
+information	283290	9180
+stand	292950	5820
+holding point	299250	9780
+tower	309510	5160
+ground	315150	6300
+delivery	321930	6960
+approach	329370	6540
+radar	336390	6300
+director	343170	7020
+control	350670	7740
+departure	358890	7800
+radio	367170	6900
+time	374550	5760
+heathrow	380790	6540
+gatwick	387810	6360
+stansted	394650	7080
+luton	402210	6300
+london city	408990	10080
+biggin	419550	6240
+farnborough	426270	8040
+northolt	434790	7680
+southend	442950	6900
+thames	450330	5700
+london	456510	6240
+manchester	463230	8460
+birmingham	472170	7800
+bristol	480450	6360
+edinburgh	487290	7680
+glasgow	495450	7020
+cambridge	502950	7380
+oxford	510810	7020
+southampton	518310	8520
+bournemouth	527310	6780
+shoreham	534570	6660
+redhill	541710	6360
+elstree	548550	6720
+lydd	555750	4800
+manston	561030	6840
+norwich	568350	6900
+east midlands	575730	10320
+liverpool	586530	7200
+newcastle	594210	7440
+cardiff	602130	6120
+exeter	608730	6720
+jersey	615930	7080
+guernsey	623490	7140
+belfast	631110	6660
+dublin	638250	6000
+paris	644730	5340
+orly	650550	6180
+schiphol	657210	6480
+brussels	664170	6480
+frankfurt	671130	7020
+innsbruck	678630	6180
+zurich	685290	5820
+geneva	691590	6960
+brize	699030	5820
+lakenheath	705330	8580
+mildenhall	714390	8820
+marham	723690	6900
+coningsby	731070	7020
+waddington	738570	7860
+scampton	746910	7200
+skyward	754590	6900
+ascot	761970	5820
+reach	768270	4770
+viper	773520	6180
+surface wind	780180	8040
+calm	788700	4620
+variable	793800	6540
+gusting	800820	6660
+cleared ils approach	807960	15780
+expect ils approach	824220	16980
+miles	841680	6900
+taxi to holding point	849060	15180
+via	864720	5460
+cross runway	870660	10380
+hold short of runway	881520	14100
+hold position	896100	9960
+line up and wait	906540	11340
+cleared for take-off	918360	12000
+cleared to land	930840	11460
+go around	942780	9180
+contact	952440	6780
+climb	959700	5700
+descend	965880	6780
+maintain	973140	8640
+turn left heading	982260	11280
+turn right heading	994020	12420
+fly heading	1006920	9060
+cleared	1016460	5880
+cleared to	1022820	7380
+via flight planned route	1030680	15600
+after departure climb straight ahead	1046760	20520
+cleared visual approach	1067760	14340
+report established	1082580	13500
+on the localiser	1096560	12060
+vacate left	1109100	9840
+vacate right	1119420	9360
+taxi to stand	1129260	12780
+taxi to the apron	1142520	13740
+resume own navigation	1156740	15660
+roger	1172880	6180
+say again	1179540	8040
+cleared to leave the control zone	1188060	18840
+vfr	1207380	9540
+not above	1217400	7140
+good day	1225020	7200
+when ready	1232700	7860
+continue approach	1241040	12120
+request taxi	1253640	10860
+request start-up	1264980	13200
+request ifr clearance to	1278660	19140
+request vfr departure	1298280	19380
+ready for departure	1318140	13560
+at holding point	1332180	11280
+on the apron	1343940	9300
+with information	1353720	10620
+passing	1364820	6180
+climbing	1371480	6300
+descending	1378260	7440
+established on the localiser	1386180	18240
+field in sight	1404900	10500
+going around	1415880	10260
+final	1426620	5820
+request ils approach	1432920	17400
+request visual approach	1450800	15840
+inbound	1467120	6900
+for landing	1474500	8520
+mayday mayday mayday	1483500	14100
+pan pan, pan pan, pan pan	1498080	18180
+engine failure	1516740	11520
+engine fire	1528740	10560
+electrical failure	1539780	12300
+hydraulic failure	1552560	12780
+fuel leak	1565820	7620
+smoke in the cockpit	1573920	13980
+bird strike	1588380	7980
+gear failure	1596840	10200
+request vectors for an immediate landing	1607520	22260
+persons on board	1630260	13500
+runway vacated	1644240	13560
+squawking	1658280	7080
+wilco	1665840	6360
+request	1672680	7020
+level	1680180	5040
+request vectors	1685700	11760
+request frequency change	1697940	17040
+ready	1715460	5340
+climb straight ahead	1721280	12540
+request ifr clearance	1734300	17880
+backtrack runway	1752660	11220

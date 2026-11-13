@@ -78,10 +78,13 @@ for f in os.listdir("assets/fonts"):
 # A compact airport list, if a native run has made one (cache/; the page
 # falls back to OurAirports' CSVs otherwise).
 extras = []
-if os.path.isfile("cache/ourairports.tsv.gz"):
-    os.makedirs(os.path.join(out, "data"), exist_ok=True)
-    shutil.copy("cache/ourairports.tsv.gz", os.path.join(out, "data"))
-    extras.append("data/ourairports.tsv.gz")
+# (Compact airport list and ATC frequencies, src/atc/freqs.rs; the page falls
+# back to OurAirports' CSVs, which GitHub Pages serves with CORS.)
+for name in ["ourairports.tsv.gz", "frequencies.tsv.gz"]:
+    if os.path.isfile(os.path.join("cache", name)):
+        os.makedirs(os.path.join(out, "data"), exist_ok=True)
+        shutil.copy(os.path.join("cache", name), os.path.join(out, "data"))
+        extras.append("data/" + name)
 json.dump({"files": files, "extras": extras}, open(os.path.join(out, "assets/manifest.json"), "w"), indent=0)
 # The page shows download progress against the uncompressed module size.
 size = os.path.getsize(os.path.join(out, "pkg/skyward_bg.wasm"))

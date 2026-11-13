@@ -80,6 +80,17 @@ reference RPMs, cross-fades) is documented in `src/audio/soundsets.rs`.
 The voice is heard through a simulated cockpit loudspeaker (band-pass,
 presence peak, light drive) in `src/audio/voice.rs`.
 
+## ATC radio voices (`atc/`, Track R)
+
+| Files | What | Source | Licence |
+|---|---|---|---|
+| `atc/<voice>.ogg` + `atc/<voice>.idx` (6 voices, 12 kHz mono Ogg Vorbis q1, ≈ 2.8 MB) | The ATC / ATIS / pilot phrase vocabulary of `atc/vocab.tsv`: digits, the phonetic alphabet, units, airport and unit names, stock phrases ("cleared for take-off", "line up and wait", "taxi to holding point", "report established" …), packed one stream per voice with an index of clip offsets | Generated offline for this project with [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (ONNX build) running locally — voices `am_liam` (the pilot), `bf_emma` (ATIS / delivery), `am_onyx` (ground), `bm_fable` (tower), `af_river` (approach / director / radar), `af_aoede` (second ATIS / units) — then time-compressed (WSOLA, pitch kept), trimmed, loudness-matched and resampled. Script: `tools/gen_atc.py`. | Kokoro-82M model weights are Apache-2.0; the generated audio is original output made for Skyward and is released with the project (treat as CC0). |
+
+Transmissions are assembled from these clips at run time (`src/atc/phrase.rs`)
+and played through an AM airband chain — squelch break and tail, carrier
+hiss by signal strength, 300–3,000 Hz voice band, compression and drive —
+in `src/audio/radio.rs`.
+
 ## Regenerating
 
 * Samples: fetch the source files listed above (only the `Sounds/` folders)
@@ -94,6 +105,11 @@ presence peak, light drive) in `src/audio/voice.rs`.
   fades and write 24 kHz PCM-16; then resample to 16 kHz with a gentle
   roll-off above 6.5 kHz. File names must match `src/audio/voice.rs` (e.g.
   `2500.wav`, `app_minimums.wav`, `too_low_gear.wav`).
+* ATC voices: `python tools/gen_atc.py ../atc [cache dir]` (run from
+  `assets/audio/tools`, Kokoro ONNX as above, ffmpeg with libvorbis). Edit
+  `atc/vocab.tsv` (key, text to speak, voices P/C/A, speed factor) and re-run:
+  rendered clips are cached, so only new phrases are synthesised. The test
+  `atc::tests::voice_packs_match_the_vocabulary` checks the packs match.
 
 ## Avro Vulcan B.2 samples (`vul_*`, Track H)
 

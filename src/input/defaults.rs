@@ -47,6 +47,7 @@ pub fn keyboard() -> Vec<(Key, Vec<K>)> {
         (Key::ObsInc, vec![K::Digit7]),
         (Key::Nav1Ident, vec![K::Digit8]),
         (Key::RadioPanel, vec![K::F3]),
+        (Key::CommsMenu, vec![K::F4]),
         (Key::NdMode, vec![K::Semicolon]),
         (Key::Camera, vec![K::KeyC]),
         (Key::LookLeft, vec![K::Numpad4]),

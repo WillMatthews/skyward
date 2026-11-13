@@ -288,6 +288,10 @@ pub enum Event {
     /// Fuel / ordnance explosion, `energy` 0..1.
     Explosion { pos: Vec3, energy: f32 },
     Speak(Clip),
+    /// A radio transmission was submitted (`radio::submit` id): ATC / ATIS / pilot.
+    Radio(u32),
+    /// A receiver was detuned / lost power (0 = COM 1, 1 = COM 2).
+    RadioCut(u8),
     /// Autopilot disconnect warning.
     ApDisconnect,
     MasterCaution,

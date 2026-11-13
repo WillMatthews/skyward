@@ -494,6 +494,11 @@ impl AirportScene {
         f
     }
 
+    /// The current layout of an airport (ATC taxi routing), if built.
+    pub fn layout(&self, ident: &str) -> Option<Arc<Layout>> {
+        self.sites.get(ident).and_then(|s| s.layout.clone())
+    }
+
     /// Stands of the airports in range (startpos / debugging): (airport, name, stop point, heading) in the current frame.
     pub fn stands(&self, proj: &Proj) -> Vec<(String, String, Vec2, f32)> {
         let mut out = Vec::new();

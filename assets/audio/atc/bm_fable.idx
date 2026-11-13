@@ -1,0 +1,188 @@
+12000	1845000
+zero	0	4560
+one	5040	3870
+two	9390	3660
+three	13530	4260
+four	18270	4230
+five	22980	4320
+six	27780	4080
+seven	32340	4770
+eight	37590	3540
+niner	41610	4650
+alpha	46740	4950
+bravo	52170	5130
+charlie	57780	4800
+delta	63060	5070
+echo	68610	4560
+foxtrot	73650	5820
+golf	79950	4620
+hotel	85050	5640
+india	91170	4860
+juliett	96510	6120
+kilo	103110	5130
+lima	108720	4950
+mike	114150	4680
+november	119310	5700
+oscar	125490	4560
+papa	130530	4140
+quebec	135150	4980
+romeo	140610	5580
+sierra	146670	5580
+tango	152730	4830
+uniform	158040	6660
+victor	165180	4950
+whiskey	170610	5250
+x-ray	176340	6330
+yankee	183150	5880
+zulu	189510	4740
+hundred	194730	7680
+thousand	202890	8460
+decimal	211830	7740
+minus	220050	7860
+left	228390	6360
+right	235230	6120
+centre	241830	7410
+feet	249720	6180
+knots	256380	6600
+degrees	263460	8220
+runway	272160	7380
+heading	280020	6180
+altitude	286680	9300
+flight level	296460	9120
+squawk	306060	6750
+qnh	313290	10440
+information	324210	10680
+stand	335370	6660
+holding point	342510	11700
+tower	354690	5580
+ground	360750	6780
+delivery	368010	8340
+approach	376830	8100
+radar	385410	7680
+director	393570	8520
+control	402570	8940
+departure	411990	8640
+radio	421110	7740
+time	429330	6270
+heathrow	436080	7200
+gatwick	443760	7200
+stansted	451440	8400
+luton	460320	7290
+london city	468090	11580
+biggin	480150	6000
+farnborough	486630	7620
+northolt	494730	8400
+southend	503610	8280
+thames	512370	6960
+london	519810	7410
+manchester	527700	9660
+birmingham	537840	8670
+bristol	546990	6600
+edinburgh	554070	8040
+glasgow	562590	7740
+cambridge	570810	8340
+oxford	579630	7500
+southampton	587610	10680
+bournemouth	598770	7800
+shoreham	607050	8160
+redhill	615690	7440
+elstree	623610	7500
+lydd	631590	5760
+manston	637830	8520
+norwich	646830	7320
+east midlands	654630	11880
+liverpool	666990	7800
+newcastle	675270	9420
+cardiff	685170	6720
+exeter	692370	7500
+jersey	700350	7500
+guernsey	708330	7260
+belfast	716070	8280
+dublin	724830	6960
+paris	732270	7410
+orly	740160	6660
+schiphol	747300	6900
+brussels	754680	7680
+frankfurt	762840	9060
+innsbruck	772380	8640
+zurich	781500	6720
+geneva	788700	8160
+brize	797340	7020
+lakenheath	804840	10500
+mildenhall	815820	9780
+marham	826080	7290
+coningsby	833850	8640
+waddington	842970	8460
+scampton	851910	8520
+skyward	860910	7260
+ascot	868650	7440
+reach	876570	6000
+viper	883050	7020
+surface wind	890550	9000
+calm	900030	5820
+variable	906330	8640
+gusting	915450	7020
+cleared ils approach	922950	22620
+expect ils approach	946050	22800
+miles	969330	7560
+taxi to holding point	977370	20160
+via	998010	6360
+cross runway	1004850	11160
+hold short of runway	1016490	18060
+hold position	1035030	12060
+line up and wait	1047570	11760
+cleared for take-off	1059810	16560
+cleared to land	1076850	11760
+go around	1089090	9840
+contact	1099410	7920
+climb	1107810	6690
+descend	1114980	7680
+maintain	1123140	9240
+turn left heading	1132860	15900
+turn right heading	1149240	17340
+fly heading	1167060	11760
+cleared	1179300	6930
+cleared to	1186710	9360
+via flight planned route	1196550	17820
+after departure climb straight ahead	1214850	25440
+cleared visual approach	1240770	18540
+report established	1259790	15120
+on the localiser	1275390	14160
+vacate left	1290030	11340
+vacate right	1301850	11280
+taxi to stand	1313610	13800
+taxi to the apron	1327890	18300
+resume own navigation	1346670	20760
+roger	1367910	6720
+say again	1375110	9300
+cleared to leave the control zone	1384890	23940
+vfr	1409310	12060
+not above	1421850	7890
+good day	1430220	7800
+when ready	1438500	9360
+continue approach	1448340	13680
+start-up approved	1462500	14100
+readback correct	1477080	12600
+identified	1490160	10380
+i say again	1501020	13320
+stop immediately	1514820	14940
+check altitude	1530240	11640
+roger mayday	1542360	12060
+roger pan pan	1554900	13200
+emergency services are standing by	1568580	25920
+miles from touchdown	1594980	17460
+frequency change approved	1612920	20940
+report final	1634340	12780
+report field in sight	1647600	17580
+vectors for ils approach	1665660	24720
+you are not cleared to enter the runway	1690860	24000
+traffic	1715340	6720
+report when ready for departure	1722540	24660
+position	1747680	7320
+you are cleared to	1755480	12420
+expect	1768380	7440
+after departure	1776300	12360
+climb flight level	1789140	15300
+contact radar	1804920	12780
+climb straight ahead	1818180	13980
+backtrack runway	1832640	11880
