@@ -113,8 +113,10 @@ item lands; keep entries one line.
 - [ ] **P1** Bot in mountain terrain: airliners at LOWI land on 26 but not 08 (straight-in from the hold is too high → safe go-arounds); ATR/E190 can climb into rising side valleys with a westerly (no terrain-aware departure / climb-in-hold)
 - [x] **P1** Input: gamepad, joystick/HOTAS, rudder pedals, quadrants (gilrs + evdev, hot-plug), rebinding UI, curves/deadzone/calibration, mouse yoke, head-look (P)
 - [ ] **P2** Input follow-ups: differential toe brakes need a `Controls` field (per-engine throttles done: `Controls::engine_throttle`, M); help overlay shows default keys not bindings; menu navigation by gamepad; mouse-yoke reticle; verify defaults on real X52/X56/TCA/Windows
-- [ ] **P1** Accessibility: UI scale, colour-blind-safe palettes, subtitles for callouts (ATC / ATIS subtitles done, R)
-- [ ] **P2** Localisation-ready strings
+- [x] **P1** Settings redesign: 14-category rail, search across settings + key bindings, one-line descriptions, consistent widgets (segmented / switch / slider + unit / stepper / key chips), changed dots, Restart / Soon badges, Apply / Revert / Reset category / Reset all with confirmations, keyboard + controller navigation, 1024×640 → 2560×1440 at 80–200 % scale, same screen from the main and pause menus; settings.json v2 (migrates v1, keeps unknown keys, `SKYWARD_CONFIG_DIR`); new settings wired: realism presets, structural damage / crashes (DMG wires the consumers), G-effects, random-failures default, unlimited fuel, auto-rudder / auto-trim, STALL / OVERSPEED cues, warp limit, FOVs, head motion, chase distance / lag, starting view, hPa / inHg, °C / °F, subtitles, name tags, chat filter, default port, player name, output device, mute in background, cache limit / clear / offline mode, toggle brakes (SET)
+- [ ] **P1** Settings follow-ups (consumers owned by other tracks; rows show "Soon"): Video presets (GFX, `settings_video.rs`), turbulence (WX), road traffic (RT), ADS-B traffic + radius (X), autobrake / taxi ribbon / landing guidance (GH), engine damage (DMG), parked-aircraft density (A); reduced motion only drops head motion so far (UI animations / crash-camera shake not yet gated); cache location is fixed (`cache/` next to the binary); languages (strings not externalised)
+- [x] **P1** Accessibility: UI scale to 200 %, colour-blind palettes (deuteranopia / protanopia / tritanopia variants of the status colours, applied to all UI vertices + map canvases; checked with a CVD simulation and WCAG AA in tests), high contrast, subtitles toggle, reduced motion, hold-vs-toggle brakes; TEXT3 raised to 4.5 : 1 (SET)
+- [ ] **P2** Localisation-ready strings (Settings › Interface & Language has the language row)
 
 ## 7. Platform, quality & release
 - [x] Private repo `WillMatthews/skyward`, checkpoint commits pushed as tracks land
@@ -127,7 +129,7 @@ item lands; keep entries one line.
 - [ ] **P1** Performance budgets enforced in CI (GPU timing on soak runs)
 - [ ] **P1** Licence/attribution audit for every asset and data source (OSM/OpenMapTiles, FlightGear, OurAirports, fonts, audio)
 - [ ] **P1** 8-hour soak (bot) with memory/VRAM leak checks; offline mode test
-- [ ] **P2** Settings/save persistence, crash logs, opt-in diagnostics (no tracking by default)
+- [ ] **P2** Crash logs, opt-in diagnostics (no tracking by default) (settings persistence: done, SET)
 - [ ] **P2** Website/landing page with trailer + screenshots
 
 ---
@@ -159,3 +161,4 @@ item lands; keep entries one line.
 | H2a | Jets: 777-300ER, CRJ700, Citation X, Concorde (+ importer: 2D panels, path-scoped excludes, forced submodels, planar screen UVs, interior shells; JSBSim `aero_ref_pt_shift_x`) | ✅ |
 | H2b | Five more propeller types (Extra 500, Super Cub, Zlin Z-50 LX, Otter floats, DC-3) + water operations (`src/water.rs`) | ✅ |
 | next | H2 extra aircraft (proposed) | ⏳ awaiting decision |
+| SET | Settings redesign: rail + search + Apply / Revert, new settings, accessibility palettes, panel chrome polish (`ui/settings*.rs`, `ui/palette.rs`, `ui/chrome.rs`, `ui/geffects.rs`) | ✅ |

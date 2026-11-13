@@ -104,3 +104,10 @@ src/flight/ga.rs
 src/flight/tests/ga_types.rs
 src/vfx/spray.rs
 src/vfx/smoke.rs
+src/ui/settings.rs
+src/ui/settings_schema.rs
+src/ui/settings_ui.rs
+src/ui/settings_video.rs
+src/ui/palette.rs
+src/ui/chrome.rs
+src/ui/geffects.rs

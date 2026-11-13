@@ -478,6 +478,14 @@ pub struct Sim {
     pub mission_pilot: Option<crate::missions::pilot::MissionPilot>,
     pub mission_mayday: bool,
     pub tenders: Option<crate::missions::tenders::Tenders>,
+    /// The player's settings the simulation reads (ui/settings.rs; the app copies them every frame).
+    pub prefs: crate::ui::settings::SimPrefs,
+    /// The first-frame preferences (starting view, random failures) were applied.
+    pub prefs_init: bool,
+    /// Wheel brakes latched by a press (Accessibility › toggle brakes).
+    brake_latch: bool,
+    /// Cockpit head motion: eye offset (body frame, m), its rate, and last step's velocity.
+    head: (Vec3, Vec3, Vec3),
 }
 
 /// Cinematic camera state.
@@ -600,6 +608,10 @@ impl Sim {
             mission_pilot: None,
             mission_mayday: false,
             tenders: None,
+            prefs: Default::default(),
+            prefs_init: false,
+            brake_latch: false,
+            head: (Vec3::ZERO, Vec3::ZERO, Vec3::ZERO),
         };
         s.nav = crate::nav::NavState::new(&s.defs[sel]);
         s.atc = crate::atc::Atc::new(&s.defs[sel]);
@@ -693,6 +705,9 @@ impl Sim {
         self.flap_idx = flap_idx;
         // Systems (systems/): ready to go, or cold and dark; armed failures are cleared.
         self.failures.clear();
+        self.failures.random.on = self.prefs.random_failures && self.mission.is_none() && self.bot.is_none();
+        self.brake_latch = false;
+        self.head = (Vec3::ZERO, Vec3::ZERO, self.ac.vel);
         if self.cold_dark {
             self.ac.sys = crate::systems::Systems::new(&def, true);
             self.ctl.throttle = 0.0;
@@ -1048,7 +1063,8 @@ impl Sim {
                 Key::Pause => self.paused = !self.paused,
                 Key::Map => self.show_map = !self.show_map,
                 Key::Help => self.show_help = !self.show_help,
-                Key::TimeWarp => self.warp = if self.warp >= 8 { 1 } else { self.warp * 2 },
+                Key::TimeWarp => self.warp = if self.warp >= self.prefs.max_warp.max(1) { 1 } else { self.warp * 2 },
+                Key::Brakes if self.prefs.toggle_brakes => self.brake_latch = !self.brake_latch,
                 Key::FlapsDown => {
                     let n = def.flap_detents.len();
                     self.flap_idx = (self.flap_idx + 1).min(n.saturating_sub(1));
@@ -1214,7 +1230,8 @@ impl Sim {
         // Controllers: analog axes straight to the controls, levers when moved.
         self.apply_analog(input, dt);
         if !bot_on {
-            self.ctl.brakes = h(Key::Brakes).max(pilot::toe_brakes(&input.analog));
+            let key_brakes = if self.prefs.toggle_brakes { self.brake_latch as u8 as f32 } else { h(Key::Brakes) };
+            self.ctl.brakes = key_brakes.max(pilot::toe_brakes(&input.analog));
             let det = def.flap_detents;
             let full = det.last().copied().unwrap_or(1.0).max(1e-3);
             let target_flaps = det.get(self.flap_idx).copied().unwrap_or(0.0) / full;
@@ -1275,10 +1292,16 @@ impl Sim {
                 }
                 // Aircraft systems and failures (systems/), then the flight model
                 // (in the mission's air: a microburst, missions/wind.rs).
+                // Settings › Flight & Realism: unlimited fuel (not for the bot / missions).
+                if self.bot.is_none() && self.mission.is_none() {
+                    self.ac.sys.fuel_floor = if self.prefs.unlimited_fuel { 1.0 } else { 0.0 };
+                }
                 self.systems_step(&amb, DT);
+                let ctl = self.assisted_controls(self.sel, DT);
                 let def = &self.defs[self.sel];
                 let env = mission_glue::MissionEnv { inner: world, run: self.mission.as_ref() };
-                self.ac.step(def, &self.ctl, &env, DT);
+                self.ac.step(def, &ctl, &env, DT);
+                head_motion(&mut self.head, &self.ac, self.prefs.head_motion, DT);
                 self.acc -= DT;
                 steps += 1;
                 if self.ac.crashed.is_some() {
@@ -1326,8 +1349,31 @@ impl Sim {
         let f = rot * Vec3::Z;
         let target = if f.x.abs() + f.z.abs() > 1e-3 { f.x.atan2(-f.z) } else { self.ac.heading() };
         let d = wrap(target - self.cam_heading);
-        self.cam_heading += d * (1.0 - (-4.0 * dt).exp());
+        // Settings › Camera › Chase lag: 0 stiff (rate 16/s) .. 0.5 default (4/s) .. 1 lazy (1/s).
+        let rate = 4.0 * 4f32.powf(1.0 - 2.0 * self.prefs.chase_lag.clamp(0.0, 1.0));
+        self.cam_heading += d * (1.0 - (-rate * dt).exp());
     }
+
+    /// Auto-rudder / auto-trim (Settings › Flight & Realism) on top of the
+    /// pilot's inputs, when the pilot (not the bot or autopilot) is flying.
+    fn assisted_controls(&mut self, sel: usize, dt: f32) -> Controls {
+        let mut ctl = self.ctl;
+        let pilot = self.bot.is_none() && self.mission_pilot.is_none() && !self.ap.engaged && self.defs[sel].rotor.is_none();
+        if !pilot || self.ac.on_ground {
+            return ctl;
+        }
+        if self.prefs.auto_rudder && ctl.rudder.abs() < 0.05 {
+            // Null the sideslip (+ = air from the right: right rudder), as a turn coordinator.
+            ctl.rudder = (ctl.rudder + self.ac.beta() * 2.5).clamp(-0.6, 0.6);
+        }
+        if self.prefs.auto_trim && ctl.elevator.abs() < 0.05 && self.ac.airspeed() > 15.0 {
+            // Stick released: trim away the pitch rate (q, + = nose up) so the attitude holds.
+            self.ctl.trim = (self.ctl.trim - self.ac.rates().y * 0.6 * dt).clamp(-1.0, 1.0);
+            ctl.trim = self.ctl.trim;
+        }
+        ctl
+    }
+
 
     /// Structural events, loose parts and the wreck (damage.rs, debris.rs).
     fn structures(&mut self, world: &World, dt: f32) {
@@ -1702,14 +1748,14 @@ impl Sim {
     pub fn frame(&mut self, aspect: f32) -> (FrameView, MeshData) {
         (self.rpos, self.rrot) = self.pose();
         let pos = self.rpos;
-        let mut fov = 60f32.to_radians();
+        let mut fov = self.prefs.chase_fov.clamp(20.0, 120.0).to_radians();
         let show_aircraft = true;
         let (eye, target, cam_up) = match self.cam {
             CamMode::Chase => {
                 let yaw = self.cam_heading + self.orbit_yaw;
                 let back = vec3(-yaw.sin(), 0.0, yaw.cos()); // opposite of heading direction
                 let p = self.orbit_pitch;
-                let off = (back * p.cos() + Vec3::Y * p.sin()) * self.orbit_dist;
+                let off = (back * p.cos() + Vec3::Y * p.sin()) * self.orbit_dist * self.prefs.chase_distance.clamp(0.3, 4.0);
                 let mut eye = pos + off;
                 // (A small drone is framed from just above the ground.)
                 let small = self.defs[self.sel].category == Category::Drone;
@@ -1729,8 +1775,8 @@ impl Sim {
                 // SKYWARD_COCKPIT_FOV=<deg>: narrower view for instrument close-ups (captures).
                 static FOV: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
                 let f = *FOV.get_or_init(|| std::env::var("SKYWARD_COCKPIT_FOV").ok().and_then(|v| v.parse::<f32>().ok()).filter(|v| (5.0..=120.0).contains(v)));
-                fov = f.unwrap_or(72.0).to_radians();
-                let e = pos + self.rrot * self.model.eye;
+                fov = f.unwrap_or(self.prefs.cockpit_fov.clamp(20.0, 130.0)).to_radians();
+                let e = pos + self.rrot * (self.model.eye + self.head.0);
                 // Head-look (input/sim_glue.rs).
                 let head = self.rrot * self.pilot.look_rot();
                 match self.defs[self.sel].rotor.as_ref().and_then(|r| r.quad()) {
@@ -1920,4 +1966,23 @@ fn load_model(def: &AircraftDef) -> (AircraftModel, f32) {
     model.nose_gear = def.gear.iter().find(|g| matches!(g.kind, flight::ContactKind::Wheel { steerable: true, .. }) && g.pos.z > 0.0).map(|g| g.pos);
     let size = model.radius.max(def.wingspan * 0.5);
     (model, size)
+}
+
+/// Settings › Camera › Cockpit head motion: the pilot's head as a damped
+/// spring pushed by the aircraft's acceleration (body frame).
+fn head_motion(head: &mut (Vec3, Vec3, Vec3), ac: &Aircraft, on: bool, dt: f32) {
+    let (mut d, mut v, prev) = *head;
+    if !on || ac.crashed.is_some() {
+        *head = (Vec3::ZERO, Vec3::ZERO, ac.vel);
+        return;
+    }
+    let acc = ((ac.vel - prev) / dt.max(1e-4)).clamp_length_max(80.0);
+    let a_body = ac.rot.inverse() * acc;
+    // ~2 Hz, well damped; a steady 1 g push moves the head ≈ 1 cm (6 cm at most).
+    let k = (2.0 * PI * 2.0f32).powi(2);
+    let c = 2.0 * 0.8 * (2.0 * PI * 2.0);
+    let f = -a_body * 0.012 * k / 9.81;
+    v += (f - d * k - v * c) * dt;
+    d = (d + v * dt).clamp_length_max(0.06);
+    *head = (d, v, ac.vel);
 }

@@ -170,7 +170,11 @@ fn chat(ctx: &egui::Context, st: &mut UiState, screen: Rect, now: f64) {
             text_halo(&p, pos, Align2::LEFT_TOP, &l.text, f_ui(13.0), alpha(tc, fade));
         } else {
             let nr = text_halo(&p, pos, Align2::LEFT_TOP, format!("{}:", l.name), f_semi(13.0), alpha(nc, fade));
-            let text: String = l.text.chars().take(80).collect();
+            let mut text: String = l.text.chars().take(80).collect();
+            // Settings › Multiplayer › Chat filter (other players' lines).
+            if st.settings.mp.chat_filter && matches!(l.kind, ChatKind::Player) {
+                text = super::settings_schema::filter_chat(&text);
+            }
             text_halo(&p, Pos2::new(nr.max.x + 6.0, y), Align2::LEFT_TOP, text, f_ui(13.0), alpha(tc, fade));
         }
         y -= line_h;
