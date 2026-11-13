@@ -21,6 +21,21 @@ pub struct Shared {
     pub cpu_audio_s: f64,
 }
 
+/// Output devices as (id, name) for Settings › Sound (may be slow: call off the UI thread).
+pub fn devices() -> Vec<(String, String)> {
+    let host = cpal::default_host();
+    let Ok(list) = host.output_devices() else { return Vec::new() };
+    let mut out: Vec<(String, String)> = list
+        .filter_map(|d| {
+            let id = d.id().ok()?.to_string();
+            let name = d.description().map(|x| x.name().to_string()).unwrap_or_else(|_| id.clone());
+            Some((id, name))
+        })
+        .collect();
+    out.dedup_by(|a, b| a.0 == b.0);
+    out
+}
+
 pub struct Output {
     _stream: cpal::Stream,
     pub sample_rate: u32,
@@ -33,10 +48,11 @@ impl Output {
         self.failed.load(Ordering::Relaxed)
     }
 
-    pub fn open(shared: Arc<Mutex<Shared>>) -> Result<Output, String> {
+    /// Open `device` (an id from [`devices`]; "" = the system default).
+    pub fn open(shared: Arc<Mutex<Shared>>, device: &str) -> Result<Output, String> {
         let host = cpal::default_host();
-        // SKYWARD_AUDIO_DEVICE=<part of a device id> picks another output.
-        let wanted = std::env::var("SKYWARD_AUDIO_DEVICE").ok().filter(|s| !s.is_empty());
+        // SKYWARD_AUDIO_DEVICE=<part of a device id> picks another output (else Settings › Sound).
+        let wanted = std::env::var("SKYWARD_AUDIO_DEVICE").ok().filter(|s| !s.is_empty()).or_else(|| Some(device.to_string()).filter(|s| !s.is_empty()));
         let device = match &wanted {
             Some(w) => host
                 .output_devices()

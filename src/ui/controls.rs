@@ -11,7 +11,7 @@ use egui::{Align2, Color32, Pos2, Rect, RichText, Sense, Stroke, Ui, UiBuilder, 
 pub const PAGES: [&str; 4] = ["Axes", "Buttons & keys", "Devices", "Mouse & view"];
 
 /// Apply a binding captured while listening (from the keyboard or a device).
-fn apply_captured(st: &mut UiState) {
+pub(super) fn apply_captured(st: &mut UiState) {
     let Some(c) = st.input.captured.take() else { return };
     let cfg = &mut st.settings.controls;
     let (what, action) = match &c {
@@ -40,8 +40,9 @@ fn apply_captured(st: &mut UiState) {
     }
 }
 
-/// The Controls tab. `foot`: the card's footer row (left of Done).
-pub fn page(ui: &mut Ui, st: &mut UiState, body: Rect, foot: Rect) {
+/// The Controls page. `foot`: a footer row for its own "Reset all controls"
+/// button (None: the settings shell's Reset category does it).
+pub fn page(ui: &mut Ui, st: &mut UiState, body: Rect, foot: Option<Rect>) {
     apply_captured(st);
     let p = ui.painter().clone();
     let seg = Rect::from_min_size(body.min, Vec2::new(body.width().min(560.0), 34.0));
@@ -77,6 +78,7 @@ pub fn page(ui: &mut Ui, st: &mut UiState, body: Rect, foot: Rect) {
         _ => mouse_page(ui, st, area),
     }
     // Footer: reset.
+    let Some(foot) = foot else { return };
     let r = Rect::from_min_size(foot.min, Vec2::new(190.0, foot.height()));
     if button(ui, r, "ctlreset", "Reset all controls", Btn::Secondary, true).clicked() {
         st.settings.controls = Config::default();

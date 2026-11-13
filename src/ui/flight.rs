@@ -178,7 +178,13 @@ pub fn draw(ctx: &egui::Context, st: &mut UiState, sim: &mut Sim, world: &World,
         ap_panel(ctx, st, sim, Pos2::new(screen.max.x - sp::L, bottom - sp::S));
     }
     // ---- warnings / banners
-    warnings(&p, screen, sim);
+    warnings(&p, screen, sim, &st.settings.assists);
+    // Settings › Flight & Realism › G-effects (ui/geffects.rs).
+    super::geffects::draw(ctx, st, sim);
+    // ---- weapons: gunsight, markers, stores, RWR, kill feed (weapons/)
+    if mode != HudMode::Off {
+        super::weapons::draw(&p, screen, sim);
+    }
     if sim.show_help {
         help(ctx, sim);
     }
@@ -346,7 +352,12 @@ fn annunciators(p: &egui::Painter, screen: Rect, sim: &Sim, y: f32) -> f32 {
         items.push((lab, if sim.ctl.reverse { pal::AMBER } else { pal::TEXT }, true));
     }
     if def.flap_detents.len() > 1 {
-        let flap = if def.flap_label == "Airbrakes" { format!("AIRBRAKE {}", sim.flap_label()) } else { format!("FLAPS {}", sim.flap_label()) };
+        let flap = match def.flap_label {
+            "Airbrakes" => format!("AIRBRAKE {}", sim.flap_label()),
+            // Concorde: the lever droops the nose / visor.
+            "Nose" => format!("NOSE {}", sim.flap_label()),
+            _ => format!("FLAPS {}", sim.flap_label()),
+        };
         items.push((flap, pal::TEXT, sim.ctl.flaps > 0.01));
     }
     if def.smoke_system {
@@ -600,6 +611,10 @@ fn moving_map(ctx: &egui::Context, p: &egui::Painter, st: &mut UiState, sim: &mu
     map::range_rings(&mp, &view, st.map.range, true, ring_col);
     let me = view.to_screen(pos);
     map::trend(&mp, &view, pos, v, sim.ac.turn_rate(), if dark { pal::GREEN } else { Color32::from_rgb(20, 140, 70) });
+    // Multiplayer traffic (ui/mp.rs).
+    super::mp::map_traffic(&mp, &view, st, sim, dark);
+    // Live real-world traffic (adsb/).
+    crate::adsb::ui::map_layer(&mp, &view, &st.adsb, dark);
     map::aircraft_symbol(&mp, me, view.screen_angle(sim.ac.heading()), 13.0, if dark { pal::AMBER } else { Color32::from_rgb(255, 196, 30) });
     map::wind_block(&mp, rect.min + Vec2::new(8.0, 8.0), &view, world, dark);
     // compass / orientation button
@@ -686,8 +701,9 @@ fn weather_panel(ctx: &egui::Context, st: &mut UiState, sim: &Sim, world: &World
                     row(ui, "Visibility", if w.vis_m >= 9999.0 { "10 km +".into() } else { format!("{:.1} km", w.vis_m / 1000.0) });
                     row(ui, "Cloud", w.cloud_text());
                     row(ui, "Aloft", format!("{:03.0}° {:.0} kt", w.aloft_from, w.aloft_kt));
-                    row(ui, "Temp / dew", format!("{:.0}° / {:.0}°C", w.temp_c, w.dew_c));
-                    row(ui, "QNH", format!("{:.0} hPa", w.qnh_hpa));
+                    let tu = st.settings.temp;
+                    row(ui, "Temp / dew", format!("{:.0}° / {:.0}{}", tu.conv(w.temp_c), tu.conv(w.dew_c), tu.label()));
+                    row(ui, "QNH", st.settings.pressure.fmt(w.qnh_hpa));
                     let time = match &world.real_time {
                         Some(rt) => rt.text.clone(),
                         None => format!("{} local · day {}", super::hhmm(sim.hours), sim.day_of_year),
@@ -826,7 +842,7 @@ fn ap_panel(ctx: &egui::Context, st: &mut UiState, sim: &mut Sim, at: Pos2) {
     });
 }
 
-fn warnings(p: &egui::Painter, screen: Rect, sim: &Sim) {
+fn warnings(p: &egui::Painter, screen: Rect, sim: &Sim, assists: &super::settings::Assists) {
     let blink = (sim.time * 3.0).fract() < 0.6;
     let def = sim.def();
     let y = screen.center().y - screen.height() * 0.2;
@@ -849,10 +865,12 @@ fn warnings(p: &egui::Painter, screen: Rect, sim: &Sim) {
             p.text(Pos2::new(r.center().x, top + 50.0), Align2::CENTER_CENTER, sub, f_ui(12.5), pal::TEXT3);
         }
         p.text(Pos2::new(r.center().x, r.max.y - 18.0), Align2::CENTER_CENTER, "R  Restart      Esc  Menu", f_inst(12.0), pal::TEXT3);
-    } else if sim.ac.stall_warning() && blink {
+    } else if sim.ac.stall_warning() && blink && assists.stall_warning {
         chip(p, Pos2::new(screen.center().x, y), Align2::CENTER_CENTER, "STALL", f_inst_b(28.0), Color32::WHITE, Color32::from_rgb(200, 30, 30));
     } else if let Some(fire) = crate::systems::alerts::alerts(&sim.ac.sys, def, &sim.ac, &sim.ctl).into_iter().find(|a| a.fire || a.smoke).filter(|_| blink) {
         chip(p, Pos2::new(screen.center().x, y), Align2::CENTER_CENTER, &fire.title, f_inst_b(24.0), Color32::WHITE, Color32::from_rgb(200, 30, 30));
+    } else if assists.overspeed_warning && sim.ac.dmg.overspeed && blink {
+        chip(p, Pos2::new(screen.center().x, y), Align2::CENTER_CENTER, "OVERSPEED", f_inst_b(26.0), Color32::WHITE, Color32::from_rgb(200, 30, 30));
     } else if def.retractable_gear && sim.ac.gear_pos() < 0.99 && !sim.ac.on_ground && sim.ac.pos.y - sim.ground_y < 150.0 && sim.ac.vertical_speed() < -1.0 && sim.ac.airspeed() < def.vref_kt * 1.3 * KT && blink {
         chip(p, Pos2::new(screen.center().x, y), Align2::CENTER_CENTER, "GEAR NOT DOWN", f_inst_b(22.0), Color32::WHITE, Color32::from_rgb(200, 30, 30));
     }
@@ -904,6 +922,7 @@ pub fn control_rows(def: &crate::flight::AircraftDef) -> Vec<(&'static str, &'st
         v.push(("Systems", "B  Space", "Wheel brakes".into()));
     }
     v.push(("Systems", "L", "Landing · taxi lights".into()));
+    v.extend(super::weapons::control_rows(def));
     v.extend([
         ("Autopilot", "Z", "Engage · disengage".into()),
         ("Autopilot", "Ins Del", "Heading −/+ 5°".into()),

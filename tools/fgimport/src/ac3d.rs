@@ -250,7 +250,10 @@ fn parse_object(l: &mut Lines, header: &str, prot: Mat3, ploc: Vec3) -> Result<A
                     }
                 }
                 for _ in 0..n {
-                    let h = l.next().ok_or("EOF before kid")?;
+                    // A kid count larger than the objects that follow (some
+                    // exporters, e.g. the FGAddon Concorde) is tolerated, as
+                    // OSG's loader does: stop at the end of the file.
+                    let Some(h) = l.next() else { break };
                     if !h.starts_with("OBJECT") {
                         return Err(format!("expected OBJECT, got {h}"));
                     }

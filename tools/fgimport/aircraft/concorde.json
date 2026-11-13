@@ -1,0 +1,79 @@
+{
+ "props": {
+  "sim/current-view/internal": 1,
+  "systems/seat/captain": 1,
+  "controls/seat/all": 1,
+  "sim/virtual-cockpit": 1
+ },
+ "channels": [
+  [
+   "^systems/engines/engine(?:\\[(\\d)\\])?/bucket-deg$",
+   "eng{1}_reverser",
+   21.0,
+   0.0
+  ],
+  [
+   "^systems/gear/bogie-(?:left|right)-deg$",
+   "const",
+   0.0,
+   0.0
+  ],
+  [
+   "^systems/seat/gear-(?:main|front)$",
+   "const",
+   0.0,
+   0.0
+  ],
+  [
+   "^systems/flight/gravity$",
+   "const",
+   0.0,
+   0.0
+  ]
+ ],
+ "light_models": [
+  "procedural_light",
+  "Effects/lights/",
+  "[Ll]ights?/.*(nav|beacon|strobe|landing|taxi|collision)",
+  "/(nav|beacon|strobe)",
+  "lightsource/",
+  "light/(landing|taxi)"
+ ],
+ "max_tex": 2048,
+ "interior_max_tex": 1024,
+ "id": "concorde",
+ "name": "Aerospatiale/BAC Concorde",
+ "fg_name": "Concorde",
+ "model": "Models/Concorde_ba.xml",
+ "fdm": {
+  "jsbsim": "Concorde.xml"
+ },
+ "fuel_kg": 26000,
+ "exclude_models": [
+  "Effects/",
+  "effects",
+  "Pushback",
+  "Human",
+  "crew",
+  "chock",
+  "pilot\\.xml",
+  "steward",
+  "Instruments/light/"
+ ],
+ "interior_models": [
+  "flightdeck",
+  "Instruments",
+  "interior",
+  "Interior",
+  "Panels"
+ ],
+ "textures": {
+  "concorde.png": "Skyward/concorde-neutral.png"
+ },
+ "displays": [],
+ "eye_view": [
+  -0.452,
+  1.53,
+  8.08
+ ]
+}

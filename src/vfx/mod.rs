@@ -24,6 +24,7 @@ pub mod gpu;
 mod rotorwash;
 mod smoke;
 mod spray;
+mod weapons;
 
 use crate::debris::{Debris, Fx};
 use crate::flight::{Aircraft, AircraftDef, EngineKind, GRAVITY};

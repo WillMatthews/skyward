@@ -7,6 +7,7 @@
 
 use super::{Input, Key, Sim};
 use crate::flight::{Category, KT};
+use crate::ground::ops::GroundReq;
 use crate::ground::pushback::{self, Phase, PushDir, Pushback};
 use crate::ground::{Autobrake, Steer, guide, spec};
 use crate::input::AxisAction as A;
@@ -66,6 +67,75 @@ impl Sim {
             _ => return false,
         }
         true
+    }
+
+    /// The ground menu's rows now: (request, label, state).
+    pub fn ground_menu(&self) -> Vec<(GroundReq, String, String)> {
+        let def = self.def();
+        let sp = spec::spec(def);
+        let gs = Vec2::new(self.ac.vel.x, self.ac.vel.z).length();
+        let parked = self.ac.on_ground && gs < 0.5;
+        let mut v = Vec::new();
+        let pushing = self.ground.push.as_ref().is_some_and(|p| p.attached() && !matches!(p.phase, Phase::WaitBrake | Phase::Disconnecting(_)));
+        if pushing {
+            v.push((GroundReq::PushStop, "Stop the push".into(), String::new()));
+        } else if parked && pushback::can_push(def) && self.ground.push.is_none() {
+            for d in [PushDir::Straight, PushDir::TailLeft, PushDir::TailRight] {
+                v.push((GroundReq::Push(d), format!("Push back, {}", d.label()), String::new()));
+            }
+        }
+        if self.ac.on_ground {
+            v.push((GroundReq::ParkingBrake, "Parking brake".into(), if self.ctl.parking_brake { "SET".into() } else { "OFF".into() }));
+        }
+        if parked && def.has_engine {
+            let on = self.ground.chocks || self.ground.gpu;
+            v.push((GroundReq::Services, "Chocks + ground power".into(), if on { "IN".into() } else { "OUT".into() }));
+        }
+        if sp.autobrake.is_some() {
+            v.push((GroundReq::Autobrake, "Autobrake".into(), self.ctl.autobrake.label().into()));
+        }
+        if matches!(sp.steer, Steer::TailCaster { lockable: true }) {
+            v.push((GroundReq::TailLock, "Tail-wheel lock".into(), if self.ctl.tail_lock { "LOCKED".into() } else { "FREE".into() }));
+        }
+        if self.ac.on_ground {
+            v.push((GroundReq::TaxiGuide, "Taxi guidance + follow the greens".into(), if self.ground.guide.is_some() { "ON".into() } else { "OFF".into() }));
+        }
+        v
+    }
+
+    /// A ground-menu row was picked.
+    pub fn ground_request(&mut self, world: &World, r: GroundReq) {
+        match r {
+            GroundReq::Push(d) => {
+                let def = self.defs[self.sel].clone();
+                self.ground.pending = None;
+                self.pushback_key(&def);
+                if self.ground.pending.is_some() {
+                    self.ground.pending = Some((d, 1.0));
+                    self.say(format!("Ground: pushback {}, tug on its way", d.label()), 3.0);
+                }
+            }
+            GroundReq::PushStop => {
+                if let Some(p) = &mut self.ground.push {
+                    p.stop();
+                }
+            }
+            GroundReq::ParkingBrake => {
+                self.ground_key(world, Key::ParkingBrake);
+            }
+            GroundReq::Services => {
+                self.ground_key(world, Key::GroundServices);
+            }
+            GroundReq::Autobrake => {
+                self.ground_key(world, Key::Autobrake);
+            }
+            GroundReq::TailLock => {
+                self.ground_key(world, Key::TailwheelLock);
+            }
+            GroundReq::TaxiGuide => {
+                self.ground_key(world, Key::TaxiGuide);
+            }
+        }
     }
 
     fn pushback_key(&mut self, def: &crate::flight::AircraftDef) {
@@ -218,6 +288,22 @@ impl Sim {
             return;
         }
         let def = self.defs[self.sel].clone();
+        // Settings › Flight & Realism › Autobrake: armed on each new flight.
+        if !self.ground.prefs_applied {
+            self.ground.prefs_applied = true;
+            let pos = spec::spec(&def).autobrake_positions();
+            if self.bot.is_none() && pos.contains(&self.prefs.autobrake) {
+                self.ctl.autobrake = self.prefs.autobrake;
+            }
+        }
+        // Settings › Assists › Taxi ribbon: guidance along an ATC taxi clearance.
+        if self.prefs.taxi_ribbon && self.ground.guide.is_none() && self.ac.on_ground && self.bot.is_none() {
+            let key = self.atc.dep.as_ref().filter(|d| d.route.len() >= 2).map(|d| ((d.route.len() as u64) << 32) ^ (d.route[0].x.to_bits() as u64));
+            if key.is_some() && key != self.ground.ribbon_route {
+                self.ground.ribbon_route = key;
+                self.start_taxi_guide(world);
+            }
+        }
         // Advisories from the tyres / brakes and the tug driver.
         if self.ac.ground.note_seq != self.ground.seen_note {
             self.ground.seen_note = self.ac.ground.note_seq;

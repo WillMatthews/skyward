@@ -11,10 +11,10 @@ use crate::world::World;
 use egui::{Align2, Color32, Pos2, Rect, Sense, Stroke, Vec2};
 
 /// Comms menu state (in [`UiState`]).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct CommsUi {
     pub open: bool,
-    /// 0 = requests, 1 = tune.
+    /// 0 = requests, 1 = tune, 2 = ground (pushback, chocks, autobrake, taxi).
     pub page: usize,
     pub sel: usize,
     /// Digit keys pressed while the menu is open (1..9, 0).
@@ -22,17 +22,14 @@ pub struct CommsUi {
     /// Controller navigation: −1 / +1 steps, select.
     pub nav: i32,
     pub select: bool,
-    pub subtitles: bool,
-}
-
-impl Default for CommsUi {
-    fn default() -> Self {
-        CommsUi { open: false, page: 0, sel: 0, keys: Vec::new(), nav: 0, select: false, subtitles: true }
-    }
 }
 
 enum Item {
     Req(Req, String),
+    /// Ground page (src/ground): request, label, state.
+    Ground(crate::ground::ops::GroundReq, String, String),
+    /// A numbered row that opens a page.
+    Open(usize, String),
     Tune(usize, bool, String, String),
     Page(usize, String),
     Toggle(u8, String, bool),
@@ -41,10 +38,10 @@ enum Item {
 /// Subtitles + menu. `bottom` = top of the instrument area (subtitles sit above it).
 pub fn draw(ctx: &egui::Context, st: &mut UiState, sim: &mut Sim, world: &World, bottom: f32) {
     let screen = ctx.content_rect();
-    if st.comms.subtitles {
+    if st.settings.subtitles {
         subtitles(ctx, sim, screen, bottom);
     }
-    if st.comms.open && sim.atc.enabled {
+    if st.comms.open && (sim.atc.enabled || st.comms.page == 2) {
         menu(ctx, st, sim, world, screen);
     } else {
         st.comms.keys.clear();
@@ -113,12 +110,18 @@ fn menu(ctx: &egui::Context, st: &mut UiState, sim: &mut Sim, world: &World, scr
         for (r, l) in crate::atc::menu(sim, world) {
             items.push(Item::Req(r, l));
         }
-        items.truncate(9);
+        items.truncate(8);
+        items.push(Item::Open(2, "Ground crew & taxi…".into()));
         items.push(Item::Page(1, "Tune a station…".into()));
         items.push(Item::Toggle(0, "Read back automatically".into(), sim.atc.auto_readback));
         items.push(Item::Toggle(1, "Assist: tune hand-offs, set squawk".into(), sim.atc.assist));
-        items.push(Item::Toggle(2, "Subtitles".into(), st.comms.subtitles));
+        items.push(Item::Toggle(2, "Subtitles".into(), st.settings.subtitles));
         items.push(Item::Toggle(3, format!("COM 2 receive · {}", crate::atc::phrase::freq_text(sim.nav.radios.com[1].active)), sim.atc.com2_rx));
+    } else if st.comms.page == 2 {
+        for (r, l, v) in sim.ground_menu().into_iter().take(9) {
+            items.push(Item::Ground(r, l, v));
+        }
+        items.push(Item::Page(0, if sim.atc.enabled { "Back".into() } else { "Close".into() }));
     } else {
         for (i, _) in sim.atc.tune_list(world, &sim.ac, sim.ground_y).into_iter().take(9) {
             let s = &sim.atc.stations[i];
@@ -153,14 +156,19 @@ fn menu(ctx: &egui::Context, st: &mut UiState, sim: &mut Sim, world: &World, scr
     // Right-hand side, below the corner map.
     let top = if st.map.mode == super::flight::MapMode::Corner { 330.0 } else { screen.height() * 0.16 };
     let at = Pos2::new(screen.max.x - sp::L - w, (screen.min.y + top).min(screen.max.y - h - 120.0).max(screen.min.y + sp::L));
+    let close_key = super::chrome::key_of(st, crate::sim::Key::CommsMenu);
     let area = egui::Area::new(egui::Id::new("comms_menu")).fixed_pos(at).order(egui::Order::Foreground).show(ctx, |ui| {
         let (r, _) = ui.allocate_exact_size(Vec2::new(w, h), Sense::hover());
         let p = ui.painter().clone();
         super::panel_with(&p, r, sp::R_CARD, pal::PANEL_SOLID);
         // Header: COM 1, the unit, signal.
         let x0 = r.min.x + 16.0;
-        p.text(Pos2::new(x0, r.min.y + 14.0), Align2::LEFT_TOP, "COMMS", f_inst_b(11.0), pal::TEXT3);
-        p.text(Pos2::new(r.max.x - 16.0, r.min.y + 14.0), Align2::RIGHT_TOP, "F4 close", f_inst(11.0), pal::TEXT3);
+        p.text(Pos2::new(x0, r.min.y + 14.0), Align2::LEFT_TOP, if st.comms.page == 2 { "COMMS · GROUND" } else { "COMMS" }, f_inst_b(11.0), pal::TEXT3);
+        // (The key that toggles the menu, as a key cap, like the other panels' headers.)
+        if let Some(k) = &close_key {
+            let kw = p.layout_no_wrap(k.clone(), super::f_semi(11.5), pal::TEXT2).size().x + 14.0;
+            super::chrome::keycap(&p, Pos2::new(r.max.x - 16.0 - kw, r.min.y + 21.0), k);
+        }
         p.text(Pos2::new(x0, r.min.y + 32.0), Align2::LEFT_TOP, format!("COM 1  {:.3}", khz as f32 / 1000.0), super::f_digits_b(17.0), pal::GREEN);
         let (name, col) = match &station {
             Some((s, q)) => {
@@ -202,6 +210,8 @@ fn menu(ctx: &egui::Context, st: &mut UiState, sim: &mut Sim, world: &World, scr
             p.text(Pos2::new(rr.min.x + 12.0, rr.center().y), Align2::LEFT_CENTER, &key, super::f_digits_b(14.0), pal::CYAN);
             let (label, sub, colr) = match it {
                 Item::Req(r, l) => (l.clone(), String::new(), if matches!(r, Req::Mayday | Req::PanPan) { pal::AMBER } else { pal::TEXT }),
+                Item::Ground(_, l, v) => (l.clone(), v.clone(), pal::TEXT),
+                Item::Open(_, l) => (l.clone(), String::new(), pal::TEXT2),
                 Item::Tune(_, _, l, f) => (l.clone(), f.clone(), pal::TEXT),
                 Item::Page(_, l) => (l.clone(), String::new(), pal::TEXT2),
                 Item::Toggle(_, l, on) => (l.clone(), if *on { "ON".into() } else { "OFF".into() }, pal::TEXT2),
@@ -243,6 +253,19 @@ fn menu(ctx: &egui::Context, st: &mut UiState, sim: &mut Sim, world: &World, scr
                 st.comms.page = 0;
                 st.comms.sel = 0;
             }
+            Some(Item::Ground(r, _, _)) => {
+                sim.ground_request(world, *r);
+                st.comms.sel = 0;
+                // (Pushback / taxi guidance close the menu; toggles keep it open.)
+                if matches!(r, crate::ground::ops::GroundReq::Push(_) | crate::ground::ops::GroundReq::TaxiGuide) {
+                    st.comms.open = false;
+                }
+            }
+            Some(Item::Open(pg, _)) => {
+                st.comms.page = *pg;
+                st.comms.sel = 0;
+            }
+            Some(Item::Page(0, _)) if !sim.atc.enabled => st.comms.open = false,
             Some(Item::Page(pg, _)) => {
                 st.comms.page = *pg;
                 st.comms.sel = 0;
@@ -250,7 +273,11 @@ fn menu(ctx: &egui::Context, st: &mut UiState, sim: &mut Sim, world: &World, scr
             Some(Item::Toggle(k, _, _)) => match k {
                 0 => sim.atc.auto_readback = !sim.atc.auto_readback,
                 1 => sim.atc.assist = !sim.atc.assist,
-                2 => st.comms.subtitles = !st.comms.subtitles,
+                2 => {
+                    // (Settings › Display & HUD › Subtitles: the same switch.)
+                    st.settings.subtitles = !st.settings.subtitles;
+                    st.settings_dirty = true;
+                }
                 _ => sim.atc.com2_rx = !sim.atc.com2_rx,
             },
             None => {}

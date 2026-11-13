@@ -30,7 +30,7 @@ struct Globals {
     city: vec4<f32>,      // x street lights on, y office windows lit, z home windows lit, w local hours
     lmap: vec4<f32>,      // ground light map: eye-relative centre x, z, 1 / size, enabled
     misc: vec4<f32>,      // x airport lights level, y beacons on, z ground fog extinction (/km), w fog top (m)
-    misc2: vec4<f32>,     // x traffic density, y aircraft lights count, z moon phase angle, w unused
+    misc2: vec4<f32>,     // x traffic density, y aircraft lights count, z moon phase angle, w simulated traffic radius (m, 0 = none)
     alights: array<vec4<f32>, 12>, // aircraft lights: [pos, range], [dir, cos outer], [rgb cd, cos inner]
     pre: vec4<f32>,       // x pre-exposure: every radiance written to the HDR targets is x this
                           // (sun_e, sky.x and the SH ambient already include it), y 1 / x

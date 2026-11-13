@@ -302,7 +302,13 @@ pub fn spawn(def: &AircraftDef, world: &World, cs: &CustomStart) -> Option<(Airc
         }
         Spec::Air { lat, lon, alt_m, hdg } => {
             let p = world.proj.to_world(*lat, *lon);
-            let v = cruise_ias(def);
+            // A supersonic type started in the stratosphere is in its cruise:
+            // Mach 2 at FL550 (~530 KIAS), not 250 kt.
+            let v = if def.mmo > 1.2 && *alt_m > 12_000.0 {
+                flight::cas_from_tas(0.98 * def.mmo * flight::isa(*alt_m).speed_of_sound, *alt_m)
+            } else {
+                cruise_ias(def)
+            };
             let (ac, ctl) = air(vec3(p.x, alt_m.max(world.ground_height(p) + 60.0), p.y), hdg.to_radians(), v);
             Some((ac, ctl, 0, nearest_runway(p)))
         }

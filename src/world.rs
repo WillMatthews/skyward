@@ -166,6 +166,9 @@ pub struct World {
     pub live_time: bool,
     /// Use today's real date (season, sun) even when the clock time is set by hand.
     pub live_date: bool,
+    /// Seconds added to this machine's clock for the live time (multiplayer:
+    /// the server's UTC is authoritative, net/).
+    pub clock_skew_s: i64,
     live_seen: u64,
     /// Bumped whenever `clouds` is replaced.
     pub cloud_version: u64,
@@ -189,6 +192,8 @@ pub struct World {
     pub pavement: crate::ground::Pavement,
     /// Runway condition forced by `--runway` / `SKYWARD_RUNWAY` (else from the weather).
     pub runway_cond: Option<crate::ground::Contam>,
+    /// Road traffic over the resident tiles' lane graphs (traffic/).
+    pub traffic: crate::traffic::Traffic,
 }
 
 fn rect_dist(r: (Vec2, Vec2), p: Vec2) -> f32 {
@@ -235,6 +240,7 @@ impl World {
             live_weather: false,
             live_time: false,
             live_date: false,
+            clock_skew_s: 0,
             live_seen: 0,
             cloud_version: 1,
             wind: WindField::from_wx(&Wx::preset(Weather::Scattered)),
@@ -248,6 +254,7 @@ impl World {
             airport_detail: crate::airport::AirportScene::new(),
             pavement: Default::default(),
             runway_cond: std::env::var("SKYWARD_RUNWAY").ok().and_then(|s| crate::ground::Contam::parse(&s)),
+            traffic: crate::traffic::Traffic::new(proj),
         }
     }
 
@@ -307,7 +314,7 @@ impl World {
         if self.live_time || self.live_date {
             let off = self.live.wx.as_ref().and_then(|w| w.utc_offset_s);
             // The clock is the start's (its zone): the sun then moves smoothly with the aircraft.
-            let rt = weather::real_time(self.home.lat0, self.home.lon0, weather::unix_now(), off);
+            let rt = weather::real_time(self.home.lat0, self.home.lon0, weather::unix_now() + self.clock_skew_s, off);
             self.clock = if self.live_time { (rt.sun_hours, rt.sun_doy) } else { (clock.0, rt.day_of_year) };
             out = Some(self.clock);
             self.real_time = self.live_time.then_some(rt);
@@ -416,6 +423,7 @@ impl World {
         self.field_off = (self.field_off.0 - dx, self.field_off.1 - dz);
         self.proj = new;
         self.rebases += 1;
+        self.traffic.rebase(new);
         for (id, t) in self.tiles.iter_mut() {
             t.xf = Proj::tile_frame(*id).map_to(&new);
             t.rect = id.rect(&new);
@@ -588,6 +596,9 @@ impl World {
         if let Some(a) = &b.aero {
             self.airport_detail.add_tile(b.id, a.clone(), b.grid.clone(), self.airport_db.as_ref());
         }
+        if let Some(r) = &b.roads {
+            self.traffic.add_tile(r.clone());
+        }
         let trees = b.trees.len();
         let water = b.collision.water_levels(&b.grid);
         self.tiles.insert(b.id, Loaded { rect, xf, far: b.id.is_far(), collision: b.collision, grid: b.grid.clone(), buildings: b.building_count, trees });
@@ -679,6 +690,7 @@ impl World {
             self.uploads.retain(|u| u.id != id);
             self.evicted.push(id);
             self.airport_detail.remove_tile(id);
+            self.traffic.remove_tile(id);
         }
         let now = Instant::now();
         let busy = self.pool.in_flight();
@@ -926,6 +938,7 @@ impl World {
                 self.uploads.retain(|u| u.id != id);
                 self.evicted.push(id);
                 self.airport_detail.remove_tile(id);
+                self.traffic.remove_tile(id);
             }
         }
         self.airport_db = Some(db);
@@ -1111,6 +1124,7 @@ mod tests {
             runways: vec![RunwayPiece { a: rw.0, b: rw.1, name: "09/27".into() }],
             airports: vec![],
             aero: Default::default(),
+            roads: vec![],
         };
         (scene::build_tile(id, &tp, f), tower, pond, rw)
     }

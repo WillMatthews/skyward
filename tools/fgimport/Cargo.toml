@@ -16,3 +16,6 @@ regex = "1"
 
 [profile.dev]
 opt-level = 2
+
+# Standalone (not part of the game workspace).
+[workspace]

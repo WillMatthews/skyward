@@ -85,9 +85,17 @@ struct Builder<'a> {
     pm: PropMap,
     cfg: &'a Value,
     exclude_models: Vec<Regex>,
-    exclude_objects: Vec<Regex>,
+    /// (object-name regex, optional model-path regex).
+    exclude_objects: Vec<(Regex, Option<Regex>)>,
     interior_models: Vec<Regex>,
     interior_objects: Vec<Regex>,
+    /// Objects that also get an inward-facing, untextured copy (colour):
+    /// cockpits that rely on the exterior skin for their walls (FlightGear
+    /// draws single-sided surfaces from both sides; Skyward culls them).
+    interior_shell: Vec<(Regex, Vec3)>,
+    /// Submodels loaded whatever their `<condition>` (e.g. the 777 pedestal,
+    /// shown in FlightGear only from the internal view).
+    force_models: Vec<Regex>,
     light_models: Vec<Regex>,
     /// (object-name regex, display kind, optional model-path regex) — glass display screens.
     displays: Vec<(Regex, String, Option<Regex>)>,
@@ -105,6 +113,24 @@ fn regexes(cfg: &Value, key: &str) -> Vec<Regex> {
     cfg.get(key)
         .and_then(|v| v.as_array())
         .map(|a| a.iter().filter_map(|s| s.as_str()).map(|s| Regex::new(s).expect("bad regex")).collect())
+        .unwrap_or_default()
+}
+
+/// `[regex | [regex, model-path-regex]]`: rules optionally limited to the
+/// objects of models whose path (outermost model first) matches.
+fn path_regexes(cfg: &Value, key: &str) -> Vec<(Regex, Option<Regex>)> {
+    let re = |s: &str| Regex::new(s).expect("bad regex");
+    cfg.get(key)
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| match v {
+                    Value::String(s) => Some((re(s), None)),
+                    Value::Array(p) => Some((re(p.first()?.as_str()?), p.get(1).and_then(|x| x.as_str()).map(re))),
+                    _ => None,
+                })
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -168,13 +194,19 @@ impl<'a> Builder<'a> {
     }
 
     fn add_ac_object(&mut self, o: &AcObject, mats: &std::rc::Rc<Vec<AcMaterial>>, dir: &Path, parent: usize, interior: bool, rel: &str) {
-        if self.exclude_objects.iter().any(|r| r.is_match(&o.name)) {
+        if self.exclude_objects.iter().any(|(r, p)| r.is_match(&o.name) && p.as_ref().is_none_or(|p| p.is_match(rel))) {
             return;
         }
         let texture = o.texture.as_ref().and_then(|t| self.texture_path(t, dir));
         let interior = interior || self.interior_objects.iter().any(|r| r.is_match(&o.name));
-        let geom = (!o.tris.is_empty()).then(|| Geom { obj_tris: o.tris.clone(), materials: mats.clone(), texture, crease: o.crease });
         let display = if o.tris.is_empty() { None } else { self.displays.iter().position(|(r, _, p)| r.is_match(&o.name) && p.as_ref().is_none_or(|p| p.is_match(rel))) };
+        let geom = (!o.tris.is_empty()).then(|| {
+            let mut obj_tris = o.tris.clone();
+            if display.is_some() {
+                planar_screen_uv(&mut obj_tris);
+            }
+            Geom { obj_tris, materials: mats.clone(), texture, crease: o.crease }
+        });
         let id = self.add(
             Node {
                 name: o.name.clone(),
@@ -185,6 +217,12 @@ impl<'a> Builder<'a> {
             },
             Some(parent),
         );
+        if let Some((_, col)) = self.interior_shell.iter().find(|(r, _)| r.is_match(&o.name)).filter(|_| !o.tris.is_empty()) {
+            let obj_tris = o.tris.iter().map(|t| ac3d::Tri { v: [t.v[0], t.v[2], t.v[1]], uv: [t.uv[0], t.uv[2], t.uv[1]], mat: 0, smooth: t.smooth, two_sided: false }).collect();
+            let mat = AcMaterial { name: "shell".into(), rgb: *col, amb: *col, emis: Vec3::ZERO, spec: Vec3::splat(0.1), shi: 8.0, trans: 0.0 };
+            let geom = Geom { obj_tris, materials: std::rc::Rc::new(vec![mat]), texture: None, crease: o.crease };
+            self.add(Node { name: format!("{}#shell", o.name), geom: Some(geom), flags: Flags { interior: true, ..Default::default() }, ..Default::default() }, Some(id));
+        }
         for k in &o.kids {
             self.add_ac_object(k, mats, dir, id, interior, rel);
         }
@@ -276,7 +314,8 @@ impl<'a> Builder<'a> {
                 continue;
             };
             // Static or dynamic condition on the submodel.
-            let cond = m.child("condition").map(|c| self.pm.condition(c));
+            let forced = self.force_models.iter().any(|r| r.is_match(&rel) || r.is_match(&mname));
+            let cond = m.child("condition").filter(|_| !forced).map(|c| self.pm.condition(c));
             let mut attach = g;
             match cond.as_ref().and_then(|c| c.is_const()) {
                 Some(v) if v == 0.0 => continue,
@@ -314,10 +353,192 @@ impl<'a> Builder<'a> {
                 }
             }
         }
+        for p in x.children("panel") {
+            self.load_panel(p, &dir, g);
+        }
         for a in x.children("animation") {
             self.animation(g, a, &dir);
         }
         Ok(g)
+    }
+
+    // ---- FlightGear 2D panels placed in the 3D cockpit (`<panel>`) ----------
+    //
+    // A panel file lists instruments (x, y = centre, w, h in panel units on a
+    // w × h panel); an instrument is a stack of textured layers (texture crop,
+    // size in its w-base × h-base units) with x-shift / y-shift / rotation
+    // transformations bound to properties, `switch` layers (first true
+    // sub-layer) and conditions. Each layer becomes a quad node under a chain
+    // of nodes, one per transformation. Text layers are not imported.
+
+    fn load_panel(&mut self, p: &Elem, dir: &Path, parent: usize) {
+        let Some(path) = p.text_of("path") else { return };
+        let Some(pp) = self.ctx.resolve(path, dir) else {
+            self.log.push(format!("missing panel {path}"));
+            return;
+        };
+        let corner = |n: &str| p.child(n).map(|c| Vec3::new(c.f("x-m").unwrap_or(0.0), c.f("y-m").unwrap_or(0.0), c.f("z-m").unwrap_or(0.0)));
+        let (Some(bl), Some(br), Some(tl)) = (corner("bottom-left"), corner("bottom-right"), corner("top-left")) else { return };
+        let px = match xml::load(&self.ctx, &pp) {
+            Ok(e) => e,
+            Err(e) => {
+                self.log.push(e);
+                return;
+            }
+        };
+        if let Some(c) = p.child("condition").map(|c| self.pm.condition(c)) {
+            if c.is_const() == Some(0.0) {
+                return;
+            }
+        }
+        let (pw, ph) = (px.f("w").unwrap_or(1024.0), px.f("h").unwrap_or(768.0));
+        let ex = (br - bl) / pw;
+        let ey = (tl - bl) / ph;
+        // Towards the viewer, 2 mm proud of the cockpit surface behind it.
+        let ez = ex.cross(ey).normalize_or(Vec3::Z);
+        let m = Mat4::from_cols(ex.extend(0.0), ey.extend(0.0), ez.extend(0.0), (bl + ez * 0.002).extend(1.0));
+        let name = p.text_of("name").unwrap_or("panel").to_string();
+        let g = self.group(&name, m, Some(parent));
+        self.nodes[g].flags.interior = true;
+        let pdir = pp.parent().unwrap_or(Path::new(".")).to_path_buf();
+        let Some(insts) = px.child("instruments") else { return };
+        for inst in insts.children("instrument") {
+            self.panel_instrument(inst, g, &pdir);
+        }
+    }
+
+    fn panel_instrument(&mut self, inst: &Elem, parent: usize, dir: &Path) {
+        let cond = inst.child("condition").map(|c| self.pm.condition(c));
+        let mut at = parent;
+        if let Some(c) = cond {
+            match c.is_const() {
+                Some(v) if v == 0.0 => {
+                    if std::env::var_os("FGIMPORT_PANELS").is_some() {
+                        eprintln!("PANEL drop {:?}", inst.text_of("name"));
+                    }
+                    return;
+                }
+                Some(_) => {}
+                None => at = self.add(Node { name: "instr#cond".into(), anim: Some(Anim::Select(c)), ..Default::default() }, Some(at)),
+            }
+        }
+        let (wb, hb) = (inst.f("w-base").unwrap_or(128.0), inst.f("h-base").unwrap_or(128.0));
+        let (w, h) = (inst.f("w").unwrap_or(wb), inst.f("h").unwrap_or(hb));
+        let (x, y) = (inst.f("x").unwrap_or(0.0), inst.f("y").unwrap_or(0.0));
+        let local = Mat4::from_translation(Vec3::new(x, y, 0.0)) * Mat4::from_scale(Vec3::new(w / wb.max(1.0), h / hb.max(1.0), 1.0));
+        let name = inst.text_of("name").unwrap_or("instrument").to_string();
+        let g = self.group(&name, local, Some(at));
+        let Some(layers) = inst.child("layers") else { return };
+        let mut k = 0usize;
+        for l in layers.children("layer") {
+            self.panel_layer(l, g, dir, (wb, hb), &mut k, true);
+        }
+    }
+
+    /// One layer (recursing into `switch` layers). `k` counts the quads of
+    /// the instrument (their depth order).
+    fn panel_layer(&mut self, l: &Elem, parent: usize, dir: &Path, base: (f32, f32), k: &mut usize, own_cond: bool) {
+        let mut at = parent;
+        if own_cond {
+            if let Some(c) = l.child("condition").map(|c| self.pm.condition(c)) {
+                match c.is_const() {
+                    Some(v) if v == 0.0 => {
+                        if std::env::var_os("FGIMPORT_PANELS").is_some() {
+                            eprintln!("PANEL layer off {:?}", l.text_of("name"));
+                        }
+                        return;
+                    }
+                    Some(_) => {}
+                    None => at = self.add(Node { name: "layer#cond".into(), anim: Some(Anim::Select(c)), ..Default::default() }, Some(at)),
+                }
+            }
+        }
+        match l.text_of("type").unwrap_or("texture").trim() {
+            "switch" => {
+                // The first sub-layer whose condition holds is shown.
+                let mut prior: Vec<Expr> = Vec::new();
+                for sub in l.children("layer") {
+                    let c = sub.child("condition").map(|c| self.pm.condition(c)).unwrap_or(Expr::C(1.0));
+                    let sel = if prior.is_empty() { c.clone() } else { op("and", vec![c.clone(), op("not", vec![op("or", prior.clone())])]) };
+                    match sel.is_const() {
+                        Some(v) if v == 0.0 => {}
+                        _ => {
+                            let n = if sel.is_const().is_some() { at } else { self.add(Node { name: "switch#sel".into(), anim: Some(Anim::Select(sel)), ..Default::default() }, Some(at)) };
+                            self.panel_layer(sub, n, dir, base, k, false);
+                        }
+                    }
+                    if c.is_const().is_some_and(|v| v != 0.0) {
+                        break;
+                    }
+                    prior.push(c);
+                }
+            }
+            "text" | "built-in" => {}
+            _ => {
+                let Some(tex) = l.child("texture") else { return };
+                let Some(tpath) = tex.text_of("path").and_then(|p| self.ctx.resolve(p, dir)) else {
+                    self.log.push(format!("panel layer texture not found: {:?}", tex.text_of("path")));
+                    return;
+                };
+                // Transformations, outermost first.
+                if let Some(ts) = l.child("transformations") {
+                    for t in ts.children("transformation") {
+                        let raw = t.text_of("property").map(|p| self.pm.prop(p));
+                        let v = match (raw, t.child("interpolation")) {
+                            (Some(x), Some(tab)) => crate::expr::interp_expr(x, crate::expr::table_of(tab)),
+                            (Some(x), None) => {
+                                let (lo, hi) = (t.f("min"), t.f("max"));
+                                let x = if lo.is_some() || hi.is_some() { op("clamp", vec![x, Expr::C(lo.unwrap_or(f32::NEG_INFINITY)), Expr::C(hi.unwrap_or(f32::INFINITY))]) } else { x };
+                                op("add", vec![op("mul", vec![x, Expr::C(t.f("scale").unwrap_or(1.0))]), Expr::C(t.f("offset").unwrap_or(0.0))])
+                            }
+                            (None, _) => Expr::C(t.f("offset").unwrap_or(0.0)),
+                        };
+                        let anim = match t.text_of("type").unwrap_or("").trim() {
+                            "x-shift" => match v.is_const() {
+                                Some(c) => {
+                                    at = self.group("xshift", Mat4::from_translation(Vec3::X * c), Some(at));
+                                    continue;
+                                }
+                                None => Anim::Translate { axis: Vec3::X, m: v },
+                            },
+                            "y-shift" => match v.is_const() {
+                                Some(c) => {
+                                    at = self.group("yshift", Mat4::from_translation(Vec3::Y * c), Some(at));
+                                    continue;
+                                }
+                                None => Anim::Translate { axis: Vec3::Y, m: v },
+                            },
+                            // Positive = clockwise as seen by the pilot.
+                            "rotation" => match v.is_const() {
+                                Some(c) => {
+                                    at = self.group("rot", Mat4::from_rotation_z(-c.to_radians()), Some(at));
+                                    continue;
+                                }
+                                None => Anim::Rotate { center: Vec3::ZERO, axis: -Vec3::Z, deg: v },
+                            },
+                            _ => continue,
+                        };
+                        at = self.add(Node { name: "layer#xf".into(), anim: Some(anim), ..Default::default() }, Some(at));
+                    }
+                }
+                let (w, h) = (l.f("w").unwrap_or(base.0), l.f("h").unwrap_or(base.1));
+                let (u0, v0, u1, v1) = (tex.f("x1").unwrap_or(0.0), tex.f("y1").unwrap_or(0.0), tex.f("x2").unwrap_or(1.0), tex.f("y2").unwrap_or(1.0));
+                // Layers stack towards the viewer (FlightGear draws them in order, depth off).
+                let z = *k as f32 * 0.0004;
+                *k += 1;
+                let p = |x: f32, y: f32| Vec3::new(x * 0.5 * w, y * 0.5 * h, z);
+                let q = [p(-1.0, -1.0), p(1.0, -1.0), p(1.0, 1.0), p(-1.0, 1.0)];
+                let t = [Vec2::new(u0, v0), Vec2::new(u1, v0), Vec2::new(u1, v1), Vec2::new(u0, v1)];
+                let tri = |a: usize, b: usize, c: usize| ac3d::Tri { v: [q[a], q[b], q[c]], uv: [t[a], t[b], t[c]], mat: 0, smooth: false, two_sided: false };
+                let mat = AcMaterial { name: "panel".into(), rgb: Vec3::ONE, amb: Vec3::ONE, emis: Vec3::ZERO, spec: Vec3::ZERO, shi: 0.0, trans: 0.0 };
+                let geom = Geom { obj_tris: vec![tri(0, 1, 2), tri(0, 2, 3)], materials: std::rc::Rc::new(vec![mat]), texture: Some(tpath), crease: 0.0 };
+                let name = l.text_of("name").unwrap_or("layer").to_string();
+                if std::env::var_os("FGIMPORT_PANELS").is_some() {
+                    eprintln!("PANEL quad {name}");
+                }
+                self.add(Node { name, geom: Some(geom), flags: Flags { interior: true, ..Default::default() }, ..Default::default() }, Some(at));
+            }
+        }
     }
 
     /// All nodes named `name` in the subtree of `root`.
@@ -439,6 +660,12 @@ impl<'a> Builder<'a> {
             }
             _ => targets,
         };
+        // Glass display screens stay on: Skyward drives their power and
+        // content (src/cockpit/displays.rs), not the model's "screen off" selects.
+        let targets: Vec<usize> = if ty == "select" { targets.into_iter().filter(|&t| self.nodes[t].flags.display.is_none()).collect() } else { targets };
+        if targets.is_empty() {
+            return;
+        }
         let anim = match ty.as_str() {
             "rotate" | "knob" => {
                 let (center, axis) = self.axis_of(g, a);
@@ -976,9 +1203,23 @@ pub fn run(cfg: &Value, src: &Path, out: &Path) -> Result<(), String> {
         pm: PropMap::new(statics, &extra),
         cfg,
         exclude_models: regexes(cfg, "exclude_models"),
-        exclude_objects: regexes(cfg, "exclude_objects"),
+        exclude_objects: path_regexes(cfg, "exclude_objects"),
         interior_models: regexes(cfg, "interior_models"),
         interior_objects: regexes(cfg, "interior_objects"),
+        force_models: regexes(cfg, "force_models"),
+        interior_shell: cfg
+            .get("interior_shell")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|e| {
+                        let e = e.as_array()?;
+                        let c = e.get(1).and_then(|c| c.as_array()).map(|c| c.iter().filter_map(|x| x.as_f64()).map(|x| x as f32).collect::<Vec<_>>()).unwrap_or_default();
+                        Some((Regex::new(e.first()?.as_str()?).expect("bad shell regex"), Vec3::new(*c.first().unwrap_or(&0.6), *c.get(1).unwrap_or(&0.6), *c.get(2).unwrap_or(&0.6))))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
         light_models: regexes(cfg, "light_models"),
         displays: cfg
             .get("displays")
@@ -1296,6 +1537,40 @@ pub fn run(cfg: &Value, src: &Path, out: &Path) -> Result<(), String> {
     std::fs::write(out.join("import-report.txt"), &rep).map_err(|e| e.to_string())?;
     print!("{rep}");
     Ok(())
+}
+
+/// Screens modelled without texture coordinates (all UVs equal: the 777's
+/// canvas placements) get a planar mapping seen from the front: u to the
+/// viewer's right, v up (0..1 over the face). Positions are in the AC file's
+/// model frame (x aft, y right, z up).
+fn planar_screen_uv(tris: &mut [crate::ac3d::Tri]) {
+    let (mut lo, mut hi) = (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN));
+    for t in tris.iter() {
+        for uv in t.uv {
+            lo = lo.min(uv);
+            hi = hi.max(uv);
+        }
+    }
+    if tris.is_empty() || (hi - lo).min_element() > 1e-4 {
+        return;
+    }
+    let n = tris.iter().map(|t| (t.v[1] - t.v[0]).cross(t.v[2] - t.v[0])).sum::<Vec3>().normalize_or(-Vec3::X);
+    let up = (Vec3::Z - n * n.dot(Vec3::Z)).normalize_or(Vec3::Y);
+    let right = (-n).cross(up);
+    let q = |p: Vec3| Vec2::new(p.dot(right), p.dot(up));
+    let (mut a, mut b) = (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN));
+    for t in tris.iter() {
+        for p in t.v {
+            a = a.min(q(p));
+            b = b.max(q(p));
+        }
+    }
+    let span = (b - a).max(Vec2::splat(1e-6));
+    for t in tris.iter_mut() {
+        for k in 0..3 {
+            t.uv[k] = (q(t.v[k]) - a) / span;
+        }
+    }
 }
 
 /// A display screen's texture window (UV bounding box) and its physical

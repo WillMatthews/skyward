@@ -87,6 +87,9 @@ pub struct GroundSpec {
     pub rudder_diff_brake: bool,
     /// Wheel (rim) temperature at which the fusible plugs melt and let the tyre down (°C).
     pub fuse_c: f32,
+    /// Brake torque at full pressure relative to the type's braking coefficient
+    /// on its weight (per-type calibration against published landing rolls).
+    pub torque_k: f32,
 }
 
 impl GroundSpec {
@@ -116,10 +119,11 @@ impl GroundSpec {
     /// its static weight: light single-disc brakes only lock a lightly loaded
     /// wheel (just after touchdown, flaps out), as on the real aircraft.
     pub fn brake_scale(&self) -> f32 {
-        match self.brake {
+        let kind = match self.brake {
             BrakeKind::Light => 0.6,
             _ => 1.0,
-        }
+        };
+        kind * self.torque_k
     }
 
     /// Side grip of a tail wheel relative to a main tyre's (per unit load): a
@@ -197,6 +201,7 @@ pub fn spec(def: &AircraftDef) -> GroundSpec {
         steer: Steer::Pedal { deg: def.nose_steer_deg, fade_ms: 10.0 },
         rudder_diff_brake: true,
         fuse_c: 1e9,
+        torque_k: 1.0,
     };
     let airliner = GroundSpec {
         psi_main: 180.0,
@@ -213,6 +218,7 @@ pub fn spec(def: &AircraftDef) -> GroundSpec {
         steer: tiller(def.nose_steer_deg, 6.0),
         rudder_diff_brake: false,
         fuse_c: 177.0,
+        torque_k: 1.0,
     };
     match def.id {
         "kestrel" => GroundSpec { steer: Steer::Caster { link_deg: 10.0, free_deg: 30.0, fade_ms: 10.0 }, ..light },
@@ -279,6 +285,25 @@ pub fn spec(def: &AircraftDef) -> GroundSpec {
             sink_kg: 40.0,
             autobrake: Some(AIRBUS_AB),
             steer: tiller(75.0, 6.0),
+            ..airliner
+        },
+        // CRJ700: steel brakes on two-wheel mains; landing roll ≈ 800 m (LFL 1,536 m).
+        "crj700" => {
+            GroundSpec { psi_main: 168.0, psi_aux: 150.0, r_main: 0.44, r_aux: 0.31, i_main: 10.0, i_aux: 1.5, brake: BrakeKind::Steel, sink_kg: 22.0, torque_k: 0.7, ..airliner }
+        }
+        // Citation X: carbon brakes with anti-skid, pedal nose steering; landing roll ≈ 600 m.
+        "citationx" => GroundSpec {
+            psi_main: 190.0,
+            psi_aux: 120.0,
+            r_main: 0.36,
+            r_aux: 0.24,
+            wheels_per_leg: 2,
+            i_main: 3.0,
+            i_aux: 0.6,
+            brake: BrakeKind::Carbon,
+            sink_kg: 12.0,
+            steer: Steer::Pedal { deg: def.nose_steer_deg, fade_ms: 10.0 },
+            torque_k: 0.75,
             ..airliner
         },
         "hercules" => GroundSpec {

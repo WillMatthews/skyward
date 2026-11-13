@@ -1,4 +1,4 @@
-12000	1925460
+12000	2186910
 zero	0	3840
 one	4320	2730
 two	7530	3180
@@ -227,3 +227,34 @@ runway surface wet	1858320	14700
 advise on initial contact you have information	1873500	28020
 climb straight ahead	1902000	12060
 backtrack runway	1914540	10440
+nine	1925460	3480
+ten	1929420	3060
+eleven	1932960	3840
+twelve	1937280	3210
+o'clock	1940970	5940
+opposite direction	1947390	12000
+same direction	1959870	11220
+crossing left to right	1971570	14280
+crossing right to left	1986330	13980
+same level	2000790	7680
+above	2008950	5100
+below	2014530	5100
+airbus	2020110	5820
+boeing	2026410	5640
+embraer	2032530	6660
+regional jet	2039670	10920
+turboprop	2051070	7020
+business jet	2058570	9840
+light aircraft	2068890	10200
+helicopter	2079570	8040
+military jet	2088090	10440
+military transport	2099010	13500
+airliner	2112990	6840
+glider	2120310	5100
+drone	2125890	4860
+concorde	2131230	6600
+extend downwind	2138310	12120
+vectors for spacing	2150910	13800
+number	2165190	5760
+following	2171430	6780
+on final	2178690	7740

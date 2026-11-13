@@ -38,6 +38,10 @@ pub struct GroundOps {
     pub flown: bool,
     /// Seconds a stand start has waited for the airport layout.
     pub respawn_t: f32,
+    /// The settings' default autobrake was applied to this flight.
+    pub prefs_applied: bool,
+    /// The ATC taxi route the taxi ribbon was last started for.
+    pub ribbon_route: Option<u64>,
 }
 
 impl GroundOps {
@@ -72,4 +76,18 @@ impl GroundOps {
         out.append(mesh, m);
         out.mat = mat;
     }
+}
+
+/// A ground-menu request (the comms panel's Ground page, ui/comms.rs).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum GroundReq {
+    Push(PushDir),
+    PushStop,
+    ParkingBrake,
+    /// Chocks + ground power in / out.
+    Services,
+    /// Autobrake selector: next position.
+    Autobrake,
+    TailLock,
+    TaxiGuide,
 }

@@ -658,6 +658,8 @@ impl AircraftLightRig {
 
 /// Max sprites / analytic lights of the aircraft per frame.
 pub const AC_SPRITES: usize = 16;
+/// Light sprites per frame of the player's aircraft plus the other aircraft (multiplayer).
+pub const DYN_SPRITES: usize = AC_SPRITES + 512;
 pub const AC_SPOTS: usize = 4;
 
 /// One analytic light in the scene shader (eye-relative): spot (cone) or

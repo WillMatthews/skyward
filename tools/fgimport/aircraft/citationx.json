@@ -1,0 +1,123 @@
+{
+ "props": {
+  "sim/current-view/internal": 1
+ },
+ "channels": [
+  [
+   "^engines/engine(?:\\[(\\d)\\])?/fan$",
+   "eng{1}_n1",
+   1.0,
+   0.0
+  ],
+  [
+   "^sim/multiplay/generic/int\\[6\\]$",
+   "nav",
+   1.0,
+   0.0
+  ],
+  [
+   "^sim/multiplay/generic/int(?:\\[0\\])?$",
+   "strobe",
+   1.0,
+   0.0
+  ],
+  [
+   "^sim/multiplay/generic/int\\[1\\]$",
+   "beacon",
+   1.0,
+   0.0
+  ],
+  [
+   "^sim/multiplay/generic/int\\[[234]\\]$",
+   "landing_light",
+   1.0,
+   0.0
+  ],
+  [
+   "^sim/multiplay/generic/float(?:\\[0\\])?$",
+   "doors",
+   1.0,
+   0.0
+  ],
+  [
+   "^sim/multiplay/generic/float\\[1\\]$",
+   "spoilers",
+   1.0,
+   0.0
+  ],
+  [
+   "^sim/multiplay/generic/float\\[2\\]$",
+   "eng0_reverser",
+   1.0,
+   0.0
+  ],
+  [
+   "^surface-positions/reverser-norm$",
+   "eng0_reverser",
+   1.0,
+   0.0
+  ],
+  [
+   "^controls/gear/steering$",
+   "steer_norm",
+   1.0,
+   0.0
+  ],
+  [
+   "^gear/gear(?:\\[(\\d)\\])?/tire-rpm$",
+   "gear{1}_roll_ms",
+   42.0,
+   0.0
+  ]
+ ],
+ "light_models": [
+  "procedural_light",
+  "Effects/lights/",
+  "[Ll]ights?/.*(nav|beacon|strobe|landing|taxi)",
+  "/(nav|beacon|strobe)"
+ ],
+ "max_tex": 2048,
+ "interior_max_tex": 1024,
+ "id": "citationx",
+ "name": "Cessna Citation X",
+ "fg_name": "CitationX",
+ "model": "Models/Citation-X.xml",
+ "fdm": {
+  "cg_model": [
+   -0.45,
+   0.0,
+   0.0
+  ]
+ },
+ "exclude_models": [
+  "Effects/",
+  "registration",
+  "shadow",
+  "Human",
+  "pilot",
+  "Pilot"
+ ],
+ "interior_models": [
+  "flightdeck",
+  "Instruments",
+  "panel",
+  "pedestal",
+  "cabin"
+ ],
+ "eye_view": [
+  -0.375,
+  0.41,
+  -7.0
+ ],
+ "displays": [],
+ "interior_shell": [
+  [
+   "^(Fuselage|Fuselage\\.005)$",
+   [
+    0.55,
+    0.55,
+    0.57
+   ]
+  ]
+ ]
+}

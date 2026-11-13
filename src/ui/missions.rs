@@ -398,11 +398,16 @@ pub fn briefing(ui: &mut Ui, st: &mut UiState) {
         st.actions.push(Action::Goto(Screen::Missions));
     }
     let r = Rect::from_min_size(Pos2::new(content.max.x - 240.0, fy), Vec2::new(240.0, 48.0));
-    if button(ui, r, "bfly", "Fly this mission", Btn::Primary, true).clicked() || nav.ok {
+    // Missions are single-player: not while connected to a server.
+    let online = st.mp.connected();
+    let fly = button(ui, r, "bfly", "Fly this mission", Btn::Primary, !online);
+    let fly = if online { fly.on_hover_text(super::menus::MISSIONS_SOLO) } else { fly };
+    if !online && (fly.clicked() || nav.ok) {
         st.missions.pending = Some(m.id.clone());
         st.actions.push(Action::StartMission);
     }
-    p.text(Pos2::new(r.min.x - 20.0, fy + 24.0), Align2::RIGHT_CENTER, "Tab: pause · O: systems & failures · F4: radio (MAYDAY)", f_ui(12.5), pal::TEXT3);
+    let hint = if online { super::menus::MISSIONS_SOLO } else { "Tab: pause · O: systems & failures · F4: radio (MAYDAY)" };
+    p.text(Pos2::new(r.min.x - 20.0, fy + 24.0), Align2::RIGHT_CENTER, hint, f_ui(12.5), pal::TEXT3);
 }
 
 fn day_label(doy: u32) -> String {
