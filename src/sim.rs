@@ -383,6 +383,10 @@ pub struct Sim {
     pub start: Start,
     pub ac: Aircraft,
     pub ctl: Controls,
+    /// Keyboard pitch feel (input/key_pitch.rs).
+    key_pitch: crate::input::key_pitch::KeyPitch,
+    /// Damage / crash assists from the settings (missions fly Realistic).
+    pub assists: crate::damage::Assists,
     flap_idx: usize,
     pub spoiler_idx: usize,
     pub cam: CamMode,
@@ -541,6 +545,8 @@ impl Sim {
             start,
             ac,
             ctl: Controls::default(),
+            key_pitch: Default::default(),
+            assists: Default::default(),
             flap_idx: 0,
             spoiler_idx: 0,
             cam: CamMode::Chase,
@@ -1196,7 +1202,13 @@ impl Sim {
             cur + (target - cur).clamp(-r * dt, r * dt)
         };
         if !bot_on && !self.ap.engaged {
-            self.ctl.elevator = approach(self.ctl.elevator, h(Key::PitchUp) - h(Key::PitchDown), 2.2);
+            // Keys: progressive travel, easing off near the limit load on
+            // stick-to-surface aircraft (input/key_pitch.rs).
+            let band = (def.control_law == crate::flight::ControlLaw::Direct && !self.ac.on_ground && def.rotor.is_none()).then(|| {
+                let sd = crate::damage::struct_def(def.id);
+                crate::input::key_pitch::Feel::new(sd.n_lim, sd.n_lim_neg, def.vs1_kt, self.ac.airspeed_kt())
+            });
+            self.ctl.elevator = self.key_pitch.step(self.ctl.elevator, h(Key::PitchUp) - h(Key::PitchDown), self.ac.g_load(), band, dt);
             self.ctl.aileron = approach(self.ctl.aileron, h(Key::RollRight) - h(Key::RollLeft), 3.0);
             self.ctl.rudder = approach(self.ctl.rudder, h(Key::YawRight) - h(Key::YawLeft), 2.5);
             self.ctl.trim = (self.ctl.trim + (h(Key::TrimUp) - h(Key::TrimDown)) * 0.25 * dt).clamp(-1.0, 1.0);
@@ -1278,6 +1290,8 @@ impl Sim {
                 self.systems_step(&amb, DT);
                 let def = &self.defs[self.sel];
                 let env = mission_glue::MissionEnv { inner: world, run: self.mission.as_ref() };
+                // Missions are scored with the airframe and crashes realistic.
+                self.ac.assists = if self.mission.is_some() { crate::damage::Assists::default() } else { self.assists };
                 self.ac.step(def, &self.ctl, &env, DT);
                 self.acc -= DT;
                 steps += 1;

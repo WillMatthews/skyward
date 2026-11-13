@@ -3,6 +3,7 @@
 # `cargo fmt --check` instead.
 src/input/mod.rs
 src/input/sim_glue.rs
+src/input/key_pitch.rs
 src/ui/controls.rs
 src/platform/mod.rs
 src/tiles_web.rs
