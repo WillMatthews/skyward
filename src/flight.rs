@@ -3192,9 +3192,20 @@ fn lower_first(s: &str) -> String {
 }
 
 /// Per-aircraft seed for the structural strength scatter.
+///
+/// Counted per thread, not per process: a process-wide counter made each
+/// aircraft's strength depend on how many aircraft *other* threads had built
+/// first, so a sim run (e.g. a test among parallel tests) was not reproducible
+/// and flipped outcomes with machine load.
 fn next_seed() -> u32 {
-    static SEED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x5EED);
-    SEED.fetch_add(0x9E37_79B9, std::sync::atomic::Ordering::Relaxed)
+    thread_local! {
+        static SEED: std::cell::Cell<u32> = const { std::cell::Cell::new(0x5EED) };
+    }
+    SEED.with(|s| {
+        let v = s.get();
+        s.set(v.wrapping_add(0x9E37_79B9));
+        v
+    })
 }
 
 /// Live state of one engine.

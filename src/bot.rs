@@ -976,8 +976,19 @@ struct RidgeState {
     arrived: bool,
 }
 
-/// Tours flown so far (all gliders): each new one is planned differently.
-static GLIDER_TOURS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// Tours flown so far (all gliders on this thread): each new one is planned
+/// differently. Per thread so a run is reproducible whatever other threads
+/// (parallel tests, regress workers) fly.
+fn next_glider_tour() -> u32 {
+    thread_local! {
+        static TOURS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+    TOURS.with(|t| {
+        let n = t.get();
+        t.set(n.wrapping_add(1));
+        n
+    })
+}
 
 /// Cloud-base and cumulus information as a pilot would see it.
 fn sky(world: &World) -> &CloudField {
@@ -996,7 +1007,7 @@ impl Glider {
             v += 0.5;
         }
         let home = home.map(|r| (r.a + r.b) * 0.5).unwrap_or(xz(ac.pos));
-        let tour_n = GLIDER_TOURS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tour_n = next_glider_tour();
         let tour = glider_tour(world, home, tour_n);
         Glider {
             mode: if ac.on_ground { GMode::Landed } else { GMode::Cruise },
@@ -1553,7 +1564,7 @@ impl Glider {
                 if self.wp >= self.tour.len() {
                     // Lap done: another route next time.
                     self.wp = 0;
-                    self.tour_n = GLIDER_TOURS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    self.tour_n = next_glider_tour();
                     self.tour = glider_tour(world, self.home, self.tour_n);
                     if let Some(f) = self.tour.first() {
                         ev.push(format!("new tour: {} first", f.name));
