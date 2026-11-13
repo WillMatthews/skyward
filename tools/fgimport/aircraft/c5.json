@@ -1,0 +1,50 @@
+{
+ "props": {
+  "sim/current-view/internal": 1
+ },
+ "channels": [],
+ "light_models": [
+  "procedural_light",
+  "Effects/lights/",
+  "[Ll]ights?/.*(nav|beacon|strobe|landing|taxi|flash)",
+  "/(nav|beacon|strobe)"
+ ],
+ "max_tex": 2048,
+ "interior_max_tex": 1024,
+ "id": "galaxy",
+ "name": "Lockheed C-5M Super Galaxy",
+ "fg_name": "C-5",
+ "model": "Models/C-5.xml",
+ "fdm": {
+  "jsbsim": "C-5M-JSB.xml"
+ },
+ "exclude_models": [
+  "Effects/",
+  "Services",
+  "Military",
+  "projection",
+  "Human",
+  "Pilot"
+ ],
+ "interior_models": [
+  "Cockpit",
+  "Flightdeck"
+ ],
+ "textures": {
+  "436th.png": "Skyward/c5-neutral.png"
+ },
+ "fuel_kg": 75000,
+ "vrp_m": [
+  38.2765,
+  0.0,
+  4.1678
+ ],
+ "eye_body": [
+  0.75,
+  4.0,
+  24.0
+ ],
+ "pointmass_kg": {
+  "payload": 30000
+ }
+}

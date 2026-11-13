@@ -30,6 +30,9 @@ the user is working on this machine; render offscreen and inspect PNGs.
 | aerolink | Aerolink 72 | Airliner (turboprop) | ATR 72 class: high wing, twin 6-blade turboprops, T-tail |
 | meridian190 | Meridian 190 | Airliner (jet) | E190 class: low wing, twin underwing turbofans |
 | meridian320 | Meridian 320 | Airliner (jet) | A320 class: low wing, twin underwing turbofans, wingtip fences/sharklets |
+| hercules | (v3) Lockheed C-130H Hercules | Airliner (turboprop; role "Military transport") | 4 turboprops, high wing, tandem main gear, STOL / rough field |
+| galaxy | (v3) Lockheed C-5M Super Galaxy | Airliner (jet; role "Strategic airlifter") | 4 underwing turbofans, T-tail, 4 six-wheel bogies |
+| vulcan | (v3) Avro Vulcan B.2 | Airliner (jet; role "Delta-wing bomber") | tailless delta, 4 buried turbojets, elevons, flap lever = airbrakes |
 
 ### Shared geometry (body frame, metres)
 

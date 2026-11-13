@@ -40,6 +40,8 @@ pub enum SoundSet {
     Cfm56,
     /// IAE V2500 (A320 SASA recordings).
     V2500,
+    /// Bristol Siddeley Olympus 301 turbojets (FGUK Vulcan recordings): the howl.
+    Olympus,
 }
 
 /// Static per-type sound parameters (sent with every frame; tiny).

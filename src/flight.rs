@@ -655,6 +655,15 @@ pub struct AircraftDef {
     /// then fitted to it ([`JsbDef::fit`]) for the analytic helpers (trim,
     /// stall speed, FBW inversion feed-forward).
     pub jsb: Option<std::sync::Arc<JsbDef>>,
+
+    // ================= v3 heavies =================
+    /// Display class for menus ("" = the category's name).
+    pub role: &'static str,
+    /// Runway length the type needs, m (0 = the category default, see
+    /// `sim::min_runway`).
+    pub min_runway_m: f32,
+    /// Can use unpaved / grass strips (STOL / rough-field gear).
+    pub rough_field: bool,
 }
 
 /// A JSBSim aerodynamic model plus how Skyward's normalised surfaces map onto
@@ -1433,12 +1442,23 @@ const MERIDIAN320_HARD: &[HardPoint] = &[
 const MERIDIAN320_ENGINES: &[Vec3] = &[Vec3::new(5.63, -1.55, 4.03), Vec3::new(-5.63, -1.55, 4.03)];
 
 /// The aircraft roster, in contract order: kestrel, swift, peregrine, lancer,
-/// aerolink, meridian190, meridian320.
+/// aerolink, meridian190, meridian320, then the v3 heavies hercules, galaxy, vulcan.
 pub fn catalogue() -> Vec<AircraftDef> {
     // Built once (the JSBSim FDMs are parsed and fitted here).
     static CAT: std::sync::OnceLock<Vec<AircraftDef>> = std::sync::OnceLock::new();
     CAT.get_or_init(|| {
-        let mut v = vec![kestrel_def(), swift_def(), peregrine_def(), lancer_def(), aerolink_def(), meridian190_def(), meridian320_def()];
+        let mut v = vec![
+            kestrel_def(),
+            swift_def(),
+            peregrine_def(),
+            lancer_def(),
+            aerolink_def(),
+            meridian190_def(),
+            meridian320_def(),
+            hercules_def(),
+            galaxy_def(),
+            vulcan_def(),
+        ];
         for d in &mut v {
             rig_for_cruise(d);
         }
@@ -1465,6 +1485,14 @@ pub const ALIASES: &[(&str, &str)] = &[
     ("e190", "meridian190"),
     ("embraer190", "meridian190"),
     ("a320", "meridian320"),
+    ("c130", "hercules"),
+    ("c-130", "hercules"),
+    ("c130h", "hercules"),
+    ("c5", "galaxy"),
+    ("c-5", "galaxy"),
+    ("c5m", "galaxy"),
+    ("vulcanb2", "vulcan"),
+    ("avro-vulcan", "vulcan"),
 ];
 
 /// Canonical id for an id or alias (case-insensitive).
@@ -2223,6 +2251,8 @@ fn aerolink_def() -> AircraftDef {
         egt_max: 780.0,
         reverse_eff: 0.35,
         yaw_damper: 2.0,
+        // ATR 72-500: TOFL ~1,300 m at MTOW, less at the weights flown here.
+        min_runway_m: 1_100.0,
         ..Default::default()
     }
 }
@@ -2341,6 +2371,8 @@ fn meridian190_base() -> AircraftDef {
         egt_max: 870.0,
         reverse_eff: 0.40,
         yaw_damper: 2.5,
+        // E190s operate London City (1,508 m) with the steep-approach option.
+        min_runway_m: 1_450.0,
         ..Default::default()
     }
 }
@@ -2464,6 +2496,495 @@ fn meridian320_base() -> AircraftDef {
         nz_min: -1.0,
         roll_rate_max: deg(15.0),
         yaw_damper: 2.5,
+        min_runway_m: 1_800.0,
+        ..Default::default()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// v3 heavies: C-130H Hercules, C-5M Super Galaxy, Avro Vulcan B.2
+// ---------------------------------------------------------------------------
+
+// --- Hercules (C-130H) ---------------------------------------------------------
+
+const HERCULES_GEAR: &[GearPoint] = &[
+    // FGAddon C130 model, gear down (tandem main wheels in the fuselage pods).
+    wheel(Vec3::new(0.0, -3.36, 9.10), 450_000.0, 45_000.0, true, false, true),
+    wheel(Vec3::new(2.125, -3.36, 0.42), 1_400_000.0, 140_000.0, false, true, true),
+    wheel(Vec3::new(-2.125, -3.36, 0.42), 1_400_000.0, 140_000.0, false, true, true),
+    wheel(Vec3::new(2.125, -3.36, -1.11), 1_400_000.0, 140_000.0, false, true, true),
+    wheel(Vec3::new(-2.125, -3.36, -1.11), 1_400_000.0, 140_000.0, false, true, true),
+    // Ramp hinge / aft belly (over-rotation ~12°).
+    skid(Vec3::new(0.0, -2.62, -4.45), 1_500_000.0, 150_000.0, 0.5),
+];
+
+const HERCULES_HARD: &[HardPoint] = &[
+    hard(0.0, -1.25, 12.80, "Flew into the ground"),
+    hard(20.15, 1.74, -0.23, "Wingtip strike"),
+    hard(-20.15, 1.74, -0.23, "Wingtip strike"),
+    hard(9.82, -0.89, 3.35, "Prop strike"),
+    hard(-9.82, -0.89, 3.35, "Prop strike"),
+    hard(4.93, -0.89, 3.35, "Prop strike"),
+    hard(-4.93, -0.89, 3.35, "Prop strike"),
+    hard(0.0, 1.95, 8.00, "Crashed inverted"),
+    hard(0.0, 8.70, -13.30, "Crashed inverted"),
+    hard(0.0, -2.55, 6.00, GEAR_UP),
+    hard(0.0, -2.55, -2.50, GEAR_UP),
+    hard(1.80, -2.50, -0.30, GEAR_UP),
+    hard(-1.80, -2.50, -0.30, GEAR_UP),
+];
+
+/// Propeller hubs, engine 0 = left outboard (#1) .. 3 = right outboard (#4).
+const HERCULES_ENGINES: &[Vec3] = &[Vec3::new(9.82, 1.17, 3.35), Vec3::new(4.93, 1.17, 3.35), Vec3::new(-4.93, 1.17, 3.35), Vec3::new(-9.82, 1.17, 3.35)];
+
+fn hercules_def() -> AircraftDef {
+    AircraftDef {
+        id: "hercules",
+        name: "Lockheed C-130H Hercules",
+        description: "Four-turboprop tactical airlifter (FlightGear C130 model; flight model calibrated \
+                      to its YASim data and published figures). 4 × T56-A-15, 4,590 shp, four-blade props, \
+                      high wing, rough-field gear: short fields from ~700 m.",
+        role: "Military transport",
+        has_engine: true,
+        flap_label: "Flaps",
+        flap_detents: &[0.0, 18.0, 36.0],
+        flap_max_deg: 36.0,
+        vs0_kt: 96.0,
+        vs1_kt: 119.0,
+        vno_kt: 250.0,
+        vne_kt: 290.0,
+        gear_height: 3.282,
+        wingspan: 40.41,
+        mass: 60_000.0,
+        inertia_roll: 1_600_000.0,
+        inertia_pitch: 2_300_000.0,
+        inertia_yaw: 3_600_000.0,
+        wing_area: 162.1,
+        chord: 4.16,
+        wing_height: 1.2,
+        cl0: 0.45,
+        cl_alpha: 5.0,
+        alpha_stall: deg(15.4),
+        alpha_stall_neg: deg(14.0),
+        stall_sharpness: 35.0,
+        cl_flat: 1.0,
+        stall_drop: 0.75,
+        stall_decay: 0.15,
+        cd0: 0.022,
+        oswald: 0.80,
+        cd_profile_k: 0.0,
+        cl_min_profile: 0.0,
+        cd_flat: 1.3,
+        cd_beta: 0.2,
+        flap_cl: 0.95,
+        flap_curve: 0.6,
+        flap_alpha_stall: deg(-1.0),
+        flap_cd: 0.070,
+        flap_cd_exp: 1.5,
+        flap_cm: -0.05,
+        cm0: 0.08,
+        cm_alpha: -1.4,
+        cm_q: -25.0,
+        cm_elevator: 0.9,
+        cm_stall: -0.10,
+        trim_authority: 0.5,
+        cy_beta: -0.6,
+        cl_beta: -0.10,
+        cl_p: -0.5,
+        stall_autorotation: 0.15,
+        cl_r_per_cl: 0.25,
+        cl_aileron: 0.026,
+        cn_beta: 0.08,
+        cn_r: -0.12,
+        cn_p: -0.03,
+        cn_rudder: 0.055,
+        cn_aileron: -0.003,
+        surface_rate: 2.0,
+        flap_rate: 0.12,
+        static_thrust: 200_000.0,
+        thrust_v1: 0.0,
+        thrust_v2: 0.0,
+        windmill_cd: 0.15,
+        prop_disk_area: 53.1,
+        prop_wash: 0.0,
+        idle_power: 0.06,
+        spool_time: 1.8,
+        rpm_idle: 730.0,
+        rpm_static: 1_020.0,
+        rpm_per_ms: 6.0,
+        gear: HERCULES_GEAR,
+        hard_points: HERCULES_HARD,
+        roll_mu: 0.02,
+        brake_mu: 0.6,
+        tire_mu: 0.8,
+        nose_steer_deg: 60.0,
+        max_touchdown_sink: 3.6,
+        max_touchdown_bank: deg(10.0),
+        min_touchdown_pitch: deg(-1.5),
+        g_limit_pos: 3.0,
+        g_limit_neg: -1.0,
+
+        category: Category::Airliner,
+        engine_kind: EngineKind::Turboprop,
+        engine_count: 4,
+        retractable_gear: true,
+        has_reverser: true,
+        eye: Vec3::new(0.6, 0.53, 9.96),
+        vr_kt: 112.0,
+        vref_kt: 125.0,
+        vle_kt: 168.0,
+        ceiling_m: 10_060.0,
+        mmo: 0.55,
+        gear_time: 10.0,
+        cd_gear: 0.020,
+        mach_dd: 0.62,
+        cd_wave: 0.03,
+        engine_pos: HERCULES_ENGINES,
+        engine_power_w: 3_420_000.0,
+        const_speed_prop: true,
+        prop_eta: 0.84,
+        prop_fm: 0.80,
+        prop_radius: 2.055,
+        prop_rotation: 1.0,
+        prop_gear: 1.0,
+        prop_inertia: 300.0,
+        crit_alt_m: 0.0,
+        lapse_exp: 0.75,
+        torque_k: 1.0,
+        swirl_k: 0.0,
+        pfactor_k: 0.05,
+        rig_kt: 200.0,
+        sfc: 0.30,
+        egt_idle: 520.0,
+        egt_max: 1_070.0,
+        reverse_eff: 0.60,
+        yaw_damper: 2.0,
+        min_runway_m: 900.0,
+        rough_field: true,
+        ..Default::default()
+    }
+}
+
+// --- Galaxy (C-5M) --------------------------------------------------------------
+
+const GALAXY_GEAR: &[GearPoint] = &[
+    // FGMEMBERS C-5 model, gear down: four-wheel nose, four six-wheel main bogies.
+    wheel(Vec3::new(0.0, -4.97, 19.15), 2_000_000.0, 800_000.0, true, false, true),
+    wheel(Vec3::new(3.94, -4.97, -0.54), 3_500_000.0, 3_000_000.0, false, true, true),
+    wheel(Vec3::new(-3.94, -4.97, -0.54), 3_500_000.0, 3_000_000.0, false, true, true),
+    wheel(Vec3::new(3.94, -4.97, -5.60), 3_500_000.0, 3_000_000.0, false, true, true),
+    wheel(Vec3::new(-3.94, -4.97, -5.60), 3_500_000.0, 3_000_000.0, false, true, true),
+    // Aft fuselage / ramp (over-rotation ~11°).
+    skid(Vec3::new(0.0, -1.41, -20.50), 6_000_000.0, 900_000.0, 0.5),
+];
+
+const GALAXY_HARD: &[HardPoint] = &[
+    hard(0.0, -0.8, 29.50, "Flew into the ground"),
+    hard(33.90, 1.70, -11.20, "Wingtip strike"),
+    hard(-33.90, 1.70, -11.20, "Wingtip strike"),
+    hard(19.15, -0.45, 2.40, "Engine pod strike"),
+    hard(-19.15, -0.45, 2.40, "Engine pod strike"),
+    hard(12.20, -0.15, 5.40, "Engine pod strike"),
+    hard(-12.20, -0.15, 5.40, "Engine pod strike"),
+    hard(0.0, 7.5, 16.50, "Crashed inverted"),
+    hard(0.0, 16.4, -40.50, "Crashed inverted"),
+    hard(0.0, -3.3, 13.50, GEAR_UP),
+    hard(0.0, -3.0, -6.50, GEAR_UP),
+];
+
+/// Fan faces, engine 0 = left outboard .. 3 = right outboard.
+const GALAXY_ENGINES: &[Vec3] = &[Vec3::new(19.15, 0.70, 2.42), Vec3::new(12.21, 1.39, 5.41), Vec3::new(-12.21, 1.39, 5.41), Vec3::new(-19.15, 0.70, 2.42)];
+
+fn galaxy_def() -> AircraftDef {
+    with_jsb(
+        galaxy_base(),
+        include_str!("../assets/aircraft/galaxy/fdm.xml"),
+        &[],
+        &[],
+        200.0,
+        |j| {
+            j.elev_up = deg(25.0);
+            j.elev_down = deg(20.0);
+            j.ail_up = deg(20.0);
+            j.ail_down = deg(20.0);
+            j.rudder_max = deg(25.0);
+            j.spoiler_max_deg = 45.0;
+        },
+    )
+}
+
+fn galaxy_base() -> AircraftDef {
+    AircraftDef {
+        id: "galaxy",
+        name: "Lockheed C-5M Super Galaxy",
+        description: "Strategic airlifter (FGMEMBERS C-5 model, JSBSim aerodynamics calibrated to \
+                      published figures). 4 × GE CF6-80C2, 228 kN each, 280 t as flown: slow to spool, \
+                      huge inertia, needs a long runway.",
+        role: "Strategic airlifter",
+        has_engine: true,
+        flap_label: "Flaps",
+        flap_detents: &[0.0, 8.0, 16.0, 25.0, 32.0, 40.0],
+        flap_max_deg: 40.0,
+        vs0_kt: 106.0,
+        vs1_kt: 145.0,
+        vno_kt: 350.0,
+        vne_kt: 350.0,
+        gear_height: 4.859,
+        wingspan: 67.89,
+        mass: 280_000.0,
+        inertia_roll: 42_000_000.0,
+        inertia_pitch: 30_900_000.0,
+        inertia_yaw: 71_000_000.0,
+        wing_area: 576.0,
+        chord: 10.88,
+        wing_height: 7.5,
+        cl0: 0.40,
+        cl_alpha: 4.4,
+        alpha_stall: deg(13.5),
+        alpha_stall_neg: deg(12.0),
+        stall_sharpness: 35.0,
+        cl_flat: 1.0,
+        stall_drop: 0.75,
+        stall_decay: 0.15,
+        cd0: 0.020,
+        oswald: 0.80,
+        cd_profile_k: 0.0,
+        cl_min_profile: 0.0,
+        cd_flat: 1.3,
+        cd_beta: 0.2,
+        flap_cl: 1.2,
+        flap_curve: 0.5,
+        flap_alpha_stall: 0.0,
+        flap_cd: 0.08,
+        flap_cd_exp: 1.0,
+        flap_cm: -0.05,
+        cm0: 0.0,
+        cm_alpha: -0.6,
+        cm_q: -17.0,
+        cm_elevator: 0.5,
+        cm_stall: -0.10,
+        trim_authority: 0.9,
+        cy_beta: -1.0,
+        cl_beta: -0.10,
+        cl_p: -0.4,
+        stall_autorotation: 0.1,
+        cl_r_per_cl: 0.2,
+        cl_aileron: 0.035,
+        cn_beta: 0.12,
+        cn_r: -0.15,
+        cn_p: -0.02,
+        cn_rudder: 0.035,
+        cn_aileron: 0.0,
+        surface_rate: 2.0,
+        flap_rate: 0.025,
+        static_thrust: 912_000.0,
+        thrust_v1: 0.0,
+        thrust_v2: 0.0,
+        windmill_cd: 0.05,
+        prop_disk_area: 17.5,
+        prop_wash: 0.0,
+        idle_power: 0.0,
+        spool_time: 8.5,
+        rpm_idle: 0.0,
+        rpm_static: 0.0,
+        rpm_per_ms: 0.0,
+        gear: GALAXY_GEAR,
+        hard_points: GALAXY_HARD,
+        roll_mu: 0.02,
+        brake_mu: 0.5,
+        tire_mu: 0.8,
+        nose_steer_deg: 60.0,
+        max_touchdown_sink: 3.3,
+        max_touchdown_bank: deg(8.0),
+        min_touchdown_pitch: deg(-1.5),
+        g_limit_pos: 2.5,
+        g_limit_neg: -1.0,
+
+        category: Category::Airliner,
+        engine_kind: EngineKind::Jet,
+        engine_count: 4,
+        retractable_gear: true,
+        has_spoilers: true,
+        has_reverser: true,
+        eye: Vec3::new(0.75, 4.0, 24.0),
+        vr_kt: 145.0,
+        vref_kt: 138.0,
+        vle_kt: 250.0,
+        ceiling_m: 12_500.0,
+        mmo: 0.825,
+        gear_time: 10.0,
+        cd_gear: 0.025,
+        spoiler_cl: 0.3,
+        spoiler_cd: 0.05,
+        spoiler_flight_max: 0.5,
+        mach_dd: 0.80,
+        cd_wave: 0.05,
+        engine_pos: GALAXY_ENGINES,
+        n1_idle: 0.22,
+        idle_thrust_frac: 0.04,
+        thrust_mach: [-0.85, 0.35],
+        n1_rpm: 3_433.0,
+        sfc: 0.034,
+        egt_idle: 420.0,
+        egt_max: 900.0,
+        reverse_eff: 0.35,
+        yaw_damper: 2.5,
+        min_runway_m: 2_400.0,
+        ..Default::default()
+    }
+}
+
+// --- Vulcan (B.2) ---------------------------------------------------------------
+
+const VULCAN_GEAR: &[GearPoint] = &[
+    // FGMEMBERS AvroVulcanB2 model / FDM contacts, gear down.
+    wheel(Vec3::new(0.0, -2.13, 6.92), 1_400_000.0, 140_000.0, true, false, true),
+    wheel(Vec3::new(4.81, -2.13, -2.05), 2_200_000.0, 700_000.0, false, true, true),
+    wheel(Vec3::new(-4.81, -2.13, -2.05), 2_200_000.0, 700_000.0, false, true, true),
+    // Jet-pipe fairings / tail (tail-down limit ~10°).
+    skid(Vec3::new(0.0, 0.05, -13.6), 2_000_000.0, 200_000.0, 0.5),
+];
+
+const VULCAN_HARD: &[HardPoint] = &[
+    hard(0.0, -0.2, 16.5, "Flew into the ground"),
+    hard(16.80, 0.28, -8.9, "Wingtip strike"),
+    hard(-16.80, 0.28, -8.9, "Wingtip strike"),
+    hard(9.0, -0.40, -6.0, "Wingtip strike"),
+    hard(-9.0, -0.40, -6.0, "Wingtip strike"),
+    hard(0.0, 1.9, 11.0, "Crashed inverted"),
+    hard(0.0, 6.12, -12.98, "Crashed inverted"),
+    hard(0.0, -1.0, 5.0, GEAR_UP),
+    hard(0.0, -1.0, -3.0, GEAR_UP),
+    hard(3.5, -0.9, -2.0, GEAR_UP),
+    hard(-3.5, -0.9, -2.0, GEAR_UP),
+];
+
+/// Jet-pipe exits, engine 0 = left outer .. 3 = right outer (buried in the wing roots).
+const VULCAN_ENGINES: &[Vec3] = &[Vec3::new(3.56, -0.71, -10.44), Vec3::new(2.34, -0.71, -10.44), Vec3::new(-2.34, -0.71, -10.44), Vec3::new(-3.56, -0.71, -10.44)];
+
+fn vulcan_def() -> AircraftDef {
+    with_jsb(vulcan_base(), include_str!("../assets/aircraft/vulcan/fdm.xml"), &[], &[], 250.0, |j| {
+        // Elevons: ±20° pitch, ±20° roll; the flap lever drives the airbrakes.
+        j.elev_up = 0.35;
+        j.elev_down = 0.30;
+        j.ail_up = 0.35;
+        j.ail_down = 0.35;
+        j.rudder_max = 0.35;
+        j.flaps_are_airbrakes = true;
+    })
+}
+
+fn vulcan_base() -> AircraftDef {
+    AircraftDef {
+        id: "vulcan",
+        name: "Avro Vulcan B.2",
+        description: "Delta-wing V-bomber (FGUK / FGMEMBERS model, JSBSim with Skyward delta-wing \
+                      aerodynamics). 4 × Olympus 301, 89 kN each. No stall break — just rising drag \
+                      and sink at high alpha. Flap lever = airbrakes.",
+        role: "Delta-wing bomber",
+        has_engine: true,
+        flap_label: "Airbrakes",
+        flap_detents: &[0.0, 0.5, 1.0],
+        flap_max_deg: 0.0,
+        vs0_kt: 88.0,
+        vs1_kt: 88.0,
+        vno_kt: 350.0,
+        vne_kt: 415.0,
+        gear_height: 2.051,
+        wingspan: 33.83,
+        mass: 60_000.0,
+        inertia_roll: 1_690_000.0,
+        inertia_pitch: 1_640_000.0,
+        inertia_yaw: 3_380_000.0,
+        wing_area: 368.4,
+        chord: 10.89,
+        wing_height: 0.3,
+        cl0: 0.04,
+        cl_alpha: 3.1,
+        alpha_stall: deg(28.0),
+        alpha_stall_neg: deg(20.0),
+        stall_sharpness: 15.0,
+        cl_flat: 1.0,
+        stall_drop: 0.95,
+        stall_decay: 0.3,
+        cd0: 0.0125,
+        oswald: 0.85,
+        cd_profile_k: 0.0,
+        cl_min_profile: 0.0,
+        cd_flat: 1.3,
+        cd_beta: 0.2,
+        flap_cl: 0.0,
+        flap_curve: 0.0,
+        flap_alpha_stall: 0.0,
+        flap_cd: 0.045,
+        flap_cd_exp: 1.0,
+        flap_cm: 0.0,
+        cm0: 0.0,
+        cm_alpha: -0.7,
+        cm_q: -21.0,
+        cm_elevator: 0.6,
+        cm_stall: 0.0,
+        trim_authority: 0.6,
+        cy_beta: -1.0,
+        cl_beta: -0.10,
+        cl_p: -0.4,
+        stall_autorotation: 0.05,
+        cl_r_per_cl: 0.15,
+        cl_aileron: 0.05,
+        cn_beta: 0.12,
+        cn_r: -0.15,
+        cn_p: -0.02,
+        cn_rudder: 0.05,
+        cn_aileron: 0.0,
+        surface_rate: 2.0,
+        flap_rate: 0.4,
+        static_thrust: 356_000.0,
+        thrust_v1: 0.0,
+        thrust_v2: 0.0,
+        windmill_cd: 0.05,
+        prop_disk_area: 4.0,
+        prop_wash: 0.0,
+        idle_power: 0.0,
+        spool_time: 7.0,
+        rpm_idle: 0.0,
+        rpm_static: 0.0,
+        rpm_per_ms: 0.0,
+        gear: VULCAN_GEAR,
+        hard_points: VULCAN_HARD,
+        roll_mu: 0.02,
+        brake_mu: 0.45,
+        tire_mu: 0.8,
+        nose_steer_deg: 50.0,
+        max_touchdown_sink: 3.3,
+        max_touchdown_bank: deg(5.0),
+        min_touchdown_pitch: deg(-1.0),
+        g_limit_pos: 3.0,
+        g_limit_neg: -1.0,
+
+        category: Category::Airliner,
+        engine_kind: EngineKind::Jet,
+        engine_count: 4,
+        retractable_gear: true,
+        eye: Vec3::new(0.34, 1.95, 11.85),
+        vr_kt: 145.0,
+        vref_kt: 150.0,
+        vle_kt: 230.0,
+        ceiling_m: 17_000.0,
+        mmo: 0.93,
+        gear_time: 10.0,
+        cd_gear: 0.015,
+        mach_dd: 0.88,
+        cd_wave: 0.045,
+        engine_pos: VULCAN_ENGINES,
+        n1_idle: 0.28,
+        idle_thrust_frac: 0.05,
+        thrust_mach: [-0.55, 0.45],
+        n1_rpm: 6_600.0,
+        sfc: 0.084,
+        egt_idle: 380.0,
+        egt_max: 690.0,
+        yaw_damper: 2.0,
+        min_runway_m: 2_000.0,
         ..Default::default()
     }
 }
@@ -4249,6 +4770,7 @@ mod tests {
             "peregrine" => 200.0,
             "lancer" => 350.0,
             "aerolink" => 180.0,
+            "hercules" => 200.0,
             _ => 250.0,
         }
     }
@@ -4390,7 +4912,7 @@ mod tests {
     fn catalogue_order() {
         let c = catalogue();
         let ids: Vec<_> = c.iter().map(|d| d.id).collect();
-        assert_eq!(ids, ["kestrel", "swift", "peregrine", "lancer", "aerolink", "meridian190", "meridian320"]);
+        assert_eq!(ids, ["kestrel", "swift", "peregrine", "lancer", "aerolink", "meridian190", "meridian320", "hercules", "galaxy", "vulcan"]);
         assert!(c[0].has_engine && !c[1].has_engine);
         assert_eq!(c[1].flap_label, "Airbrakes");
         for d in &c {
@@ -5099,11 +5621,12 @@ mod tests {
 
     #[test]
     fn airliner_taxi_turns() {
-        for id in ["aerolink", "meridian190", "meridian320", "lancer"] {
+        for id in ["aerolink", "meridian190", "meridian320", "lancer", "hercules", "galaxy", "vulcan"] {
             let def = ac(id);
             let env = TestEnv::default();
             let mut a = Aircraft::on_runway(&def, Vec2::ZERO, 0.0, &env);
-            let thr = if id == "lancer" { 0.15 } else { 0.25 };
+            // (The 280 t C-5 needs more than a quarter throttle to break away.)
+            let thr = match id { "lancer" => 0.15, "galaxy" => 0.4, _ => 0.25 };
             let mut t = 0.0;
             run(&mut a, &def, &env, 40.0, |a| {
                 t += DT;
@@ -5248,7 +5771,10 @@ mod tests {
         let pitch = pitch_override.unwrap_or(if def.taildragger { def.rest_pitch() - deg(0.5) } else { tp.pitch + deg(2.0) });
         a.rot = attitude(0.0, pitch, bank);
         a.vel = Vec3::new(0.0, -sink_fpm * FPM, -kt * KT);
-        a.pos.y = def.gear_height + 0.25;
+        // Start with the low-side wheels (not the CG) 0.25 m above the runway:
+        // wide-track gear in a bank would otherwise begin inside the ground.
+        let track = def.gear.iter().map(|g| g.pos.x.abs()).fold(0.0f32, f32::max);
+        a.pos.y = def.gear_height + 0.25 + track * bank.sin().abs();
         let mut on_ground_time = 0.0;
         let tail = def.taildragger;
         let mut tt = 0.0f32;
@@ -5286,7 +5812,10 @@ mod tests {
             eprintln!("{} 500 fpm: crashed {:?}, final speed {:.2}, x {:.1}", def.name, a.crashed, a.vel.length(), a.pos.x);
             assert!(a.crashed.is_none());
             assert!(a.on_ground && a.vel.length() < 0.2, "{} still moving {}", def.id, a.vel.length());
-            let a = land(&def, 300.0, deg(6.0), None);
+            // The Vulcan's low, far-aft delta tips (nose-high touchdown) leave
+            // only ~5° of bank at touchdown, as on the real aircraft.
+            let bank = if def.id == "vulcan" { 3.5 } else { 6.0 };
+            let a = land(&def, 300.0, deg(bank), None);
             assert!(a.crashed.is_none(), "{} {:?}", def.id, a.crashed);
             let a = land(&def, 1000.0, 0.0, None);
             eprintln!("{} 1000 fpm: {:?}", def.name, a.crashed);
@@ -5710,6 +6239,8 @@ mod tests {
                 // A fixed 65 % throttle is a big thrust excess for the jets (they
                 // zoom-climb): the app should start them with trimmed_controls_at().
                 let vs_lim = match def.category {
+                    // The lightly loaded Vulcan has a fighter-like T/W (0.6).
+                    _ if def.id == "vulcan" => 45.0,
                     Category::Airliner | Category::FastJet => 35.0,
                     _ => 9.0,
                 };
@@ -5764,6 +6295,9 @@ mod tests {
             ("peregrine", vec![130.0, 200.0, 280.0]),
             ("aerolink", vec![150.0, 200.0, 240.0]),
             ("meridian190", vec![180.0, 250.0, 300.0]),
+            ("hercules", vec![160.0, 200.0, 240.0]),
+            ("galaxy", vec![200.0, 250.0, 300.0]),
+            ("vulcan", vec![200.0, 250.0, 300.0]),
         ];
         for (id, speeds) in cases {
             let def = ac(id);
@@ -5972,7 +6506,19 @@ mod tests {
 
     #[test]
     fn spool_up_times() {
-        for (id, lo, hi) in [("meridian320", 5.0, 8.5), ("meridian190", 5.0, 8.0), ("lancer", 2.5, 5.0), ("aerolink", 1.5, 5.0), ("peregrine", 0.8, 3.0)] {
+        for (id, lo, hi) in [
+            ("meridian320", 5.0, 8.5),
+            ("meridian190", 5.0, 8.0),
+            ("lancer", 2.5, 5.0),
+            ("aerolink", 1.5, 5.0),
+            ("peregrine", 0.8, 3.0),
+            // C-130 T56: constant-speed props, power responds in ~2-3 s.
+            ("hercules", 1.5, 5.0),
+            // C-5 CF6-80C2: big fans, slow from idle (~8-10 s to 90 %).
+            ("galaxy", 7.0, 11.0),
+            // Vulcan Olympus 301 turbojets: ~6-8 s idle to full.
+            ("vulcan", 5.0, 9.0),
+        ] {
             let def = ac(id);
             let env = TestEnv::default();
             let mut a = Aircraft::on_runway(&def, Vec2::ZERO, 0.0, &env);
@@ -6268,5 +6814,188 @@ mod tests {
         eprintln!("peregrine full power at 120 kt, hands off 5 s: heading {:.1}°, bank {:.1}°", a.heading().to_degrees(), a.roll().to_degrees());
         assert!(a.heading() < deg(-2.0) && a.roll() < deg(-3.0));
         // The rigging cancels it at the cruise point (see hands_off_trimmed_stability).
+    }
+
+    // ------------------------------------------------------------------
+    // v3 heavies: C-130H, C-5M, Vulcan B.2 against published figures
+    // ------------------------------------------------------------------
+
+    /// One-engine-out (engine 0, left outboard) climb-out handled with rudder
+    /// and ~3° of bank: (free yaw in 4 s, max rudder, max heading deviation, climb fpm).
+    fn engine_out(def: &AircraftDef, kt: f32, flap: f32) -> (f32, f32, f32, f32) {
+        let env = TestEnv::default();
+        let (mut a, base) = flying(def, Vec3::new(0.0, 300.0, 0.0), 0.0, kt * KT, flap);
+        let base = Controls { throttle: 1.0, gear_down: false, ..base };
+        a.gear_pos = 0.0;
+        let mut pilot = Pilot::default();
+        run(&mut a, def, &env, 10.0, |a| pilot.fly(def, a, base, Vert::Speed(kt * KT), 0.0, DT));
+        if std::env::var("HEAVY_REPORT").is_ok() {
+            eprintln!("  {} all engines at {kt} kt: {:.0} fpm, thrust {:.0} kN, pitch {:.1} alpha {:.1}", def.id, a.vertical_speed() / FPM, (0..def.engine_count).map(|i| a.engine_thrust(i)).sum::<f32>() / 1e3, a.pitch().to_degrees(), a.alpha().to_degrees());
+        }
+        let mut b = a.clone();
+        let h0 = b.heading();
+        run(&mut b, def, &env, 4.0, |_| Controls { failed_engines: 1, ..base });
+        let yaw_free = wrap(b.heading() - h0);
+        let failed = Controls { failed_engines: 1, ..base };
+        let mut pilot = Pilot::default();
+        let (mut max_rud, mut max_dev, mut rud_i) = (0.0f32, 0.0f32, 0.0f32);
+        let h0 = a.heading();
+        let mut tt = 0.0f32;
+        let mut y20 = 0.0f32;
+        run(&mut a, def, &env, 40.0, |a| {
+            tt += DT;
+            if (tt - 20.0).abs() < DT * 0.5 {
+                y20 = a.pos.y;
+            }
+            let mut c = pilot.fly(def, a, failed, Vert::Speed(kt * KT), deg(3.0), DT);
+            let e = wrap(a.heading() - h0);
+            rud_i = (rud_i - 1.5 * e * DT).clamp(-1.0, 1.0);
+            c.rudder = (rud_i - 4.0 * e - 2.0 * a.rates().z).clamp(-1.0, 1.0);
+            max_rud = max_rud.max(c.rudder.abs());
+            max_dev = max_dev.max(wrap(a.heading() - h0).abs());
+            if std::env::var("EO_TRACE").is_ok_and(|v| v == def.id) && (tt * 0.5).fract() < DT * 0.5 {
+                eprintln!("   eo t {:.1} vs {:.0} ias {:.0} pitch {:.1} roll {:.1} el {:.2} ail {:.2} rud {:.2} g {:.2}", tt, a.vertical_speed() / FPM, a.airspeed_kt(), a.pitch().to_degrees(), a.roll().to_degrees(), c.elevator, c.aileron, c.rudder, a.g_load());
+            }
+            c
+        });
+        assert!(a.crashed.is_none(), "{} engine out {:?}", def.id, a.crashed);
+        if std::env::var("HEAVY_REPORT").is_ok() {
+            eprintln!(
+                "  {} engine out: thrust {:?} kN, ias {:.0}, pitch {:.1}, alpha {:.1}, beta {:.1}, gear {:.1}, flaps {:.2}",
+                def.id,
+                (0..def.engine_count).map(|i| (a.engine_thrust(i) / 1e3).round()).collect::<Vec<_>>(),
+                a.airspeed_kt(),
+                a.pitch().to_degrees(),
+                a.alpha().to_degrees(),
+                a.beta().to_degrees(),
+                a.gear_pos(),
+                a.surfaces().flaps
+            );
+        }
+        // Mean climb over the last 20 s (the test pilot's speed hold is slow on the heavies).
+        (yaw_free, max_rud, max_dev, (a.pos.y - y20) / 20.0 / FPM)
+    }
+
+    /// Published figures (sources: type fact sheets / flight manuals as summarised
+    /// in each `assets/aircraft/<id>/CREDITS.md`), at the simulated weights:
+    /// C-130H 60 t, C-5M 280 t, Vulcan B.2 60 t. Stall / minimum speeds are
+    /// power-off, 1 g, scaled to the simulated weight.
+    #[test]
+    fn v3_heavies_published_numbers() {
+        struct Row {
+            id: &'static str,
+            /// (clean, landing config) 1-g stall / minimum speed, kt IAS.
+            stall: (f32, f32),
+            /// Take-off: flap lever, rotation pitch°, ground-roll range m, lift-off kt range.
+            to: (f32, f32, std::ops::Range<f32>, std::ops::Range<f32>),
+            /// (alt m, KIAS, target fpm): full-power climb.
+            climb: (f32, f32, f32),
+            /// (alt m, target max level KTAS, tolerance kt).
+            vmax: (f32, f32, f32),
+            /// Landing roll (brakes + spoilers if fitted + reverse if fitted), m.
+            roll: std::ops::Range<f32>,
+            /// Engine-out check: (KIAS, flap lever).
+            eo: (f32, f32),
+        }
+        let rows = [
+            // C-130H: stall ~129 / 104 KIAS at 70 t (flaps up / 100 %) → 119 / 96 at 60 t;
+            // take-off 1,093 m over 50 ft at 70 t (≈ 600 m ground roll at 60 t, flaps 50 %);
+            // climb 1,830 fpm at MTOW (≈ 2,300 at 60 t); 320 KTAS at 20,000 ft;
+            // landing roll ~ 550 m with reverse pitch.
+            Row { id: "hercules", stall: (119.0, 96.0), to: (0.5, 9.0, 450.0..800.0, 105.0..128.0), climb: (0.0, 150.0, 2300.0), vmax: (6100.0, 320.0, 15.0), roll: 400.0..850.0, eo: (130.0, 0.5) },
+            // C-5M: clean stall ~145 KIAS / full flap ~106 at 280 t; take-off run 1,600 m
+            // (5,400 ft, published) — at 280 t, flaps 40 % (16°), Vr 145, lift-off ~155;
+            // climb 2,100 fpm is the published average at MTOW: initial sea-level climb
+            // at 280 t with 4 × 228 kN is ~4,000 fpm; max M0.79 (462 KTAS) at FL350;
+            // landing run 1,100 m (3,600 ft) with reversers.
+            Row { id: "galaxy", stall: (145.0, 106.0), to: (0.4, 9.0, 1000.0..1700.0, 140.0..170.0), climb: (0.0, 250.0, 4000.0), vmax: (10_670.0, 462.0, 20.0), roll: 600.0..1300.0, eo: (160.0, 0.4) },
+            // Vulcan B.2 at 60 t (light, display-like weight): no stall break — the
+            // minimum 1-g speed is at ~28° alpha (~88 kt); rotate 145 kt, unstick
+            // ~160-170 kt after ~800 m; T/W 0.6 gives ~10,000 fpm at 300 KIAS (no
+            // published figure — physics estimate); 561 KTAS / M0.96 max at altitude
+            // (545 at 12 km); landing roll without the brake chute ~1,000 m.
+            Row { id: "vulcan", stall: (88.0, 88.0), to: (0.0, 9.0, 550.0..1000.0, 145.0..178.0), climb: (0.0, 300.0, 10_000.0), vmax: (12_000.0, 545.0, 25.0), roll: 700.0..1600.0, eo: (170.0, 0.0) },
+        ];
+        for r in rows {
+            let def = ac(r.id);
+            let s_clean = sim_stall_speed(&def, 0.0);
+            let s_full = sim_stall_speed(&def, 1.0);
+            let t = takeoff(&def, r.to.0, deg(r.to.1), false, true);
+            let roc = climb_rate(&def, r.climb.0 + 300.0, r.climb.1);
+            let (vmax, m) = max_level_tas(&def, r.vmax.0, cas_from_tas(r.vmax.1 * 0.9 * KT, r.vmax.0) / KT, 300.0);
+            let roll = landing_roll(&def, def.has_spoilers, def.has_reverser);
+            let (yaw_free, max_rud, max_dev, eo_roc) = engine_out(&def, r.eo.0, r.eo.1);
+            eprintln!(
+                "HEAVY {:9} stall {:5.1}/{:5.1} kt (target {}/{}) | T/O roll {:5.0} m lift-off {:4.0} kt | climb {:5.0} fpm (target {}) | max {:4.0} KTAS M{:.2} (target {}) | landing roll {:4.0} m | eng-out yaw {:5.1}° rud {:.2} dev {:.1}° climb {:5.0} fpm",
+                r.id, s_clean, s_full, r.stall.0, r.stall.1, t.roll_m, t.liftoff_kt, roc, r.climb.2, vmax, m, r.vmax.1, roll, yaw_free.to_degrees(), max_rud, max_dev.to_degrees(), eo_roc
+            );
+            if std::env::var("HEAVY_REPORT").is_ok() {
+                continue;
+            }
+            assert!((s_clean / r.stall.0 - 1.0).abs() < 0.07, "{} clean stall {s_clean}", r.id);
+            assert!((s_full / r.stall.1 - 1.0).abs() < 0.08, "{} landing stall {s_full}", r.id);
+            assert!(r.to.2.contains(&t.roll_m), "{} ground roll {}", r.id, t.roll_m);
+            assert!(r.to.3.contains(&t.liftoff_kt), "{} lift-off {}", r.id, t.liftoff_kt);
+            assert!(t.climb_15s > 40.0, "{} climb-out {}", r.id, t.climb_15s);
+            assert!((roc / r.climb.2 - 1.0).abs() < 0.3, "{} climb {roc}", r.id);
+            assert!((vmax - r.vmax.1).abs() < r.vmax.2 + 10.0, "{} max speed {vmax}", r.id);
+            assert!(r.roll.contains(&roll), "{} landing roll {roll}", r.id);
+            // Engine 0 dead: nose swings towards it; rudder holds it with margin; still climbs.
+            assert!(yaw_free < deg(-1.0), "{} free yaw {}", r.id, yaw_free.to_degrees());
+            assert!(max_rud < 0.95, "{} rudder {max_rud}", r.id);
+            assert!(max_dev < deg(10.0), "{} heading dev {}", r.id, max_dev.to_degrees());
+            assert!(eo_roc > 300.0, "{} 3-engine climb {eo_roc}", r.id);
+        }
+    }
+
+    /// `cargo test --release heavy_probe -- --ignored --nocapture`: trim table
+    /// of the v3 heavies (approach, climb, cruise Mach sweep).
+    #[test]
+    #[ignore]
+    fn heavy_probe() {
+        if let Ok(id) = std::env::var("PROBE_LEVEL") {
+            let def = ac(&id);
+            let alt: f32 = std::env::var("PROBE_ALT").ok().and_then(|v| v.parse().ok()).unwrap_or(10_670.0);
+            let kt: f32 = std::env::var("PROBE_KT").ok().and_then(|v| v.parse().ok()).unwrap_or(400.0);
+            let env = TestEnv::default();
+            let start = cas_from_tas(kt * KT, alt) / KT;
+            let mut a = Aircraft::airborne(&def, Vec3::new(0.0, alt, 0.0), 0.0, start * KT);
+            let base = Controls { throttle: 1.0, gear_down: false, ..trimmed_controls_at(&def, start * KT, alt) };
+            let mut pilot = Pilot::default();
+            for k in 0..(120 * 120) {
+                let c = pilot.fly(&def, &a, base, Vert::Alt(alt), 0.0, DT);
+                if k % 600 == 0 {
+                    eprintln!("t {:4.0} ktas {:5.1} M{:.3} alt {:6.0} pitch {:5.2} alpha {:5.2} el {:5.2} n1 {:.2} thrust {:.0} kN", k as f32 * DT, a.tas() / KT, a.mach(), a.pos.y, a.pitch().to_degrees(), a.alpha().to_degrees(), c.elevator, a.n1(0), (0..def.engine_count).map(|i| a.engine_thrust(i)).sum::<f32>() / 1e3);
+                }
+                a.step(&def, &c, &env, DT);
+            }
+            return;
+        }
+        for id in ["hercules", "galaxy", "vulcan"] {
+            let def = ac(id);
+            for (kt, flap, alt, gd) in [(def.vref_kt - 5.0, 1.0, 0.0, true), (def.vref_kt + 10.0, 0.5, 0.0, true), (def.vr_kt, 0.4, 0.0, true)] {
+                let tp = def.trim_point_at(kt * KT, flap, alt, gd);
+                eprintln!("{id} {kt:.0} kt flap {flap}: alpha {:.1} pitch {:.1} thr {:.2} elev {:.2} trim {:.2}", tp.alpha.to_degrees(), tp.pitch.to_degrees(), tp.throttle, tp.elevator, tp.trim);
+            }
+            let alt = if id == "hercules" { 6100.0 } else { 10_670.0 };
+            for m in [0.5f32, 0.6, 0.7, 0.75, 0.8, 0.85, 0.9] {
+                let tas = m * isa(alt).speed_of_sound;
+                let tp = def.trim_point_at(cas_from_tas(tas, alt), 0.0, alt, false);
+                eprintln!("{id} M{m} ({:.0} KTAS) at {alt} m: alpha {:.1} thr {:.2} elev {:.2}", tas / KT, tp.alpha.to_degrees(), tp.throttle, tp.elevator);
+            }
+        }
+    }
+
+    /// Per-type runway minima (start-position / airport-filter rules): the
+    /// STOL-ish turboprops are not held to the jet airliners' 1,800 m.
+    #[test]
+    fn runway_minima_per_type() {
+        let need = |id: &str| crate::sim::min_runway(&ac(id));
+        assert!(need("hercules") <= 1000.0 && ac("hercules").rough_field);
+        assert!(need("aerolink") <= 1508.0, "the ATR fits London City"); // EGLC 09/27
+        assert!(need("meridian190") <= 1508.0, "E190s operate London City");
+        assert!(need("meridian320") >= 1800.0);
+        assert!(need("galaxy") >= 2400.0 && need("vulcan") >= 2000.0);
+        assert!(need("kestrel") < 600.0 && need("lancer") >= 1400.0);
     }
 }

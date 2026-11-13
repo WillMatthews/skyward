@@ -225,5 +225,11 @@ pub fn read(fdm: &Elem, cfg: &Value) -> Jsb {
         "contacts": contacts,
         "engines": engines,
     });
+    // Config `vrp_m` (structural metres): where the visual model's origin
+    // really sits, for FDMs whose VRP does not match their model.
+    if let Some(a) = cfg.get("vrp_m").and_then(|v| v.as_array()) {
+        let f = |i: usize| a.get(i).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+        vrp = Vec3::new(f(0), f(1), f(2));
+    }
     Jsb { vrp, cg, report }
 }

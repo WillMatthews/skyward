@@ -6,7 +6,8 @@ from the FlightGear source recordings listed in MANIFEST.
 
 <source-root> holds the fetched FlightGear files at the paths given below
 (`c172/...` = github.com/c172p-team/c172p, `svn/<Aircraft>/...` = FGAddon
-trunk/Aircraft, `fg/...` = fgdata, `ejet/...` = tdammers/E-jet-family-YV).
+trunk/Aircraft, `fg/...` = fgdata, `ejet/...` = tdammers/E-jet-family-YV,
+`fgm/<repo>/...` = github.com/FGMEMBERS/<repo>).
 Provenance and licences: ../CREDITS.md.
 
 Per file: mix to mono, trim, resample (polyphase, scipy) to a rate chosen so
@@ -70,6 +71,14 @@ MANIFEST = [
     ("atr_prop", ["fg/Sounds/turboprop1.wav"], L, 11025, 0.0, None, 0),
     ("atr_start", ["fg/Sounds/turbine_start.wav"], O, 11025, 0.0, None, 0),
     ("atr_stop", ["fg/Sounds/turbine_shutdown.wav"], O, 11025, 0.0, 11.0, 0),
+    # ---- Avro Vulcan B.2 Olympus 301 (FGUK, FGMEMBERS/AvroVulcanB2) — also build_vulcan.py
+    ("vul_x_turb", ["fgm/AvroVulcanB2/Sounds/vulcan-engine-exterior.wav"], L, 28000, 0.0, None, 0),
+    ("vul_x_jet", ["fgm/AvroVulcanB2/Sounds/jet.wav"], L, 11025, 0.0, None, 0),
+    ("vul_x_blast", ["fgm/AvroVulcanB2/Sounds/vulcan-jetblast.wav"], L, 20000, 0.0, 14.0, 0),
+    ("vul_x_howl", ["fgm/AvroVulcanB2/Sounds/vulcan-howel.wav"], L, 24000, 0.0, None, 0),
+    ("vul_i_eng", ["fgm/AvroVulcanB2/Sounds/vulcan-engine-inside.wav"], L, 20000, 0.0, None, 0),
+    ("vul_start", ["fgm/AvroVulcanB2/Sounds/vulcan-start.wav"], O, 16000, 0.0, 24.0, 0),
+    ("vul_stop", ["fgm/AvroVulcanB2/Sounds/vulcan-shutdown.wav"], O, 16000, 0.0, 16.0, 0),
     # ---- A320 CFM56-5B (SASA recordings from the A320-family)
     ("cfm_x_idle", ["svn/A320-family/Sounds/SASA/CFM56B/external/cfm-idle.wav"], L, 22050, 0.0, None, 0),
     ("cfm_x_idle_r", ["svn/A320-family/Sounds/SASA/CFM56B/external/cfm-idleRear.wav"], L, 22050, 0.0, None, 0),

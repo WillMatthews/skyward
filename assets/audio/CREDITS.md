@@ -22,6 +22,7 @@ released under the **GNU GPL**:
 | FGAddon `Aircraft/ASK21` | GPL-2.0-or-later (`README.md`) | |
 | c172p-team/c172p (GitHub) | GPL-2.0 (repository `LICENSE`) | Sounds by Gilberto Agostinho and the c172p team |
 | fgdata (`Sounds/`, GitLab `flightgear/fgdata`) | GPL-2.0 (`LICENSE.md`) | FlightGear base package |
+| FGMEMBERS/AvroVulcanB2 (GitHub, FGUK) | GPL-2.0 (repository `COPYING`; no "or later" statement) | Sounds credited to "Algernon" in `AvroVulcanb2-set.xml`; the recordings' original source is not documented in the package (see below) |
 
 **Compatibility note:** the A320-family files are GPL-2.0 *only* (and the
 Spitfire IX package is stated as GPLv2). Shipping them is fine for a project
@@ -58,6 +59,8 @@ rate / length / loop flag / build attenuation). 95 files, ~4.1 MB.
 | `crash_f16`, `crash_explode`, `crash_water` | `Sounds/Effects/aircraft-crash.wav`, `aircraft-explode.wav`, `aircraft-water-crash.wav` | f16 |
 | `atr_out`, `atr_int`, `atr_rev` | `Sounds/out.wav`, `intern.wav`, `reverse.wav` | DHC-8 (A. Spiekermann) |
 | `atr_prop`, `atr_start`, `atr_stop` | `Sounds/turboprop1.wav`, `turbine_start.wav`, `turbine_shutdown.wav` | fgdata |
+| `vul_x_turb`, `vul_x_jet`, `vul_x_blast`, `vul_x_howl`, `vul_i_eng` | `Sounds/vulcan-engine-exterior.wav`, `jet.wav`, `vulcan-jetblast.wav` (first 14 s), `vulcan-howel.wav`, `vulcan-engine-inside.wav` | AvroVulcanB2 (FGUK) |
+| `vul_start`, `vul_stop` | `Sounds/vulcan-start.wav` (first 24 s), `vulcan-shutdown.wav` (first 16 s) | AvroVulcanB2 (FGUK) |
 | `cfm_x_*` (idle, idle_r, idle_c, idle_d, spool, lowspool, spool_c, spool_cr, rumble, rumble_d, buzz, buzz_d, rev, start, stop) | `Sounds/SASA/CFM56B/external/cfm-idle`, `-idleRear`, `-idleClose`, `-idleDist`, `-spool`, `-lowspool`, `-spoolClose`, `-spoolCloseRear`, `-rumble`, `-rumbleDist`, `-buzz`, `-buzzDist`, `-reverse`, `-startup`, `-shutdown` | A320-family (SASA) |
 | `cfm_c_*` (idle, idle2, spool, hum, comb, comb2, buzz, rev, start, stop) | `Sounds/SASA/CFM56B/cockpit/cfm-idle`, `-idle2`, `-lowspool`, `-hum`, `-comb`, `-comb-full`, `-buzz`, `-reverse`; `.../start/A320_cockpit_startup`, `A320_cockpit_shutdown` | A320-family (SASA) |
 | `v25_x_*`, `v25_c_*` | `Sounds/SASA/V2500/external/v2500-idle`, `-idleRear`, `-spool`, `-lowspool`, `-buzz`, `-buzzDist`, `-startup`; `.../cockpit/v2500-idle`, `-lowspool`, `-comb`, `-buzz`, `-reverse`; `.../start/v2500-start2` | A320-family (SASA) |
@@ -91,3 +94,17 @@ presence peak, light drive) in `src/audio/voice.rs`.
   fades and write 24 kHz PCM-16; then resample to 16 kHz with a gentle
   roll-off above 6.5 kHz. File names must match `src/audio/voice.rs` (e.g.
   `2500.wav`, `app_minimums.wav`, `too_low_gear.wav`).
+
+## Avro Vulcan B.2 samples (`vul_*`, Track H)
+
+From github.com/FGMEMBERS/AvroVulcanB2 (`master`, fetched 2026-11-13),
+licensed as a whole under GPL-2.0 (repository `COPYING`). The set file
+credits the sounds to "Algernon" (FGUK); the package does not say where
+the recordings were made, so their provenance rests on the package licence
+alone — the same standard as the other FGAddon / FGMEMBERS assets, but
+flagged here in case a stricter audit is wanted (the Vulcan then falls back
+to the CFM56 set by removing `SoundSet::Olympus` in `src/audio/capture.rs`).
+Built by `tools/build_vulcan.py` (numpy + ffmpeg; same processing as
+`build_samples.py`, whose MANIFEST also lists them). The C-130 uses the
+DHC-8 (PW100) turboprop set and the C-5 the CFM56-5B set as the nearest
+recorded engines; their own packages' sounds were not imported.

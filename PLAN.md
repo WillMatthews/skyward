@@ -62,7 +62,9 @@ item lands; keep entries one line.
 - [ ] **P1** Full 3D cockpits with working instruments (render gauges into cockpit textures), head look (mouse/TrackIR-style)
 - [ ] **P1** Systems depth per type: electrics, fuel (burn + CG), hydraulics, engine start procedures, failures menu
 - [ ] **P1** Ground handling: taxiing with tillers, pushback, chocks, wheel friction by surface
-- [ ] **P2** v3 types: C-130, C-5, Avro Vulcan; helicopter; quadcopter
+- [x] **P2** v3 heavies: C-130H Hercules (FGAddon C130, calibrated to YASim + published), C-5M Super Galaxy (FGMEMBERS C-5, patched JSBSim), Avro Vulcan B.2 (FGUK, JSBSim + delta-wing aero, Olympus howl); neutral liveries, bot / audio / per-type runway minima (H)
+- [ ] **P1** Heavies follow-ups: C-130 bot floats ~850 m before touchdown at EGLC; C-130 / C-5 use the PW100 / CFM56 recordings (no T56 / CF6 set); C-130 ramp and C-5 kneeling / visor not driven; C-5 & Vulcan cockpits are basic FG models (no working gauges); Vulcan brake chute; fuel burn (all flown at one weight)
+- [ ] **P2** v3 types: helicopter; quadcopter
 - [ ] **P2** Livery selector (house liveries; user-supplied)
 
 ## 4. Audio
@@ -125,4 +127,5 @@ item lands; keep entries one line.
 | P | Input devices (gilrs/evdev, rebinding, curves, head-look) + CI/goldens | ✅ |
 | T | Terrain elevation + landmarks | ✅ |
 | L | Structure/flex/crashes + supersonic/atmospheric VFX (damage, debris, vfx) | ✅ |
+| H | v3 heavies: C-130H, C-5M, Vulcan B.2 | ✅ |
 | next | Airports detail, live 3D cockpit instruments, ATC, missions, release packaging | ⏳ to schedule |

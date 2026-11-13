@@ -22,11 +22,18 @@ python3 -I $S/fetch.py f16 svn:f16 f16 Models/F-16.xml f16b52.xml
 python3 -I $S/fetch.py atr72 svn:ATR-72-500 ATR-72-500 Models/ATR-72-500.xml ATR-72-500.xml
 python3 -I $S/fetch.py e190 gh:YV3399/E-jet-family-YV@master E-jet-family Models/E190.xml FDM/E190.xml
 python3 -I $S/fetch.py a320 svn:A320-family A320-family Models/A320-200-CFM.xml FDE/A320-200-CFM.xml
+# v3 heavies (Track H): C130 from FGAddon; C-5 and the Vulcan are git clones of
+# github.com/FGMEMBERS/C-5 and /AvroVulcanB2 placed at $FG_SRC/c5 and $FG_SRC/AvroVulcanB2
+python3 -I $S/fetch.py c130 svn:C130 C130 Models/c130.xml Systems/FDM/c130-yasim.xml
 # extra inputs: ATR Models/paintkit.xcf, A320 Models/Liveries/CFM/2k/CFM56-white.png
 python3 -I $S/texconv.py $FG_SRC                       # SGI .rgb / DDS → PNG
 python3 -I tools/fgimport/liveries/make_liveries.py $FG_SRC   # neutral A320 / ATR liveries
+python3 -I tools/fgimport/liveries/make_liveries.py $FG_SRC c130 c5 vulcan   # heavies: insignia painted out
 cargo run --release --manifest-path tools/fgimport/Cargo.toml -- \
     tools/fgimport/aircraft/c172p.json $FG_SRC/c172p assets/aircraft/kestrel   # etc.
+# The C-5 and Vulcan JSBSim aero get Skyward calibration patches after import:
+python3 -I tools/fgimport/patches/aero.py galaxy assets/aircraft/galaxy/fdm.xml
+python3 -I tools/fgimport/patches/aero.py vulcan assets/aircraft/vulcan/fdm.xml
 ```
 
 `FGIMPORT_DUMP=<regex>` prints model-frame bounding boxes of matching objects.
@@ -41,6 +48,7 @@ In the game: `SKAC_DUMP=<id> cargo test --release geometry_dump -- --ignored
 | `model` | entry model XML |
 | `fdm` | `{"jsbsim": "file.xml"}` (CG / VRP / contacts from the FDM) or `{"cg_model": [x,y,z]}` (YASim types: CG in model metres) |
 | `fuel_kg`, `pointmass_kg` | loaded condition for the CG / inertia |
+| `vrp_m` | JSBSim types: override the FDM's VRP (structural metres) when it does not match the visual model (C-5) |
 | `eye_view` / `eye_model` / `eye_body` | cockpit eye (FG view offsets / model frame / body frame) |
 | `props` | static property values (variants, damage flags …) |
 | `channels` | `[regex, channel, scale, offset]` property → Skyward channel rules (before the built-ins) |

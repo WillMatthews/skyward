@@ -48,13 +48,16 @@ models later.
 ## v3 — heavies, rotorcraft and polish
 - ✅ **Real aircraft** — the seven types are now FlightGear aircraft (textured
   models with cockpits and animations, JSBSim aerodynamics for C172 / ASK 21 /
-  F-16 / E190 / A320), GPL-2.0-or-later. Available for the heavies below:
-  FlightGear C130 (GPL v2, YASim), C-5 (FGMEMBERS/C-5, GPL v2, JSBSim),
-  Vulcan B.2 (FGUK fork, GPL v2, JSBSim).
-- **Military cargo**: C-130-class (4 turboprops, STOL-ish, short fields) and
-  C-5 Galaxy-class (very heavy jet, long runways).
-- **Avro Vulcan-class delta bomber**: delta-wing aero (high-alpha lift,
-  no stall break, big induced drag), 4 buried jets.
+  F-16 / E190 / A320), GPL-2.0-or-later; the heavies below (C130 FGAddon,
+  FGMEMBERS C-5 and AvroVulcanB2) are GPL v2.
+- ✅ **Military cargo** (2026-11-13): Lockheed C-130H Hercules (4 × T56
+  turboprops, high wing, short / rough fields from ~900 m) and C-5M Super
+  Galaxy (280 t, 4 × CF6, slow spool, huge inertia, 2,400 m runways).
+- ✅ **Avro Vulcan B.2**: delta-wing aero (lift to ~28° alpha with no stall
+  break, big induced / high-alpha drag), 4 buried Olympus jets, the howl;
+  airbrakes on the flap lever.
+- Runway minima are per type now (ATR 1,100 m, E190 1,450 m, C-130 900 m on
+  grass too, C-5 2,400 m, Vulcan 2,000 m).
 - **Heavy airliner** handling, **ILS approaches** (approach charts per runway).
 - **Helicopter**: collective/cyclic/pedals, ground effect, autorotation.
 - **Quadcopter**: rate/angle modes, FPV camera.

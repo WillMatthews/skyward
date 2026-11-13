@@ -1,0 +1,63 @@
+"hercules": 104 nodes (103 animated out of 106), 29 materials, 27 textures (0.7 MB), 116 chunks
+triangles: exterior 68294, interior 56444; vertices 115187; model.skac 1.7 MB; radius 20.3 m
+eye: Some(Vec3(0.6, 0.53, 9.96))
+lights: 5
+channels used: aileron_l aileron_r alt_ft ctl_trim elevator eng0_rpm eng1_rpm eng2_rpm eng3_rpm flaps gear0_comp_norm gear0_roll_ms gear1_comp_norm gear1_roll_ms gear2_comp_norm gear2_roll_ms gear3_roll_ms gear4_roll_ms gear_pos heading_deg ias_kt pitch_deg prop0_rpm prop1_rpm prop2_rpm prop3_rpm roll_deg rudder steer_deg throttle vs_fpm
+animation types: [("", 72), ("knob", 4), ("material", 53), ("noshadow", 49), ("pick", 17), ("rotate", 125), ("select", 26), ("spin", 9), ("textranslate", 25), ("translate", 23)]
+unmapped properties (count):
+    49 controls/lighting/instruments-norm
+    49 controls/electric/battery-switch
+    12 sim/multiplay/generic/float[1]
+     6 instrumentation/nav/radials/selected-deg
+     6 instrumentation/clock/indicated-sec
+     4 systems/electrical/outputs/hsi
+     4 sim/multiplay/generic/float[17]
+     4 sim/multiplay/generic/float[16]
+     4 sim/multiplay/generic/float[15]
+     4 sim/multiplay/generic/float[14]
+     4 sim/multiplay/generic/bool[2]
+     4 instrumentation/tacan/switch-position
+     4 autopilot/settings/heading-bug-deg
+     2 sim/multiplay/generic/float
+     2 instrumentation/tacan/indicated-bearing-true-deg
+     2 instrumentation/tacan/in-range
+     2 instrumentation/tacan/frequencies/selected-channel[4]
+     2 instrumentation/nav/in-range
+     2 instrumentation/nav/heading-needle-deflection
+     2 instrumentation/nav/has-gs
+     2 instrumentation/nav/gs-needle-deflection
+     2 instrumentation/heading-indicator/offset-deg
+     2 instrumentation/dme/in-range
+     2 engines/engine[3]/torque-ftlb
+     2 engines/engine[2]/torque-ftlb
+     2 engines/engine[1]/torque-ftlb
+     2 engines/engine/torque-ftlb
+     1 instrumentation/radar/tilt
+     1 instrumentation/radar/switch-pos
+     1 instrumentation/radar/dim
+     1 instrumentation/altimeter/setting-inhg
+     1 instrumentation/adf/indicated-bearing-deg
+     1 engines/engine[3]/oil-temperature-degf
+     1 engines/engine[3]/oil-pressure-psi
+     1 engines/engine[3]/fuel-flow-gph
+     1 engines/engine[3]/egt-degf-calc
+     1 engines/engine[2]/oil-temperature-degf
+     1 engines/engine[2]/oil-pressure-psi
+     1 engines/engine[2]/fuel-flow-gph
+     1 engines/engine[2]/egt-degf-calc
+     1 engines/engine[1]/oil-temperature-degf
+     1 engines/engine[1]/oil-pressure-psi
+     1 engines/engine[1]/fuel-flow-gph
+     1 engines/engine[1]/egt-degf-calc
+     1 engines/engine/oil-temperature-degf
+     1 engines/engine/oil-pressure-psi
+     1 engines/engine/fuel-flow-gph
+     1 engines/engine/egt-degf-calc
+     1 controls/flight/rudder-trim
+     1 controls/flight/aileron-trim
+     1 controls/engines/engine[3]/propeller-pitch
+     1 controls/engines/engine[2]/propeller-pitch
+     1 controls/engines/engine[1]/propeller-pitch
+     1 controls/engines/engine/propeller-pitch
+     1 accelerations/pilot-g
+log:

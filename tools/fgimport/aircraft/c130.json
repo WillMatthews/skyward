@@ -1,0 +1,68 @@
+{
+ "props": {},
+ "channels": [
+  [
+   "^sim/multiplay/generic/float\\[4\\]$",
+   "prop0_rpm",
+   0.2,
+   0.0
+  ],
+  [
+   "^sim/multiplay/generic/float\\[5\\]$",
+   "prop1_rpm",
+   0.2,
+   0.0
+  ],
+  [
+   "^sim/multiplay/generic/float\\[6\\]$",
+   "prop2_rpm",
+   0.2,
+   0.0
+  ],
+  [
+   "^sim/multiplay/generic/float\\[7\\]$",
+   "prop3_rpm",
+   0.2,
+   0.0
+  ]
+ ],
+ "light_models": [
+  "procedural_light",
+  "Effects/lights/",
+  "[Ll]ights?/.*(nav|beacon|strobe|landing|taxi)",
+  "/(nav|beacon|strobe)",
+  "(^|/)light/(beacon|RedLight|GreenLight|StrobeLight)\\.xml$"
+ ],
+ "max_tex": 2048,
+ "interior_max_tex": 1024,
+ "id": "hercules",
+ "name": "Lockheed C-130H Hercules",
+ "fg_name": "C130",
+ "model": "Models/c130.xml",
+ "fdm": {
+  "cg_model": [
+   -2.0,
+   0,
+   -2.6
+  ]
+ },
+ "exclude_models": [
+  "Effects/",
+  "Pilot",
+  "refueling",
+  "ac130"
+ ],
+ "interior_models": [
+  "Interior",
+  "Panel",
+  "Seats"
+ ],
+ "textures": {
+  "texture.png": "Skyward/texture-neutral.png"
+ },
+ "eye_view": [
+  -0.6,
+  -2.07,
+  -11.96
+ ]
+}

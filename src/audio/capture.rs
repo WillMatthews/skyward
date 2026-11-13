@@ -66,6 +66,14 @@ pub fn profile_for(def: &AircraftDef, size: f32) -> Profile {
         SoundSet::V2500
     } else if id == "meridian320" || has(&["a320", "a32"]) {
         SoundSet::Cfm56
+    } else if id == "vulcan" || has(&["vulcan"]) {
+        SoundSet::Olympus
+    } else if id == "galaxy" || has(&["c5", "c-5", "galaxy"]) {
+        // CF6-80C2 (big-fan turbofan): nearest recorded set.
+        SoundSet::Cfm56
+    } else if id == "hercules" || has(&["c130", "c-130", "hercules"]) {
+        // Allison T56: nearest recorded turboprop set (PW100), 4-blade props.
+        SoundSet::Atr
     } else {
         match p.family {
             Family::LightPiston => SoundSet::C172,
@@ -89,6 +97,9 @@ pub fn profile_for(def: &AircraftDef, size: f32) -> Profile {
         "lancer" => p.fan_blades = 23,
         "meridian190" => p.fan_blades = 28,
         "meridian320" => p.fan_blades = 36,
+        "hercules" => p.blades = 4,
+        "galaxy" => p.fan_blades = 38,
+        "vulcan" => p.fan_blades = 22,
         _ => match p.family {
             Family::Warbird => {
                 p.cylinders = 12;

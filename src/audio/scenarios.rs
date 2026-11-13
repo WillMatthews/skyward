@@ -57,6 +57,24 @@ const PLANES: &[Plane] = &[
         cruise: 140.0,
         crash_speed: 75.0,
     },
+    Plane {
+        id: "hercules",
+        rpm: (730.0, 1020.0),
+        cruise: 110.0,
+        crash_speed: 60.0,
+    },
+    Plane {
+        id: "galaxy",
+        rpm: (0.0, 0.0),
+        cruise: 140.0,
+        crash_speed: 75.0,
+    },
+    Plane {
+        id: "vulcan",
+        rpm: (0.0, 0.0),
+        cruise: 150.0,
+        crash_speed: 80.0,
+    },
 ];
 
 fn base_frame(id: &str) -> Frame {
