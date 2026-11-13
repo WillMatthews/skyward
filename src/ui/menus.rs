@@ -296,6 +296,7 @@ pub fn credits(ui: &mut Ui, st: &mut UiState) {
         ("Navaids", "VOR / DME / NDB: OurAirports — public domain · ILS: synthetic, derived from the runway data (a few London ILS from public charts)"),
         ("ATC", "Frequencies: OurAirports — public domain · voices: Kokoro-82M (Apache-2.0), generated for Skyward"),
         ("Weather", WEATHER_CREDIT),
+        ("Live traffic", "ADS-B data: adsb.lol contributors — ODbL 1.0 (desktop version)"),
         ("Elevation", "Terrain Tiles on AWS (Mapzen / Tilezen: SRTM, GMTED2010, 3DEP, ETOPO1, EU-DEM and more)"),
         ("Aircraft & sounds", "FlightGear aircraft and recordings — GPL v2 / v2+ (per-aircraft credits in the source)"),
         ("Fonts", "Inter (Rasmus Andersson), JetBrains Mono, B612 (Airbus / Intactile / ENAC) — SIL Open Font License 1.1"),
@@ -1740,6 +1741,39 @@ pub fn settings(ui: &mut Ui, st: &mut UiState, in_flight: bool) {
                     label(&p, y, "Map orientation", "");
                     if let Some(i) = segmented(ui, ctrl(y), "north", &["North up", "Track up"], if s.north_up { 0 } else { 1 }) {
                         s.north_up = i == 0;
+                    }
+                    // Live traffic (adsb/) — owned by X; minimal rows for the settings redesign to move.
+                    let lt = &mut s.live_traffic;
+                    y += row_h;
+                    label(&p, y, "Live traffic", if crate::platform::WEB { "Desktop version only" } else { "Real aircraft from adsb.lol (ODbL)" });
+                    if let Some(i) = segmented(ui, ctrl(y), "lt_on", &["On", "Off"], if lt.enabled { 0 } else { 1 }) {
+                        lt.enabled = i == 0 && !crate::platform::WEB;
+                    }
+                    y += row_h;
+                    label(&p, y, "Traffic radius", "Around you, more ahead");
+                    let names: Vec<String> = crate::adsb::RADII_NM.iter().map(|r| format!("{r:.0} NM")).collect();
+                    let names: Vec<&str> = names.iter().map(|x| x.as_str()).collect();
+                    let cur = crate::adsb::RADII_NM.iter().position(|r| (r - lt.radius_nm).abs() < 1.0).unwrap_or(1);
+                    if let Some(i) = segmented(ui, ctrl(y), "lt_radius", &names, cur) {
+                        lt.radius_nm = crate::adsb::RADII_NM[i];
+                    }
+                    y += row_h;
+                    label(&p, y, "Traffic count", "Most aircraft shown, nearest first");
+                    let names: Vec<String> = crate::adsb::BUDGETS.iter().map(|n| n.to_string()).collect();
+                    let names: Vec<&str> = names.iter().map(|x| x.as_str()).collect();
+                    let cur = crate::adsb::BUDGETS.iter().position(|n| *n == lt.max_aircraft).unwrap_or(2);
+                    if let Some(i) = segmented(ui, ctrl(y), "lt_budget", &names, cur) {
+                        lt.max_aircraft = crate::adsb::BUDGETS[i];
+                    }
+                    y += row_h;
+                    label(&p, y, "Ground traffic", "Taxiing and parked aircraft");
+                    if let Some(i) = segmented(ui, ctrl(y), "lt_ground", &["Show", "Hide"], if lt.ground { 0 } else { 1 }) {
+                        lt.ground = i == 0;
+                    }
+                    y += row_h;
+                    label(&p, y, "Traffic tags", "Callsigns over the aircraft");
+                    if let Some(i) = segmented(ui, ctrl(y), "lt_tags", &["On", "Off"], if lt.tags { 0 } else { 1 }) {
+                        lt.tags = i == 0;
                     }
                 }
                 1 => {

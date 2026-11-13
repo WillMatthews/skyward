@@ -531,6 +531,8 @@ pub struct UiState {
     pub aircraft_group: Option<menus::Group>,
     /// Multiplayer session (net/) and the server browser's model.
     pub mp: crate::net::Mp,
+    /// Live real-world traffic (ADS-B, `adsb/`).
+    pub adsb: crate::adsb::LiveTraffic,
     pub browser: crate::net::browse::Browser,
     /// Missions: selection, records, the active one, the last result.
     pub missions: missions::MissionUi,
@@ -571,6 +573,7 @@ impl UiState {
             controls_axis: None,
             aircraft_group: None,
             mp: crate::net::Mp::new(),
+            adsb: crate::adsb::LiveTraffic::new(),
             browser: Default::default(),
             missions: Default::default(),
             dt: 1.0 / 60.0,

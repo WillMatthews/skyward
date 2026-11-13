@@ -30,6 +30,7 @@ pub mod phrase;
 pub mod taxi;
 #[cfg(test)]
 mod tests;
+pub mod traffic;
 pub mod vectors;
 
 use crate::audio::radio::{self, Voice};
@@ -320,6 +321,10 @@ pub struct Atc {
     last_khz: [u32; 2],
     /// UTC now (hours, minutes).
     utc: (u32, u32),
+    /// Traffic information (`traffic.rs`): who was called (seconds ago, negative), next check, sequencing done.
+    traffic_seen: HashMap<u16, f32>,
+    traffic_check: f32,
+    seq_given: bool,
 }
 
 impl Default for Atc {
@@ -397,6 +402,9 @@ impl Atc {
             land_t: 0.0,
             last_khz: [0; 2],
             utc: (12, 0),
+            traffic_seen: HashMap::new(),
+            traffic_check: 0.0,
+            seq_given: false,
         }
     }
 
@@ -1299,6 +1307,7 @@ impl Atc {
         self.cleared_alt_ft = Some(first_alt);
         self.arr = Some(ArrPlan { airport: ap.ident.clone(), runway: rwy, ils: ilsrec.is_some() && ils, director: Some(dir) });
         self.phase = Phase::Vectors;
+        self.seq_given = false;
         let _ = emergency;
         self.instruct(st, b, Some(rb), fx);
     }
@@ -1649,6 +1658,10 @@ impl Atc {
             b.say("roger mayday").comma().say("emergency services are standing by");
             self.instruct(&st, b, None, vec![]);
             self.begin_vectors(&st, ctx, true, Some(()));
+            return;
+        }
+        // Traffic information and sequencing against the traffic picture (traffic.rs).
+        if self.traffic_calls(&st, ctx, dt) {
             return;
         }
         match self.phase {

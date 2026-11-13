@@ -558,6 +558,8 @@ fn moving_map(ctx: &egui::Context, p: &egui::Painter, st: &mut UiState, sim: &mu
     map::trend(&mp, &view, pos, v, sim.ac.turn_rate(), if dark { pal::GREEN } else { Color32::from_rgb(20, 140, 70) });
     // Multiplayer traffic (ui/mp.rs).
     super::mp::map_traffic(&mp, &view, st, sim, dark);
+    // Live real-world traffic (adsb/).
+    crate::adsb::ui::map_layer(&mp, &view, &st.adsb, dark);
     map::aircraft_symbol(&mp, me, view.screen_angle(sim.ac.heading()), 13.0, if dark { pal::AMBER } else { Color32::from_rgb(255, 196, 30) });
     map::wind_block(&mp, rect.min + Vec2::new(8.0, 8.0), &view, world, dark);
     // compass / orientation button

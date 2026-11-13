@@ -16,7 +16,9 @@
 //! Sound:      --mute (N toggles in flight; volumes in Settings › Sound); offline: --audio-render out.wav --seconds S [--audio-script "2:cam=cockpit,9:gear"] [--audio-until Final]
 //! Display:    --vsync on|off (default on: FIFO present, smoothed frame step); SKYWARD_FRAME_LOG=file logs per-frame timing
 //! Multiplayer: skyward --connect host[:port] --name CALLSIGN [--password PW]   (server: cargo run -p skyward-server -- --help)
+//! Live traffic: real aircraft from adsb.lol (default on; off with --no-live / --no-adsb; headless only with --adsb); --adsb-fixture rec.json replays a recording
 
+mod adsb;
 mod airport;
 mod airports;
 mod atmosphere;
@@ -169,6 +171,9 @@ struct Args {
     /// Airline-emergency mission to fly (missions/), and fly it with the scripted pilot.
     mission: Option<String>,
     mission_bot: bool,
+    /// Live traffic (adsb/): replay a recording; force on / off for this session.
+    adsb_fixture: Option<String>,
+    adsb: Option<bool>,
 }
 
 fn parse_vec3(s: &str) -> Option<Vec3> {
@@ -279,6 +284,8 @@ fn parse_args_from(argv: Vec<String>) -> Args {
         mp_chat: String::new(),
         mission: None,
         mission_bot: false,
+        adsb_fixture: None,
+        adsb: None,
     };
     let mut i = 0;
     let next = |i: &mut usize| -> String {
@@ -410,10 +417,13 @@ fn parse_args_from(argv: Vec<String>) -> Args {
                 a.live_given = true;
             }
             "--metar" => a.metar = Some(next(&mut i)),
+            "--adsb-fixture" => a.adsb_fixture = Some(next(&mut i)),
+            "--adsb" => a.adsb = Some(true),
+            "--no-adsb" => a.adsb = Some(false),
             "--map-zoom" => a.map_zoom = next(&mut i).parse().ok(),
             "--radius-km" => a.radius = next(&mut i).parse::<f32>().ok().map(|k| k * 1000.0),
             "-h" | "--help" => {
-                println!("{}", include_str!("main.rs").lines().take(18).collect::<Vec<_>>().join("\n"));
+                println!("{}", include_str!("main.rs").lines().take(19).collect::<Vec<_>>().join("\n"));
                 std::process::exit(0);
             }
             other => eprintln!("ignoring unknown argument {other}"),
@@ -950,21 +960,36 @@ fn render_frame(
                 fv = FrameView { eye, view: glam::camera::rh::view::look_at_mat4(eye, look, Vec3::Y), ..fv };
             }
             // Other players' aircraft (net/): real models, lights, afterburners — eye-relative.
+            let (mut frames, mut lights) = (Vec::new(), Vec::new());
             if ui.st.mp.connected() {
-                let (frames, lights, flames) = ui.st.mp.render_traffic(fv.eye);
+                let (f, l, flames) = ui.st.mp.render_traffic(fv.eye);
                 dynm.append(&flames, glam::Mat4::IDENTITY);
-                renderer.set_traffic(frames, lights);
+                (frames, lights) = (f, l);
                 ui.st.mp.cam = Some((fv.eye, fv.view, fv.fov_y));
             } else {
                 ui.st.mp.cam = None;
             }
+            // Live real-world traffic (adsb/): after the players (they take precedence).
+            {
+                let lt_settings = ui.st.settings.live_traffic.clone();
+                ui.st.adsb.update(sim, &s.world, ui.st.dt, &lt_settings);
+                let mut flames = scene::MeshData::default();
+                let slots = 96usize.saturating_sub(frames.len());
+                let t = sim.time % 3600.0;
+                frames.extend(ui.st.adsb.render(fv.eye, t, slots, &mut lights, &mut flames));
+                dynm.append(&flames, glam::Mat4::IDENTITY);
+                ui.st.adsb.cam = Some((fv.eye, fv.view, fv.fov_y));
+            }
+            renderer.set_traffic(frames, lights);
             // Browser: the scene may render below the output size (upscaled by the tonemap pass).
             #[cfg(target_arch = "wasm32")]
             let (w, h) = platform::web::scene_size(w, h);
             {
                 // Airport instances (parked aircraft, vehicles, windsocks in the real wind).
                 let wd = &s.world;
-                let af = wd.airport_detail.frame(&wd.proj, fv.eye, sim.time, &|p| flight::Environment::wind(wd, p), &|xz| flight::Environment::ground_height(wd, xz));
+                let mut af = wd.airport_detail.frame(&wd.proj, fv.eye, sim.time, &|p| flight::Environment::wind(wd, p), &|xz| flight::Environment::ground_height(wd, xz));
+                // Stands taken by live aircraft (adsb/): their procedural occupants are hidden.
+                airport::hide_parked(&mut af, &ui.st.adsb.hidden, fv.eye);
                 renderer.set_airport_frame(af);
             }
             renderer.render(device, queue, &mut enc, target, w, h, &fv, &dynm);
@@ -1001,6 +1026,7 @@ fn render_frame(
                     ui::flight::draw(&ctx, st, sim, world, ppp_now, fps);
                 }
                 ui::mp::draw(&ctx, st, sim);
+                adsb::ui::tags(&ctx, &st.adsb, sim.ac.pos, st.settings.alt);
             }
             if let (Some(msg), Screen::Flying) = (loading, st.screen) {
                 let (t, d, f) = loading_info(msg);
@@ -1257,6 +1283,25 @@ fn apply_route(args: &Args, sim: &mut sim::Sim, world: &world::World) {
     }
 }
 
+/// Live traffic for this session: a replayed recording (`--adsb-fixture`),
+/// or forced on / off (`--adsb`, `--no-adsb`; `--no-live` turns it off;
+/// headless captures leave it off unless asked).
+fn setup_adsb(args: &Args, ui: &mut Ui, headless: bool) -> Result<(), String> {
+    if let Some(path) = &args.adsb_fixture {
+        let text = std::fs::read_to_string(path).map_err(|e| format!("--adsb-fixture {path}: {e}"))?;
+        let frames = adsb::feed::parse_recording(&text).map_err(|e| format!("--adsb-fixture {path}: {e}"))?;
+        eprintln!("live traffic: replaying {} recorded frames ({} aircraft)", frames.len(), frames[0].reports.len());
+        ui.st.adsb.replay(frames);
+        return Ok(());
+    }
+    ui.st.adsb.force = match args.adsb {
+        Some(on) => Some(on),
+        None if headless || (args.live_given && !args.live) => Some(false),
+        None => None,
+    };
+    Ok(())
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn headless(args: Args) -> Result<(), String> {
     let mut args = args;
@@ -1287,6 +1332,8 @@ fn headless(args: Args) -> Result<(), String> {
     ui.hide_hud = args.no_hud;
     // (Captures neither read nor write the player's multiplayer favourites / recents.)
     ui.st.mp.prefs = net::prefs::Prefs { read_only: true, ..net::prefs::Prefs::from_json(&serde_json::Value::Null) };
+    // Live traffic (adsb/): off in captures (reproducible) unless asked for, or a recording replayed.
+    setup_adsb(&args, &mut ui, true)?;
     ui.st.db = db.clone();
     ui.st.plan = plan_from_args(&args, db.as_deref());
     if let Some(m) = args.hud_mode {
@@ -1390,6 +1437,18 @@ fn headless(args: Args) -> Result<(), String> {
         sync_gpu(&mut s, &mut renderer, &mut ui, &gpu, None);
     }
     weather::save_report(&path, &s.world);
+    // Live traffic asked for in a capture (`--adsb`): wait for the first answer (≤ 15 s).
+    if args.adsb == Some(true) && args.adsb_fixture.is_none() {
+        let tw = Instant::now();
+        let lt_settings = ui.st.settings.live_traffic.clone();
+        while tw.elapsed() < Duration::from_secs(15) && ui.st.adsb.fetched == 0 {
+            if let Some(sim) = s.sim.as_ref() {
+                ui.st.adsb.update(sim, &s.world, 0.05, &lt_settings);
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        eprintln!("{} after {:.1} s", ui.st.adsb.status, tw.elapsed().as_secs_f32());
+    }
     let (w, h) = (args.width, args.height);
     let tex = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("shot"),
@@ -1694,6 +1753,15 @@ fn headless(args: Args) -> Result<(), String> {
     );
     let px = gfx::read_texture(&gpu, &tex, w, h);
     image::save_buffer(&path, &px, w, h, image::ColorType::Rgba8).map_err(|e| e.to_string())?;
+    if ui.st.adsb.settings.enabled {
+        let lt = &ui.st.adsb;
+        eprintln!("live traffic: {} aircraft shown, update {:.3} ms, render {:.3} ms ({})", lt.shown(), lt.cpu_ms, lt.render_ms, lt.status);
+        if std::env::var_os("SKYWARD_ADSB_DEBUG").is_some() {
+            for line in lt.debug_lines(&s.world.proj) {
+                eprintln!("  {line}");
+            }
+        }
+    }
     eprintln!("wrote {path}");
     ui.st.mp.leave();
     Ok(())
@@ -2449,6 +2517,13 @@ fn ui_action(r: &mut Running, k: Key, flying: bool) -> bool {
             st.mp.tags = !st.mp.tags;
             st.toasts.push(ui::toast::Kind::Info, if st.mp.tags { "Name tags on" } else { "Name tags off" }, "", 1.4);
         }
+        // Live-traffic callsign tags (adsb/) when not in a multiplayer session.
+        Key::NameTags if st.adsb.settings.enabled => {
+            let t = &mut st.settings.live_traffic.tags;
+            *t = !*t;
+            st.settings_dirty = true;
+            st.toasts.push(ui::toast::Kind::Info, if *t { "Traffic tags on" } else { "Traffic tags off" }, "", 1.4);
+        }
         Key::QuickChat if st.mp.connected() => st.mp.wheel = if st.mp.wheel.is_some() { None } else { Some(net::Wheel::default()) },
         Key::Chat | Key::PlayerList | Key::NameTags | Key::QuickChat => {}
         Key::Map => st.map.mode = st.map.mode.next(),
@@ -2642,6 +2717,9 @@ impl App {
         ui.st.input.add_fakes_from_env();
         eprintln!("{}", ui.st.input.status);
         ui.st.db = db.clone();
+        if let Err(e) = setup_adsb(&self.args, &mut ui, false) {
+            eprintln!("{e}");
+        }
         if let Some(m) = self.args.hud_mode {
             ui.st.settings.hud = m;
         }
@@ -3211,7 +3289,13 @@ impl App {
                 let inv = view.inverse();
                 audio::Listener { pos: eye, fwd: -inv.z_axis.truncate(), up: inv.y_axis.truncate() }
             });
-            r.audio.set_traffic(mp.sounds(ear), listener);
+            // Live traffic (adsb/) fills the slots the players leave.
+            let mut sounds = mp.sounds(ear);
+            let lt = &r.ui.st.adsb;
+            if let Some(cam) = lt.cam.filter(|_| lt.settings.enabled) {
+                lt.sounds(cam.0, &mut sounds);
+            }
+            r.audio.set_traffic(sounds, listener);
         }
         if let Some(s) = r.session.as_ref() {
             r.audio.update(s.sim.as_ref(), &s.world, dt, r.ui.st.screen != Screen::Flying);

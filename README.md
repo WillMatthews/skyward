@@ -368,7 +368,7 @@ Every key can be rebound in **Settings › Controls**. Press **H** or **F1** in 
 | Esc / Tab | pause menu: resume, restart, change aircraft / airport, settings |
 | H / F1 | help |
 | F12 | screenshot |
-| Enter, F11, Num *, Backspace / Num 0 | multiplayer (when connected): chat, players & spectate, name tags, quick-chat wheel |
+| Enter, F11, Num *, Backspace / Num 0 | multiplayer (when connected): chat, players & spectate, name tags, quick-chat wheel; Num * also toggles the live-traffic tags |
 
 Stick inputs disconnect the autopilot (flashing AP DISCONNECT); throttle keys only drop the
 autothrottle.
@@ -495,6 +495,36 @@ skyward --shot m.png --aircraft meridian320 --bot --soak --seconds 4200 --warp 8
 | `SKYWARD_UI_SCRIPT="4:aircraft,7:departure,10:airport=EGKK,12:fly"` | drive the menus for tests |
 
 </details>
+
+## Live traffic
+
+The real aircraft around you, from ADS-B (the [adsb.lol](https://adsb.lol/) open API, ODbL),
+flown by the closest model in the hangar (desktop build; on by default, **Settings › Display**).
+
+- **What you see.** Airliners on final with their gear and flaps out, landing lights and strobes;
+  departures rotating and cleaning up; taxiing aircraft following the taxiway centrelines; parked
+  aircraft on their stands (the procedural one there makes room). Callsign tags (type, altitude,
+  distance) over the aircraft, a traffic layer on the moving map (callsign, altitude / flight level,
+  type, speed vector) and TCAS symbols with callsigns on the ND. Their engines are heard.
+- **ATC knows about them.** Radar and tower pass traffic information ("traffic, two o'clock,
+  five miles, opposite direction, two thousand feet above, A320") and the approach director extends
+  your downwind to fit in behind real arrivals.
+- **Smooth from a jumpy feed.** Reports arrive every 5–10 s, already a few seconds old. The traffic
+  is played out ~10–15 s in the past and interpolated between reports along their reported
+  velocities (Hermite curves: exact at every report, turning with the aircraft, flaring into the
+  touch-down), so nothing jumps; attitude, gear, flaps, spoilers, reversers and lights are
+  synthesised from the motion and the flight phase.
+- **Types.** ICAO type designators map to stand-ins (A320 family and 737s → A320, 777 / 787 / A330 /
+  A350 / 747 / A380 → 777 scaled to their span, E-Jets → E190, CRJs → CRJ700, ATR / Dash 8 → ATR 72,
+  business jets → Citation X, helicopters → EC130, fighters → F-16, light aircraft → C172 / Cub /
+  Extra 500), with neutral liveries.
+- **Polite.** One request in flight, every 5 s (10 s with nobody around), backing off on errors and
+  rate limits; only a rounded position and a radius are sent. Offline, the traffic simply fades out.
+- **Options.** On / off, radius (25–150 NM, shifted ahead along your track), how many aircraft
+  (nearest first), ground traffic, tags (also Num *). `--no-adsb` / `--no-live` turn it off for a session;
+  headless captures leave it off unless `--adsb`; `--adsb-fixture tests/adsb/egll_arrivals.json`
+  replays a recording deterministically (on the simulation clock).
+- **Not in the browser:** the API sends no CORS headers, so web pages may not call it.
 
 ## Multiplayer
 
@@ -748,7 +778,6 @@ These are being built now or planned. They aren't in `main` yet. See [`ROADMAP.m
 [`PLAN.md`](PLAN.md).
 
 - **More challenges.** Crosswind and short-field landings, glider task racing, scored tours.
-- **Live traffic.** Real ADS-B traffic as AI aircraft.
 - **More aircraft.** And military types with weapons.
 - **Releases and replays.** Native release packages, and a replay / flight recorder.
 
@@ -803,6 +832,7 @@ liveries are neutral, with no operator markings.
 | ILS | Synthetic, from OurAirports runway data; a few London ILS frequencies / idents / glidepaths from public charts | — |
 | Weather | METARs from [aviationweather.gov](https://aviationweather.gov/) (NOAA); forecasts from [Open-Meteo](https://open-meteo.com/) | Public / CC BY 4.0 |
 | Place search fallback | [Nominatim](https://nominatim.org/) | ODbL |
+| Live traffic | ADS-B positions from the [adsb.lol](https://adsb.lol/) API (volunteer receivers; no API key, requests carry only a position, a radius and a generic `skyward-flightsim/0.x` User-Agent) | [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/) |
 
 <details>
 <summary><b>Elevation data attribution (Terrain Tiles sources)</b></summary>

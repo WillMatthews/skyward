@@ -87,6 +87,8 @@ pub struct Settings {
     pub last: Option<LastFlight>,
     pub recents: Vec<String>,
     pub favourites: Vec<String>,
+    /// Live real-world traffic (ADS-B, `adsb/`). // owned by X
+    pub live_traffic: crate::adsb::Settings,
 }
 
 impl Default for Settings {
@@ -107,7 +109,22 @@ impl Default for Settings {
             last: None,
             recents: Vec::new(),
             favourites: Vec::new(),
+            live_traffic: crate::adsb::Settings::default(), // owned by X
         }
+    }
+}
+
+/// Live-traffic settings from JSON (missing fields keep their defaults). // owned by X
+fn live_traffic_from_json(v: Option<&Value>) -> crate::adsb::Settings {
+    let d = crate::adsb::Settings::default();
+    let Some(v) = v else { return d };
+    let b = |k: &str, def: bool| v.get(k).and_then(|x| x.as_bool()).unwrap_or(def);
+    crate::adsb::Settings {
+        enabled: b("enabled", d.enabled),
+        radius_nm: v.get("radius_nm").and_then(|x| x.as_f64()).map(|x| x as f32).unwrap_or(d.radius_nm).clamp(5.0, 250.0),
+        max_aircraft: v.get("max_aircraft").and_then(|x| x.as_u64()).map(|x| x as usize).unwrap_or(d.max_aircraft).clamp(1, 500),
+        ground: b("ground", d.ground),
+        tags: b("tags", d.tags),
     }
 }
 
@@ -193,6 +210,8 @@ impl Settings {
             "last": self.last.as_ref().map(|l| json!({ "aircraft": l.aircraft, "airport": l.airport, "start": l.start, "watch": l.watch })),
             "recents": self.recents,
             "favourites": self.favourites,
+            // owned by X (live traffic, adsb/)
+            "live_traffic": { "enabled": self.live_traffic.enabled, "radius_nm": self.live_traffic.radius_nm, "max_aircraft": self.live_traffic.max_aircraft, "ground": self.live_traffic.ground, "tags": self.live_traffic.tags },
         })
     }
 
@@ -255,6 +274,7 @@ impl Settings {
             last,
             recents: list("recents"),
             favourites: list("favourites"),
+            live_traffic: live_traffic_from_json(v.get("live_traffic")), // owned by X
         }
     }
 }

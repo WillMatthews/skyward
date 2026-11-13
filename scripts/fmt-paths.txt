@@ -104,3 +104,13 @@ src/flight/ga.rs
 src/flight/tests/ga_types.rs
 src/vfx/spray.rs
 src/vfx/smoke.rs
+src/adsb/mod.rs
+src/adsb/feed.rs
+src/adsb/fetch.rs
+src/adsb/ground.rs
+src/adsb/playout.rs
+src/adsb/synth.rs
+src/adsb/tests.rs
+src/adsb/types.rs
+src/adsb/ui.rs
+src/atc/traffic.rs

@@ -34,12 +34,32 @@ pub struct Remote {
     pub crashed: bool,
     /// Round trip of the last ping, from the player list (ms); 0 = unknown.
     pub ping_ms: u16,
+    /// Uniform model scale (live traffic stand-ins, `adsb/`; 1 for players).
+    pub scale: f32,
+    /// Structural parts (lost-part hiding): players only.
+    structural: bool,
 }
 
 impl Remote {
     pub fn new(id: u16, name: String, aircraft: String, defs: &[AircraftDef]) -> Remote {
+        let mut r = Remote::new_unloaded(id, name, aircraft, defs);
+        r.load(defs);
+        r
+    }
+
+    /// A live-traffic aircraft (`adsb/`): a stand-in model at `scale`, posed
+    /// each frame with [`Remote::place`] instead of the interpolator.
+    pub fn new_live(id: u16, name: String, aircraft: String, defs: &[AircraftDef], scale: f32) -> Remote {
+        let mut r = Remote::new_unloaded(id, name, aircraft, defs);
+        r.scale = scale;
+        r.structural = false;
+        r.load(defs);
+        r
+    }
+
+    fn new_unloaded(id: u16, name: String, aircraft: String, defs: &[AircraftDef]) -> Remote {
         let def = defs.iter().position(|d| d.id == aircraft).unwrap_or(0);
-        let mut r = Remote {
+        Remote {
             id,
             name,
             aircraft,
@@ -57,9 +77,18 @@ impl Remote {
             loading: None,
             crashed: false,
             ping_ms: 0,
-        };
-        r.load(defs);
-        r
+            scale: 1.0,
+            structural: true,
+        }
+    }
+
+    /// Pose it directly (live traffic): this frame's state, current world frame.
+    pub fn place(&mut self, state: AcState, pos: Vec3, rot: Quat, vel: Vec3) {
+        self.cur = Some(Sampled { state, extrapolated: 0.0, stale: false });
+        self.pos = pos;
+        self.rot = rot;
+        self.vel = vel;
+        self.crashed = false;
     }
 
     /// (Re)load the model for the current type — off the main thread (the
@@ -69,11 +98,12 @@ impl Remote {
         self.model = None;
         self.rig = None;
         let Some(d) = defs.get(self.def).cloned() else { return };
+        let structural = self.structural;
         let build = move || {
             let mut m = crate::models::build(d.id, d.eye);
             m.nose_gear = d.gear.iter().find(|g| matches!(g.kind, crate::flight::ContactKind::Wheel { steerable: true, .. }) && g.pos.z > 0.0).map(|g| g.pos);
             // Structural parts: pieces another player has lost are hidden.
-            if let Some(a) = m.asset.clone() {
+            if let Some(a) = m.asset.clone().filter(|_| structural) {
                 m.parts = Some(crate::models::classify(&a, &d));
             }
             m
@@ -96,9 +126,20 @@ impl Remote {
     }
 
     fn set_model(&mut self, m: AircraftModel, defs: &[AircraftDef]) {
-        self.rig = Some(crate::lights::AircraftLightRig::from_model(&m));
+        let mut rig = crate::lights::AircraftLightRig::from_model(&m);
+        if self.scale != 1.0 {
+            let k = self.scale;
+            rig.nav.iter_mut().for_each(|l| l.0 *= k);
+            rig.strobes.iter_mut().for_each(|p| *p *= k);
+            rig.beacons.iter_mut().for_each(|p| *p *= k);
+            rig.landing.iter_mut().for_each(|l| l.0 *= k);
+            if let Some(t) = rig.taxi.as_mut() {
+                t.0 *= k;
+            }
+        }
+        self.rig = Some(rig);
         let span = defs.get(self.def).map(|d| d.wingspan * 0.5).unwrap_or(0.0);
-        self.size = m.radius.max(span).max(0.3);
+        self.size = m.radius.max(span).max(0.3) * self.scale;
         self.model = Some(m);
     }
 
@@ -159,7 +200,7 @@ impl Remote {
         let def = defs.get(self.def)?;
         let m = self.model.as_mut()?;
         m.update_channels(time, &|name| channel(name, &st, def, time));
-        let body = Mat4::from_rotation_translation(self.rot, self.pos - eye);
+        let body = Mat4::from_scale_rotation_translation(Vec3::splat(self.scale), self.rot, self.pos - eye);
         let mut f = m.frame(body, false)?;
         if f.parts.is_some() {
             // Separated parts (wings, tail, gear...) are not drawn.
