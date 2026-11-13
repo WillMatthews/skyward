@@ -20,6 +20,7 @@ mod airports;
 mod atmosphere;
 mod aircraft_asset;
 mod assets;
+mod atc;
 mod audio;
 mod autopilot;
 mod nav;
@@ -124,6 +125,8 @@ struct Args {
     panel: Option<usize>,
     /// Radios & flight-plan panel tab to open (headless captures).
     radio_panel: Option<usize>,
+    /// Headless shots: open the ATC comms menu.
+    comms_panel: bool,
     /// Keys to press after the spawn (`--press ap,ap_appr`; input/ ids).
     press: Vec<Key>,
     /// Flight plan (`--route BIG,LAM,EGLL/27R`, nav/).
@@ -234,6 +237,7 @@ fn parse_args_from(argv: Vec<String>) -> Args {
         cold_dark: false,
         panel: None,
         radio_panel: None,
+        comms_panel: false,
         press: Vec::new(),
         route: None,
         frame_dt: None,
@@ -306,6 +310,10 @@ fn parse_args_from(argv: Vec<String>) -> Args {
             "--route" => a.route = Some(next(&mut i)),
             "--press" => a.press.extend(next(&mut i).split(',').filter_map(|k| input::key_from_id(k.trim()))),
             "--panel" if argv.get(i + 1).is_some_and(|v| v == "radios" || v == "fms") => a.radio_panel = Some(if next(&mut i) == "fms" { 1 } else { 0 }),
+            "--panel" if argv.get(i + 1).is_some_and(|v| v == "comms") => {
+                i += 1;
+                a.comms_panel = true;
+            }
             "--panel" => {
                 a.panel = Some(match next(&mut i).as_str() {
                     "armed" | "schedule" | "random" => 1,
@@ -1132,6 +1140,8 @@ fn headless(args: Args) -> Result<(), String> {
     if nav::db::wait(Duration::from_secs(60)).is_none() {
         eprintln!("navaids: database unavailable — ILS only");
     }
+    // Airport frequencies for ATC (atc/).
+    let _ = atc::freqs::wait(Duration::from_secs(60));
     let gpu = Gpu::new(None, Gpu::instance())?;
     eprintln!("GPU: {}", gpu.adapter_name());
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -1180,6 +1190,7 @@ fn headless(args: Args) -> Result<(), String> {
         ui.st.radio.open = true;
         ui.st.radio.tab = t;
     }
+    ui.st.comms.open = args.comms_panel;
     if let Ok(t) = std::env::var("SKYWARD_SETTINGS_TAB") {
         let mut it = t.split(':');
         ui.st.settings_tab = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
@@ -1302,9 +1313,14 @@ fn headless(args: Args) -> Result<(), String> {
         realtime_flight(&args, &gpu, &mut renderer, &mut ui, &mut s, &view, w, h, &raw, &mut input)?;
     } else {
         // Fast-forward the simulation; streaming keeps up in the background.
+        // (`--audio-script` cues work here too: ATC requests for comms shots.)
+        let mut cues = audio::render::parse_script(&args.audio_script);
         let steps = (args.seconds * 60.0) as usize;
         for i in 0..steps.max(1) {
             let sim = s.sim.as_mut().unwrap();
+            for c in cues.due(i as f32 / 60.0, sim, &s.world) {
+                audio::render::apply(&c, sim, &mut input, &s.world);
+            }
             sim.update(&s.world, &mut input, if steps == 0 { 0.0 } else { 1.0 / 60.0 });
             if let (Some(t), None) = (args.throttle, &sim.bot) {
                 sim.ctl.throttle = t;
@@ -2088,6 +2104,24 @@ struct App {
     init: Option<PendingInit>,
 }
 
+/// A number key (top row or keypad) for the comms menu.
+fn comms_digit(code: KeyCode) -> Option<u8> {
+    use KeyCode as K;
+    Some(match code {
+        K::Digit0 | K::Numpad0 => 0,
+        K::Digit1 | K::Numpad1 => 1,
+        K::Digit2 | K::Numpad2 => 2,
+        K::Digit3 | K::Numpad3 => 3,
+        K::Digit4 | K::Numpad4 => 4,
+        K::Digit5 | K::Numpad5 => 5,
+        K::Digit6 | K::Numpad6 => 6,
+        K::Digit7 | K::Numpad7 => 7,
+        K::Digit8 | K::Numpad8 => 8,
+        K::Digit9 | K::Numpad9 => 9,
+        _ => return None,
+    })
+}
+
 /// Interface-level actions (keyboard or controller); true when handled here.
 fn ui_action(r: &mut Running, k: Key, flying: bool) -> bool {
     let st = &mut r.ui.st;
@@ -2118,6 +2152,14 @@ fn ui_action(r: &mut Running, k: Key, flying: bool) -> bool {
         Key::WeatherPanel => st.show_wx = !st.show_wx,
         Key::Failures => st.fail.open = !st.fail.open,
         Key::RadioPanel => st.radio.open = !st.radio.open,
+        Key::CommsMenu => {
+            st.comms.open = !st.comms.open;
+            st.comms.page = 0;
+            st.comms.sel = 0;
+        }
+        Key::CommsNext | Key::CommsPrev if st.comms.open => st.comms.nav += if k == Key::CommsNext { 1 } else { -1 },
+        Key::CommsSelect if st.comms.open => st.comms.select = true,
+        Key::CommsNext | Key::CommsPrev | Key::CommsSelect => {}
         Key::MouseYoke => {
             if !st.settings.controls.mouse.yoke {
                 st.toasts.push(ui::toast::Kind::Info, "Mouse yoke is off", "Turn it on in Settings › Controls › Mouse & view", 3.0);
@@ -2390,6 +2432,19 @@ impl ApplicationHandler for App {
                             }
                         }
                         return;
+                    }
+                    // The comms menu (F4) takes the number keys while it is open (ui/comms.rs).
+                    if r.ui.st.comms.open && screen == Screen::Flying && !typing {
+                        if let Some(d) = comms_digit(code) {
+                            if pressed {
+                                r.ui.st.comms.keys.push(d);
+                            }
+                            return;
+                        }
+                        if pressed && code == KeyCode::Escape {
+                            r.ui.st.comms.open = false;
+                            return;
+                        }
                     }
                     if pressed && code == KeyCode::Escape && flying {
                         ui_action(r, Key::Menu, flying);
@@ -2807,7 +2862,10 @@ fn audio_render(args: Args) -> Result<(), String> {
     let db = airports::Loader::start().wait(Duration::from_secs(120));
     resolve_airport(&mut args, db.as_deref());
     let _ = nav::db::wait(Duration::from_secs(60));
-    let mut s = Session::new(&args, db, None);
+    let _ = atc::freqs::wait(Duration::from_secs(60));
+    // `--start-at` (stand / apron, final...) as in the headless shots.
+    let custom = args.start_at.clone().map(|spec| startpos::CustomStart { airport: plan_from_args(&args, db.as_deref()).airport, spec });
+    let mut s = Session::new(&args, db, custom);
     let t0 = Instant::now();
     fn pump(s: &mut Session) {
         s.world.update();
@@ -2840,6 +2898,14 @@ fn audio_render(args: Args) -> Result<(), String> {
     }
     if s.world.live_weather || s.world.live_time {
         s.world.live.wait(Duration::from_secs(12));
+    }
+    // ATC scripts: the airport layouts (taxiways, holds) complete first.
+    if args.audio_script.contains("atc") {
+        let t1 = Instant::now();
+        while !s.world.airport_detail.idle() && t1.elapsed() < Duration::from_secs(60) {
+            pump(&mut s);
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
     pump(&mut s);
     {
@@ -2898,7 +2964,7 @@ fn audio_render(args: Args) -> Result<(), String> {
         {
             let sim = s.sim.as_mut().unwrap();
             for c in cues.due(t, sim, &s.world) {
-                audio::render::apply(&c, sim, &mut input);
+                audio::render::apply(&c, sim, &mut input, &s.world);
                 rec.mark(c);
             }
             sim.update(&s.world, &mut input, dt);
@@ -2917,6 +2983,10 @@ fn audio_render(args: Args) -> Result<(), String> {
     }
     let rep = rec.finish(&path)?;
     eprintln!("{rep}");
+    // The radio transcript (atc/).
+    for l in &s.sim.as_ref().unwrap().atc.log {
+        eprintln!("radio: [{}] {}", l.who, l.text);
+    }
     let ac = &s.sim.as_ref().unwrap().ac;
     eprintln!("end: alt {:.0} m, ias {:.0} kt, on ground {}, crashed {:?}", ac.pos.y, ac.airspeed_kt(), ac.on_ground, ac.crashed);
     Ok(())

@@ -181,6 +181,8 @@ pub fn draw(ctx: &egui::Context, st: &mut UiState, sim: &mut Sim, world: &World,
     super::failures::panel(ctx, st, sim);
     // ---- radios & flight plan (F3)
     super::radio::panel(ctx, st, sim, world);
+    // ---- ATC: subtitles and the comms menu (F4)
+    super::comms::draw(ctx, st, sim, world, bottom);
 }
 
 /// Smoke in the cockpit (electrical / engine fire) and a cracked windscreen (systems/).
@@ -831,6 +833,7 @@ pub fn control_rows(def: &crate::flight::AircraftDef) -> Vec<(&'static str, &'st
         ("Autopilot", "J", "Auto flight".into()),
         ("Radios", "5 · 6 7 · 8", "NAV 1 swap · course −/+ · ident".into()),
         ("Radios", "F3 · ;", "Radios & flight plan · ND mode".into()),
+        ("ATC", "F4 · 1–9 · 0", "Comms menu: requests · tune a station".into()),
         ("View", "C", "Camera".into()),
         ("View", "Right drag · wheel", "Orbit · zoom".into()),
         ("View", "M", "Map: corner · large · off".into()),

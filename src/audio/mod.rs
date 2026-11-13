@@ -30,6 +30,7 @@ mod engines;
 mod fx;
 mod output;
 pub mod params;
+pub mod radio;
 pub mod render;
 mod rotorcraft;
 mod sampled;

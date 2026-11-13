@@ -114,6 +114,28 @@ anywhere on Earth, for as long as you like. wgpu (Vulkan), winit, egui.
   (auto-tunes NAV 1), edited in the radio panel (F3) or on the large map
   (click / drag / right-click), with distance / ETA / fuel predictions and an
   MCDU F-PLN page. The bot couples to the ILS on its finals.
+* **Air traffic control** (`src/atc/`) — the airports' real ATIS / delivery /
+  ground / tower / approach (director, radar) frequencies (OurAirports); tune
+  COM 1 and talk through the comms menu (**F4**). UK CAP 413-style
+  phraseology assembled from pre-rendered voice clips (six Kokoro voices:
+  one per kind of unit, a distinct one for your read-backs) played through
+  an AM airband chain (squelch break and tail, hiss by signal strength,
+  voice band, compression), with subtitles. **ATIS** loops the live METAR
+  (letter advances with the weather, runway in use from the wind, transition
+  level, "advise on initial contact you have information …"). Departure: IFR
+  / VFR clearance with a squawk, start-up, taxi to a runway-holding point
+  routed over the airport's taxiway graph ("taxi to holding point N1 runway
+  27L via G, F, B, L28"), line-up and take-off clearance with the surface
+  wind, hand-off to departure / radar, "identified", climb. Arrival: radar
+  vectors to a 30° intercept of the ILS with descents and the approach
+  clearance (they lead the autopilot to a localiser and glideslope capture),
+  hand-off to tower, landing clearance, vacate, taxi in; visual approaches.
+  Controllers react to altitude busts, runway incursions, take-off or
+  landing without a clearance (stop immediately / go around) and squawk
+  7700; MAYDAY / PAN PAN with the failure from the systems, vectors to the
+  nearest ILS. Read-backs are automatic (or from the menu); assists tune the
+  next frequency, set the squawk and (`atc_follow`) let the autopilot fly
+  the vectors. The auto-flight bot does its own radio work in watch mode.
 * **Auto flight bot** — an AI pilot that flies the real flight model through
   the controls: glider soaring and powered take-off → landmark tour →
   approach → landing cycles, wind-aware (see below).
@@ -237,7 +259,7 @@ suitable airfield.
 | `hercules` (`c130`) | **Lockheed C-130H Hercules** | Four T56 turboprops, high wing, short and rough fields (from ~900 m, grass OK), reverse pitch. |
 | `galaxy` (`c5`) | **Lockheed C-5M Super Galaxy** | 280 t strategic airlifter: slow-spooling CF6s, huge inertia, spoilers and reversers. Needs 2,400 m. |
 | `vulcan` | **Avro Vulcan B.2** | Delta-wing V-bomber: no stall break but huge drag at high alpha, T/W 0.6, the Olympus howl. Flap lever = airbrakes. Needs 2,000 m. |
-| `ec130` (`heli`, `h130`) | **Airbus Helicopters EC130 B4** | Single-turboshaft light helicopter: collective on the throttle, cyclic on the stick, pedals on the rudder; G or F4 cycles the stability assist (attitude hold → off → SAS); K fails the engine (autorotation). Starts beside the runway, rotors turning. |
+| `ec130` (`heli`, `h130`) | **Airbus Helicopters EC130 B4** | Single-turboshaft light helicopter: collective on the throttle, cyclic on the stick, pedals on the rudder; G or F6 cycles the stability assist (attitude hold → off → SAS); K fails the engine (autorotation). Starts beside the runway, rotors turning. |
 | `fpv` (`quad`, `drone`) | **5" FPV quadcopter** | Angle (self-levelling) or rate (acro) mode on G / ;, throttle on the throttle; C → cockpit = the FPV camera with OSD. On a gamepad both sticks fly "mode 2" (left: throttle / yaw, right: pitch / roll). |
 
 The models, textures and FDM data come from FlightGear (GPL); sources,
@@ -265,6 +287,7 @@ the city (fast jets: 3,000 m), glider thermal release.
 | 1 / 2 / 3 / 4 | autopilot LOC (VOR) track on NAV 1 / **APPR** (LOC + G/S, autoland on airliners) / LNAV (flight plan) / VNAV — arm, again to cancel |
 | 5, 6 / 7, 8 | NAV 1: swap active ↔ standby, course (OBS) −/+ 1°, Morse ident audio |
 | F3 | **radios & flight plan** panel: COM / NAV / ADF frequencies, course, ident, transponder; route, destination + approach, direct-to, predictions |
+| F4 | **ATC comms menu**: the requests for the unit on COM 1 (1–9 pick, 0 = tune a station, Esc closes), read-back / assist / subtitle / COM 2 options; controllers: bind *Comms menu: next / previous / select* |
 | ; | navigation display: ROSE ILS → ROSE VOR → ROSE NAV → ARC → PLAN |
 | K | engine-failure practice (fails engine 1, then 2, then restores) |
 | O / F2 | **systems & failures** panel: fail / arm / random failures, repair; systems (battery, generators, fuel, engine start, APU, hydraulics, anti-ice, alternate gear, fire handles) |
@@ -372,7 +395,8 @@ Headless (no window) — renders offscreen and writes a PNG:
 | `--gear up\|down`, `--flaps N`, `--spoilers F`, `--reverse`, `--fail BITS` | aircraft setup |
 | `--fail pitot,vacuum,fire2@30` | systems failures by id (`fire` `flameout` `partial` `overspeed` `carbice` `leak` `pump` `gen` `vacuum` `pitot` `static` `ai` `dg` `pfd` `gear` `flapasym` `flapjam` `hyd` `jam` `brakes` `tyre` `smoke` `bird` `icing`; a digit = engine / tank / system, `jam-rudder`, `tyre-right`; `@S` arms it S seconds in) |
 | `--cold-dark`, `--panel failures\|armed\|systems` | start cold and dark; show the systems & failures panel |
-| `--panel radios\|fms`, `--press ap,ap_appr,nd_mode` | show the radios & flight-plan panel; press keys (Settings › Controls ids) after the spawn |
+| `--panel radios\|fms\|comms`, `--press ap,ap_appr,nd_mode` | show the radios & flight-plan panel / the ATC comms menu; press keys (Settings › Controls ids) after the spawn |
+| `--audio-script "2:atc=clearance,40:atc=taxi"` | scripted cues (also with `--shot`): ATC requests `atc=clearance\|startup\|taxi\|ready\|checkin\|ils\|visual\|established\|field\|final\|goaround\|vacated\|mayday\|panpan\|sayagain`, `com1=118.5`, `com2_rx`, `atc_follow` (the autopilot flies the vectors), `jump=lineup`, `bot` (see `src/audio/render.rs`) |
 | `--route LAM,BIG,EGLL/27R[/rnav]` | flight plan: navaids / airports / `lat:lon`, the last item an approach (ILS auto-tunes NAV 1) |
 | `--eye x,y,z --look x,y,z` | fixed camera |
 | `--eye-ll lat,lon,h --look-ll lat,lon,h` | fixed camera by geography (heights above the ground) |
@@ -498,6 +522,7 @@ A shift costs well under 0.1 ms.
 | `src/input/` | game controllers (gilrs + Linux evdev), bindings, default layouts, curves, head-look / analog glue (`sim_glue.rs`) |
 | `src/airports.rs` | OurAirports download / cache / search, runways in the world frame, METAR lookup |
 | `src/nav/` | navaid database (OurAirports navaids + synthetic ILS), radios with reception / Morse, FMS-lite flight plan, the autopilot's nav inputs; radio panel `src/ui/radio.rs` |
+| `src/atc/` | ATC: frequencies (`freqs.rs`), phraseology + voice vocabulary (`phrase.rs`, `assets/audio/atc/vocab.tsv`), ATIS + runway in use (`atis.rs`), taxi routing (`taxi.rs`), radar vectors (`vectors.rs`), the controllers / pilot session (`mod.rs`); radio audio `src/audio/radio.rs`, comms menu + subtitles `src/ui/comms.rs` |
 | `src/airport/`, `src/shaders/airport*.wgsl` | airport detail: tile-side airside styles + summaries (`tile.rs`), layout (`layout.rs`: markings, stands, signs, lights, vehicles), Overpass client (`overpass.rs`), procedural models + sign font (`mesh.rs`, `font.rs`), parked-aircraft LODs (`fleet.rs`), renderer (`gfx.rs`) |
 | `src/startpos.rs` | departure-screen starts (runway end, final, apron, air) |
 
@@ -532,7 +557,10 @@ Airports and runways: [OurAirports](https://ourairports.com/data/) (public
 domain; cached in `cache/ourairports.tsv.gz`); navaids (VOR, DME, NDB) from
 OurAirports' `navaids.csv` (public domain; cached in `cache/navaids.tsv.gz`),
 ILS synthetic from the runway data (a few London ILS frequencies / idents /
-glidepaths from public charts); airport detail from
+glidepaths from public charts); airport radio frequencies from OurAirports'
+`airport-frequencies.csv` (public domain; cached in `cache/frequencies.tsv.gz`);
+ATC voices generated with [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M)
+(Apache-2.0; see `assets/audio/CREDITS.md`); airport detail from
 OpenStreetMap through the [Overpass API](https://overpass-api.de/) (©
 OpenStreetMap contributors, ODbL; cached in `cache/airports/`); fallback lookup via
 [Nominatim](https://nominatim.org/). Fonts (SIL Open Font License 1.1, see

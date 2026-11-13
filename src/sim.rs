@@ -211,6 +211,11 @@ pub enum Key {
     RadioPanel,
     /// Navigation display mode (ROSE ILS / VOR / NAV, ARC, PLAN).
     NdMode,
+    /// ATC comms menu (interface); next / previous / select its rows (controllers).
+    CommsMenu,
+    CommsNext,
+    CommsPrev,
+    CommsSelect,
 }
 
 impl Key {
@@ -411,6 +416,8 @@ pub struct Sim {
     pub cold_dark: bool,
     /// Radios, flight plan and the guidance the autopilot couples to (nav/).
     pub nav: crate::nav::NavState,
+    /// Air traffic control on the radios (atc/).
+    pub atc: crate::atc::Atc,
 }
 
 /// Cinematic camera state.
@@ -527,8 +534,10 @@ impl Sim {
             failures: Default::default(),
             cold_dark: false,
             nav: Default::default(),
+            atc: Default::default(),
         };
         s.nav = crate::nav::NavState::new(&s.defs[sel]);
+        s.atc = crate::atc::Atc::new(&s.defs[sel]);
         s.light_rig = crate::lights::AircraftLightRig::from_model(&s.model);
         s.reset(world);
         s
@@ -575,6 +584,9 @@ impl Sim {
 
     pub fn reset(&mut self, world: &World) {
         let def = self.defs[self.sel].clone();
+        let keep = (self.atc.auto_readback, self.atc.assist, self.atc.bot_comms);
+        self.atc = crate::atc::Atc::new(&def);
+        (self.atc.auto_readback, self.atc.assist, self.atc.bot_comms) = keep;
         if !self.start.valid_for(&def) {
             self.start = Start::default_for(&def);
         }
@@ -786,6 +798,7 @@ impl Sim {
     /// bot and runway with it so nothing visibly jumps.
     pub fn rebase(&mut self, r: &crate::world::Rebase) {
         self.ac.rebase(r.delta);
+        self.atc.rebase(r);
         self.prev_pos = r.shift(self.prev_pos);
         self.rpos = r.shift(self.rpos);
         if let Some(p) = &mut self.flyby_pos {
@@ -1189,6 +1202,8 @@ impl Sim {
             self.time += dt * self.warp as f32;
         }
         self.systems_frame();
+        // Air traffic control: the frequency, ATIS, the controllers (atc/).
+        crate::atc::step(self, world, dt);
         // The bot's runway: NAV 1 on its ILS (it couples to it on final, bot.rs).
         if let Some(end) = self.bot.as_ref().and_then(|b| b.focus_runway()) {
             if let Some(rw) = world.runways.iter().find(|r| end.same_runway(r) && !r.airport.is_empty()) {

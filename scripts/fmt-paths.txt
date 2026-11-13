@@ -46,3 +46,12 @@ src/rotor/tests.rs
 src/rotor/glue.rs
 src/vfx/rotorwash.rs
 src/audio/rotorcraft.rs
+src/atc/mod.rs
+src/atc/atis.rs
+src/atc/freqs.rs
+src/atc/phrase.rs
+src/atc/taxi.rs
+src/atc/vectors.rs
+src/atc/tests.rs
+src/audio/radio.rs
+src/ui/comms.rs

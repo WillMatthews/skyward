@@ -670,6 +670,13 @@ impl Bot {
         tour.iter().skip(wp).map(|l| (l.name.clone(), l.pos)).collect()
     }
 
+    /// ATC (atc/): hold at the runway until cleared for take-off.
+    pub fn set_atc_wait(&mut self, wait: bool) {
+        if let Kind::Powered(p) = &mut self.kind {
+            p.atc_wait = wait;
+        }
+    }
+
     /// Something the cinematic camera may want to frame (runway threshold when landing).
     pub fn focus_runway(&self) -> Option<RunwayEnd> {
         match &self.kind {
@@ -1909,6 +1916,8 @@ impl Profile {
 }
 
 struct Powered {
+    /// Waiting for an ATC take-off clearance (atc/; at most a minute).
+    atc_wait: bool,
     phase: PPhase,
     pf: Profile,
     field: Option<Runway>,
@@ -1976,6 +1985,7 @@ impl Powered {
         let tour = plan_tour(world, home_p, if def.category == Category::Trainer { 3000.0 } else { 4000.0 }, pf.tour_r, 4);
         let vapp0 = pf.vapp;
         let mut s = Powered {
+            atc_wait: false,
             phase: PPhase::Enroute,
             pf,
             field,
@@ -2175,7 +2185,7 @@ impl Powered {
                 ctl.aileron = 0.0;
                 ctl.rudder = 0.0;
                 *status = format!("Ready for departure RWY {rwname}");
-                if t - self.phase_t > 5.0 && self.flap_idx == pf.to_flap {
+                if t - self.phase_t > 5.0 && self.flap_idx == pf.to_flap && (!self.atc_wait || t - self.phase_t > 60.0) {
                     self.set_phase(PPhase::TakeoffRoll, t);
                     ev.push(format!("take-off roll RWY {rwname} ({})", self.field_name));
                 }

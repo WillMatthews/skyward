@@ -253,6 +253,7 @@ pub fn credits(ui: &mut Ui, st: &mut UiState) {
         ("Vector tiles", "OpenFreeMap · airport detail: OSM via the Overpass API"),
         ("Airports & runways", "OurAirports — public domain (ourairports.com/data)"),
         ("Navaids", "VOR / DME / NDB: OurAirports — public domain · ILS: synthetic, derived from the runway data (a few London ILS from public charts)"),
+        ("ATC", "Frequencies: OurAirports — public domain · voices: Kokoro-82M (Apache-2.0), generated for Skyward"),
         ("Weather", "METARs: aviationweather.gov (NOAA) · forecasts: Open-Meteo (CC BY 4.0)"),
         ("Elevation", "Terrain Tiles on AWS (Mapzen / Tilezen: SRTM, GMTED2010, 3DEP, ETOPO1, EU-DEM and more)"),
         ("Aircraft & sounds", "FlightGear aircraft and recordings — GPL v2 / v2+ (per-aircraft credits in the source)"),
@@ -1468,6 +1469,8 @@ pub fn settings(ui: &mut Ui, st: &mut UiState, in_flight: bool) {
             slider(ui, y, "Cockpit systems", &mut s.sound.systems, 1.5);
             y += row_h;
             slider(ui, y, "Callouts", &mut s.sound.voice, 1.5);
+            y += row_h;
+            slider(ui, y, "ATC radio", &mut s.sound.radio, 1.5);
             y += row_h;
             slider(ui, y, "Interface", &mut s.sound.ui, 1.5);
             y += row_h;

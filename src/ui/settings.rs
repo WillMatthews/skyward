@@ -187,7 +187,7 @@ impl Settings {
             "alt": match self.alt { AltUnit::Feet => "ft", AltUnit::Metres => "m" },
             "map_style": match self.map_style { MapStyle::Auto => "auto", MapStyle::Day => "day", MapStyle::Night => "night" },
             "north_up": self.north_up,
-            "sound": { "muted": s.muted, "master": s.master, "engines": s.engines, "environment": s.environment, "systems": s.systems, "voice": s.voice, "ui": s.ui },
+            "sound": { "muted": s.muted, "master": s.master, "engines": s.engines, "environment": s.environment, "systems": s.systems, "voice": s.voice, "ui": s.ui, "radio": s.radio },
             "controls": self.controls.to_json(),
             "conditions": { "live": c.live, "hours": c.hours, "day": c.day, "preset": c.preset, "metar": c.metar },
             "last": self.last.as_ref().map(|l| json!({ "aircraft": l.aircraft, "airport": l.airport, "start": l.start, "watch": l.watch })),
@@ -211,6 +211,7 @@ impl Settings {
             sound.environment = g("environment", sound.environment);
             sound.systems = g("systems", sound.systems);
             sound.voice = g("voice", sound.voice);
+            sound.radio = g("radio", sound.radio);
             sound.ui = g("ui", sound.ui);
         }
         let mut conditions = d.conditions.clone();

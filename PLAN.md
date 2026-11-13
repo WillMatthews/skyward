@@ -78,7 +78,8 @@ item lands; keep entries one line.
 - [x] Sample-based engines from real FlightGear recordings, supersonic Mach cone + N-wave boom (K2)
 - [x] Crash/impact sound redesign, event API for debris/fire (K2)
 - [ ] **P1** Audio follow-ups: CF34-class recording for E190, engine start sequences once starters exist, remove unused menu_window, human listening pass on levels
-- [ ] **P1** ATC radio (tower/approach phraseology, AI voice) and ATIS from live METAR
+- [x] **P1** ATC radio + ATIS (src/atc): real frequencies (OurAirports), UK CAP 413 phraseology from pre-rendered Kokoro voice clips (6 voices) through an airband chain + subtitles; ATIS from the live METAR (letter, runway by wind, TL); clearance / start-up / taxi over the taxiway graph / line-up / take-off / hand-offs; radar vectors to ILS intercepts; landing / vacate; deviations (bust, incursion, no clearance), MAYDAY / PAN / 7700; auto read-backs + assists; comms menu (F4); bot radio in watch mode (R)
+- [ ] **P1** ATC follow-ups: some isolated-word clips have Kokoro end artefacts ("knots", "feet", "six" in the US voices) — cut words from carrier sentences with a forced aligner; no AI traffic (no traffic information / sequencing / "number two"); no SIDs / STARs (clearances "via flight planned route", initial altitude by TA); taxi routes need the airport layout loaded (and use the map's hold names); no ground "push and start"; one frequency per unit (no sectorisation); the bot flies its own visual pattern (not the vectors); voices / airport names English only (others are spelled ICAO); the browser build embeds the voice packs (+2.8 MB wasm)
 - [ ] **P1** Environment: airport ambience, rain on fuselage by surface, wind howl in gear wells
 - [ ] **P2** Cockpit switch/knob foley, seat rattles, headset/no-headset mix
 
@@ -103,7 +104,7 @@ item lands; keep entries one line.
 - [ ] **P1** Bot in mountain terrain: airliners at LOWI land on 26 but not 08 (straight-in from the hold is too high → safe go-arounds); ATR/E190 can climb into rising side valleys with a westerly (no terrain-aware departure / climb-in-hold)
 - [x] **P1** Input: gamepad, joystick/HOTAS, rudder pedals, quadrants (gilrs + evdev, hot-plug), rebinding UI, curves/deadzone/calibration, mouse yoke, head-look (P)
 - [ ] **P2** Input follow-ups: differential toe brakes + per-engine throttles need `Controls` fields; help overlay shows default keys not bindings; menu navigation by gamepad; mouse-yoke reticle; verify defaults on real X52/X56/TCA/Windows
-- [ ] **P1** Accessibility: UI scale, colour-blind-safe palettes, subtitles for callouts/ATC
+- [ ] **P1** Accessibility: UI scale, colour-blind-safe palettes, subtitles for callouts (ATC / ATIS subtitles done, R)
 - [ ] **P2** Localisation-ready strings
 
 ## 7. Platform, quality & release
@@ -141,4 +142,6 @@ item lands; keep entries one line.
 | S | Aircraft systems + realistic failures (systems/, failures panel, ECAM / EICAS, aural) | ✅ |
 | F | Navigation: navaids, radios, FMS-lite, ILS / VOR / LNAV / VNAV autopilot, autoland, nav displays (`src/nav/`) | ✅ |
 | Q | Rotorcraft: EC130 B4 helicopter + FPV quad (src/rotor, rotor wash, audio, bot) | ✅ |
-| R | ATC + ATIS | ⏳ running |
+| R | ATC radio + ATIS: frequencies, phraseology, voices, taxi routing, vectors, comms menu, bot radio (`src/atc/`) | ✅ |
+| UI | Menu scrolling / responsive layouts | ⏳ running |
+| next | H2 extra aircraft (proposed) | ⏳ awaiting decision |

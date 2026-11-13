@@ -23,13 +23,18 @@ others; per-item sources, authors and licences are listed in:
         (src/rotor/quad_model.rs), no third-party content.
   * assets/audio/CREDITS.md — sounds, including FlightGear recordings
     (GPL v2 / v2+, some GPL v2 only).
+  * assets/audio/atc/ — ATC / ATIS radio voice clips generated for Skyward
+    with Kokoro-82M (Apache-2.0 model; the clips are original output,
+    released with the project — see assets/audio/CREDITS.md).
   * assets/fonts/ — fonts (SIL Open Font License 1.1).
   * README.md, "Credits" — map, weather and airport data services. Navaids
     (VOR, DME, NDB) come from OurAirports' navaids.csv (public domain,
     https://ourairports.com/data/); ILS localizer / glideslope records are
     synthetic, derived from the OurAirports runway data (src/nav/db.rs), with
     the frequencies, idents and glidepath angles of a few London ILS taken as
-    facts from public charts. No licence-restricted navigation data is used.
+    facts from public charts. Airport radio frequencies (ATIS, delivery,
+    ground, tower, approach) come from OurAirports' airport-frequencies.csv
+    (public domain). No licence-restricted navigation data is used.
 
 Because some bundled content is GPL version 2 only, the combined work is
 distributed under the terms of GPL version 2.

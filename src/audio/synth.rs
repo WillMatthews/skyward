@@ -29,12 +29,14 @@ pub struct Settings {
     pub systems: f32,
     pub voice: f32,
     pub ui: f32,
+    /// ATC / ATIS radio in the headset.
+    pub radio: f32,
     pub muted: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { master: 0.7, engines: 1.0, environment: 1.0, systems: 1.0, voice: 1.0, ui: 0.8, muted: false }
+        Settings { master: 0.7, engines: 1.0, environment: 1.0, systems: 1.0, voice: 1.0, ui: 0.8, radio: 1.0, muted: false }
     }
 }
 
@@ -290,6 +292,8 @@ pub struct Synth {
     /// Engine voices' share of exterior mix in the interior path.
     ife: [f32; MAX_ENG],
     speaker: Speaker,
+    /// COM 1 / COM 2 receivers (ATC, ATIS).
+    radio: super::radio::Radio,
     fdn: Fdn,
     world_lp: OnePole,
     world_lp2: OnePole,
@@ -299,6 +303,7 @@ pub struct Synth {
     g_env: Ramp,
     g_sys: Ramp,
     g_voice: Ramp,
+    g_radio: Ramp,
     g_ui: Ramp,
     g_master: Ramp,
     ext_sys: Ramp,
@@ -346,6 +351,7 @@ impl Synth {
             prev_mach: 0.0,
             ife: [1.0; MAX_ENG],
             speaker: Speaker::new(sr),
+            radio: super::radio::Radio::new(sr),
             fdn: Fdn::new(sr),
             world_lp: OnePole::new(700.0, sr),
             world_lp2: OnePole::new(1100.0, sr),
@@ -355,6 +361,7 @@ impl Synth {
             g_env: Ramp::new(1.0),
             g_sys: Ramp::new(1.0),
             g_voice: Ramp::new(1.0),
+            g_radio: Ramp::new(1.0),
             g_ui: Ramp::new(1.0),
             g_master: Ramp::new(0.0),
             ext_sys: Ramp::new(1.0),
@@ -515,6 +522,8 @@ impl Synth {
             }
             Event::Crash { .. } | Event::Impact { .. } | Event::Separation { .. } | Event::Explosion { .. } | Event::Scrape { .. } | Event::Fire { .. } => {}
             Event::Speak(c) => speaker.play(c),
+            Event::Radio(id) => self.radio.start(id),
+            Event::RadioCut(ch) => self.radio.cut(ch),
             Event::ApDisconnect => {
                 // Original three-note bugle figure, played twice.
                 let (c, e, g, hi) = (1046.5, 1318.5, 1568.0, 2093.0);
@@ -637,6 +646,7 @@ impl Synth {
         self.g_env.to(st.environment.clamp(0.0, 2.0), n);
         self.g_sys.to(st.systems.clamp(0.0, 2.0), n);
         self.g_voice.to(st.voice.clamp(0.0, 2.0), n);
+        self.g_radio.to(st.radio.clamp(0.0, 2.0), n);
         self.g_ui.to(st.ui.clamp(0.0, 2.0), n);
 
         let world_target = if !self.have_frame || !f.active || f.paused { 0.0 } else if f.menu { 0.45 } else { 1.0 };
@@ -939,19 +949,22 @@ impl Synth {
         lis.0 += al * amb_g;
         lis.1 += ar * amb_g;
         let voice = self.speaker.tick();
-        let duck = 1.0 - 0.42 * self.speaker.active;
+        let com = self.radio.tick();
+        let duck = (1.0 - 0.42 * self.speaker.active) * (1.0 - 0.3 * self.radio.active);
 
         let w = self.world_r.tick();
         let ge = self.g_eng.tick() * w * duck;
         let gv = self.g_env.tick() * w * duck;
         let gs = self.g_sys.tick() * w * duck * self.ext_sys.tick();
         let gvo = self.g_voice.tick() * w * (0.5 + 0.5 * ins);
+        // The headset radio: the same inside and out (not muffled by the airframe).
+        let gr = self.g_radio.tick() * w;
         let gu = self.g_ui.tick();
         let bo = self.blackout.tick();
         let wl = wext.0 * outs + wi * ins;
         let wr = wext.1 * outs + wi * ins;
-        let mut l = ((ext_eng.0 * outs + int_eng.0 * ins) * ge + (ext_env.0 * outs + int_env.0 * ins + lis.0 + rl * outs + wl) * gv + c_sys.0 * gs + voice * gvo) * bo;
-        let mut r = ((ext_eng.1 * outs + int_eng.1 * ins) * ge + (ext_env.1 * outs + int_env.1 * ins + lis.1 + rr * outs + wr) * gv + c_sys.1 * gs + voice * gvo) * bo;
+        let mut l = ((ext_eng.0 * outs + int_eng.0 * ins) * ge + (ext_env.0 * outs + int_env.0 * ins + lis.0 + rl * outs + wl) * gv + c_sys.0 * gs + voice * gvo + com * gr) * bo;
+        let mut r = ((ext_eng.1 * outs + int_eng.1 * ins) * ge + (ext_env.1 * outs + int_env.1 * ins + lis.1 + rr * outs + wr) * gv + c_sys.1 * gs + voice * gvo + com * gr) * bo;
         if self.muffle_fc < 19_000.0 {
             l = self.muffle_l.lp(l);
             r = self.muffle_r.lp(r);

@@ -1,0 +1,270 @@
+# Skyward ATC phrase vocabulary: key	tts text	voices (P pilot, C controllers, A ATIS)	speed factor
+# Rust (src/atc/phrase.rs) assembles transmissions from these keys; tools/gen_atc.py renders them.
+zero	zero	PCA	1.32
+one	one	PCA	1.32
+two	two	PCA	1.32
+three	three	PCA	1.32
+four	four	PCA	1.32
+five	five	PCA	1.32
+six	six	PCA	1.32
+seven	seven	PCA	1.32
+eight	eight	PCA	1.32
+niner	niner	PCA	1.32
+alpha	alpha	PCA	1.25
+bravo	bravo	PCA	1.25
+charlie	charlie	PCA	1.25
+delta	delta	PCA	1.25
+echo	echo	PCA	1.25
+foxtrot	foxtrot	PCA	1.25
+golf	golf	PCA	1.25
+hotel	hotel	PCA	1.25
+india	india	PCA	1.25
+juliett	juliet	PCA	1.25
+kilo	kilo	PCA	1.25
+lima	leema	PCA	1.25
+mike	mike	PCA	1.25
+november	november	PCA	1.25
+oscar	oscar	PCA	1.25
+papa	papa	PCA	1.25
+quebec	kebeck	PCA	1.25
+romeo	romeo	PCA	1.25
+sierra	sierra	PCA	1.25
+tango	tango	PCA	1.25
+uniform	uniform	PCA	1.25
+victor	victor	PCA	1.25
+whiskey	whiskey	PCA	1.25
+x-ray	ecks ray	PCA	1.25
+yankee	yankee	PCA	1.25
+zulu	zulu	PCA	1.25
+hundred	hundred	PCA	1.06
+thousand	thousand	PCA	1.06
+decimal	decimal	PCA	1.06
+minus	minus	PCA	1.06
+left	left	PCA	1.06
+right	right	PCA	1.06
+centre	center	PCA	1.06
+feet	feet	PCA	1.06
+knots	knots	PCA	1.06
+degrees	degrees	PCA	1.06
+runway	runway	PCA	1.06
+heading	heading	PCA	1.06
+altitude	altitude	PCA	1.06
+flight level	flight level	PCA	1.06
+squawk	squawk	PCA	1.06
+qnh	Q N H	PCA	1.06
+information	information	PCA	1.06
+stand	stand	PCA	1.06
+holding point	holding point	PCA	1.06
+tower	tower	PCA	1.06
+ground	ground	PCA	1.06
+delivery	delivery	PCA	1.06
+approach	approach	PCA	1.06
+radar	radar	PCA	1.06
+director	director	PCA	1.06
+control	control	PCA	1.06
+departure	departure	PCA	1.06
+radio	radio	PCA	1.06
+time	time	PCA	1.06
+heathrow	heathrow	PCA	1.06
+gatwick	gatwick	PCA	1.06
+stansted	stansted	PCA	1.06
+luton	luton	PCA	1.06
+london city	london city	PCA	1.06
+biggin	biggin	PCA	1.06
+farnborough	farnborough	PCA	1.06
+northolt	northolt	PCA	1.06
+southend	southend	PCA	1.06
+thames	thames	PCA	1.06
+london	london	PCA	1.06
+manchester	manchester	PCA	1.06
+birmingham	birmingham	PCA	1.06
+bristol	bristol	PCA	1.06
+edinburgh	edinburgh	PCA	1.06
+glasgow	glasgow	PCA	1.06
+cambridge	cambridge	PCA	1.06
+oxford	oxford	PCA	1.06
+southampton	southampton	PCA	1.06
+bournemouth	bournemouth	PCA	1.06
+shoreham	shoreham	PCA	1.06
+redhill	redhill	PCA	1.06
+elstree	elstree	PCA	1.06
+lydd	lydd	PCA	1.06
+manston	manston	PCA	1.06
+norwich	norwich	PCA	1.06
+east midlands	east midlands	PCA	1.06
+liverpool	liverpool	PCA	1.06
+newcastle	newcastle	PCA	1.06
+cardiff	cardiff	PCA	1.06
+exeter	exeter	PCA	1.06
+jersey	jersey	PCA	1.06
+guernsey	guernsey	PCA	1.06
+belfast	belfast	PCA	1.06
+dublin	dublin	PCA	1.06
+paris	paris	PCA	1.06
+orly	orly	PCA	1.06
+schiphol	skippol	PCA	1.06
+brussels	brussels	PCA	1.06
+frankfurt	frankfurt	PCA	1.06
+innsbruck	innsbruck	PCA	1.06
+zurich	zurich	PCA	1.06
+geneva	geneva	PCA	1.06
+brize	brize	PCA	1.06
+lakenheath	lakenheath	PCA	1.06
+mildenhall	mildenhall	PCA	1.06
+marham	marham	PCA	1.06
+coningsby	coningsby	PCA	1.06
+waddington	waddington	PCA	1.06
+scampton	scampton	PCA	1.06
+skyward	skyward	PC	1.06
+ascot	ascot	PC	1.06
+reach	reach	PC	1.06
+viper	viper	PC	1.06
+surface wind	surface wind	PCA	1.06
+calm	calm	PCA	1.06
+variable	variable	PCA	1.06
+gusting	gusting	PCA	1.06
+cleared ils approach	cleared I L S approach	PCA	1.06
+expect ils approach	expect I L S approach	PCA	1.06
+miles	miles	PCA	1.06
+taxi to holding point	taxi to holding point	PC	1.06
+via	via	PC	1.06
+cross runway	cross runway	PC	1.06
+hold short of runway	hold short of runway	PC	1.06
+hold position	hold position	PC	1.06
+line up and wait	line up and wait	PC	1.06
+cleared for take-off	cleared for take off	PC	1.06
+cleared to land	cleared to land	PC	1.06
+go around	go around	PC	1.06
+contact	contact	PC	1.06
+climb	climb	PC	1.06
+descend	descend	PC	1.06
+maintain	maintain	PC	1.06
+turn left heading	turn left heading	PC	1.06
+turn right heading	turn right heading	PC	1.06
+fly heading	fly heading	PC	1.06
+cleared	cleared	PC	1.06
+cleared to	cleared to	PC	1.06
+via flight planned route	via flight planned route	PC	1.06
+after departure climb straight ahead	after departure climb straight ahead	PC	1.06
+cleared visual approach	cleared visual approach	PC	1.06
+report established	report established	PC	1.06
+on the localiser	on the localiser	PC	1.06
+vacate left	vacate left	PC	1.06
+vacate right	vacate right	PC	1.06
+taxi to stand	taxi to stand	PC	1.06
+taxi to the apron	taxi to the apron	PC	1.06
+resume own navigation	resume own navigation	PC	1.06
+roger	roger	PC	1.06
+say again	say again	PC	1.06
+cleared to leave the control zone	cleared to leave the control zone	PC	1.06
+vfr	V F R	PC	1.06
+not above	not above	PC	1.06
+good day	good day	PC	1.06
+when ready	when ready	PC	1.06
+continue approach	continue approach	PC	1.06
+start-up approved	start up approved	C	1.06
+readback correct	readback correct	C	1.06
+identified	identified	C	1.06
+i say again	i say again	C	1.06
+stop immediately	stop immediately	C	1.06
+check altitude	check altitude	C	1.06
+roger mayday	roger mayday	C	1.06
+roger pan pan	roger pan pan	C	1.06
+emergency services are standing by	emergency services are standing by	C	1.06
+miles from touchdown	miles from touchdown	C	1.06
+frequency change approved	frequency change approved	C	1.06
+report final	report final	C	1.06
+report field in sight	report field in sight	C	1.06
+vectors for ils approach	vectors for I L S approach	C	1.06
+you are not cleared to enter the runway	you are not cleared to enter the runway	C	1.06
+traffic	traffic	C	1.06
+report when ready for departure	report when ready for departure	C	1.06
+position	position	C	1.06
+you are cleared to	you are cleared to	C	1.06
+expect	expect	C	1.06
+after departure	after departure	C	1.06
+climb flight level	climb flight level	C	1.06
+contact radar	contact radar	C	1.06
+request taxi	request taxi	P	1.06
+request start-up	request start up	P	1.06
+request ifr clearance to	request I F R clearance to	P	1.06
+request vfr departure	request V F R departure	P	1.06
+ready for departure	ready for departure	P	1.06
+at holding point	at holding point	P	1.06
+on the apron	on the apron	P	1.06
+with information	with information	P	1.06
+passing	passing	P	1.06
+climbing	climbing	P	1.06
+descending	descending	P	1.06
+established on the localiser	established on the localiser	P	1.06
+field in sight	field in sight	P	1.06
+going around	going around	P	1.06
+final	final	P	1.06
+request ils approach	request I L S approach	P	1.06
+request visual approach	request visual approach	P	1.06
+inbound	inbound	P	1.06
+for landing	for landing	P	1.06
+mayday mayday mayday	mayday mayday mayday	P	1.06
+pan pan, pan pan, pan pan	pan pan, pan pan, pan pan	P	1.06
+engine failure	engine failure	P	1.06
+engine fire	engine fire	P	1.06
+electrical failure	electrical failure	P	1.06
+hydraulic failure	hydraulic failure	P	1.06
+fuel leak	fuel leak	P	1.06
+smoke in the cockpit	smoke in the cockpit	P	1.06
+bird strike	bird strike	P	1.06
+gear failure	gear failure	P	1.06
+request vectors for an immediate landing	request vectors for an immediate landing	P	1.06
+persons on board	persons on board	P	1.06
+runway vacated	runway vacated	P	1.06
+squawking	squawking	P	1.06
+wilco	wilco	P	1.06
+request	request	P	1.06
+level	level	P	1.06
+request vectors	request vectors	P	1.06
+request frequency change	request frequency change	P	1.06
+ready	ready	P	1.06
+this is	this is	A	1.06
+runway in use	runway in use	A	1.06
+landing runway	landing runway	A	1.06
+departing runway	departing runway	A	1.06
+variable between	variable between	A	1.06
+and	and	A	1.06
+visibility	visibility	A	1.06
+kilometres or more	kilometres or more	A	1.06
+metres	metres	A	1.06
+kilometres	kilometres	A	1.06
+cavok	cav okay	A	1.06
+no significant cloud	no significant cloud	A	1.06
+no cloud detected	no cloud detected	A	1.06
+cloud	cloud	A	1.06
+few	few	A	1.06
+scattered	scattered	A	1.06
+broken	broken	A	1.06
+overcast	overcast	A	1.06
+vertical visibility	vertical visibility	A	1.06
+cumulonimbus	cumulonimbus	A	1.06
+towering cumulus	towering cumulus	A	1.06
+temperature	temperature	A	1.06
+dew point	dew point	A	1.06
+hectopascals	hectopascals	A	1.06
+transition level	transition level	A	1.06
+light	light	A	1.06
+heavy	heavy	A	1.06
+rain	rain	A	1.06
+drizzle	drizzle	A	1.06
+snow	snow	A	1.06
+showers	showers	A	1.06
+thunderstorm	thunderstorm	A	1.06
+mist	mist	A	1.06
+fog	fog	A	1.06
+haze	haze	A	1.06
+hail	hail	A	1.06
+freezing	freezing	A	1.06
+in the vicinity	in the vicinity	A	1.06
+recent	recent	A	1.06
+runway surface wet	runway surface wet	A	1.06
+advise on initial contact you have information	advise on initial contact you have information	A	1.06
+climb straight ahead	climb straight ahead	PC	1.06
+request ifr clearance	request I F R clearance	P	1.06
+backtrack runway	backtrack runway	PC	1.06
