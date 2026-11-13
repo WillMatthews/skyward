@@ -881,6 +881,9 @@ mod tests {
 
     fn start(def: &AircraftDef) -> (f32, f32) {
         match def.category {
+            // Track H2b types away from their category's norm.
+            _ if def.id == "dc3" => (140.0, 2000.0),
+            _ if def.id == "extra500" => (150.0, 2000.0),
             Category::Trainer => (90.0, 1500.0),
             Category::Glider => (55.0, 1500.0),
             Category::Warbird => (200.0, 2000.0),

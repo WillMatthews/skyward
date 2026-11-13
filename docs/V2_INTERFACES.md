@@ -33,6 +33,11 @@ the user is working on this machine; render offscreen and inspect PNGs.
 | hercules | (v3) Lockheed C-130H Hercules | Airliner (turboprop; role "Military transport") | 4 turboprops, high wing, tandem main gear, STOL / rough field |
 | galaxy | (v3) Lockheed C-5M Super Galaxy | Airliner (jet; role "Strategic airlifter") | 4 underwing turbofans, T-tail, 4 six-wheel bogies |
 | vulcan | (v3) Avro Vulcan B.2 | Airliner (jet; role "Delta-wing bomber") | tailless delta, 4 buried turbojets, elevons, flap lever = airbrakes |
+| extra500 | (v3 H2b) Extra EA-500 | Trainer (turboprop; role "Turboprop tourer") | low-wing turboprop single, retractable gear, glass IFDs |
+| cub | (v3 H2b) Piper PA-18 Super Cub | Trainer (piston; role "Bush plane") | high-wing tube-and-fabric taildragger, fixed-pitch prop |
+| zlin | (v3 H2b) Zlin Z-50 LX | Trainer (piston; role "Aerobatic") | single-seat aerobat, symmetric wing, no flaps, `smoke_system` |
+| otter | (v3 H2b) DHC-3 Otter (floats) | Trainer (piston; role "Floatplane") | high-wing radial bush plane on floats: `hulls` (src/water.rs), starts on water |
+| dc3 | (v3 H2b) Douglas DC-3 / C-47 | Airliner (piston; role "Classic airliner") | twin radials, retractable mains, tail wheel |
 
 ### Shared geometry (body frame, metres)
 
@@ -121,3 +126,24 @@ impl CloudRenderer {
 - Sky/lighting must match the app: copy `sky_color` and `apply_fog` from `src/shaders/common.wgsl`; sun radiance (3.3, 3.05, 2.75), sky intensity 1.15, sun elevation ~38°.
 - Look: real cumulus (base ~1100 m, tops 1.5–3 km by weather), Beer–Lambert + powder + HG dual-lobe phase + multi-scattering approximation, dark flat-ish bases, bright silver linings, aerial perspective; optional thin cirrus layer high up. Flying through a cloud must look right (camera inside the layer).
 - Budget: ≤ 1.5 ms main view at 1920×1080 on the RTX 5090 (reduced-res raymarch + temporal + depth-aware upsample is fine), stable without ghosting when the camera moves at 250 m/s or rotates fast.
+
+## Water contact API (Track H2b, `src/water.rs`) — floats, hulls, ditching
+```rust
+pub struct Hull { x, bow_z, stern_z, step_z, keel_y, bow_rise, stern_rise, step_h, beam, depth, deadrise, rudder_area } // body frame
+impl Hull {
+    pub const fn float(x, bow_z, step_z, stern_z, keel_y, bow_rise, stern_rise, beam, depth, rudder_area) -> Hull;
+    pub fn fuselage(nose_z: f32, tail_z: f32, belly_y: f32, radius: f32) -> Hull; // airliner ditching
+    pub fn volume(&self) -> f32;                                                   // reserve buoyancy, m³
+}
+pub struct SeaState { wave_h, dir, wavelength }   // SeaState::from_wind(wind, fetch_m), .height(xz, t), .rate(xz, t)
+pub struct BodyState { pos, vel, rot, omega }     // omega body-frame (as Aircraft)
+pub fn water_contact(hulls: &[Hull], b: &BodyState, env: &dyn Environment, sea: &SeaState,
+                     t: f32, rudder: f32, weight_ref: f32) -> Contact;
+// Contact { force (world N), moment (body N·m), wet, displaced, buoyancy, dynamic, drag, planing 0..1,
+//           speed, slam_g (peak dynamic load / weight_ref), bow_buried, max_immersion, rudders_down, spray[4] }
+pub fn find_lane(env, near, radius, min_len, width) -> Option<(Vec2, Vec2)>; // longest open-water lane
+```
+- Strip ("2D + t") hydrodynamics: buoyancy of the immersed V / box sections, added-mass momentum (planing lift, slamming, induced drag along the keel normal), cross-flow and radiation damping, ITTC skin friction, wave-making hump, keel side force, water rudders below ~20 kt; strips over land carry nothing. `env.ground_height` is the water surface (flattened water bodies), `env.is_water` the OSM water polygons.
+- In `Aircraft::step` it runs for `def.hulls` (floatplanes) inside `ground()`; `ac.water: WaterState` keeps the sea-state clock / estimate and the last `Contact` (spray, planing, rudders) for the VFX, HUD and audio.
+- **Ditching (missions):** build `Hull::fuselage(..)` from the airliner's geometry, call `water_contact` in place of the "Ditched in the water" crash, and judge the outcome from `slam_g` (structural limit), `bow_buried` (nose dug in at speed), the bank at contact and `max_immersion` / `displaced` (floating or sinking).
+

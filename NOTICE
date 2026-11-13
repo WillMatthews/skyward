@@ -21,6 +21,17 @@ others; per-item sources, authors and licences are listed in:
         derived from the package's default texture;
       - fpv: the FPV quadcopter's model is Skyward's own, built in code
         (src/rotor/quad_model.rs), no third-party content.
+    Track H2b (more propeller types), FGAddon trunk SVN r21799:
+      - extra500: FGAddon extra500, GPL-2.0-or-later (Dirk Dittmann,
+        Eric van den Berg, Thomas Grossberger);
+      - cub: FGAddon Piper-PA-18, GPL-2.0 (Emmanuel Baranger);
+      - zlin: FGAddon Zlin-50lx, GPL-2.0 (Emmanuel Baranger, Pierre
+        Geoffroy, Sebastien Marque, Laurent Hayvel);
+      - otter: FGAddon dhc3, GPL-2.0 (Emmanuel Baranger, Pierre Geoffroy);
+      - dc3: FGAddon Douglas-Dc3, GPL-2.0 (Emmanuel Baranger, Gary Neely,
+        the PAF team), including its engine recordings
+        (assets/audio/samples/r18_*); neutral livery derived from the
+        package's default texture.
   * assets/audio/CREDITS.md — sounds, including FlightGear recordings
     (GPL v2 / v2+, some GPL v2 only).
   * assets/audio/atc/ — ATC / ATIS radio voice clips generated for Skyward

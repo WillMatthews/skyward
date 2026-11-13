@@ -509,8 +509,23 @@ fn is_military(name: &str) -> bool {
         .any(|k| n.contains(k))
 }
 
+/// A flying-club / GA mix for a light stand: mostly C172s, Super Cubs, the odd
+/// Extra 500 and aerobatic Zlin (`r` uniform 0..1).
+fn light_type(r: f32) -> u16 {
+    if r < 0.55 {
+        types::C172
+    } else if r < 0.75 {
+        types::CUB
+    } else if r < 0.88 {
+        types::EXTRA500
+    } else {
+        types::ZLIN
+    }
+}
+
 fn pick_type(c: &Ctx, span: f32, k: u64) -> Option<u16> {
     let r = c.rand(k);
+    let light = |c: &Ctx| light_type(c.rand(k ^ 0x9E37_79B9_7F4A_7C15));
     // Air bases: Hercules on the big stands, the odd Vulcan; light aircraft
     // (flying club) elsewhere.
     if c.military && span >= 30.0 && c.kind != AKind::Small {
@@ -528,8 +543,11 @@ fn pick_type(c: &Ctx, span: f32, k: u64) -> Option<u16> {
         AKind::Medium if !c.scheduled => {
             if span >= 30.0 && r < 0.25 {
                 Some(types::E190)
+            } else if span >= 30.0 && r < 0.32 {
+                // A vintage DC-3 on the odd big GA stand.
+                Some(types::DC3)
             } else if span >= 12.0 {
-                Some(if r > 0.93 { types::SPITFIRE } else { types::C172 })
+                Some(if r > 0.93 { types::SPITFIRE } else { light(c) })
             } else {
                 None
             }
@@ -555,7 +573,7 @@ fn pick_type(c: &Ctx, span: f32, k: u64) -> Option<u16> {
         }
         _ => {
             if span >= 12.0 {
-                Some(if r < 0.08 { types::SPITFIRE } else { types::C172 })
+                Some(if r < 0.08 { types::SPITFIRE } else { light(c) })
             } else {
                 None
             }

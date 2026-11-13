@@ -69,3 +69,8 @@ src/missions/tests.rs
 src/missions/throttles.rs
 src/missions/wind.rs
 src/ui/missions.rs
+src/water.rs
+src/flight/ga.rs
+src/flight/tests/ga_types.rs
+src/vfx/spray.rs
+src/vfx/smoke.rs

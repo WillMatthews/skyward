@@ -153,6 +153,11 @@ pub fn needs(def: &AircraftDef) -> (f32, bool) {
 }
 
 pub fn suitable(a: &Airport, def: &AircraftDef) -> bool {
+    if def.on_water() {
+        // Floatplanes start on the nearest open water (src/water.rs): seaplane
+        // bases and anywhere by a river or lake.
+        return true;
+    }
     let (len, paved) = needs(def);
     a.kind != Kind::Seaplane && a.usable_m(paved) >= len * 0.95
 }
@@ -185,7 +190,11 @@ fn spec_lines(d: &AircraftDef) -> Vec<(&'static str, String)> {
     }
     v.push(("Never exceed", if d.mmo > 0.0 { format!("{:.0} kt · M {:.2}", d.vne_kt, d.mmo) } else { format!("{:.0} kt", d.vne_kt) }));
     let (len, paved) = needs(d);
-    v.push(("Runway", format!("{} m{}", thousands(len), if paved { " paved" } else { "" })));
+    if d.on_water() {
+        v.push(("Operates from", format!("Water — rivers, lakes, sea ({} m)", thousands(len))));
+    } else {
+        v.push(("Runway", format!("{} m{}", thousands(len), if paved { " paved" } else { "" })));
+    }
     v.push(("Model", if d.jsb.is_some() { "FlightGear · JSBSim aero".to_string() } else { "FlightGear · calibrated".to_string() }));
     v
 }
@@ -1876,6 +1885,10 @@ mod tests {
         assert_eq!(of("vulcan"), Group::Military);
         assert_eq!(of("ec130"), Group::Rotor);
         assert_eq!(of("fpv"), Group::Rotor);
+        for id in ["extra500", "cub", "zlin", "otter"] {
+            assert_eq!(of(id), Group::Light, "{id}");
+        }
+        assert_eq!(of("dc3"), Group::Airliner);
         for g in Group::ALL {
             assert!(!g.name().is_empty());
         }

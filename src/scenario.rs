@@ -12,6 +12,7 @@
 //! | `crash` | 25° dive into the ground beside the runway |
 //! | `transonic` | fast low pass at Mach 0.98 with reheat (vapour cone) |
 //! | `cruise` | hold heading and altitude (contrails) |
+//! | `inverted` | aerobatics: roll inverted at 130 kt / 300 m over the field and hold it (smoke on with the aerobat's smoke system) |
 
 use crate::flight::{Aircraft, KT};
 use crate::sim::Sim;
@@ -48,6 +49,11 @@ fn runway(sim: &Sim) -> (Vec2, Vec2, f32) {
         }
         None => (vec2(sim.ac.pos.x, sim.ac.pos.z), vec2(0.0, -1.0), 2000.0),
     }
+}
+
+/// Height above the ground under the aircraft.
+fn sc_alt(world: &World, ac: &Aircraft) -> f32 {
+    ac.pos.y - crate::flight::Environment::ground_height(world, vec2(ac.pos.x, ac.pos.z))
 }
 
 fn heading_of(d: Vec2) -> f32 {
@@ -162,6 +168,29 @@ pub fn control(sim: &mut Sim, world: &World, dt: f32) {
                 sim.level_hold = Some((h, alt));
             }
             sim.ctl.throttle = 1.0;
+        }
+        "inverted" => {
+            if first {
+                let (a, d, _) = runway(sim);
+                let p = a + d * 400.0;
+                let gh = crate::flight::Environment::ground_height(world, p);
+                let kt = 130.0;
+                sim.ac = Aircraft::airborne(&def, Vec3::new(p.x, gh + 300.0, p.y), heading_of(d), kt * KT);
+                sim.ctl = crate::flight::trimmed_controls_at(&def, kt * KT, gh + 300.0);
+                sim.ctl.gear_down = sim.ac.gear_pos() > 0.5;
+                sim.level_hold = None;
+                sim.vfx.smoke = def.smoke_system;
+            }
+            // Half roll to inverted, then hold the height with forward stick.
+            let ac = &sim.ac;
+            let target_roll = if sc.t > 1.0 { std::f32::consts::PI } else { 0.0 };
+            let err = crate::bot::wrap_pi(ac.roll() - target_roll);
+            sim.ctl.aileron = (-2.0 * err - 0.3 * ac.rates().x).clamp(-1.0, 1.0);
+            let h_err = sc_alt(world, ac) - 300.0;
+            let inv = ac.up().y < 0.0;
+            let pitch = (-0.02 * h_err - 0.08 * vs).clamp(-0.6, 0.6);
+            sim.ctl.elevator = if inv { -(0.3 + pitch) } else { 0.1 + pitch }.clamp(-1.0, 1.0);
+            sim.ctl.throttle = 0.85;
         }
         "cruise" if first => {
             sim.level_hold = Some((sim.ac.heading(), sim.ac.pos.y));

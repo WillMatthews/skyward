@@ -299,6 +299,9 @@ pub struct Eng {
     pub oil_p_mul: f32,
     /// Fuel reaching the engine.
     pub fed: bool,
+    /// Seconds of negative g: a float carburettor runs dry (pistons), the
+    /// inverted oil system's endurance (aerobats). Recovers at positive g.
+    pub neg_g: f32,
 }
 
 /// Aural alerts (the audio director plays them).
@@ -1281,10 +1284,26 @@ impl Systems {
         }
         let e = &mut self.eng[i];
         e.agent_t += dt;
+        // Negative g (Track H2b): float carburettors starve; inverted fuel /
+        // oil systems keep going, the oil for a limited time.
+        if piston && (sd.neg_g_cutout || sd.inverted_system) {
+            if ac.g_load() < -0.15 && !ac.on_ground {
+                e.neg_g += dt;
+            } else {
+                e.neg_g = (e.neg_g - 3.0 * dt).max(0.0);
+            }
+        }
+        let inv_oil_out = sd.inverted_system && e.neg_g > defs::INVERTED_OIL_S;
         // Oil: a fire cooks it, a dead or starved engine loses pressure.
-        let t_add = 70.0 * e.fire + 25.0 * e.bird + 20.0 * e.overspeed;
+        let t_add = 70.0 * e.fire + 25.0 * e.bird + 20.0 * e.overspeed + if inv_oil_out { 25.0 } else { 0.0 };
         e.oil_t_add += (t_add - e.oil_t_add) * (dt / 20.0).min(1.0);
-        let p_mul = if e.dead { 0.0 } else { 1.0 - 0.3 * e.bird };
+        let p_mul = if e.dead {
+            0.0
+        } else if inv_oil_out {
+            0.15
+        } else {
+            1.0 - 0.3 * e.bird
+        };
         e.oil_p_mul += (p_mul - e.oil_p_mul) * (dt / 3.0).min(1.0);
         // Governor failure: overspeed builds in a couple of seconds.
         let os = if self.fail.has(Failure::new(Kind::PropOverspeed, i)) && e.run { 1.0 } else { 0.0 };
@@ -1402,6 +1421,11 @@ impl Systems {
             }
             if e.carb_ice > 0.0 {
                 p *= 1.0 - 0.75 * e.carb_ice.powf(1.5);
+            }
+            if sd.neg_g_cutout && e.neg_g > 0.4 {
+                // The float bowl has emptied: the engine coughs and dies away
+                // until positive g returns (it picks up again on its own).
+                p *= 0.04 + 0.04 * (self.time * 13.0 + i as f32).sin().max(0.0);
             }
             if sd.carburettor && self.sw.carb_heat {
                 p *= 0.9;

@@ -14,6 +14,11 @@
 //! | `hercules` | Lockheed C-130H Hercules | FGAddon C130 |
 //! | `galaxy` | Lockheed C-5M Super Galaxy | FGMEMBERS/C-5 |
 //! | `vulcan` | Avro Vulcan B.2 | FGMEMBERS/AvroVulcanB2 (FGUK) |
+//! | `extra500` | Extra EA-500 | FGAddon extra500 |
+//! | `cub` | Piper PA-18 Super Cub | FGAddon Piper-PA-18 |
+//! | `zlin` | Zlin Z-50 LX | FGAddon Zlin-50lx |
+//! | `otter` | DHC-3 Otter (floats) | FGAddon dhc3 |
+//! | `dc3` | Douglas DC-3 / C-47 | FGAddon Douglas-Dc3 |
 //!
 //! Body frame: metres, +Z nose, +Y up, +X left wing, origin = CG (as
 //! `flight.rs`). The model is a node tree with FlightGear animations mapped

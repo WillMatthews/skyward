@@ -74,6 +74,9 @@ pub enum SoundSet {
     V2500,
     /// Bristol Siddeley Olympus 301 turbojets (FGUK Vulcan recordings): the howl.
     Olympus,
+    /// Pratt & Whitney Wasp-family radials (FGAddon DC-3 R-1830 recordings;
+    /// also the Otter's R-1340).
+    Radial,
 }
 
 /// Static per-type sound parameters (sent with every frame; tiny).
