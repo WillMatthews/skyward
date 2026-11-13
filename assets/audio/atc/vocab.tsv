@@ -268,3 +268,36 @@ advise on initial contact you have information	advise on initial contact you hav
 climb straight ahead	climb straight ahead	PC	1.06
 request ifr clearance	request I F R clearance	P	1.06
 backtrack runway	backtrack runway	PC	1.06
+# Traffic information and sequencing (Track X, live traffic: src/atc/traffic.rs)
+nine	nine	C	1.32
+ten	ten	C	1.32
+eleven	eleven	C	1.32
+twelve	twelve	C	1.32
+o'clock	o'clock	C	1.06
+opposite direction	opposite direction	C	1.06
+same direction	same direction	C	1.06
+crossing left to right	crossing left to right	C	1.06
+crossing right to left	crossing right to left	C	1.06
+same level	same level	C	1.06
+above	above	C	1.06
+below	below	C	1.06
+airbus	Airbus	C	1.06
+boeing	Boeing	C	1.06
+embraer	Embraer	C	1.06
+regional jet	regional jet	C	1.06
+turboprop	turboprop	C	1.06
+business jet	business jet	C	1.06
+light aircraft	light aircraft	C	1.06
+helicopter	helicopter	C	1.06
+military jet	military jet	C	1.06
+military transport	military transport	C	1.06
+airliner	airliner	C	1.06
+glider	glider	C	1.06
+drone	drone	C	1.06
+concorde	Concorde	C	1.06
+looking out	looking out	P	1.06
+extend downwind	extend downwind	PC	1.06
+vectors for spacing	vectors for spacing	C	1.06
+number	number	PC	1.06
+following	following	C	1.06
+on final	on final	C	1.06

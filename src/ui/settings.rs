@@ -253,17 +253,14 @@ pub struct TrafficPrefs {
     /// Road traffic: 0 off, 1 low, 2 medium, 3 high (traffic::Level; default
     /// Medium natively, Low in the browser).
     pub road: u8,
-    /// ADS-B live traffic as AI aircraft. // owned by X: consumer pending.
-    pub adsb: bool,
-    /// ADS-B radius (nm). // owned by X: consumer pending.
-    pub adsb_radius_nm: f32,
+    // (ADS-B live traffic: `Settings::live_traffic`, owned by X.)
     /// Parked aircraft at stands 0..1. // owned by A (airport fleet): consumer pending.
     pub parked_density: f32,
 }
 
 impl Default for TrafficPrefs {
     fn default() -> Self {
-        TrafficPrefs { road: crate::traffic::Level::default_for_platform().as_u8(), adsb: false, adsb_radius_nm: 40.0, parked_density: 1.0 }
+        TrafficPrefs { road: crate::traffic::Level::default_for_platform().as_u8(), parked_density: 1.0 }
     }
 }
 
@@ -407,6 +404,8 @@ pub struct Settings {
     pub crashes: crate::damage::Realism,
     /// Keys this build does not know (a newer file, other tracks): written back untouched.
     pub extra: Map<String, Value>,
+    /// Live real-world traffic (ADS-B, `adsb/`). // owned by X
+    pub live_traffic: crate::adsb::Settings,
 }
 
 impl Default for Settings {
@@ -447,7 +446,34 @@ impl Default for Settings {
             structural_damage: crate::damage::Realism::Realistic,
             crashes: crate::damage::Realism::Realistic,
             extra: Map::new(),
+            live_traffic: crate::adsb::Settings::default(), // owned by X
         }
+    }
+}
+
+/// Live-traffic settings from JSON (missing fields keep their defaults). // owned by X
+/// (Files from the settings-v2 interim kept `traffic.adsb` / `traffic.adsb_radius_nm`: read those when
+/// `live_traffic` is absent.)
+fn live_traffic_from_json(v: Option<&Value>, traffic: Option<&Value>) -> crate::adsb::Settings {
+    let d = crate::adsb::Settings::default();
+    let Some(v) = v else {
+        let t = traffic.filter(|t| t.get("adsb").is_some());
+        return match t {
+            Some(t) => crate::adsb::Settings {
+                enabled: t.get("adsb").and_then(|x| x.as_bool()).unwrap_or(d.enabled),
+                radius_nm: t.get("adsb_radius_nm").and_then(|x| x.as_f64()).map(|x| x as f32).unwrap_or(d.radius_nm).clamp(5.0, 250.0),
+                ..d
+            },
+            None => d,
+        };
+    };
+    let b = |k: &str, def: bool| v.get(k).and_then(|x| x.as_bool()).unwrap_or(def);
+    crate::adsb::Settings {
+        enabled: b("enabled", d.enabled),
+        radius_nm: v.get("radius_nm").and_then(|x| x.as_f64()).map(|x| x as f32).unwrap_or(d.radius_nm).clamp(5.0, 250.0),
+        max_aircraft: v.get("max_aircraft").and_then(|x| x.as_u64()).map(|x| x as usize).unwrap_or(d.max_aircraft).clamp(1, 500),
+        ground: b("ground", d.ground),
+        tags: b("tags", d.tags),
     }
 }
 
@@ -531,6 +557,7 @@ impl<'a> J<'a> {
 /// Top-level keys this build reads and writes (the rest is kept in `extra`).
 const KNOWN: &[&str] = &[
     "version",
+    "live_traffic",
     "ui_scale",
     "hud",
     "vsync",
@@ -693,7 +720,7 @@ impl Settings {
             },
             "assists": { "taxi_ribbon": a.taxi_ribbon, "landing_guidance": a.landing_guidance, "stall_warning": a.stall_warning, "overspeed_warning": a.overspeed_warning },
             "weather": { "turbulence": self.wx.turbulence, "max_warp": self.wx.max_warp },
-            "traffic": { "road": t.road, "adsb": t.adsb, "adsb_radius_nm": t.adsb_radius_nm, "parked_density": t.parked_density },
+            "traffic": { "road": t.road, "parked_density": t.parked_density },
             "camera": {
                 "cockpit_fov": cam.cockpit_fov, "chase_fov": cam.chase_fov, "head_motion": cam.head_motion, "chase_distance": cam.chase_distance, "chase_lag": cam.chase_lag,
                 "default_view": match cam.default_view { DefaultView::Chase => "chase", DefaultView::Cockpit => "cockpit" },
@@ -707,6 +734,8 @@ impl Settings {
             "favourites": self.favourites,
             "structural_damage": self.structural_damage.name(),
             "crashes": self.crashes.name(),
+            // owned by X (live traffic, adsb/)
+            "live_traffic": { "enabled": self.live_traffic.enabled, "radius_nm": self.live_traffic.radius_nm, "max_aircraft": self.live_traffic.max_aircraft, "ground": self.live_traffic.ground, "tags": self.live_traffic.tags },
         });
         if let Some(o) = v.as_object_mut() {
             for (k, x) in &self.extra {
@@ -774,8 +803,6 @@ impl Settings {
         let traffic = TrafficPrefs {
             // (v1 files: a top-level number "traffic" = the level.)
             road: (t.f("road", j.f("traffic", dt.road as f32)).max(0.0) as u8).min(3),
-            adsb: t.b("adsb", dt.adsb),
-            adsb_radius_nm: t.f("adsb_radius_nm", dt.adsb_radius_nm).clamp(5.0, 250.0),
             parked_density: t.f("parked_density", dt.parked_density).clamp(0.0, 1.0),
         };
         let cm = j.o("camera");
@@ -846,6 +873,7 @@ impl Settings {
             structural_damage: damage_level(v, "structural_damage"),
             crashes: damage_level(v, "crashes"),
             extra,
+            live_traffic: live_traffic_from_json(v.get("live_traffic"), v.get("traffic")), // owned by X
         }
     }
 }
@@ -888,7 +916,8 @@ mod tests {
         s.realism.auto_trim = true;
         s.assists = Assists { taxi_ribbon: true, landing_guidance: true, stall_warning: false, overspeed_warning: false };
         s.wx = WxPrefs { turbulence: 0.8, max_warp: 16 };
-        s.traffic = TrafficPrefs { road: 3, adsb: true, adsb_radius_nm: 80.0, parked_density: 0.5 };
+        s.traffic = TrafficPrefs { road: 3, parked_density: 0.5 };
+        s.live_traffic = crate::adsb::Settings { enabled: false, radius_nm: 100.0, max_aircraft: 50, ground: false, tags: false };
         s.camera = CameraPrefs { cockpit_fov: 85.0, chase_fov: 50.0, head_motion: false, chase_distance: 1.5, chase_lag: 0.2, default_view: DefaultView::Cockpit };
         s.mp = MpPrefs { default_port: 50000, name_tags: false, chat_filter: false };
         s.data = DataPrefs { cache_limit_mb: 2048, offline: true };

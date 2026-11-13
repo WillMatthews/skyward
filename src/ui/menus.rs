@@ -347,6 +347,7 @@ pub fn credits(ui: &mut Ui, st: &mut UiState) {
         ("Navaids", "VOR / DME / NDB: OurAirports — public domain · ILS: synthetic, derived from the runway data (a few London ILS from public charts)"),
         ("ATC", "Frequencies: OurAirports — public domain · voices: Kokoro-82M (Apache-2.0), generated for Skyward"),
         ("Weather", WEATHER_CREDIT),
+        ("Live traffic", "ADS-B data: adsb.lol contributors — ODbL 1.0 (desktop version)"),
         ("Elevation", "Terrain Tiles on AWS (Mapzen / Tilezen: SRTM, GMTED2010, 3DEP, ETOPO1, EU-DEM and more)"),
         ("Aircraft & sounds", "FlightGear aircraft and recordings — GPL v2 / v2+ (per-aircraft credits in the source)"),
         ("Fonts", "Inter (Rasmus Andersson), JetBrains Mono, B612 (Airbus / Intactile / ENAC) — SIL Open Font License 1.1"),

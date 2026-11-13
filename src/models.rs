@@ -102,11 +102,21 @@ pub fn build(id: &str, def_eye: Vec3) -> AircraftModel {
             CACHE.lock().unwrap().push((id.to_string(), a.clone()));
             Ok(a)
         }
-        None => AircraftAsset::load(id).map(|a| {
-            let a = Arc::new(a);
-            CACHE.lock().unwrap().push((id.to_string(), a.clone()));
-            a
-        }),
+        None => {
+            // One load at a time: aircraft of the same type built at once on
+            // several threads (multiplayer / live traffic) must share one
+            // decoded asset, not each upload their own copy of the textures.
+            static LOAD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            let _one = LOAD.lock().unwrap_or_else(|e| e.into_inner());
+            match cached_asset(id) {
+                Some(a) => Ok(a),
+                None => AircraftAsset::load(id).map(|a| {
+                    let a = Arc::new(a);
+                    CACHE.lock().unwrap().push((id.to_string(), a.clone()));
+                    a
+                }),
+            }
+        }
     };
     match loaded {
         Ok(a) => {

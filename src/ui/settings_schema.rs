@@ -743,15 +743,38 @@ fn build() -> Vec<Item> {
                 |s| s.traffic.parked_density
             )
         },
+        // Live traffic (adsb/) — owned by X.
         Item {
-            pending: Some("X"),
-            ..toggle!("adsb", TRAFFIC, "Air", "Live air traffic", "Real aircraft from ADS-B feeds around you", "adsb live real traffic ai aircraft", |s| s.traffic.adsb)
+            native_only: true,
+            ..toggle!("adsb", TRAFFIC, "Air", "Live air traffic", "Real aircraft around you from adsb.lol (ODbL)", "adsb live real traffic ai aircraft", |s| s.live_traffic.enabled)
         },
         Item {
-            pending: Some("X"),
-            ..slider!("adsb_radius", TRAFFIC, "Air", "Live traffic radius", "How far around you to show live aircraft", "adsb radius range distance", 5.0, 250.0, 5.0, nm, |s| s
-                .traffic
-                .adsb_radius_nm)
+            native_only: true,
+            ..slider!("adsb_radius", TRAFFIC, "Air", "Live traffic radius", "How far around you to fetch, more ahead", "adsb radius range distance", 5.0, 250.0, 5.0, nm, |s| s
+                .live_traffic
+                .radius_nm)
+        },
+        Item {
+            native_only: true,
+            ..choice!(
+                "adsb_count",
+                TRAFFIC,
+                "Air",
+                "Live traffic count",
+                "Most aircraft shown, nearest first",
+                "adsb budget count number aircraft",
+                &["50", "100", "150", "250"],
+                crate::adsb::BUDGETS,
+                |s| s.live_traffic.max_aircraft
+            )
+        },
+        Item {
+            native_only: true,
+            ..toggle!("adsb_ground", TRAFFIC, "Air", "Live ground traffic", "Taxiing and parked real aircraft", "adsb ground taxi parked", |s| s.live_traffic.ground)
+        },
+        Item {
+            native_only: true,
+            ..toggle!("adsb_tags", TRAFFIC, "Air", "Live traffic tags", "Callsigns over the aircraft (Num *)", "adsb tags labels callsign names", |s| s.live_traffic.tags)
         },
         // ---------------------------------------------------------- sound
         toggle!("muted", SOUND, "Output", "Mute", "Silence everything (N in flight)", "mute silent quiet off", |s| s.sound.muted),

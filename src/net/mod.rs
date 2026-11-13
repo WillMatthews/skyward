@@ -97,15 +97,21 @@ pub struct Traffic {
     pub vel: Vec3,
     pub heading: f32,
     pub on_ground: bool,
+    /// Type label shown with live traffic ("A320"); empty for players.
+    pub kind: String,
+    /// Live real-world traffic (`adsb/`) rather than another player.
+    pub live: bool,
 }
 
 /// The traffic picture of this frame for instruments drawn deep inside the
 /// cockpit renderer (the ND's TCAS, `ui/mp.rs`), which only see the sim.
 static PICTURE: std::sync::Mutex<Vec<Traffic>> = std::sync::Mutex::new(Vec::new());
 
-/// Other aircraft this frame (empty when not connected).
+/// Other aircraft this frame: players (when connected), then live traffic (`adsb/`).
 pub fn traffic_picture() -> Vec<Traffic> {
-    PICTURE.lock().map(|v| v.clone()).unwrap_or_default()
+    let mut v = PICTURE.lock().map(|v| v.clone()).unwrap_or_default();
+    v.extend(crate::adsb::picture());
+    v
 }
 
 fn set_picture(v: Vec<Traffic>) {
@@ -717,6 +723,8 @@ impl Mp {
                 vel: r.vel,
                 heading: r.heading(),
                 on_ground: r.state().is_some_and(|s| s.has(skyward_net::proto::flags::ON_GROUND)),
+                kind: String::new(),
+                live: false,
             })
             .collect()
     }
