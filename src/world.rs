@@ -851,6 +851,18 @@ impl World {
         crate::terrain::cached_height(lat, lon).unwrap_or(0.0)
     }
 
+    /// Ground height where terrain data is resident, None while it streams
+    /// (the bot's procedure planner re-plans once it is known).
+    pub fn ground_height_known(&self, xz: Vec2) -> Option<f32> {
+        for z in [ZOOM, FAR_ZOOM, crate::terrain::HORIZON_ZOOM] {
+            if let Some(t) = self.tiles.get(&TileId::at_world_z(&self.proj, xz, z)) {
+                return Some(t.grid.height(t.xf.inverse(xz)));
+            }
+        }
+        let (lat, lon) = self.proj.to_latlon(xz);
+        crate::terrain::cached_height(lat, lon)
+    }
+
     /// Water-surface height of the water body nearest `xz` within `r` (m).
     pub fn water_level_near(&self, xz: Vec2, r: f32) -> Option<f32> {
         let t = self.tiles.get(&TileId::at_world(&self.proj, xz))?;
@@ -1006,7 +1018,10 @@ impl Environment for World {
         self.tile_at(xz).is_some_and(|t| t.collision.is_water(t.xf.inverse(xz)))
     }
     fn updraft(&self, p: Vec3) -> f32 {
-        self.clouds.updraft(p)
+        // Thermals, plus slope lift where the wind meets rising ground (ridge.rs).
+        let xz = vec2(p.x, p.z);
+        let w = self.wind.mean(p.y - self.terrain_height(xz), 0.3);
+        self.clouds.updraft(p) + crate::ridge::slope_lift(|q| self.terrain_height(q), p, w)
     }
     fn wind(&self, p: Vec3) -> Vec3 {
         let xz = vec2(p.x, p.z);

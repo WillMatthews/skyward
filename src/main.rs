@@ -40,6 +40,7 @@ mod missions;
 mod models;
 mod mvt;
 mod osm;
+mod ridge;
 mod rotor;
 mod scenario;
 mod scene;
@@ -2067,6 +2068,9 @@ fn soak_flight(
             st.cycles,
             st.worst_touchdown
         );
+        if st.min_clear < f32::MAX {
+            eprintln!("min terrain clearance {:.0} m (away from runways; {})", st.min_clear, st.min_clear_at);
+        }
         if st.thermals > 0 {
             eprintln!(
                 "thermals {} | {:.0} s circling, {:+.0} m gained, avg climb {:+.2} m/s",

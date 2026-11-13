@@ -2028,7 +2028,7 @@ impl Atc {
                     self.phase = Phase::Takeoff;
                 }
             }
-            "Enroute" | "LowPass" | "InitialClimb" => {
+            "Enroute" | "LowPass" | "InitialClimb" | "Departure" => {
                 if self.phase == Phase::Departure && idle {
                     if let Some(st) = self.tuned(nav, ctx).filter(|s| s.fac.is_radar() && !self.contacted.contains(&s.key())) {
                         let _ = st;

@@ -10,6 +10,7 @@ pub mod db;
 pub mod fms;
 pub mod geo;
 pub mod morse;
+pub mod procedures;
 pub mod radio;
 pub mod state;
 #[cfg(test)]

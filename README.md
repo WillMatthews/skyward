@@ -389,6 +389,11 @@ the real flight model through the controls and autopilot. Nothing is scripted or
 - **Wind.** Every leg is flown as a track. The bot picks the runway end by headwind and adds half
   the headwind plus the gust to the approach speed. It de-crabs with rudder and holds the centreline
   wing-low in the flare.
+- **Mountains.** At a field among mountains the bot surveys the terrain and flies synthetic,
+  terrain-checked procedures: a valley departure on the engine-out climb gradient (climbing in a
+  hold to the safe altitude when no valley leads out), a descent hold, then a straight, curved or
+  circling-type approach down the valley. It won't take off without a terrain-clear way out.
+  Helicopters tour the valleys; gliders soar the ridges in the slope lift.
 - **Radio.** In watch mode the bot also does its own radio work with ATC.
 
 </details>
@@ -456,7 +461,7 @@ skyward --shot m.png --aircraft meridian320 --bot --soak --seconds 4200 --warp 8
 | `SKYWARD_NO_VFX`, `SKYWARD_NO_AIRPORTS`, `SKYWARD_NO_OVERPASS`, `SKYWARD_NO_LANDMARKS`, `SKYWARD_FLAT_TERRAIN` | switch layers off |
 | `SKYWARD_GPU_TIMING`, `SKYWARD_UI_TIMING`, `SKYWARD_VFX_STATS` | per-pass GPU timing, UI CPU cost, effect counts |
 | `SKYWARD_FRAME_LOG=file`, `SKYWARD_SOAK_LOG=10`, `SKYWARD_REBASE_LOG` | frame times, soak log interval, origin shifts |
-| `SKYWARD_AIRPORT_DEBUG`, `SKYWARD_TERRAIN_DEBUG`, `SKYWARD_DEBUG_DEBRIS`, `BOT_TRACE=Final,Flare` | debug logging |
+| `SKYWARD_AIRPORT_DEBUG`, `SKYWARD_TERRAIN_DEBUG`, `SKYWARD_DEBUG_DEBRIS`, `BOT_TRACE=Final,Flare`, `SKYWARD_PROC_DEBUG` | debug logging (the last: the bot's procedure planner and holds) |
 | `SKYWARD_UI_SCRIPT="4:aircraft,7:departure,10:airport=EGKK,12:fly"` | drive the menus for tests |
 
 </details>
