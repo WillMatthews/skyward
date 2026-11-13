@@ -16,6 +16,7 @@
 
 pub mod backend;
 pub mod defaults;
+pub mod key_pitch;
 pub mod keys;
 #[cfg(test)]
 mod tests;

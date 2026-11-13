@@ -87,6 +87,12 @@ pub struct Settings {
     pub last: Option<LastFlight>,
     pub recents: Vec<String>,
     pub favourites: Vec<String>,
+    /// Airframe damage: Realistic / Forgiving (limits ×1.5, no permanent set,
+    /// no flutter) / Off (indestructible; warnings still show). damage.rs.
+    pub structural_damage: crate::damage::Realism,
+    /// Crashes: Realistic / Forgiving (only high-energy impacts end the
+    /// flight) / Off (bounce or reset, the flight goes on). flight.rs.
+    pub crashes: crate::damage::Realism,
 }
 
 impl Default for Settings {
@@ -107,6 +113,8 @@ impl Default for Settings {
             last: None,
             recents: Vec::new(),
             favourites: Vec::new(),
+            structural_damage: crate::damage::Realism::Realistic,
+            crashes: crate::damage::Realism::Realistic,
         }
     }
 }
@@ -193,6 +201,8 @@ impl Settings {
             "last": self.last.as_ref().map(|l| json!({ "aircraft": l.aircraft, "airport": l.airport, "start": l.start, "watch": l.watch })),
             "recents": self.recents,
             "favourites": self.favourites,
+            "structural_damage": self.structural_damage.name(),
+            "crashes": self.crashes.name(),
         })
     }
 
@@ -255,6 +265,8 @@ impl Settings {
             last,
             recents: list("recents"),
             favourites: list("favourites"),
+            structural_damage: crate::damage::Realism::from_name(&st("structural_damage")),
+            crashes: crate::damage::Realism::from_name(&st("crashes")),
         }
     }
 }
@@ -277,5 +289,18 @@ mod tests {
         let back = Settings::from_json(&s.to_json());
         assert_eq!(back, s);
         assert_eq!(back.recents, vec!["EGLL", "EGLC"]);
+    }
+
+    #[test]
+    fn damage_and_crash_settings() {
+        use crate::damage::Realism;
+        let d = Settings::default();
+        assert_eq!((d.structural_damage, d.crashes), (Realism::Realistic, Realism::Realistic));
+        let s = Settings { structural_damage: Realism::Forgiving, crashes: Realism::Off, ..Settings::default() };
+        let back = Settings::from_json(&s.to_json());
+        assert_eq!((back.structural_damage, back.crashes), (Realism::Forgiving, Realism::Off));
+        // Missing / unknown values load as Realistic.
+        let old = Settings::from_json(&serde_json::json!({ "crashes": "bogus" }));
+        assert_eq!((old.structural_damage, old.crashes), (Realism::Realistic, Realism::Realistic));
     }
 }

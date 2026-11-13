@@ -3098,7 +3098,10 @@ impl App {
                 r.input.pressed.retain(|k| *k != Key::Screenshot);
                 let before = s.sim.as_ref().map(|x| x.ac.pos);
                 if screen == Screen::Flying && s.catch_up.is_none() {
-                    s.sim.as_mut().unwrap().update(&s.world, &mut r.input, dt);
+                    let sim = s.sim.as_mut().unwrap();
+                    // Damage / crash assists (missions override them in the sim).
+                    sim.assists = damage::Assists { structural: r.ui.st.settings.structural_damage, crashes: r.ui.st.settings.crashes };
+                    sim.update(&s.world, &mut r.input, dt);
                 } else {
                     r.input.pressed.clear();
                     r.input.orbit_delta = glam::Vec2::ZERO;

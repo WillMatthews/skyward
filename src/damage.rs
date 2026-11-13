@@ -24,6 +24,45 @@
 use crate::flight::{AircraftDef, Surfaces, ContactKind, GearPoint, KT};
 use glam::Vec3;
 
+/// Realism of a damage / crash setting (settings `structural_damage`, `crashes`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Realism {
+    #[default]
+    Realistic,
+    Forgiving,
+    Off,
+}
+
+impl Realism {
+    pub const ALL: [Realism; 3] = [Realism::Realistic, Realism::Forgiving, Realism::Off];
+    pub fn name(self) -> &'static str {
+        match self {
+            Realism::Realistic => "Realistic",
+            Realism::Forgiving => "Forgiving",
+            Realism::Off => "Off",
+        }
+    }
+    pub fn from_name(s: &str) -> Realism {
+        Realism::ALL.into_iter().find(|r| r.name().eq_ignore_ascii_case(s)).unwrap_or_default()
+    }
+}
+
+/// Damage and crash assists (from the settings; missions fly Realistic).
+///
+/// * `structural`: Realistic — limit / ultimate loads, flutter, overspeeds as
+///   built; Forgiving — limit loads ×1.5, no permanent set short of (the
+///   raised) ultimate, no flutter; Off — the airframe is indestructible (the
+///   over-g / overspeed warnings still show).
+/// * `crashes`: Realistic — as built; Forgiving — hard landings, nose / tail /
+///   wingtip strikes and minor collisions bounce or scrape, only high-energy
+///   impacts end the flight; Off — nothing ends the flight: minor contacts
+///   bounce, anything worse resets the aircraft to a safe state.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Assists {
+    pub structural: Realism,
+    pub crashes: Realism,
+}
+
 /// Separable parts of an airframe (debris bodies, render groups).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(u8)]
@@ -300,9 +339,9 @@ const SWIFT: StructDef = StructDef {
 };
 
 const PEREGRINE: StructDef = StructDef {
-    // Spitfire IX: aerobatic fighter, ≈ +6.3 / −3 g limit (ult +9.5).
+    // Spitfire IX: aerobatic fighter, ≈ +6.3 / −4 g limit (ult +9.5 / −6).
     n_lim: 6.33,
-    n_lim_neg: -3.0,
+    n_lim_neg: -4.0,
     ult: 1.5,
     vd_kt: 420.0,
     md: 0.0,
@@ -786,8 +825,10 @@ const CRJ700: StructDef = StructDef {
 };
 
 const CITATIONX: StructDef = StructDef {
-    // Citation X: +2.9 / −1 g; VMO 350 / MMO 0.92 → VD ≈ 385 kt, MD 0.98.
-    n_lim: 2.9,
+    // Citation X (Part 25): +2.62 / −1 g — 14 CFR 25.337: n = 2.1 + 24 000 /
+    // (W + 10 000) at the 36 100 lb MTOW, −1 g up to VC; VMO 350 / MMO 0.92
+    // → VD ≈ 385 kt, MD 0.98.
+    n_lim: 2.62,
     n_lim_neg: -1.0,
     ult: 1.5,
     vd_kt: 385.0,
@@ -910,7 +951,7 @@ const EXTRA500: StructDef = StructDef {
 };
 
 const CUB: StructDef = StructDef {
-    // PA-18-150: normal category +4.4 / −1.76 g; Vne 133 → VD ≈ 150 kt.
+    // PA-18-150: utility category +4.4 / −1.76 g (14 CFR 23.337); Vne 133 → VD ≈ 150 kt.
     n_lim: 4.4,
     n_lim_neg: -1.76,
     ult: 1.5,
@@ -1031,7 +1072,8 @@ const OTTER: StructDef = StructDef {
 };
 
 const DC3: StructDef = StructDef {
-    // DC-3: +2.83 / −0.83 g flaps up (Buckaroo's FDM notes); Vne 190 → VD ≈ 215 kt.
+    // DC-3: +2.83 g flaps up (Buckaroo's FDM notes; −0.83 there), −1.0 g used
+    // as the CAR 4b transport negative limit up to VC; Vne 190 → VD ≈ 215 kt.
     n_lim: 2.83,
     n_lim_neg: -1.0,
     ult: 1.5,
@@ -1260,6 +1302,8 @@ pub struct Damage {
     pub side_f: f32,
     /// Seconds since a wing failed.
     pub since_fail: f32,
+    /// Structural-damage setting (set by the aircraft each step).
+    pub mode: Realism,
 }
 
 fn hash01(n: u32) -> f32 {
@@ -1401,7 +1445,12 @@ impl Damage {
             return;
         }
         let weight = def.mass * crate::flight::GRAVITY;
-        let (n_ult, n_ult_neg) = sd.n_ult();
+        // Forgiving: limit (and so ultimate) loads ×1.5. Off: nothing breaks.
+        let forgiving = self.mode == Realism::Forgiving;
+        let off = self.mode == Realism::Off;
+        let lim_scale = if forgiving { 1.5 } else { 1.0 };
+        let (n_lim, n_lim_neg) = (sd.n_lim * lim_scale, sd.n_lim_neg * lim_scale);
+        let (n_ult, n_ult_neg) = (n_lim * sd.ult, n_lim_neg * sd.ult);
         // ---- per-wing load: the rolling moment shifts lift between the halves.
         let yc = sd.wing_yc.max(0.5);
         // (Half of the aero rolling moment is taken as span-load asymmetry; the
@@ -1434,6 +1483,15 @@ impl Damage {
         }
         // ---- first bending mode per half-wing.
         let w = std::f32::consts::TAU * sd.f_bend;
+        // Aerodynamic damping of wing bending: a tip moving at ż changes the
+        // local angle of attack by ż / V, the lift change opposes the motion.
+        // With a cubic-ish mode shape the generalised damping is
+        // c ≈ ρ V CLα S / 12 ≈ 0.8 q S / V (CLα ≈ 5), on a modal mass of
+        // about a quarter of the half-wing: ζ_aero ≈ 1.7 q S / (V m ω).
+        // (Typically 0.1–0.4 in flight: wing bending is well damped by the air.)
+        let m_half = (sd.m_wing * def.mass).max(1.0);
+        let zeta_aero = if l.on_ground || l.ias < 5.0 { 0.0 } else { 1.7 * l.q_s / (l.ias * m_half * w) };
+        let zeta = (sd.zeta + zeta_aero).clamp(0.0, 0.7);
         let wing = [Part::WingL, Part::WingR];
         for s in 0..2 {
             if self.is_lost(wing[s]) {
@@ -1445,8 +1503,10 @@ impl Damage {
             // model is drawn in the parked shape (net = −relief on the ground).
             let net = self.n_wing[s] - sd.relief * l.n_total;
             let target = sd.tip_per_g * (net + sd.relief) + self.set[s];
-            let a = w * w * (target - self.flex[s]) - 2.0 * sd.zeta * w * self.flex_rate[s];
-            self.flex_rate[s] += a * dt;
+            // Semi-implicit (damping and stiffness implicit in the rate):
+            // unconditionally stable at the 120 Hz step for any ζ, f.
+            let wdt = w * dt;
+            self.flex_rate[s] = (self.flex_rate[s] + w * w * (target - self.flex[s]) * dt) / (1.0 + 2.0 * zeta * wdt + wdt * wdt);
             self.flex[s] += self.flex_rate[s] * dt;
             if !self.flex[s].is_finite() || !self.flex_rate[s].is_finite() {
                 self.flex[s] = target;
@@ -1467,12 +1527,15 @@ impl Damage {
             let n = self.n_wing[s];
             // Real structures meet ultimate with a margin: 0..6 % stronger.
             let scatter = 1.0 + 0.06 * hash01(self.seed.wrapping_add(s as u32 * 7919));
-            let (lim, ult) = if n >= 0.0 { (sd.n_lim, n_ult * scatter) } else { (sd.n_lim_neg, n_ult_neg * scatter) };
+            let (lim, ult) = if n >= 0.0 { (n_lim, n_ult * scatter) } else { (n_lim_neg, n_ult_neg * scatter) };
             let r = n / lim;
             if r > 1.0 {
                 self.overstress = true;
+                if off {
+                    continue;
+                }
                 let e = ((n - lim) / (ult - lim)).clamp(0.0, 1.0);
-                if e > self.strain[p.idx()] + 0.02 {
+                if !forgiving && e > self.strain[p.idx()] + 0.02 {
                     if self.strain[p.idx()] == 0.0 {
                         self.note(None, format!("Overstress {:+.1} g — {} damaged", n, p.name()), true);
                     }
@@ -1501,7 +1564,7 @@ impl Damage {
                 if !wing_mounted || self.is_lost(p) {
                     continue;
                 }
-                if l.n_total.abs() > n_ult * 1.2 || l.side_g.abs() > 4.5 {
+                if !off && (l.n_total.abs() > n_ult * 1.2 || l.side_g.abs() > 4.5) {
                     self.separate(sd, def, p, "pylon overload");
                 }
             }
@@ -1515,7 +1578,7 @@ impl Damage {
             excess = excess.max(l.mach / (sd.md + 0.05) - 1.0);
         }
         self.overspeed = ias_kt > sd.vd_kt || (sd.md > 0.0 && l.mach > sd.md);
-        if excess > 0.0 && !l.on_ground {
+        if excess > 0.0 && !l.on_ground && self.mode == Realism::Realistic {
             // Divergent oscillation: grows faster the further past onset.
             let sigma = 3.0 + 40.0 * excess;
             self.flutter += (sigma * self.flutter + 0.05) * dt;
@@ -1545,7 +1608,7 @@ impl Damage {
         if let Some(vfe) = sd.vfe_for(def, l.flaps) {
             if ias_kt > vfe && !l.on_ground {
                 self.flap_overspeed = true;
-                if self.flaps_jam.is_none() && ias_kt > vfe * 1.25 {
+                if !off && self.flaps_jam.is_none() && ias_kt > vfe * 1.25 {
                     self.flaps_jam = Some(l.flaps);
                     self.note(None, format!("Flaps jammed — flap overspeed at {ias_kt:.0} kt (limit {vfe:.0} kt)"), true);
                 }
@@ -1561,11 +1624,11 @@ impl Damage {
             if ias_kt > def.vle_kt && !l.on_ground {
                 self.gear_overspeed = true;
             }
-            if l.gear_moving && sd.vlo_kt > 0.0 && ias_kt > sd.vlo_kt * 1.15 && !self.gear_jam {
+            if !off && l.gear_moving && sd.vlo_kt > 0.0 && ias_kt > sd.vlo_kt * 1.15 && !self.gear_jam {
                 self.gear_jam = true;
                 self.note(None, format!("Gear doors damaged — gear operated at {ias_kt:.0} kt"), true);
             }
-            if ias_kt > 1.35 * def.vle_kt && !l.on_ground {
+            if !off && ias_kt > 1.35 * def.vle_kt && !l.on_ground {
                 let why = format!("landing gear extended at {ias_kt:.0} kt (limit {:.0} kt)", def.vle_kt);
                 for p in [Part::GearNose, Part::GearL, Part::GearR] {
                     if gear_points(def, p).next().is_some() {
@@ -1977,5 +2040,333 @@ mod probe {
                 println!("t {t:.2} alt {:.0} ias {:.0} pitch {:.0} roll {:.0} g {:.1} nw {:?} lost {:#06x} crashed {:?}", a.pos.y, a.airspeed_kt(), a.pitch().to_degrees(), a.roll().to_degrees(), a.g_load(), a.dmg.n_wing, a.dmg.lost, a.crashed);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod push_probe {
+    use crate::flight::*;
+    use glam::{Vec2, Vec3};
+    struct Flat;
+    impl Environment for Flat {
+        fn ground_height(&self, _: Vec2) -> f32 { 0.0 }
+        fn obstacle_top(&self, _: Vec2) -> Option<f32> { None }
+        fn is_water(&self, _: Vec2) -> bool { false }
+        fn updraft(&self, _: Vec3) -> f32 { 0.0 }
+    }
+    /// mode: 0 keyboard push (ramp 2.2/s), 1 full-forward step, 2 full-back step.
+    fn run(def: &AircraftDef, mode: u8, kt: f32, secs: f32) -> String {
+        let alt = 2000.0;
+        let mut a = Aircraft::airborne(def, Vec3::new(0.0, alt, 0.0), 0.0, kt * KT);
+        let base = trimmed_controls_at(def, kt * KT, alt);
+        let (mut gmin, mut gmax, mut nwmin, mut nwmax, mut fmin, mut fmax) = (9f32, -9f32, 9f32, -9f32, 9f32, -9f32);
+        let mut el = 0.0f32;
+        let mut kp = crate::input::key_pitch::KeyPitch::default();
+        let mut first = String::new();
+        let mut alpha_min = 0f32;
+        let mut ias_at = 0.0;
+        for k in 0..((secs + 1.0) * 120.0) as usize {
+            let t = k as f32 / 120.0;
+            let target = if t < 1.0 { 0.0 } else if mode == 2 || mode == 4 { 1.0 } else { -1.0 };
+            el = match mode {
+                0 => el + (target - el).clamp(-2.2 / 120.0, 2.2 / 120.0),
+                3 | 4 => {
+                    let band = (def.control_law == ControlLaw::Direct).then(|| crate::input::key_pitch::Feel::new(super::struct_def(def.id).n_lim, super::struct_def(def.id).n_lim_neg, def.vs1_kt, a.airspeed_kt()));
+                    kp.step(el, target, a.g_load(), band, 1.0 / 120.0)
+                }
+                _ => target,
+            };
+            let c = Controls { elevator: el, ..base };
+            a.step(def, &c, &Flat, 1.0 / 120.0);
+            if t > 1.0 {
+                gmin = gmin.min(a.g_load());
+                gmax = gmax.max(a.g_load());
+                let nw = a.dmg.n_wing[0].min(a.dmg.n_wing[1]);
+                if nw < nwmin { nwmin = nw; ias_at = a.airspeed_kt(); }
+                nwmax = nwmax.max(a.dmg.n_wing[0].max(a.dmg.n_wing[1]));
+                fmin = fmin.min(a.dmg.flex[0]);
+                fmax = fmax.max(a.dmg.flex[0]);
+                alpha_min = alpha_min.min(a.alpha());
+            }
+            if first.is_empty() && (a.dmg.lost != 0 || a.dmg.strain.iter().any(|s| *s > 0.0)) {
+                first = format!("t{:.2} {:?} strain{:.2}", t, a.dmg.failure.clone().unwrap_or("strain".into()), a.dmg.strain[1].max(a.dmg.strain[2]));
+            }
+            if std::env::var("PROBE_TRACE").is_ok_and(|v| v == def.id) && k % 6 == 0 && t > 0.9 && t < 3.0 {
+                println!("     m{mode} t {t:.2} el {el:+.2} surf {:+.2} a {:+.1} q {:+.1}dps g {:+.2} nw {:+.2}/{:+.2} flex {:+.2} ias {:.0} lost {:#x}", a.surfaces().elevator, a.alpha().to_degrees(), -a.omega.x.to_degrees(), a.g_load(), a.dmg.n_wing[0], a.dmg.n_wing[1], a.dmg.flex[0], a.airspeed_kt(), a.dmg.lost);
+            }
+            if a.crashed.is_some() { break; }
+        }
+        format!("g[{gmin:+.2},{gmax:+.2}] nw[{nwmin:+.2},{nwmax:+.2}]@{ias_at:.0}kt flex[{fmin:+.2},{fmax:+.2}] amin{:.1} {first} | lost {:#x} {:?} crash {:?}", alpha_min.to_degrees(), a.dmg.lost, a.dmg.failure, a.crashed)
+    }
+    #[test]
+    #[ignore]
+    fn push_probe_all() {
+        for def in catalogue() {
+            if def.rotor.is_some() { continue; }
+            let sd = super::struct_def(def.id);
+            let kt = std::env::var("PROBE_FRAC").ok().and_then(|s| s.parse::<f32>().ok()).unwrap_or(0.9) * def.vno_kt;
+            println!("== {} {:?} lim [{:+.2},{:+.2}] ult [{:+.2},{:+.2}] @{kt:.0}kt  cl_max {:.2}", def.id, def.control_law, sd.n_lim_neg, sd.n_lim, sd.n_ult().1, sd.n_ult().0, def.cl_max(0.0));
+            for (m, name) in [(0u8, "old-kbd-push"), (3, "kbd-push"), (4, "kbd-pull"), (1, "step-fwd"), (2, "step-aft")] {
+                println!("   {name}: {}", run(&def, m, kt, 3.0));
+            }
+        }
+    }
+}
+
+/// Negative-g / keyboard / FBW / assist tests (the "wings come off when I
+/// push" report): see the module docs of `input/key_pitch.rs`.
+#[cfg(test)]
+mod loads_tests {
+    use super::*;
+    use crate::flight::*;
+    use crate::input::key_pitch::{Feel, KeyPitch};
+    use glam::{Vec2, Vec3};
+
+    struct Flat;
+    impl Environment for Flat {
+        fn ground_height(&self, _: Vec2) -> f32 {
+            0.0
+        }
+        fn obstacle_top(&self, _: Vec2) -> Option<f32> {
+            None
+        }
+        fn is_water(&self, _: Vec2) -> bool {
+            false
+        }
+        fn updraft(&self, _: Vec3) -> f32 {
+            0.0
+        }
+    }
+
+    const DT: f32 = 1.0 / 120.0;
+
+    fn fixed_wing() -> impl Iterator<Item = AircraftDef> {
+        catalogue().into_iter().filter(|d| d.rotor.is_none())
+    }
+
+    fn steady(d: &mut Damage, def: &AircraftDef, n: f32) {
+        let w = def.mass * GRAVITY;
+        let l = Loads { lift: n * w, n_total: n, ias: def.vno_kt * 0.8 * KT, dt: DT, ..Default::default() };
+        for _ in 0..120 {
+            d.update(struct_def(def.id), def, &l);
+        }
+    }
+
+    #[test]
+    fn negative_and_positive_limits_per_type() {
+        for def in catalogue() {
+            let sd = struct_def(def.id);
+            for lim in [sd.n_lim_neg, sd.n_lim] {
+                // At the limit: nothing.
+                let mut d = Damage::new(7);
+                steady(&mut d, &def, 0.98 * lim);
+                assert!(d.lost == 0 && !d.any(), "{} at {lim}", def.id);
+                // Between limit and ultimate: permanent set, still attached.
+                let mut d = Damage::new(7);
+                steady(&mut d, &def, 1.25 * lim);
+                assert!(d.lost == 0 && d.strain[Part::WingL.idx()] > 0.0 && d.overstress, "{} at 1.25 × {lim}", def.id);
+                // Beyond ultimate (1.5 × limit, + scatter): a wing goes.
+                let mut d = Damage::new(7);
+                steady(&mut d, &def, 1.6 * lim);
+                assert!(d.is_lost(Part::WingL) || d.is_lost(Part::WingR), "{} at 1.6 × {lim}", def.id);
+                // Forgiving: limits ×1.5, no permanent set short of ultimate.
+                let mut d = Damage { mode: Realism::Forgiving, ..Damage::new(7) };
+                steady(&mut d, &def, 1.6 * lim);
+                assert!(d.lost == 0 && !d.any(), "{} forgiving", def.id);
+                steady(&mut d, &def, 2.5 * lim);
+                assert!(d.lost != 0, "{} forgiving beyond 1.5 × ultimate", def.id);
+                // Off: indestructible, the warning still shows.
+                let mut d = Damage { mode: Realism::Off, ..Damage::new(7) };
+                steady(&mut d, &def, 4.0 * lim);
+                assert!(d.lost == 0 && !d.any() && d.overstress, "{} off", def.id);
+            }
+        }
+    }
+
+    /// From trimmed cruise (0.9 Vno, 2000 m): a pilot on an analog stick
+    /// flies to `target` g and holds it. Returns (min, max g, damage).
+    fn fly_to_g(def: &AircraftDef, target: f32, kt: f32, secs: f32) -> (f32, f32, Damage) {
+        let alt = 2000.0;
+        let mut a = Aircraft::airborne(def, Vec3::new(0.0, alt, 0.0), 0.0, kt * KT);
+        let base = trimmed_controls_at(def, kt * KT, alt);
+        let (mut lo, mut hi, mut el) = (9f32, -9f32, 0.0f32);
+        let (mut g_prev, mut g_rate) = (1.0f32, 0.0f32);
+        let sd = struct_def(def.id);
+        for k in 0..(secs / DT) as usize {
+            let t = k as f32 * DT;
+            if t > 0.5 {
+                // A smooth hand: stick rate ∝ g error, ≤ 1 / s at manoeuvring
+                // speed and proportionally gentler above it.
+                // (With the g onset in mind: aim at where the g is going.)
+                let q = Feel::new(sd.n_lim, sd.n_lim_neg, def.vs1_kt, a.airspeed_kt()).q_ratio;
+                let g_ahead = a.g_load() + 0.8 * g_rate;
+                el = (el + (0.4 * (target - g_ahead)).clamp(-1.0, 1.0) * DT / q).clamp(-1.0, 1.0);
+            }
+            g_rate += ((a.g_load() - g_prev) / DT - g_rate) * 0.15;
+            g_prev = a.g_load();
+            a.step(def, &Controls { elevator: el, ..base }, &Flat, DT);
+            lo = lo.min(a.g_load());
+            hi = hi.max(a.g_load());
+        }
+        (lo, hi, a.dmg)
+    }
+
+    #[test]
+    fn push_overs_do_no_damage() {
+        for def in fixed_wing().filter(|d| d.control_law == ControlLaw::Direct) {
+            let sd = struct_def(def.id);
+            let kt = 0.9 * def.vno_kt;
+            // A push-over to 0 g: never any damage.
+            let (lo, _, d) = fly_to_g(&def, 0.0, kt, 4.0);
+            eprintln!("{}: push to 0 g → {lo:+.2} g", def.id);
+            assert!(!d.any() && lo > sd.n_lim_neg, "{}: {lo}", def.id);
+            // A firm push to −1 g (light aircraft, limit ≤ −1.4 g): no damage.
+            if sd.n_lim_neg <= -1.4 {
+                let (lo, _, d) = fly_to_g(&def, -1.0, kt, 4.0);
+                eprintln!("{}: push to −1 g → {lo:+.2} g", def.id);
+                assert!(!d.any(), "{}: −1 g push damaged it ({lo})", def.id);
+            }
+            // To the published negative limit: still attached.
+            let (lo, _, d) = fly_to_g(&def, sd.n_lim_neg, kt, 4.0);
+            eprintln!("{}: push to {} g → {lo:+.2} g", def.id, sd.n_lim_neg);
+            assert!(d.lost == 0, "{}: separated at the limit ({lo})", def.id);
+        }
+    }
+
+    #[test]
+    fn keyboard_push_and_pull_do_no_damage() {
+        // Keys held for 4 s from cruise, through the sim's keyboard path.
+        for def in fixed_wing() {
+            let sd = struct_def(def.id);
+            let kt = 0.9 * def.vno_kt;
+            for key in [-1.0, 1.0] {
+                let alt = 2000.0;
+                let mut a = Aircraft::airborne(&def, Vec3::new(0.0, alt, 0.0), 0.0, kt * KT);
+                let base = trimmed_controls_at(&def, kt * KT, alt);
+                let (mut kp, mut el, mut lo, mut hi) = (KeyPitch::default(), 0.0, 9f32, -9f32);
+                for k in 0..(4.5 / DT) as usize {
+                    let feel = (def.control_law == ControlLaw::Direct).then(|| Feel::new(sd.n_lim, sd.n_lim_neg, def.vs1_kt, a.airspeed_kt()));
+                    el = kp.step(el, if k as f32 * DT > 0.5 { key } else { 0.0 }, a.g_load(), feel, DT);
+                    a.step(&def, &Controls { elevator: el, ..base }, &Flat, DT);
+                    lo = lo.min(a.g_load());
+                    hi = hi.max(a.g_load());
+                }
+                eprintln!("{}: key {key:+} → [{lo:+.2}, {hi:+.2}] g", def.id);
+                assert!(!a.dmg.any(), "{}: key {key} damaged it [{lo}, {hi}]", def.id);
+            }
+        }
+    }
+
+    #[test]
+    fn fbw_protects_negative_and_positive_g() {
+        for def in fixed_wing().filter(|d| d.control_law != ControlLaw::Direct) {
+            let kt = 0.9 * def.vno_kt;
+            for stick in [-1.0, 1.0] {
+                let alt = 2000.0;
+                let mut a = Aircraft::airborne(&def, Vec3::new(0.0, alt, 0.0), 0.0, kt * KT);
+                let base = trimmed_controls_at(&def, kt * KT, alt);
+                let (mut lo, mut hi) = (9f32, -9f32);
+                for k in 0..(5.0 / DT) as usize {
+                    let el = if k as f32 * DT > 0.5 { stick } else { 0.0 };
+                    a.step(&def, &Controls { elevator: el, ..base }, &Flat, DT);
+                    lo = lo.min(a.g_load());
+                    hi = hi.max(a.g_load());
+                }
+                eprintln!("{}: full stick {stick:+} → [{lo:+.2}, {hi:+.2}] g", def.id);
+                assert!(lo >= def.nz_min - 0.03 && hi <= def.nz_max + 0.05, "{}: [{lo}, {hi}] vs [{}, {}]", def.id, def.nz_min, def.nz_max);
+                assert!(!a.dmg.any(), "{}: {stick} damaged it", def.id);
+            }
+        }
+    }
+
+    #[test]
+    fn genuine_overload_still_breaks_the_airframe() {
+        // Full forward stick at Vne in a C172: well past −2.28 g ultimate.
+        let def = find("kestrel").unwrap();
+        let alt = 1000.0;
+        let kt = def.vne_kt;
+        let base = trimmed_controls_at(&def, kt * KT, alt);
+        let run = |mode: Realism| {
+            let mut a = Aircraft::airborne(&def, Vec3::new(0.0, alt, 0.0), 0.0, kt * KT);
+            a.assists.structural = mode;
+            let mut lo = 9f32;
+            let mut warned = false;
+            for k in 0..(3.0 / DT) as usize {
+                let el = if k as f32 * DT > 0.3 { -1.0 } else { 0.0 };
+                a.step(&def, &Controls { elevator: el, ..base }, &Flat, DT);
+                lo = lo.min(a.g_load());
+                warned |= a.dmg.overstress;
+            }
+            (lo, a.dmg.lost, warned)
+        };
+        let (lo, lost, _) = run(Realism::Realistic);
+        assert!(lost != 0, "full forward at Vne: {lo} g and nothing broke");
+        let (lo, lost, warned) = run(Realism::Off);
+        assert!(lost == 0 && warned, "off: {lo}");
+    }
+
+    #[test]
+    fn wing_flex_step_is_damped() {
+        // A sudden 1 → 2 g step in cruise: the first bending mode overshoots
+        // by < 30 % (aerodynamic damping) and settles.
+        for def in fixed_wing() {
+            let sd = struct_def(def.id);
+            let v = 0.9 * def.vno_kt * KT;
+            let q_s = 0.5 * 1.225 * v * v * def.wing_area;
+            let w = def.mass * GRAVITY;
+            let mut d = Damage::new(1);
+            let mut l = Loads { lift: w, n_total: 1.0, ias: v, q_s, dt: DT, ..Default::default() };
+            for _ in 0..600 {
+                d.update(sd, &def, &l);
+            }
+            let f1 = d.flex[0];
+            l.lift = 2.0 * w;
+            l.n_total = 2.0;
+            let mut peak = f1;
+            for _ in 0..600 {
+                d.update(sd, &def, &l);
+                peak = peak.max(d.flex[0]);
+            }
+            let f2 = d.flex[0];
+            let over = (peak - f2) / (f2 - f1).abs().max(1e-6);
+            eprintln!("{}: flex {f1:.3} → {f2:.3} m, overshoot {:.0} %", def.id, over * 100.0);
+            assert!(over < 0.3 && f2 > f1, "{}: overshoot {over}", def.id);
+        }
+    }
+
+    #[test]
+    fn crash_assists() {
+        let def = find("kestrel").unwrap();
+        let base = trimmed_controls_at(&def, 60.0 * KT, 10.0);
+        // A hard landing (2× the design sink rate, wings level, normal speed).
+        let hard = |mode: Realism| {
+            let mut a = Aircraft::airborne(&def, Vec3::new(0.0, 3.0, 0.0), 0.0, 60.0 * KT);
+            a.assists.crashes = mode;
+            a.vel.y = -2.0 * def.max_touchdown_sink; // ("airframe broke up" in Realistic)
+            for _ in 0..(3.0 / DT) as usize {
+                a.step(&def, &Controls { throttle: 0.0, ..base }, &Flat, DT);
+            }
+            a
+        };
+        assert!(hard(Realism::Realistic).crashed.is_some());
+        let a = hard(Realism::Forgiving);
+        assert!(a.crashed.is_none() && a.pos.y > -0.5 && a.pos.y < 5.0, "{:?} {}", a.crashed, a.pos.y);
+        assert!(a.dmg.lost & GEAR_BITS == 0, "the gear survives");
+        assert!(hard(Realism::Off).crashed.is_none());
+        // A high-energy impact (a 60° dive at cruise speed).
+        let dive = |mode: Realism| {
+            let mut a = Aircraft::airborne(&def, Vec3::new(0.0, 30.0, 0.0), 0.0, 110.0 * KT);
+            a.assists.crashes = mode;
+            a.rot = attitude(0.0, -60f32.to_radians(), 0.0);
+            a.vel = a.rot * Vec3::Z * 110.0 * KT;
+            for _ in 0..(2.0 / DT) as usize {
+                a.step(&def, &base, &Flat, DT);
+            }
+            a
+        };
+        assert!(dive(Realism::Realistic).crashed.is_some());
+        assert!(dive(Realism::Forgiving).crashed.is_some(), "forgiving: high energy still ends the flight");
+        let a = dive(Realism::Off);
+        assert!(a.crashed.is_none() && a.pos.y > 200.0 && !a.on_ground, "off: reset to a safe state ({})", a.pos.y);
     }
 }
