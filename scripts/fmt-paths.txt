@@ -46,3 +46,4 @@ src/rotor/tests.rs
 src/rotor/glue.rs
 src/vfx/rotorwash.rs
 src/audio/rotorcraft.rs
+src/ui/scroll.rs

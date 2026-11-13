@@ -20,6 +20,7 @@ pub mod mapdata;
 pub mod menus;
 pub mod overview;
 pub mod radio;
+pub mod scroll;
 pub mod settings;
 pub mod toast;
 
@@ -504,6 +505,8 @@ pub struct UiState {
     /// Settings › Controls: sub-page and the expanded axis row.
     pub controls_page: usize,
     pub controls_axis: Option<(crate::input::AxisAction, usize)>,
+    /// Aircraft screen: the family filter (None: all).
+    pub aircraft_group: Option<menus::Group>,
     /// Seconds since the last frame / since start, frame counter.
     pub dt: f32,
     pub time: f32,
@@ -538,6 +541,7 @@ impl UiState {
             input: crate::input::InputSystem::new(),
             controls_page: 0,
             controls_axis: None,
+            aircraft_group: None,
             dt: 1.0 / 60.0,
             time: 0.0,
             frame_no: 0,
