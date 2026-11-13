@@ -94,6 +94,14 @@ painted over or composited.
   cloud shadows on the ground.
 - **Weather and seasons.** Rain, snow, fog and wet ground; leaf fall, autumn colours and crop
   calendars.
+- **Thunderstorms.** Cumulonimbus towers with anvils, overshooting tops and dark bases, driven by
+  the METAR (TS, CB, TCU, +TSRA, VCTS, GR) and the forecast's CAPE; rain shafts and virga under
+  them, visible from far away; lightning that lights the cloud from inside, branching
+  cloud-to-ground bolts, a flash over the whole scene and thunder arriving distance / c later.
+  Lenticular clouds stack over mountain waves.
+- **On the glass.** Rain drops on the windscreen that refract the view and run with the airflow,
+  wipers on the airliners (off / slow / fast / auto), misting, frost creeping in from the frame,
+  and rime ice on the leading edges as airframe icing builds.
 - **Night.** Moon and stars, skyglow, street lights, lit windows, moving traffic, airport lighting,
   PAPIs and landing lights.
 - **Effects.** Transonic vapour cones, afterburner shock diamonds, heat haze, Schmidt–Appleman
@@ -111,8 +119,16 @@ painted over or composited.
   flutter and overspeeds, and parts that tear off and change the aerodynamics. Survivable accidents
   slide to a stop; fatal ones break into rigid-body debris that tumbles, burns and sinks.
 - **Live weather and wind.** The nearest METAR plus Open-Meteo drive clouds, visibility,
-  precipitation, the wind gradient, gusts, turbulence and drifting thermals. Real local time and
-  date, re-fetched along long flights.
+  precipitation, the wind gradient and winds aloft up to the jet, gusts and drifting thermals.
+  Real local time and date, re-fetched along long flights.
+- **Turbulence that feels real.** The Dryden model of MIL-F-8785C as a frozen 3D field (low,
+  medium and high-altitude intensities and scale lengths; light to extreme) with rotational gusts
+  across the span; convective bumps under cumulus, severe turbulence and drafts in thunderstorms
+  and their gust fronts, clear-air turbulence in the jet's wind shear, mountain waves and rotors in
+  the lee of ridges, and wake vortices (meet your own after a steep 360). Cockpit head shake and
+  seat-of-the-pants thumps; Realistic / Reduced / Off in Settings.
+- **Weather radar.** The airliners' ND shows the storms' returns (green / yellow / red / magenta),
+  with tilt, gain and the radar shadow behind heavy rain.
 
 ### Systems, navigation and ATC
 
@@ -328,6 +344,8 @@ Every key can be rebound in **Settings › Controls**. Press **H** or **F1** in 
 | M, `,` / `.` | moving map: corner / large / off, range out / in |
 | U | instruments: full / minimal / off |
 | I | weather panel: expand / collapse |
+| Backspace / Num * | windscreen wipers: off → slow → fast → auto (airliners) |
+| Num / | weather radar tilt: auto → +2° → 0° → −1.5° → −3° → −5° (gain: bind *Weather radar gain* in Settings › Controls) |
 | N | mute sound |
 | X | time warp 1 / 2 / 4 / 8× |
 | P | pause |
@@ -407,7 +425,8 @@ the real flight model through the controls and autopilot. Nothing is scripted or
 | `--bot` / `--watch` | hand the aircraft to the auto-flight bot / + cinematic camera (+ glider relaunch) |
 | `--live` / `--no-live` | follow the real weather and time (default on) / don't |
 | `--metar "RAW"` | fixed weather from a METAR, e.g. `"EGLC 121450Z 18015G25KT 9999 SCT040 15/08 Q1015"` |
-| `--weather W` | cloud preset `clear` `few` `scattered` `broken` `overcast` |
+| `--weather W` | cloud preset `clear` `few` `scattered` `broken` `overcast` (Conditions also has *Storms & hazards*: thunderstorm, squall line, mountain wave, icing, gusty crosswind METARs) |
+| `SKYWARD_FLASH=cg\|ic` | force a lightning flash (cloud-to-ground / in-cloud) at the start: storm screenshots and thunder renders |
 | `--time HH.MM`, `--date MM-DD` | local clock time (turns live time off), date (season, sun) |
 | `--route LAM,BIG,EGLL/27R[/rnav]` | flight plan: navaids / airports / `lat:lon`, the last item an approach |
 | `--fail pitot,vacuum,fire2@30` | systems failures by id, optionally armed `@S` seconds in |
@@ -534,6 +553,7 @@ Settings › Display switches to mailbox / immediate for the lowest latency.
 | `src/airport/`, `src/airports.rs` | airport detail (markings, stands, signs, lights, vehicles, Overpass, parked fleet); OurAirports database |
 | `src/gfx.rs`, `src/gfx_aircraft.rs`, `src/shaders/` | wgpu renderer; textured aircraft renderer; WGSL shaders |
 | `src/atmosphere.rs`, `src/clouds.rs`, `src/weather.rs` | sun, sky / aerial-perspective LUTs; volumetric clouds + thermals; METAR / Open-Meteo |
+| `src/wx/` | Dryden turbulence field, thunderstorms + lightning + thunder, mountain waves / rotors / lenticulars, wake vortices, weather radar, windscreen rain / wipers / frost |
 | `src/vfx/` | particles, trails, vapour, shock diamonds, heat haze, rotor wash; condensation physics |
 | `src/flight.rs`, `src/jsbsim.rs` | fixed-wing flight dynamics + aircraft definitions; JSBSim aerodynamics evaluator |
 | `src/rotor/` | helicopter rotor / engine / Fenestron model, FPV quad, their bots, VEMD / OSD |

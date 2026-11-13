@@ -95,6 +95,18 @@ fn fs_aircraft(in: AcOut) -> FOut {
     s.f0 = vec3<f32>(inst.params.x);
     s.rough = spec_aa(inst.params.y, dndx, dndy);
     s.moving = 1.0;
+    // Airframe ice (wx/): rough white rime building back from the leading
+    // edges (surfaces facing the airflow), on the outside only.
+    let ice = ac_dyn.vib.z;
+    if (ice > 0.001 && inst.emis.w < 0.5 && mode < 1.5) {
+        let fwd = normalize(inst.model[2].xyz);
+        let facing = dot(normalize(in.nrm), fwd);
+        let grain = fract(sin(dot(floor(in.wpos * 60.0), vec3<f32>(12.9898, 78.233, 37.719))) * 43758.5453);
+        let m = smoothstep(0.92 - 0.55 * ice, 1.0 - 0.45 * ice, max(facing, 0.0) * (0.9 + 0.2 * grain)) * min(ice * 2.5, 1.0);
+        s.albedo = mix(s.albedo, vec3<f32>(0.78, 0.82, 0.86) * (0.85 + 0.25 * grain), m);
+        s.f0 = mix(s.f0, vec3<f32>(0.02), m);
+        s.rough = mix(s.rough, 0.75, m);
+    }
     // Cockpit backlighting lights the painted markings, not the black panel.
     s.emit = select(inst.emis.rgb, inst.emis.rgb * albedo, inst.emis.w > 0.5);
     s.alpha = select(1.0, alpha, mode > 0.5);

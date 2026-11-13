@@ -55,6 +55,7 @@ mod water;
 mod ui;
 mod weather;
 mod world;
+mod wx;
 mod platform;
 
 use gfx::{FrameView, Gpu, Renderer};
@@ -775,6 +776,16 @@ fn sync_gpu(s: &mut Session, renderer: &mut Renderer, ui: &mut Ui, gpu: &Gpu, bu
             w.tick_weather(0.0, (s.args.hours.unwrap_or(sim::DEFAULT_HOURS), s.args.day_of_year.unwrap_or(sim::DEFAULT_DAY)));
         }
     }
+    // Turbulence setting, cockpit head shake, the aircraft's own wake (wx/).
+    w.set_turbulence(ui.st.settings.turbulence);
+    if let Some(sim) = s.sim.as_mut() {
+        sim.wxc.shake = ui.st.settings.camera_shake;
+        let (span, mass) = (sim.def().wingspan, sim.def().mass);
+        let gh = flight::Environment::ground_height(w, vec2(sim.ac.pos.x, sim.ac.pos.z));
+        let airborne = !sim.ac.on_ground && sim.ac.crashed.is_none();
+        w.wxs.wakes.push(wx::wake::OWN_AIRCRAFT, w.to_field(sim.ac.pos), sim.ac.vel, mass, span, airborne, gh, sim.time);
+        w.wxs.wakes.wind = vec3(w.wind.aloft.x, 0.0, w.wind.aloft.y);
+    }
     renderer.set_weather(&w.render_weather(), &w.clouds);
     spent
 }
@@ -921,6 +932,9 @@ fn render_frame(
                 let af = wd.airport_detail.frame(&wd.proj, fv.eye, sim.time, &|p| flight::Environment::wind(wd, p), &|xz| flight::Environment::ground_height(wd, xz));
                 renderer.set_airport_frame(af);
             }
+            // Storms, lightning, lenticulars, windscreen rain and wipers (wx/).
+            let cockpit = sim.cam == sim::CamMode::Cockpit && view_override.is_none();
+            fv.wx = Some(std::sync::Arc::new(wx::gpu::prepare(&s.world, sim, fv.eye, cockpit, fv.aircraft.as_ref(), &mut dynm)));
             renderer.render(device, queue, &mut enc, target, w, h, &fv, &dynm);
         }
         _ => {

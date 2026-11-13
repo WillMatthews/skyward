@@ -185,6 +185,8 @@ pub struct World {
     base_check_tiles: usize,
     /// Airport detail (airport/): layouts, bakes, stands, vehicles.
     pub airport_detail: crate::airport::AirportScene,
+    /// Thunderstorms, lightning, mountain waves, wakes, turbulence setting (wx/).
+    pub wxs: crate::wx::WxSim,
 }
 
 fn rect_dist(r: (Vec2, Vec2), p: Vec2) -> f32 {
@@ -242,6 +244,7 @@ impl World {
             base_check: None,
             base_check_tiles: 0,
             airport_detail: crate::airport::AirportScene::new(),
+            wxs: crate::wx::WxSim::with_env(),
         }
     }
 
@@ -262,12 +265,13 @@ impl World {
     pub fn set_weather_preset(&mut self, w: Weather) {
         self.live_weather = false;
         self.wx = Wx::preset(w);
-        self.wind = WindField::from_wx(&self.wx);
+        self.wind = WindField { scale: self.wind.scale, ..WindField::from_wx(&self.wx) };
         let drift = self.clouds.drift();
         self.clouds = CloudField::new(self.clouds.seed(), w);
         self.clouds.raise(self.terrain_base);
         self.clouds.set_drift(drift);
         self.cloud_version += 1;
+        self.wxs.set_weather(&self.wx, self.clouds.seed(), self.terrain_base);
     }
 
     /// Fixed weather (e.g. a METAR string): live weather off.
@@ -287,8 +291,25 @@ impl World {
         self.clouds = CloudField::from_spec(self.clouds.seed(), &spec);
         self.clouds.raise(self.terrain_base);
         self.clouds.set_drift(drift);
-        self.wind = WindField::from_wx(&self.wx);
+        self.wind = WindField { scale: self.wind.scale, ..WindField::from_wx(&self.wx) };
         self.cloud_version += 1;
+        self.wxs.set_weather(&self.wx, self.clouds.seed(), self.terrain_base);
+    }
+
+    /// The player's turbulence setting (Settings): scales gusts / turbulence.
+    pub fn set_turbulence(&mut self, mode: crate::wx::turbulence::Mode) {
+        self.wxs.mode = mode;
+        self.wind.scale = mode.scale();
+    }
+
+    /// Current-frame xz of a field-coordinate point (see [`World::to_field`]).
+    pub fn from_field(&self, p: Vec2) -> Vec2 {
+        vec2((p.x as f64 - self.field_off.0) as f32, (p.y as f64 - self.field_off.1) as f32)
+    }
+
+    /// Field coordinates (fixed to the ground, unaffected by the floating origin) of a current-frame point.
+    pub fn to_field(&self, p: Vec3) -> Vec3 {
+        vec3((p.x as f64 + self.field_off.0) as f32, p.y, (p.z as f64 + self.field_off.1) as f32)
     }
 
     /// Call once per frame: polls the live data, moves the clouds with the
@@ -337,12 +358,19 @@ impl World {
                     self.clouds.raise(e);
                     self.clouds.set_drift(drift);
                     self.cloud_version += 1;
+                    self.wxs.set_ground(e);
                 } else {
                     self.apply_wx();
                 }
             }
         }
         self.update_drift();
+        // Storms drift with the clouds; lightning; the lee-wave grid (wx/).
+        let off = vec2(self.field_off.0 as f32, self.field_off.1 as f32);
+        let mut wxs = std::mem::take(&mut self.wxs);
+        let fo = self.field_off;
+        wxs.tick(self.sim_time, self.focus, off, self.clouds.drift(), self.tiles.len(), &|p: Vec2| self.terrain_height(vec2((p.x as f64 - fo.0) as f32, (p.y as f64 - fo.1) as f32)));
+        self.wxs = wxs;
         out
     }
 
@@ -427,6 +455,7 @@ impl World {
         self.last_schedule = None;
         self.dirty = true;
         self.update_drift();
+        self.wxs.storms.set_drift(self.clouds.drift());
         // Live weather follows the flight (re-fetched every 50 km).
         self.live.relocate(new.lat0, new.lon0);
         Rebase { map, delta }
@@ -439,6 +468,23 @@ impl World {
         if r.fog_top > 0.0 {
             // Ground fog lies on the terrain (top above the local ground).
             r.fog_top += self.terrain_base;
+        }
+        // Under a storm's rain shaft: heavy rain, wet ground, murk.
+        if self.wxs.storms.active() {
+            let p = vec3(self.focus.x, self.terrain_height(self.focus) + 50.0, self.focus.y);
+            let (mmh, _) = self.wxs.rain_at(p);
+            if mmh > 0.5 {
+                let k = (mmh / 60.0).clamp(0.0, 1.0);
+                if r.snow > 0.0 {
+                    r.snow = r.snow.max(0.3 + 0.7 * k);
+                } else {
+                    r.rain = r.rain.max(0.3 + 0.7 * k);
+                }
+                r.wet = r.wet.max(0.55 + 0.45 * k);
+                // Visibility in heavy rain: ~1-3 km.
+                r.fog_ext = r.fog_ext.max(0.3 + 1.6 * k);
+                r.fog_top = r.fog_top.max(self.terrain_base + self.wxs.storms.spec.base * 0.9);
+            }
         }
         r
     }
@@ -1006,17 +1052,24 @@ impl Environment for World {
         self.tile_at(xz).is_some_and(|t| t.collision.is_water(t.xf.inverse(xz)))
     }
     fn updraft(&self, p: Vec3) -> f32 {
-        self.clouds.updraft(p)
+        // Thermals, plus storm drafts and mountain waves (wx/).
+        self.clouds.updraft(p) + self.wxs.updraft(p, self.to_field(p))
     }
     fn wind(&self, p: Vec3) -> Vec3 {
         let xz = vec2(p.x, p.z);
-        // Convective turbulence: in / under the cumulus and around thermals.
+        // Convective turbulence: in / under the cumulus and around thermals
+        // (light bumps under fair-weather cumulus, moderate in towering ones).
         let lift = self.clouds.updraft(p).abs();
         let in_cloud = if p.y > self.clouds.cu_base() - 50.0 && p.y < self.clouds.top() { self.clouds.coverage(xz) } else { 0.0 };
         let conv = (lift / 3.0).max(in_cloud).clamp(0.0, 1.0);
+        let deep = (self.clouds.top() - self.clouds.cu_base()) / 3000.0;
+        let pfield = self.to_field(p);
+        // Storm outflow / mountain waves / wakes and their turbulence.
+        let (extra, _, sev) = self.wxs.air(p, pfield);
+        let severity = (conv * (1.1 + deep.clamp(0.0, 1.4))).max(sev);
         // (The boundary layer follows the terrain: height above the ground.)
-        let pf = vec3((p.x as f64 + self.field_off.0) as f32, p.y - self.terrain_height(xz), (p.z as f64 + self.field_off.1) as f32);
-        self.wind.at(pf, self.sim_time, self.roughness(xz), conv)
+        let pf = vec3(pfield.x, p.y - self.terrain_height(xz), pfield.z);
+        self.wind.at(pf, self.sim_time, self.roughness(xz), severity) + extra
     }
 }
 

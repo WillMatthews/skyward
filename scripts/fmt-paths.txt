@@ -74,3 +74,13 @@ src/flight/ga.rs
 src/flight/tests/ga_types.rs
 src/vfx/spray.rs
 src/vfx/smoke.rs
+src/wx/mod.rs
+src/wx/cockpit.rs
+src/wx/glass.rs
+src/wx/gpu.rs
+src/wx/mountain.rs
+src/wx/radar.rs
+src/wx/storm.rs
+src/wx/tests.rs
+src/wx/turbulence.rs
+src/wx/wake.rs

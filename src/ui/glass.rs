@@ -705,6 +705,14 @@ fn nd_map(p: &egui::Painter, cv: &mut canvas::Frame, ppp: f32, s: Rect, sim: &Si
     if let Some(id) = id {
         canvas::image_circle(&pc, id, s, anchor, arc_r * 1.02, Color32::from_gray(255));
     }
+    // Weather radar returns (wx/radar.rs) over the map, under the symbols.
+    if sim.def().category == crate::flight::Category::Airliner && sim.wxc.radar.ctl.on {
+        radar_returns(&pc, &sim.wxc.radar.img, anchor, arc_r, range_m, ac.heading() - trk);
+        let r = &sim.wxc.radar;
+        let tilt = if r.ctl.tilt.is_none() { format!("AUTO {:+.1}", r.img.tilt) } else { format!("{:+.1}", r.img.tilt) };
+        let gain = if r.ctl.gain == 0.0 { "CAL".to_string() } else { format!("{:+.0}", r.ctl.gain) };
+        txt(&pc, Pos2::new(s.min.x + 2.0 * u, s.max.y - 6.0 * u), Align2::LEFT_BOTTOM, format!("WXR  TILT {tilt}  GAIN {gain}"), 2.4 * u, GREEN);
+    }
     let mut taken = Vec::new();
     let clip = pc.with_clip_rect(Rect::from_min_max(s.min + Vec2::new(0.0, 8.0 * u), s.max - Vec2::new(0.0, 8.0 * u)));
     map::airports(&clip, &view, world, Style::Nd, &mut taken);
@@ -763,6 +771,40 @@ fn nd_map(p: &egui::Painter, cv: &mut canvas::Frame, ppp: f32, s: Rect, sim: &Si
     nd_corner_info(&pc, s, sim, world, route, u);
     adf_vor_footer(&pc, s, sim, u);
     pc.text(Pos2::new(s.max.x - 2.0 * u, s.max.y - 2.0 * u), Align2::RIGHT_BOTTOM, format!("{}  {range_nm} NM", if rose { "ROSE NAV" } else { "ARC" }), fi(2.6 * u), CYAN);
+}
+
+/// Radar bins as coloured polar cells: `rel` = heading − the display's up direction.
+fn radar_returns(pc: &egui::Painter, img: &crate::wx::radar::RadarImage, anchor: Pos2, arc_r: f32, range_m: f32, rel: f32) {
+    use crate::wx::radar::{AZ_BINS, HALF_SWEEP, Level, RANGE_BINS};
+    let mut mesh = egui::Mesh::default();
+    let k = arc_r / range_m.max(1.0);
+    let da = HALF_SWEEP * 2.0 / (AZ_BINS - 1) as f32;
+    let dr = img.range / RANGE_BINS as f32;
+    for a in 0..AZ_BINS {
+        let az = rel + (a as f32 / (AZ_BINS - 1) as f32 * 2.0 - 1.0) * HALF_SWEEP;
+        let (a0, a1) = (az - da * 0.5, az + da * 0.5);
+        for r in 0..RANGE_BINS {
+            let lvl = img.at(a, r);
+            if lvl == Level::None {
+                continue;
+            }
+            let (r0, r1) = (r as f32 * dr * k, (r + 1) as f32 * dr * k);
+            if r0 > arc_r * 1.02 {
+                break;
+            }
+            let [cr, cg, cb] = lvl.rgb();
+            let col = Color32::from_rgba_unmultiplied(cr, cg, cb, if lvl == Level::Ground { 120 } else { 210 });
+            let i = mesh.vertices.len() as u32;
+            for p in [polar(anchor, r0, a0), polar(anchor, r1, a0), polar(anchor, r1, a1), polar(anchor, r0, a1)] {
+                mesh.colored_vertex(p, col);
+            }
+            mesh.add_triangle(i, i + 1, i + 2);
+            mesh.add_triangle(i, i + 2, i + 3);
+        }
+    }
+    if !mesh.vertices.is_empty() {
+        pc.add(Shape::mesh(mesh));
+    }
 }
 
 fn aircraft_mark(pc: &egui::Painter, anchor: Pos2, u: f32) {

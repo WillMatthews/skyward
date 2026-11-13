@@ -1605,6 +1605,19 @@ pub fn conditions(ui: &mut Ui, st: &mut UiState) {
                 }
             }
             yy += 54.0;
+            // Weather drama (wx/): example METARs — a storm preset and friends.
+            p.text(Pos2::new(x, yy), Align2::LEFT_TOP, "STORMS & HAZARDS", f_inst_b(11.0), pal::TEXT3);
+            yy += 24.0;
+            let icao = if st.plan.airport.len() == 4 && st.plan.airport.chars().all(|ch| ch.is_ascii_alphanumeric()) { st.plan.airport.clone() } else { "ZZZZ".to_string() };
+            for (k, (name, body)) in crate::wx::EXAMPLE_METARS.iter().enumerate() {
+                let b = Rect::from_min_size(Pos2::new(x + (k % 3) as f32 * 182.0, yy + (k / 3) as f32 * 42.0), Vec2::new(174.0, 34.0));
+                let m = format!("{icao} {body}");
+                let on = c.metar.trim() == m;
+                if chip_btn(ui, b, ("wxdrama", k), name, on) {
+                    c.metar = m;
+                }
+            }
+            yy += 42.0 * crate::wx::EXAMPLE_METARS.len().div_ceil(3) as f32 + 12.0;
             p.text(Pos2::new(x, yy), Align2::LEFT_TOP, "OR A METAR", f_inst_b(11.0), pal::TEXT3);
             yy += 24.0;
             let mr = Rect::from_min_size(Pos2::new(x, yy), Vec2::new(bw - 56.0, 40.0));
@@ -1728,6 +1741,18 @@ pub fn settings(ui: &mut Ui, st: &mut UiState, in_flight: bool) {
                     label(&p, y, "Map orientation", "");
                     if let Some(i) = segmented(ui, ctrl(y), "north", &["North up", "Track up"], if s.north_up { 0 } else { 1 }) {
                         s.north_up = i == 0;
+                    }
+                    y += row_h;
+                    label(&p, y, "Turbulence", "Gusts, chop, wake and storm turbulence");
+                    let modes = crate::wx::turbulence::Mode::ALL;
+                    let cur = modes.iter().position(|m| *m == s.turbulence).unwrap_or(0);
+                    if let Some(i) = segmented(ui, ctrl(y), "turb", &modes.map(|m| m.name()), cur) {
+                        s.turbulence = modes[i];
+                    }
+                    y += row_h;
+                    label(&p, y, "Cockpit camera shake", "The head bounces in turbulence");
+                    if let Some(i) = segmented(ui, ctrl(y), "shake", &["On", "Off"], if s.camera_shake { 0 } else { 1 }) {
+                        s.camera_shake = i == 0;
                     }
                 }
                 1 => {

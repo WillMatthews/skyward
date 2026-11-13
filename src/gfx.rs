@@ -293,6 +293,8 @@ pub struct FrameView {
     pub aircraft: Option<crate::gfx_aircraft::AircraftFrame>,
     /// Particles, trails, vapour and heat haze (vfx/).
     pub vfx: Option<std::sync::Arc<crate::vfx::VfxFrame>>,
+    /// Storms, lightning, lenticulars, the windscreen (wx/gpu.rs).
+    pub wx: Option<std::sync::Arc<crate::wx::gpu::WxFrame>>,
 }
 
 /// Trees are drawn up to this distance (m) from the eye; detailed within TREE_LOD0.
@@ -589,6 +591,8 @@ pub struct Renderer {
     lights: crate::lights::LightRenderer,
     /// Effects: particles, trails, vapour, heat haze (vfx/gpu.rs).
     vfx: crate::vfx::gpu::VfxRenderer,
+    /// Lightning channels and the windscreen (wx/gpu.rs).
+    wxg: crate::wx::gpu::WxGpu,
 }
 
 fn vertex_layout() -> wgpu::VertexBufferLayout<'static> {
@@ -1079,6 +1083,7 @@ impl Renderer {
             wpass: WeatherPasses::new(device),
             vfx,
             lights,
+            wxg: crate::wx::gpu::WxGpu::new(device),
         }
     }
 
@@ -1706,6 +1711,7 @@ impl Renderer {
                 glow_tint: crate::lights::sky::GLOW_TINT,
                 lut_scale,
                 pre,
+                flash: fv.wx.as_deref().map_or(0.0, |w| w.ambient * pre),
             },
         );
         // Clouds: lit by the sun as it arrives at the middle of the layer.
@@ -1726,6 +1732,14 @@ impl Renderer {
             ground_fog: [fog.0, fog.1],
         };
         let main_cf = cloud_frame(vp, vp_rot, fv.eye, width, height);
+        // Thunderstorms, lenticulars and lightning in the clouds (wx/).
+        {
+            let none = crate::wx::gpu::WxFrame::default();
+            let w = fv.wx.as_deref().unwrap_or(&none);
+            self.clouds.set_storms(queue, &w.storms);
+            self.clouds.set_lenticular(queue, &w.lent);
+            self.clouds.set_flashes(w.lights.map(|l| crate::clouds::FlashLight { intensity: l.intensity * pre, ..l }));
+        }
         let refl_cf = cloud_frame(rvp, rvp_rot, reye, rw, rh);
         self.clouds.prepare(device, queue, encoder, &main_cf);
         let prof = self.prof.as_ref();
@@ -2080,6 +2094,10 @@ impl Renderer {
             p.mark(encoder, 5);
         }
         self.clouds.render(device, queue, encoder, &main_cf, &t.hdr, &t.dist, 0);
+        // Lightning channels (hidden by the cloud in front of them).
+        if let Some(w) = fv.wx.as_deref() {
+            self.wxg.bolts(device, queue, encoder, w, fv.eye, vp_rot, px_per_m, pre, &t.hdr, &t.dist, self.clouds.history(0), (width, height));
+        }
         // Weather: ground fog / mist (exact per-pixel optical depth), then
         // rain / snow particles in front of everything.
         {
@@ -2173,6 +2191,10 @@ impl Renderer {
                 pass.set_bind_group(0, &bg, &[]);
                 pass.draw(0..6, 0..3 * RAIN_PER_LAYER);
             }
+        }
+        // Rain on the windscreen, wipers, misting, frost (cockpit view, wx/).
+        if let Some(w) = fv.wx.as_deref() {
+            self.wxg.glass(device, queue, encoder, w, vp_rot.inverse(), px_per_m, &t.hdr, &t.dist, (width, height));
         }
         // Halos around the lights (haze, fog, rain) and the aircraft's light beams.
         {

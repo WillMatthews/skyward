@@ -75,6 +75,8 @@ pub fn keyboard() -> Vec<(Key, Vec<K>)> {
         (Key::Failures, vec![K::KeyO, K::F2]),
         (Key::Mute, vec![K::KeyN]),
         (Key::Assist, vec![K::F6]),
+        (Key::Wipers, vec![K::Backspace, K::NumpadMultiply]),
+        (Key::RadarTilt, vec![K::NumpadDivide]),
     ]
 }
 

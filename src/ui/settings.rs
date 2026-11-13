@@ -84,6 +84,9 @@ pub struct Settings {
     /// Key / controller bindings, device profiles, mouse (input/).
     pub controls: crate::input::Config,
     pub conditions: Conditions,
+    /// Turbulence: realistic / reduced / off (wx/turbulence.rs), and the cockpit head shake.
+    pub turbulence: crate::wx::turbulence::Mode,
+    pub camera_shake: bool,
     pub last: Option<LastFlight>,
     pub recents: Vec<String>,
     pub favourites: Vec<String>,
@@ -104,6 +107,8 @@ impl Default for Settings {
             sound: crate::audio::Settings::default(),
             controls: crate::input::Config::default(),
             conditions: Conditions::default(),
+            turbulence: crate::wx::turbulence::Mode::Realistic,
+            camera_shake: true,
             last: None,
             recents: Vec::new(),
             favourites: Vec::new(),
@@ -190,6 +195,8 @@ impl Settings {
             "sound": { "muted": s.muted, "master": s.master, "engines": s.engines, "environment": s.environment, "systems": s.systems, "voice": s.voice, "ui": s.ui, "radio": s.radio },
             "controls": self.controls.to_json(),
             "conditions": { "live": c.live, "hours": c.hours, "day": c.day, "preset": c.preset, "metar": c.metar },
+            "turbulence": self.turbulence.name(),
+            "camera_shake": self.camera_shake,
             "last": self.last.as_ref().map(|l| json!({ "aircraft": l.aircraft, "airport": l.airport, "start": l.start, "watch": l.watch })),
             "recents": self.recents,
             "favourites": self.favourites,
@@ -252,6 +259,8 @@ impl Settings {
             sound,
             controls: v.get("controls").map(crate::input::Config::from_json).unwrap_or_default(),
             conditions,
+            turbulence: crate::wx::turbulence::Mode::parse(&st("turbulence")).unwrap_or_default(),
+            camera_shake: b("camera_shake", true),
             last,
             recents: list("recents"),
             favourites: list("favourites"),
@@ -274,6 +283,8 @@ mod tests {
         s.sound.master = 0.4;
         s.conditions.live = false;
         s.conditions.metar = "EGLL 121150Z 24010KT 9999 FEW030 15/08 Q1015".into();
+        s.turbulence = crate::wx::turbulence::Mode::Reduced;
+        s.camera_shake = false;
         let back = Settings::from_json(&s.to_json());
         assert_eq!(back, s);
         assert_eq!(back.recents, vec!["EGLL", "EGLC"]);

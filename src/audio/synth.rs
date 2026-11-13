@@ -580,6 +580,31 @@ impl Synth {
                     rng,
                 );
             }
+            Event::ThunderRoll { km, rumble, energy, pan, ground } => {
+                // Close strikes: the crack (an N-wave from the nearest channel
+                // segment, then the tearing crackle of the rest of it); further
+                // away the air absorbs the highs and only the rolling rumble
+                // is left, lasting as long as the channel's spread of distances.
+                let k = (3.0 / km.max(0.3)).clamp(0.12, 1.2) * energy.clamp(0.4, 1.8).sqrt();
+                let lp = (14_000.0 * (-km / 2.5).exp() + 450.0).min(16_000.0);
+                if km < 2.5 && ground {
+                    let len = 0.006 + 0.004 * km;
+                    add(Shot::new(Kind::NWave { len, rise: 0.0006 + 0.001 * km }, Route::Listener, 0.9 * k, len + 0.05).panned(pan), rng);
+                    add(Shot::new(Kind::Rumble { attack: 0.004, crackle: 1.0 }, Route::Listener, 0.55 * k, 0.6 + 0.3 * km).muffled(lp, sr).panned(pan), rng);
+                }
+                let names = ["thunder_1", "thunder_2", "thunder_3"];
+                let name = names[(rng.next_u32() % 3) as usize];
+                if let Some(s) = Shot::sample(name, 0.8 + 0.25 * rng.uni() - 0.04 * km.min(5.0), Route::Listener, 1.1 * k.powf(0.7), 0.0, sr) {
+                    add(s.muffled(lp.min(900.0 + 5000.0 * k), sr).delayed(0.02 + 0.05 * km.min(4.0), sr).panned(pan * 0.8), rng);
+                }
+                add(
+                    Shot::new(Kind::Rumble { attack: 0.05 + 0.25 * (1.0 - k), crackle: 0.35 * k }, Route::Listener, 0.8 * k.powf(0.6), rumble.clamp(2.0, 20.0) + 1.5)
+                        .muffled(lp.min(2500.0), sr)
+                        .delayed(0.08, sr)
+                        .panned(pan * 0.6),
+                    rng,
+                );
+            }
             Event::UiClick => add(Shot::new(Kind::Click, Route::Ui, 0.35, 0.03), rng),
         }
     }

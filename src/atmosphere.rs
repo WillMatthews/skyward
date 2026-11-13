@@ -350,6 +350,9 @@ pub struct AtmosFrame {
     /// ambient, sun_eye) is multiplied by this, so night scenes (~1e-7 scene
     /// units) stay out of fp16 denormals; `expo` is divided by it.
     pub pre: f32,
+    /// Lightning: radiance of the lit cloud base overhead (pre-exposed scene
+    /// units), added to the ambient after the exposure is metered (wx/).
+    pub flash: f32,
 }
 
 pub struct Atmosphere {
@@ -493,7 +496,7 @@ impl Atmosphere {
             fog: [f.fog_ext, f.fog_top * 0.001, f.deck_trans, 0.0],
             moon: [f.moon.x, f.moon.y, f.moon.z, f.moon_e / SUN_E],
             night: [f.airglow / SUN_E, f.city_up / SUN_E, f.art_meter, f.pre],
-            glow_tint: [f.glow_tint.x, f.glow_tint.y, f.glow_tint.z, 0.0],
+            glow_tint: [f.glow_tint.x, f.glow_tint.y, f.glow_tint.z, f.flash],
             glow: bytemuck::cast(f.glow.map(|g| g / SUN_E)),
         };
         queue.write_buffer(&self.ubuf_main, 0, bytemuck::bytes_of(&u(f.inv_view_proj, f.eye, false)));

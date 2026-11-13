@@ -233,6 +233,8 @@ pub struct Director {
     vario: f32,
     // thunder
     next_thunder: f64,
+    /// Thunder from the storms' actual flashes (wx/), arriving after distance / c.
+    thunder_q: crate::wx::ThunderQueue,
     rng: u32,
 }
 
@@ -276,6 +278,7 @@ impl Default for Director {
             te_prev: None,
             vario: 0.0,
             next_thunder: 20.0,
+            thunder_q: Default::default(),
             rng: 0x1234_5678,
         }
     }
@@ -707,7 +710,16 @@ impl Director {
 
         // ---- weather
         let wr = world.render_weather();
-        if world.wx.thunder && !frozen {
+        if world.wxs.storms.active() && world.wxs.storms.spec.flash_rate > 0.0 {
+            // Each flash's thunder reaches the listener after distance / c:
+            // a sharp crack close by, a long low rumble from far away.
+            for th in self.thunder_q.update(&world.wxs.flashes, eye, world.wxs.time) {
+                if !frozen {
+                    let pan = th.dir.dot(right).clamp(-1.0, 1.0);
+                    events.push(Event::ThunderRoll { km: th.km, rumble: th.rumble, energy: th.energy, pan, ground: th.ground });
+                }
+            }
+        } else if world.wx.thunder && !frozen {
             if self.now > self.next_thunder {
                 let km = 1.0 + self.rand() * 9.0;
                 events.push(Event::Thunder(km));
