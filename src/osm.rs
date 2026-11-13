@@ -227,6 +227,8 @@ pub struct TileFeatures {
     pub airports: Vec<Airport>,
     /// Airport detail (airport/): gates, named taxiways, service roads.
     pub aero: AeroFeatures,
+    /// Drivable roads with their traffic attributes, tunnels included (traffic/).
+    pub roads: Vec<crate::traffic::net::RoadLine>,
 }
 
 /// Airport features the generic layers drop: gates (with their refs),
@@ -507,6 +509,10 @@ pub fn extract(layers: &[Layer], id: TileId, proj: &Proj) -> TileFeatures {
                     }
                 }
                 (_, GeomType::Line) => {
+                    // Road traffic (traffic/): every drivable road, tunnels too (hidden there).
+                    if name == "transportation" {
+                        crate::traffic::net::extract_road(&mut out.roads, f, class, &|part: &[[f32; 2]]| clip_line(part, e).into_iter().map(|(p, c)| (xf.ring(&p), c)).collect());
+                    }
                     if matches!(f.str("brunnel"), Some("tunnel")) {
                         continue;
                     }

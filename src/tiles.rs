@@ -94,6 +94,9 @@ fn fetch(agent: &ureq::Agent, template: Option<&str>, id: TileId) -> Result<(Vec
         return Ok((gunzip_if_needed(b)?, Source::Cache));
     }
     let t = template.ok_or("offline: no tile URL and tile not cached")?;
+    if crate::platform::offline() {
+        return Err("offline mode: tile not cached".into());
+    }
     let url = t.replace("{z}", &id.z.to_string()).replace("{x}", &id.x.to_string()).replace("{y}", &id.y.to_string());
     let bytes = match agent.get(&url).call() {
         Ok(r) => {

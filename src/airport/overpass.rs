@@ -171,6 +171,9 @@ pub fn fetch_blocking(ident: &str, bbox: (f64, f64, f64, f64), budget: std::time
 
 #[cfg(not(target_arch = "wasm32"))]
 fn fetch_inner(ident: &str, bbox: (f64, f64, f64, f64), budget: std::time::Duration) -> Result<Arc<OsmAirport>, String> {
+    if crate::platform::offline() {
+        return Err("offline mode".into());
+    }
     use std::io::Read;
     let t0 = web_time::Instant::now();
     let agent = ureq::AgentBuilder::new().timeout_connect(std::time::Duration::from_secs(8)).timeout(std::time::Duration::from_secs(70)).user_agent(USER_AGENT).build();

@@ -116,10 +116,16 @@ pub struct LightRenderer {
     sprite_refl: wgpu::RenderPipeline,
     traffic_main: wgpu::RenderPipeline,
     traffic_refl: wgpu::RenderPipeline,
+    /// Simulated vehicles' head / tail lights (traffic/).
+    vehicle_main: wgpu::RenderPipeline,
+    /// Draw the per-tile light-streak traffic (off with the traffic setting).
+    pub streaks: bool,
     star_main: wgpu::RenderPipeline,
     halo: wgpu::RenderPipeline,
     beams: wgpu::RenderPipeline,
     map_pipe: wgpu::RenderPipeline,
+    /// Headlight pools of the simulated vehicles in the ground light map.
+    map_vehicle_pipe: wgpu::RenderPipeline,
     map_view: wgpu::TextureView,
     cover_tex: wgpu::Texture,
     cover_view: wgpu::TextureView,
@@ -299,10 +305,12 @@ impl LightRenderer {
         let sprite_refl = scene_pipe("light sprites refl", "vs_sprite", &light_vb, 1);
         let traffic_main = scene_pipe("traffic", "vs_traffic", &traffic_vb, MSAA);
         let traffic_refl = scene_pipe("traffic refl", "vs_traffic", &traffic_vb, 1);
+        let vehicle_main = scene_pipe("vehicle lights", "vs_vehicle_lights", &[Some(crate::traffic::gpu::instance_layout())], MSAA);
         let star_main = scene_pipe("stars", "vs_star", &star_vb, MSAA);
         let halo = full_pipe("light halos", "vs_halo", "fs_halo", &light_vb, HDR);
         let beams = full_pipe("light beams", "vs_full", "fs_beams", &[], HDR);
         let map_pipe = full_pipe("light map", "vs_map", "fs_map", &light_vb, HDR);
+        let map_vehicle_pipe = full_pipe("light map vehicles", "vs_map_vehicle", "fs_map_vehicle", &[Some(crate::traffic::gpu::instance_layout())], HDR);
         let map_view = device
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some("light map"),
@@ -353,10 +361,13 @@ impl LightRenderer {
             sprite_refl,
             traffic_main,
             traffic_refl,
+            vehicle_main,
+            streaks: true,
             star_main,
             halo,
             beams,
             map_pipe,
+            map_vehicle_pipe,
             map_view,
             cover_tex,
             cover_view,
@@ -509,7 +520,8 @@ impl LightRenderer {
     }
 
     /// Splat street lights / floods into the ground light map (before the main pass).
-    pub fn draw_map(&self, encoder: &mut wgpu::CommandEncoder, tiles: &[TileDraw], world_xf: [f32; 4]) {
+    /// `vehicles`: the traffic instances (eye-relative): their headlights light the road.
+    pub fn draw_map(&self, encoder: &mut wgpu::CommandEncoder, tiles: &[TileDraw], world_xf: [f32; 4], vehicles: Option<(&wgpu::Buffer, u32)>) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("light map"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -541,6 +553,12 @@ impl LightRenderer {
                 pass.set_vertex_buffer(0, buf.slice(..));
                 pass.draw(0..6, 0..n);
             }
+        }
+        if let Some((buf, n)) = vehicles {
+            pass.set_pipeline(&self.map_vehicle_pipe);
+            self.xforms.set(&mut pass, &[0.0f32; 4]);
+            pass.set_vertex_buffer(0, buf.slice(..));
+            pass.draw(0..6, 0..n);
         }
     }
 
@@ -577,7 +595,7 @@ impl LightRenderer {
             pass.set_vertex_buffer(0, self.dyn_buf.slice(..));
             pass.draw(0..6, 0..self.dyn_n);
         }
-        if !city {
+        if !city || !self.streaks {
             return;
         }
         pass.set_pipeline(if refl { &self.traffic_refl } else { &self.traffic_main });
@@ -591,6 +609,20 @@ impl LightRenderer {
                 pass.draw(0..6 * 24, 0..*n);
             }
         }
+    }
+
+    /// Head / tail / brake lights of the simulated vehicles (eye-relative
+    /// instances, traffic/gpu.rs), inside the main pass after `draw_sprites`.
+    pub fn draw_vehicle_lights(&self, pass: &mut wgpu::RenderPass<'_>, inst: &wgpu::Buffer, n: u32) {
+        let Some(bg) = &self.bg_main else { return };
+        if n == 0 {
+            return;
+        }
+        pass.set_bind_group(0, bg, &[]);
+        pass.set_pipeline(&self.vehicle_main);
+        self.xforms.set(pass, &[0.0f32; 4]);
+        pass.set_vertex_buffer(0, inst.slice(..));
+        pass.draw(0..6 * 4, 0..n);
     }
 
     /// Haze / fog halos around the lights and the aircraft's light beams,

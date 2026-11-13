@@ -97,6 +97,11 @@ pub struct Peer {
     /// Per other player: the `latest_n` last sent to this peer.
     sent_n: HashMap<u16, u64>,
     chat: Bucket,
+    /// Weapon messages (fire / hit claims) rate limit.
+    combat: Bucket,
+    /// Air-combat score.
+    pub kills: u32,
+    pub deaths: u32,
     pongs: Vec<Msg>,
     /// Smoothed round trip, s (from the reliability layer).
     pub rtt: f64,
@@ -353,6 +358,9 @@ impl Server {
             latest_n: 0,
             sent_n: HashMap::new(),
             chat: Bucket::new(now, 5.0),
+            combat: Bucket::new(now, 400.0),
+            kills: 0,
+            deaths: 0,
             pongs: Vec::new(),
             rtt: 0.0,
         };
@@ -464,6 +472,12 @@ impl Server {
                         self.log.push(LogEvent { level: Level::Info, msg: format!("#{id} \"{name}\" crashed (severity {severity})") });
                     }
                 }
+                Msg::Combat { msg, .. } => {
+                    if let Some(m) = self.combat_check(&from, id, msg, now) {
+                        relay.push(m);
+                    }
+                    continue;
+                }
                 Msg::SetAircraft { aircraft, spectating } => {
                     if peer.aircraft != aircraft || peer.spectating != spectating {
                         peer.aircraft = aircraft.clone();
@@ -491,6 +505,63 @@ impl Server {
                 }
             }
         }
+    }
+
+    /// Arbitrate a combat message from player `id`: combat must be on, the
+    /// sender (and a hit's target) flying, hits within the weapon's
+    /// plausible range of the target's last known position, and the rate
+    /// bounded. Returns what to relay (stamped with the sender).
+    fn combat_check(&mut self, from: &SocketAddr, id: u16, msg: CombatMsg, now: f64) -> Option<Msg> {
+        let combat = self.cfg.world.combat;
+        let peer = self.peers.get_mut(from)?;
+        if msg.is_weapon() && (!combat || peer.spectating) {
+            self.stats.rate_limited += 1;
+            return None;
+        }
+        if msg.is_weapon() && !peer.combat.take(now, 150.0, 400.0) {
+            self.stats.rate_limited += 1;
+            return None;
+        }
+        let shooter_at = peer.latest.map(|s| (s.lat, s.lon, s.alt as f64));
+        let name = peer.name.clone();
+        match &msg {
+            CombatMsg::Hit { target, weapon, .. } => {
+                let tp = self.by_id.get(target).and_then(|a| self.peers.get(a))?;
+                if tp.spectating || *target == id {
+                    return None;
+                }
+                let (Some(a), Some(b)) = (shooter_at, tp.latest.map(|s| (s.lat, s.lon, s.alt as f64))) else { return None };
+                // Guns (codes 0–2, 8) reach ~2.5 km; missiles (3, 4) far more.
+                let max = if matches!(weapon, 3 | 4) { 80_000.0 } else { 3_000.0 };
+                if geo_dist(a, b) > max {
+                    self.stats.malformed += 1;
+                    return None;
+                }
+            }
+            CombatMsg::Kill { killer, .. } => {
+                if let Some(p) = self.peers.get_mut(from) {
+                    p.deaths += 1;
+                }
+                let kname = self.by_id.get(killer).and_then(|a| self.peers.get_mut(a)).map(|k| {
+                    k.kills += 1;
+                    k.name.clone()
+                });
+                let msg = match kname {
+                    Some(k) => format!("#{id} \"{name}\" shot down by \"{k}\""),
+                    None => format!("#{id} \"{name}\" was shot down"),
+                };
+                self.log.push(LogEvent { level: Level::Info, msg });
+            }
+            _ => {}
+        }
+        Some(Msg::Combat { from: id, msg })
+    }
+
+    /// Turn combat on / off for everyone (console / config).
+    pub fn set_combat(&mut self, on: bool, now: f64) {
+        let mut w = self.cfg.world.clone();
+        w.combat = on;
+        self.set_world(w, now);
     }
 
     fn remove(&mut self, addr: SocketAddr, why: LeaveReason) {
@@ -634,4 +705,12 @@ impl Server {
         v.sort_by_key(|r| r.0);
         v
     }
+}
+
+/// Distance between two geodetic points (lat, lon degrees, alt m), m (flat-earth, fine within a fight).
+fn geo_dist(a: (f64, f64, f64), b: (f64, f64, f64)) -> f64 {
+    let dn = (b.0 - a.0) * M_PER_DEG_LAT;
+    let de = (b.1 - a.1) * M_PER_DEG_LAT * (a.0.to_radians().cos());
+    let du = b.2 - a.2;
+    (dn * dn + de * de + du * du).sqrt()
 }

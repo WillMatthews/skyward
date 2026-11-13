@@ -18,7 +18,7 @@ const TAG_FAR: f32 = 15_000.0;
 const CHAT_LIFE: f64 = 14.0;
 
 /// World point → screen with the frame's camera; also the distance along the view.
-fn project(cam: &(Vec3, Mat4, f32), screen: Rect, p: Vec3) -> Option<(Pos2, f32)> {
+pub fn project(cam: &(Vec3, Mat4, f32), screen: Rect, p: Vec3) -> Option<(Pos2, f32)> {
     let (eye, view, fov) = *cam;
     // (Rotation-only view: positions eye-relative, like the renderer.)
     let v = Mat4::from_cols(view.x_axis, view.y_axis, view.z_axis, Vec4::W).transform_vector3(p - eye);
@@ -170,7 +170,11 @@ fn chat(ctx: &egui::Context, st: &mut UiState, screen: Rect, now: f64) {
             text_halo(&p, pos, Align2::LEFT_TOP, &l.text, f_ui(13.0), alpha(tc, fade));
         } else {
             let nr = text_halo(&p, pos, Align2::LEFT_TOP, format!("{}:", l.name), f_semi(13.0), alpha(nc, fade));
-            let text: String = l.text.chars().take(80).collect();
+            let mut text: String = l.text.chars().take(80).collect();
+            // Settings › Multiplayer › Chat filter (other players' lines).
+            if st.settings.mp.chat_filter && matches!(l.kind, ChatKind::Player) {
+                text = super::settings_schema::filter_chat(&text);
+            }
             text_halo(&p, Pos2::new(nr.max.x + 6.0, y), Align2::LEFT_TOP, text, f_ui(13.0), alpha(tc, fade));
         }
         y -= line_h;
@@ -436,7 +440,15 @@ pub fn nd_traffic(p: &egui::Painter, view: &View, sim: &Sim, u: f32) {
     }
     let own = sim.ac.pos;
     let mut worst = Threat::Other;
+    // Live traffic: callsigns on the nearest few airborne targets (and every TA / RA).
+    let mut near: Vec<(f32, u16)> = traffic.iter().filter(|t| t.live && !t.on_ground).map(|t| (vec2(t.pos.x - own.x, t.pos.z - own.z).length(), t.id)).collect();
+    near.sort_by(|a, b| a.0.total_cmp(&b.0));
+    near.truncate(6);
     for t in &traffic {
+        // (Live traffic on the ground is not shown, as on a real TCAS.)
+        if t.live && t.on_ground {
+            continue;
+        }
         let q = view.to_screen(vec2(t.pos.x, t.pos.z));
         if !view.rect.contains(q) {
             continue;
@@ -468,6 +480,10 @@ pub fn nd_traffic(p: &egui::Painter, view: &View, sim: &Sim, u: f32) {
         let lab = format!("{}{:02.0}", if dh >= 0.0 { "+" } else { "−" }, dh.abs().min(99.0));
         let above = dh >= 0.0;
         p.text(q + Vec2::new(0.0, if above { -s - 1.0 } else { s + 1.0 }), if above { Align2::CENTER_BOTTOM } else { Align2::CENTER_TOP }, lab, f_mono(2.6 * u), col);
+        // Live traffic: the callsign beside the symbol (`adsb/`).
+        if t.live && !t.name.is_empty() && (th >= Threat::Ta || near.iter().any(|n| n.1 == t.id)) {
+            p.text(q + Vec2::new(s + 2.4 * u, 0.0), Align2::LEFT_CENTER, &t.name, f_mono(2.2 * u), alpha(col, 0.85));
+        }
         let vs = t.vel.y / 0.3048 * 60.0;
         if vs.abs() > 500.0 {
             let x = q.x + s + 1.2 * u;
@@ -488,7 +504,7 @@ mod tests {
     use super::*;
 
     fn tr(pos: Vec3, vel: Vec3) -> Traffic {
-        Traffic { id: 1, name: "x".into(), aircraft: "kestrel".into(), pos, vel, heading: 0.0, on_ground: false }
+        Traffic { id: 1, name: "x".into(), aircraft: "kestrel".into(), pos, vel, heading: 0.0, on_ground: false, kind: String::new(), live: false }
     }
 
     #[test]

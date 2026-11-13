@@ -416,6 +416,15 @@ fn command(server: &mut Server, line: &str, now: f64, log: &Logger, cfg: &Config
             v.sort();
             reply(if v.is_empty() { "no bans".into() } else { v.join("\n") })
         }
+        "combat" => match rest.trim() {
+            "on" | "off" => {
+                let on = rest.trim() == "on";
+                server.set_combat(on, now);
+                log.info(&format!("combat {}", if on { "on" } else { "off" }));
+                reply(format!("combat {}", if on { "on" } else { "off" }))
+            }
+            _ => reply(format!("combat is {} (combat on|off)", if server.cfg.world.combat { "on" } else { "off" })),
+        },
         "say" => {
             server.say(rest);
             log.info(&format!("chat <server> {rest}"));

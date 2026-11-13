@@ -641,6 +641,8 @@ pub struct TileBuild {
     pub lights: crate::lights::TileLights,
     /// Airport detail: what this tile adds to its airports' layouts (airport/).
     pub aero: Option<std::sync::Arc<crate::airport::tile::AeroTile>>,
+    /// Lane graph for the road traffic (traffic/net.rs).
+    pub roads: Option<std::sync::Arc<crate::traffic::net::RoadNet>>,
 }
 
 const DENSITY_N: usize = 24;
@@ -686,6 +688,7 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
     }
     // Built-up cells (buildings or urban landuse, grown by one cell): only
     // their roads get street lights — country roads stay dark.
+    let built_cells;
     {
         let mut built = vec![false; DENSITY_N * DENSITY_N];
         for z in 0..DENSITY_N as i32 {
@@ -706,6 +709,7 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
         for a in sel(&f, |k| matches!(k, Kind::Urban(_))) {
             rx_d.fill(&a.outer, &a.holes, |x, y| built[y as usize * DENSITY_N + x as usize] = true);
         }
+        built_cells = built.clone();
         lights.set_built(built, DENSITY_N);
     }
     flat.mat = mat::GROUND;
@@ -1011,6 +1015,23 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
     let mut lights = lights.finish();
     drape_lights(&mut lights, &grid);
     let aero = aero.summary(id, &f, aero_blds);
+    // Road traffic: the lane graph, draped on the terrain.
+    let roads = {
+        let cell = (hi - lo) / DENSITY_N as f32;
+        let built = |p: Vec2| {
+            let c = ((p - lo) / cell).floor();
+            let (x, z) = (c.x as i32, c.y as i32);
+            (0..DENSITY_N as i32).contains(&x) && (0..DENSITY_N as i32).contains(&z) && built_cells[z as usize * DENSITY_N + x as usize]
+        };
+        // Landmark bridges (Tower Bridge): the traffic drives on their deck.
+        let decks: Vec<(&Vec<Vec2>, f32)> = landmarks.iter().filter_map(|l| Some((l.suppress.first()?, grid.height(l.anchor) + l.deck?))).collect();
+        let height = |p: Vec2| {
+            let h = grid.height(p);
+            decks.iter().filter(|(r, _)| point_in_ring(p, r)).fold(h, |h, (_, d)| h.max(*d))
+        };
+        let ctx = crate::traffic::net::Ctx { id, proj, height: &height, built: &built };
+        crate::traffic::net::build(&ctx, &f.roads).map(std::sync::Arc::new)
+    };
 
     TileBuild {
         id,
@@ -1028,6 +1049,7 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
         building_count,
         lights,
         aero,
+        roads,
     }
 }
 
@@ -1127,6 +1149,7 @@ pub fn build_far_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
         building_count: 0,
         lights,
         aero: None,
+        roads: None,
     }
 }
 
@@ -1150,6 +1173,7 @@ impl TileBuild {
             building_count: 0,
             lights: crate::lights::TileLights::default(),
             aero: None,
+            roads: None,
         }
     }
 }
@@ -1557,6 +1581,7 @@ mod wire_impls {
             self.building_count.put(w);
             self.lights.put(w);
             self.aero.put(w);
+            self.roads.put(w);
         }
         fn get(r: &mut R) -> Res<Self> {
             Ok(TileBuild {
@@ -1575,6 +1600,7 @@ mod wire_impls {
                 building_count: Wire::get(r)?,
                 lights: Wire::get(r)?,
                 aero: Wire::get(r)?,
+                roads: Wire::get(r)?,
             })
         }
     }

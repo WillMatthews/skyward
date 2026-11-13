@@ -298,6 +298,8 @@ pub struct Synth {
     radio: super::radio::Radio,
     /// Other aircraft (multiplayer).
     traffic: super::traffic::Traffic,
+    /// Guns, cracks, hits, launches, seeker / RWR tones (weapons.rs).
+    weapons: super::weapons::Weapons,
     fdn: Fdn,
     world_lp: OnePole,
     world_lp2: OnePole,
@@ -358,6 +360,7 @@ impl Synth {
             pa: Speaker::new(sr),
             radio: super::radio::Radio::new(sr),
             traffic: super::traffic::Traffic::default(),
+            weapons: super::weapons::Weapons::new(sr),
             fdn: Fdn::new(sr),
             world_lp: OnePole::new(700.0, sr),
             world_lp2: OnePole::new(1100.0, sr),
@@ -473,6 +476,19 @@ impl Synth {
                 _ => {}
             }
         }
+        // Weapons (weapons.rs): guns and tones are voices, the rest one-shots.
+        {
+            let ear = self.ear;
+            let pool = &mut self.pool;
+            let rng = &mut self.rng;
+            let mut add = |s: Shot| {
+                let s = if s.route == Route::World { s.delayed((s.wpos.distance(ear) / SPEED_OF_SOUND).min(8.0), sr) } else { s };
+                pool.add(s.init(sr, rng));
+            };
+            if self.weapons.event(e, &mut add) {
+                return;
+            }
+        }
         let rng = &mut self.rng;
         let pool = &mut self.pool;
         let speaker = &mut self.speaker;
@@ -585,6 +601,7 @@ impl Synth {
                 );
             }
             Event::UiClick => add(Shot::new(Kind::Click, Route::Ui, 0.35, 0.03), rng),
+            Event::Gun { .. } | Event::Crack { .. } | Event::Hit { .. } | Event::Missile { .. } | Event::Countermeasure { .. } | Event::Eject { .. } | Event::Tones { .. } => {}
         }
     }
 
@@ -698,6 +715,7 @@ impl Synth {
         }
         let ear = self.ear;
         let (er, eu, ef) = (f.ear_right, f.ear_up, f.ear_fwd);
+        self.weapons.control(ear, er, f.interior, if f.cut { Vec3::ZERO } else { f.shift });
         let axis = f.ac_rot * Vec3::Z;
         // Supersonic source: exact retarded-time solution with the full
         // speed (silence ahead of the Mach cone, boom on entering it). At
@@ -896,13 +914,16 @@ impl Synth {
             ext_eng.1 += s * em.gr.tick();
             send += s * em.send.tick();
         }
-        // Airframe emitter (aero / ground / airframe one-shots).
+        // Airframe emitter (aero / ground / airframe one-shots), plus the guns (weapons.rs).
         let (mut a_ext, mut a_int) = self.air.tick(&mut self.rng);
-        let mut cock_shots = 0.0f32;
+        let (w_ext, w_int, w_world, w_tones) = self.weapons.tick(&mut self.rng);
+        a_ext += w_ext;
+        a_int += w_int;
+        let mut cock_shots = w_tones;
         let mut lis = (0.0f32, 0.0f32);
         let lis_g = 1.0 - 0.45 * ins;
         let mut ui = 0.0f32;
-        let mut wext = (0.0f32, 0.0f32);
+        let mut wext = w_world;
         for slot in self.pool.shots.iter_mut() {
             if let Some(s) = slot {
                 match s.tick(sr, &mut self.rng) {

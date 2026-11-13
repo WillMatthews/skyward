@@ -3,9 +3,8 @@
 //! the loading screen.
 
 use super::overview::{self, View as OView};
+use super::{alpha, f_display, f_inst, f_inst_b, f_mono, f_semi, f_ui, gradient_rect, hhmm, pal, panel, panel_with, sp, thousands, Action, Screen, UiState};
 use super::worldmap::{self, style::MapStyle as WStyle};
-use super::settings::{HudMode, MapStyle, DETAIL_NAMES};
-use super::{alpha, f_display, f_inst, f_inst_b, f_mono, f_semi, f_ui, gradient_rect, hhmm, pal, panel, panel_with, sp, thousands, Action, AltUnit, Screen, SpeedUnit, UiState};
 use crate::airports::{self, Airport, Db, Kind};
 use crate::flight::{AircraftDef, Category, EngineKind};
 use crate::startpos::Spec;
@@ -270,8 +269,10 @@ pub fn main_menu(ui: &mut Ui, st: &mut UiState) {
     p.text(Pos2::new(tx, card.min.y + 64.0), Align2::LEFT_TOP, ap, f_ui(13.0), pal::TEXT2);
     p.text(Pos2::new(tx, card.min.y + 84.0), Align2::LEFT_TOP, st.plan.spec.label(), f_ui(13.0), pal::TEXT3);
     if button(ui, Rect::from_min_size(Pos2::new(tx, card.max.y - 46.0), Vec2::new(card.max.x - tx - 16.0, 36.0)), "flynow", "Fly", Btn::Primary, true).clicked() {
+        st.plan.dogfight = None;
         st.actions.push(Action::Fly);
     }
+    dogfight_card(ui, st, Rect::from_min_size(Pos2::new(card.min.x, card.min.y - 286.0), Vec2::new(cw, 274.0)));
     p.text(Pos2::new(x, screen.max.y - 28.0), Align2::LEFT_BOTTOM, format!("{} · {} · {}", crate::hud::ATTRIBUTION, airports::CREDIT, WEATHER_CREDIT_SHORT), f_ui(11.0), pal::TEXT3);
 }
 
@@ -283,6 +284,56 @@ const WEATHER_CREDIT: &str = if crate::platform::WEB {
     "METARs: aviationweather.gov (NOAA) · forecasts: Open-Meteo (CC BY 4.0)"
 };
 const WEATHER_CREDIT_SHORT: &str = if crate::platform::WEB { "Weather: METARs via VATSIM, Open-Meteo" } else { "Weather: NOAA aviationweather.gov, Open-Meteo" };
+
+/// The dogfight quick start: aircraft, opponent, format, opponents' skill.
+fn dogfight_card(ui: &mut Ui, st: &mut UiState, card: Rect) {
+    use crate::weapons::ai::Difficulty;
+    use crate::weapons::setup::Format;
+    let p = ui.painter().clone();
+    panel(&p, card, sp::R_CARD);
+    let x = card.min.x + 18.0;
+    let w = card.width() - 36.0;
+    p.text(Pos2::new(x, card.min.y + 16.0), Align2::LEFT_TOP, "DOGFIGHT", f_inst_b(11.0), pal::ACCENT);
+    p.text(Pos2::new(x, card.min.y + 34.0), Align2::LEFT_TOP, "Guns, missiles and AI pilots over this airfield", f_ui(13.0), pal::TEXT2);
+    let types = [("peregrine", "Spitfire IX"), ("lancer", "F-16C")];
+    let lw = 84.0;
+    let mut y = card.min.y + 62.0;
+    let row = |p: &egui::Painter, y: f32, label: &str| {
+        p.text(Pos2::new(x, y + 15.0), Align2::LEFT_CENTER, label, f_ui(13.0), pal::TEXT3);
+        Rect::from_min_size(Pos2::new(x + lw, y), Vec2::new(w - lw, 30.0))
+    };
+    let names: Vec<&str> = types.iter().map(|t| t.1).collect();
+    let sel = types.iter().position(|t| t.0 == st.dogfight.player).unwrap_or(0);
+    if let Some(i) = segmented(ui, row(&p, y, "You"), "df_you", &names, sel) {
+        st.dogfight.player = types[i].0.to_string();
+    }
+    y += 38.0;
+    let sel = types.iter().position(|t| t.0 == st.dogfight.opponent).unwrap_or(0);
+    if let Some(i) = segmented(ui, row(&p, y, "Opponent"), "df_opp", &names, sel) {
+        st.dogfight.opponent = types[i].0.to_string();
+    }
+    y += 38.0;
+    let fmts = [Format::OneVOne, Format::TwoVTwo];
+    let sel = fmts.iter().position(|f| *f == st.dogfight.format).unwrap_or(0);
+    if let Some(i) = segmented(ui, row(&p, y, "Format"), "df_fmt", &["1 v 1", "2 v 2"], sel) {
+        st.dogfight.format = fmts[i];
+    }
+    y += 38.0;
+    let names: Vec<&str> = Difficulty::ALL.iter().map(|d| d.name()).collect();
+    let sel = Difficulty::ALL.iter().position(|d| *d == st.dogfight.difficulty).unwrap_or(1);
+    if let Some(i) = segmented(ui, row(&p, y, "Pilots"), "df_skill", &names, sel) {
+        st.dogfight.difficulty = Difficulty::ALL[i];
+    }
+    y += 44.0;
+    if button(ui, Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, 36.0)), "df_fight", "Fight", Btn::Primary, true).clicked() {
+        if let Some(i) = st.defs.iter().position(|d| d.id == st.dogfight.player) {
+            st.plan.aircraft = i;
+        }
+        st.plan.watch = false;
+        st.plan.dogfight = Some(st.dogfight.clone());
+        st.actions.push(Action::Fly);
+    }
+}
 
 pub fn credits(ui: &mut Ui, st: &mut UiState) {
     let screen = ui.ctx().content_rect();
@@ -297,6 +348,7 @@ pub fn credits(ui: &mut Ui, st: &mut UiState) {
         ("Navaids", "VOR / DME / NDB: OurAirports — public domain · ILS: synthetic, derived from the runway data (a few London ILS from public charts)"),
         ("ATC", "Frequencies: OurAirports — public domain · voices: Kokoro-82M (Apache-2.0), generated for Skyward"),
         ("Weather", WEATHER_CREDIT),
+        ("Live traffic", "ADS-B data: adsb.lol contributors — ODbL 1.0 (desktop version)"),
         ("Elevation", "Terrain Tiles on AWS (Mapzen / Tilezen: SRTM, GMTED2010, 3DEP, ETOPO1, EU-DEM and more)"),
         ("Aircraft & sounds", "FlightGear aircraft and recordings — GPL v2 / v2+ (per-aircraft credits in the source)"),
         ("Fonts", "Inter (Rasmus Andersson), JetBrains Mono, B612 (Airbus / Intactile / ENAC) — SIL Open Font License 1.1"),
@@ -1681,7 +1733,7 @@ fn details_panel(ui: &mut Ui, st: &mut UiState, db: &Arc<Db>, def: &AircraftDef,
                     _ => "Calm".into(),
                 };
                 p.text(mc.min + Vec2::new(70.0, 10.0), Align2::LEFT_TOP, wind, f_semi(14.0), pal::TEXT);
-                let extra = format!("{}{}{}", m.temp_c.map(|t| format!("{t:.0}°C  ")).unwrap_or_default(), m.qnh_hpa.map(|q| format!("Q{q:.0}  ")).unwrap_or_default(), if km > 3.0 { format!("{} · {km:.0} km", m.station) } else { m.station.clone() });
+                let extra = format!("{}{}{}", m.temp_c.map(|t| format!("{:.0}{}  ", st.settings.temp.conv(t), st.settings.temp.label())).unwrap_or_default(), m.qnh_hpa.map(|q| format!("{}  ", st.settings.pressure.short(q))).unwrap_or_default(), if km > 3.0 { format!("{} · {km:.0} km", m.station) } else { m.station.clone() });
                 p.text(Pos2::new(mc.max.x - 12.0, mc.min.y + 12.0), Align2::RIGHT_TOP, extra, f_ui(12.0), pal::TEXT2);
                 let g = p.layout(m.raw.clone(), f_mono(11.0), pal::TEXT3, w - 24.0);
                 p.galley(mc.min + Vec2::new(12.0, 38.0), g, pal::TEXT3);
@@ -1835,6 +1887,7 @@ pub fn conditions(ui: &mut Ui, st: &mut UiState) {
     }
     let y = heading(&p, content.min + Vec2::new(0.0, 56.0), "Conditions", "Real weather and time at the airport, or set your own.");
     let colw = (content.width() - 24.0) * 0.5;
+    let (temp_u, press_u) = (st.settings.temp, st.settings.pressure);
     let c = &mut st.settings.conditions;
     let card = |ui: &mut Ui, r: Rect, id: &str, title: &str, sub: &str, on: bool| -> bool {
         let resp = ui.interact(r, ui.id().with(id), Sense::click());
@@ -1896,8 +1949,8 @@ pub fn conditions(ui: &mut Ui, st: &mut UiState) {
                             tiles.push(("WIND", if w.wind_kt < 1.0 { "Calm".into() } else { format!("{:03.0}° {:.0} kt", w.wind_from, w.wind_kt) }, pal::TEXT));
                             tiles.push(("VISIBILITY", if w.vis_m >= 9999.0 { "10 km +".into() } else { format!("{:.1} km", w.vis_m / 1000.0) }, pal::TEXT));
                             tiles.push(("CLOUD", w.cloud_text(), pal::TEXT));
-                            tiles.push(("TEMPERATURE", format!("{:.0} °C", w.temp_c), pal::TEXT));
-                            tiles.push(("QNH", format!("{:.0} hPa", w.qnh_hpa), pal::TEXT));
+                            tiles.push(("TEMPERATURE", temp_u.fmt(w.temp_c), pal::TEXT));
+                            tiles.push(("QNH", press_u.fmt(w.qnh_hpa), pal::TEXT));
                         }
                         let tw = (bw - 56.0 - 6.0 * 12.0) / 7.0;
                         for (k, (lab, val, col)) in tiles.iter().enumerate() {
@@ -2016,6 +2069,7 @@ pub fn conditions(ui: &mut Ui, st: &mut UiState) {
     let summary = format!("{} · {} · {}", def.name, st.plan.airport, st.plan.spec.label());
     p.text(Pos2::new(content.max.x - 250.0, fy + 24.0), Align2::RIGHT_CENTER, summary, f_ui(14.0), pal::TEXT2);
     if button(ui, Rect::from_min_size(Pos2::new(content.max.x - 230.0, fy), Vec2::new(230.0, 48.0)), "fly", "Fly", Btn::Primary, !st.plan.airport.is_empty()).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.any()) {
+        st.plan.dogfight = None;
         st.actions.push(Action::Fly);
     }
 }
@@ -2036,138 +2090,9 @@ fn month_day(doy: u32) -> (u32, u32) {
 
 // ---------------------------------------------------------------- settings
 
+/// The settings screen (ui/settings_ui.rs: category rail, search, Apply / Revert).
 pub fn settings(ui: &mut Ui, st: &mut UiState, in_flight: bool) {
-    let screen = ui.ctx().content_rect();
-    let p = ui.painter().clone();
-    backdrop(&p, screen, if in_flight { 0.85 } else { 1.0 });
-    // Controls needs room for its binding table.
-    let w = if st.settings_tab == 3 { 960.0 } else { 760.0f32 }.min(screen.width() - 80.0);
-    let card = Rect::from_center_size(screen.center(), Vec2::new(w, (screen.height() - 120.0).min(if st.settings_tab == 3 { 820.0 } else { 760.0 })));
-    panel_with(&p, card, sp::R_CARD, pal::PANEL_SOLID);
-    let x = card.min.x + 32.0;
-    p.text(Pos2::new(x, card.min.y + 26.0), Align2::LEFT_TOP, "Settings", f_display(28.0), pal::TEXT);
-    let tabs = ["Display", "Units", "Sound", "Controls"];
-    if let Some(t) = segmented(ui, Rect::from_min_size(Pos2::new(x, card.min.y + 76.0), Vec2::new(w - 64.0, 36.0)), "settabs", &tabs, st.settings_tab) {
-        st.settings_tab = t;
-    }
-    let body = Rect::from_min_max(Pos2::new(x, card.min.y + 132.0), Pos2::new(card.max.x - 32.0, card.max.y - 80.0));
-    let s0 = st.settings.clone();
-    let lw = 220.0;
-    let row_h = 52.0;
-    let label = |p: &egui::Painter, y: f32, k: &str, hint: &str| {
-        p.text(Pos2::new(x, y + 8.0), Align2::LEFT_TOP, k, f_semi(14.0), pal::TEXT);
-        if !hint.is_empty() {
-            p.text(Pos2::new(x, y + 28.0), Align2::LEFT_TOP, hint, f_ui(11.5), pal::TEXT3);
-        }
-    };
-    let ctrl = |y: f32| Rect::from_min_size(Pos2::new(x + lw, y + 6.0), Vec2::new(body.max.x - x - lw, 34.0));
-    if st.settings_tab == 3 {
-        // Bindings, devices, mouse (ui/controls.rs).
-        let foot = Rect::from_min_size(Pos2::new(x, card.max.y - 64.0), Vec2::new(w - 240.0, 44.0));
-        super::controls::page(ui, st, body, foot);
-    } else {
-        // The other tabs scroll when the window is short (the bar floats right of the controls).
-        let page_r = Rect::from_min_max(body.min, Pos2::new(card.max.x - 12.0, body.max.y));
-        let tab = st.settings_tab;
-        let audio_status = st.audio_status.clone();
-        let s = &mut st.settings;
-        super::scroll::page(ui, page_r, ["settings_display", "settings_units", "settings_sound"][tab.min(2)], pal::PANEL_SOLID, |ui, o, _| {
-            let p = ui.painter().clone();
-            let mut y = o.y;
-            match tab {
-                0 => {
-                    label(&p, y, "Interface scale", "Relative to the window size");
-                    let opts = ["80 %", "90 %", "100 %", "115 %", "130 %"];
-                    let vals = [0.8, 0.9, 1.0, 1.15, 1.3];
-                    let cur = vals.iter().position(|v| (v - s.ui_scale).abs() < 0.03).unwrap_or(2);
-                    if let Some(i) = segmented(ui, ctrl(y), "scale", &opts, cur) {
-                        s.ui_scale = vals[i];
-                    }
-                    y += row_h;
-                    label(&p, y, "Instruments", "U cycles in flight");
-                    let cur = [HudMode::Full, HudMode::Minimal, HudMode::Off].iter().position(|m| *m == s.hud).unwrap_or(0);
-                    if let Some(i) = segmented(ui, ctrl(y), "hud", &["Full", "Minimal", "Off"], cur) {
-                        s.hud = [HudMode::Full, HudMode::Minimal, HudMode::Off][i];
-                    }
-                    y += row_h;
-                    label(&p, y, "Scenery detail", "Detailed scenery radius");
-                    if let Some(i) = segmented(ui, ctrl(y), "detail", &DETAIL_NAMES, s.detail as usize) {
-                        s.detail = i as u8;
-                    }
-                    y += row_h;
-                    label(&p, y, "Vertical sync", "Off: lowest latency, may stutter");
-                    if let Some(i) = segmented(ui, ctrl(y), "vsync", &["On", "Off"], if s.vsync { 0 } else { 1 }) {
-                        s.vsync = i == 0;
-                    }
-                    y += row_h;
-                    label(&p, y, "Map style", "Auto follows the sun");
-                    let cur = [MapStyle::Auto, MapStyle::Day, MapStyle::Night].iter().position(|m| *m == s.map_style).unwrap_or(0);
-                    if let Some(i) = segmented(ui, ctrl(y), "mapstyle", &["Auto", "Day", "Night"], cur) {
-                        s.map_style = [MapStyle::Auto, MapStyle::Day, MapStyle::Night][i];
-                    }
-                    y += row_h;
-                    label(&p, y, "Map orientation", "");
-                    if let Some(i) = segmented(ui, ctrl(y), "north", &["North up", "Track up"], if s.north_up { 0 } else { 1 }) {
-                        s.north_up = i == 0;
-                    }
-                }
-                1 => {
-                    label(&p, y, "Speed", "Panels and the status card; dials keep the aircraft's own units");
-                    let cur = [SpeedUnit::Knots, SpeedUnit::Kmh, SpeedUnit::Mph].iter().position(|m| *m == s.speed).unwrap_or(0);
-                    if let Some(i) = segmented(ui, ctrl(y), "spd", &["Knots", "km/h", "mph"], cur) {
-                        s.speed = [SpeedUnit::Knots, SpeedUnit::Kmh, SpeedUnit::Mph][i];
-                    }
-                    y += row_h + 10.0;
-                    label(&p, y, "Altitude", "");
-                    if let Some(i) = segmented(ui, ctrl(y), "alt", &["Feet", "Metres"], if s.alt == AltUnit::Feet { 0 } else { 1 }) {
-                        s.alt = if i == 0 { AltUnit::Feet } else { AltUnit::Metres };
-                    }
-                }
-                _ => {
-                    label(&p, y, "Mute", "N in flight");
-                    if let Some(i) = segmented(ui, ctrl(y), "mute", &["Sound on", "Muted"], if s.sound.muted { 1 } else { 0 }) {
-                        s.sound.muted = i == 1;
-                    }
-                    y += row_h;
-                    let slider = |ui: &mut Ui, y: f32, k: &str, v: &mut f32, max: f32| {
-                        label(&p, y, k, "");
-                        let r = ctrl(y);
-                        // (Slider and its value on one line.)
-                        ui.scope_builder(UiBuilder::new().max_rect(r).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
-                            ui.spacing_mut().slider_width = r.width() - 70.0;
-                            ui.add(egui::Slider::new(v, 0.0..=max).show_value(false));
-                            ui.label(RichText::new(format!("{:.0} %", *v / max * 100.0)).font(f_mono(12.0)).color(pal::TEXT2));
-                        });
-                    };
-                    slider(ui, y, "Master", &mut s.sound.master, 1.0);
-                    y += row_h;
-                    slider(ui, y, "Engines", &mut s.sound.engines, 1.5);
-                    y += row_h;
-                    slider(ui, y, "Wind, ground, weather", &mut s.sound.environment, 1.5);
-                    y += row_h;
-                    slider(ui, y, "Cockpit systems", &mut s.sound.systems, 1.5);
-                    y += row_h;
-                    slider(ui, y, "Callouts", &mut s.sound.voice, 1.5);
-                    y += row_h;
-                    slider(ui, y, "ATC radio", &mut s.sound.radio, 1.5);
-                    y += row_h;
-                    slider(ui, y, "Interface", &mut s.sound.ui, 1.5);
-                    y += row_h;
-                    p.text(Pos2::new(x, y + 6.0), Align2::LEFT_TOP, audio_status.clone(), f_ui(12.0), pal::TEXT3);
-                }
-            }
-            y + row_h + 8.0 - o.y
-        });
-    }
-    if st.settings != s0 {
-        st.settings_dirty = true;
-    }
-    let fy = card.max.y - 64.0;
-    if button(ui, Rect::from_min_size(Pos2::new(card.max.x - 172.0, fy), Vec2::new(140.0, 44.0)), "done", "Done", Btn::Primary, true).clicked() || (esc(ui) && !super::controls::swallow_esc(st)) {
-        st.input.listen = None;
-        st.input.calib = None;
-        st.actions.push(Action::Back);
-    }
+    super::settings_ui::screen(ui, st, in_flight);
 }
 
 // ---------------------------------------------------------------- pause
@@ -2195,7 +2120,7 @@ pub fn pause(ui: &mut Ui, st: &mut UiState, title: &str, sub: &str) {
     }
     // Rows tighten on short windows so the card always fits.
     let step = ((screen.height() - 48.0 - 130.0) / items.len() as f32).clamp(44.0, 54.0);
-    let h = 120.0 + items.len() as f32 * step + 10.0;
+    let h = 120.0 + items.len() as f32 * step + 10.0 + 34.0;
     let card = Rect::from_center_size(screen.center(), Vec2::new(w, h));
     panel_with(&p, card, sp::R_CARD, pal::PANEL_SOLID);
     p.text(card.min + Vec2::new(28.0, 24.0), Align2::LEFT_TOP, "Paused", f_display(28.0), pal::TEXT);
@@ -2209,6 +2134,10 @@ pub fn pause(ui: &mut Ui, st: &mut UiState, title: &str, sub: &str) {
         }
         y += step;
     }
+    // Key hints, as on the other screens.
+    let pad = st.input.devices.iter().any(|d| d.info.kind == crate::input::DevKind::Gamepad);
+    let hints: &[(&str, &str)] = if pad { &[("Start", "Resume")] } else { &[("Esc", "Resume")] };
+    super::chrome::key_hints(&p, Rect::from_min_size(Pos2::new(card.min.x, card.max.y - 40.0), Vec2::new(w, 26.0)), hints);
 }
 
 // ---------------------------------------------------------------- loading

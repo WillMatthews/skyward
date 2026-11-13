@@ -60,13 +60,13 @@ jobs:
         run: scripts/fmt-check.sh
 
       - name: clippy
-        run: cargo clippy --locked --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       - name: tests
-        run: cargo test --locked -- --skip gpu_
+        run: cargo test --locked --workspace -- --skip gpu_
 
       - name: release build
-        run: cargo build --locked --release
+        run: cargo build --locked --release --workspace
 
   server:
     name: skyward-server (${{ matrix.os }})

@@ -946,6 +946,9 @@ impl MetarFetch {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn fetch_metar(id: &str, lat: f64, lon: f64) -> Result<(crate::weather::Metar, f64), String> {
+    if crate::platform::offline() {
+        return Err("offline mode".into());
+    }
     let f = HttpFetcher;
     let parse = |body: &[u8]| -> Vec<(crate::weather::Metar, f64)> {
         let Ok(serde_json::Value::Array(a)) = serde_json::from_slice::<serde_json::Value>(body) else { return Vec::new() };

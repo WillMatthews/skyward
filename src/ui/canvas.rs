@@ -29,6 +29,8 @@ pub struct Frame {
     pub jobs: Vec<Job>,
     /// Per canvas: (frames since redrawn, size) — see [`Frame::due`].
     ages: HashMap<&'static str, (u32, Vec2)>,
+    /// Accessibility palette for the canvases' colours (ui/palette.rs).
+    pub palette: super::palette::Mode,
 }
 
 /// Browser: moving-map canvases are redrawn every this many frames (their
@@ -115,6 +117,7 @@ impl Canvases {
     /// with the main egui renderer; their ids go back into `frame.ids`.
     pub fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, enc: &mut wgpu::CommandEncoder, main: &mut egui_wgpu::Renderer, frame: &mut Frame) -> Vec<wgpu::CommandBuffer> {
         let mut extra = Vec::new();
+        let pm = frame.palette;
         for job in frame.jobs.drain(..) {
             let size = [((job.size.x * job.ppp).round() as u32).clamp(1, 8192), ((job.size.y * job.ppp).round() as u32).clamp(1, 8192)];
             let t = self.targets.entry(job.key).or_insert_with(|| {
@@ -139,10 +142,11 @@ impl Canvases {
             let opts = epaint::TessellationOptions { feathering: false, ..Default::default() };
             let mut tess = epaint::Tessellator::new(job.ppp, opts, [1, 1], Vec::new());
             let clip = Rect::from_min_size(Pos2::ZERO, job.size);
-            let prims = tess.tessellate_shapes(job.shapes.into_iter().map(|shape| epaint::ClippedShape { clip_rect: clip, shape, transform_after_tessellation: egui::emath::TSTransform::IDENTITY }).collect());
+            let mut prims = tess.tessellate_shapes(job.shapes.into_iter().map(|shape| epaint::ClippedShape { clip_rect: clip, shape, transform_after_tessellation: egui::emath::TSTransform::IDENTITY }).collect());
+            super::palette::apply(&mut prims, pm);
             let sd = egui_wgpu::ScreenDescriptor { size_in_pixels: size, pixels_per_point: job.ppp };
             extra.extend(t.renderer.update_buffers(device, queue, enc, &prims, &sd));
-            let c = job.clear.to_normalized_gamma_f32();
+            let c = super::palette::map_color(job.clear, pm).to_normalized_gamma_f32();
             let mut pass = enc
                 .begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("canvas"),

@@ -1,0 +1,9 @@
+{"ac":[
+{"hex":"40ab01","type":"adsb_icao","flight":"SKY123  ","t":"A339","alt_baro":16175,"alt_geom":16300,"gs":328.4,"ias":280,"track":290.31,"track_rate":0.03,"roll":0.35,"true_heading":294.18,"baro_rate":2304,"geom_rate":2304,"squawk":"1456","emergency":"none","category":"A5","lat":51.599304,"lon":-1.358890,"nic":8,"seen_pos":0.4,"nac_p":11,"seen":0.0,"rssi":-14.9},
+{"hex":"40ab02","type":"adsb_icao","flight":"SKY77K  ","t":"B77W","alt_baro":"ground","gs":12.5,"track":91.4,"true_heading":91.4,"squawk":"2000","category":"A5","lat":51.4712,"lon":-0.4590,"seen_pos":1.2,"seen":0.2},
+{"hex":"~abc123","type":"mlat","flight":"GSKYA   ","t":"C172","alt_baro":2100,"alt_geom":2250,"gs":95.0,"track":45.0,"geom_rate":-512,"category":"A1","lat":51.40,"lon":-0.30,"seen_pos":3.0,"seen":3.0},
+{"hex":"40ab04","type":"adsb_icao","flight":"SKY9E","t":"A320","alt_baro":5000,"gs":250,"track":180,"baro_rate":-1200,"squawk":"7700","emergency":"general","category":"A3","lat":51.30,"lon":-0.50,"seen_pos":0.1},
+{"hex":"40ab05","type":"adsb_icao","flight":"","t":"EC35","alt_baro":1200,"gs":110,"track":10,"category":"A7","lat":51.50,"lon":-0.10,"seen_pos":0.5},
+{"hex":"40ab06","type":"adsb_icao","flight":"NOPOS   ","t":"A320","alt_baro":30000,"category":"A3","seen":0.5},
+{"hex":"40ab07","type":"adsb_icao","flight":"TUG1","t":"SERV","category":"C2","alt_baro":"ground","lat":51.47,"lon":-0.45,"seen_pos":0.5}
+],"msg":"No error","now":1794588119000,"total":7,"ctime":1794588119000,"ptime":0}

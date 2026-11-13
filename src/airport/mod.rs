@@ -149,6 +149,11 @@ pub fn reserve_spot(at: Option<(f64, f64)>) {
     }
 }
 
+/// The stand reserved for the player (lat / lon), if any.
+pub fn reserved_spot() -> Option<(f64, f64)> {
+    RESERVED.lock().ok().and_then(|g| *g)
+}
+
 /// Rebuild a layout at most this often while its tiles keep arriving.
 const REBUILD_EVERY: Duration = Duration::from_millis(2500);
 /// Give up waiting for Overpass (headless shots wait for it) after this.
@@ -424,7 +429,7 @@ impl AirportScene {
         let (ex, ey, ez) = (eye.x as f64, eye.y as f64, eye.z as f64);
         let rel = |m: &crate::osm::Xform2, p: Vec3| -> Vec3 { Vec3::new((m.sx * p.x as f64 + m.tx - ex) as f32, (p.y as f64 - ey) as f32, (p.z as f64 + m.tz - ez) as f32) };
         // The parked aircraft nearest a reserved stand (the player's) stays out.
-        let reserved = RESERVED.lock().ok().and_then(|g| *g).map(|(la, lo)| proj.to_world(la, lo));
+        let reserved = reserved_spot().map(|(la, lo)| proj.to_world(la, lo));
         let skip = reserved.and_then(|q| {
             let mut best: Option<(f32, usize, usize)> = None;
             for (bi, (_, b)) in self.bakes().enumerate() {
@@ -510,6 +515,11 @@ impl AirportScene {
         self.sites.get(ident).and_then(|s| s.layout.clone())
     }
 
+    /// Every airport layout built so far (live-traffic taxiway snapping, `adsb/`).
+    pub fn layouts(&self) -> Vec<Arc<Layout>> {
+        self.sites.values().filter_map(|s| s.layout.clone()).collect()
+    }
+
     /// Stands of the airports in range (startpos / debugging): (airport, name, stop point, heading) in the current frame.
     pub fn stands(&self, proj: &Proj) -> Vec<(String, String, Vec2, f32)> {
         let mut out = Vec::new();
@@ -545,6 +555,19 @@ pub fn osm_bbox(ap: &crate::airports::Airport) -> (f64, f64, f64, f64) {
     let dlat = m / crate::osm::M_PER_DEG_LAT;
     let dlon = dlat / ap.lat.to_radians().cos().max(0.1);
     (s - dlat, w - dlon, n + dlat, e + dlon)
+}
+
+/// Hide the parked aircraft standing within 25 m of `at` (world points: stands
+/// taken by live traffic, `adsb/`). `eye`: the frame's eye (instances are eye-relative).
+pub fn hide_parked(f: &mut Frame, at: &[Vec2], eye: Vec3) {
+    if at.is_empty() {
+        return;
+    }
+    f.parked.retain(|p| {
+        let w = p.xf.w_axis;
+        let xz = Vec2::new(w.x + eye.x, w.z + eye.z);
+        !at.iter().any(|h| h.distance(xz) < 25.0)
+    });
 }
 
 /// One instance this frame (eye-relative placement, body → world).
