@@ -1430,7 +1430,10 @@ impl Sim {
         let def = self.def();
         let v = def.flap_detents.get(self.flap_idx).copied().unwrap_or(0.0);
         // (The Vulcan's flap lever drives its airbrakes: shown like the glider's.)
-        if def.has_engine && def.flap_label != "Airbrakes" {
+        if def.flap_label == "Nose" {
+            // Concorde's droop nose / visor lever.
+            ["UP", "VISOR", "5°", "12.5°"].get(self.flap_idx).copied().unwrap_or("UP").into()
+        } else if def.has_engine && def.flap_label != "Airbrakes" {
             format!("{v:.0}°")
         } else if self.ctl.flaps < 0.02 {
             "closed".into()

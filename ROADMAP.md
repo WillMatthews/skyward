@@ -58,6 +58,14 @@ models later.
   airbrakes on the flap lever.
 - Runway minima are per type now (ATR 1,100 m, E190 1,450 m, C-130 900 m on
   grass too, C-5 2,400 m, Vulcan 2,000 m).
+- ✅ **More jets** (2026-11-13, Track H2a): **Boeing 777-300ER** (513 kN
+  GE90s, FBW, glass cockpit, parked on the hubs' widebody stands),
+  **Bombardier CRJ700** (rear engines, T-tail), **Cessna Citation X**
+  (Mach 0.92 bizjet, parked on business aprons) and **Concorde** — Mach 2 at
+  FL550-600, reheat, slender-delta vortex lift with no stall break, the
+  centre of pressure moving aft with Mach balanced by trim-fuel transfer,
+  droop nose and visor, and her analogue cockpit live (FlightGear 2D panels
+  imported into the 3D cockpit).
 - **Heavy airliner** handling, **ILS approaches** (approach charts per runway).
 - ✅ **Helicopter** (2026-11-13): Airbus Helicopters EC130 B4 — FGAddon
   model (GPL v2+) with its B4 panel and VEMD, on Skyward's own rotor

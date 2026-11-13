@@ -11,7 +11,7 @@ use glam::{Vec2, Vec3};
 
 /// Minimum live cockpit instruments per type (needles + flags + drums +
 /// display screens), from the current imports with some headroom.
-const MIN_LIVE: [(&str, usize); 10] = [
+const MIN_LIVE: [(&str, usize); 14] = [
     ("kestrel", 50),
     ("swift", 18),
     ("peregrine", 20),
@@ -22,6 +22,10 @@ const MIN_LIVE: [(&str, usize); 10] = [
     ("hercules", 70),
     ("galaxy", 20),
     ("vulcan", 55),
+    ("triple7", 40),
+    ("crj700", 20),
+    ("citationx", 50),
+    ("concorde", 75),
 ];
 
 /// Channels computed in `models.rs` (controls, surfaces, gear, lights, engines' basics).
@@ -86,7 +90,13 @@ fn every_channel_binds_and_enough_instruments_are_live() {
 
 #[test]
 fn glass_types_have_their_displays() {
-    for (id, kinds) in [("meridian320", &["pfd", "nd", "ewd", "sd", "isis"][..]), ("meridian190", &["pfd", "nd", "ewd", "isis"][..]), ("lancer", &["nd", "ewd"][..])] {
+    for (id, kinds) in [
+        ("meridian320", &["pfd", "nd", "ewd", "sd", "isis"][..]),
+        ("meridian190", &["pfd", "nd", "ewd", "isis"][..]),
+        ("lancer", &["nd", "ewd"][..]),
+        ("triple7", &["pfd", "nd", "ewd", "sd", "mcdu"][..]),
+        ("crj700", &["pfd", "nd", "ewd", "mcdu"][..]),
+    ] {
         let Ok(a) = AircraftAsset::load(id) else { continue };
         let d = a.displays();
         for k in kinds {

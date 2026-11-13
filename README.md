@@ -40,14 +40,17 @@ anywhere on Earth, for as long as you like. wgpu (Vulkan), winit, egui.
   local time and date. The weather is re-fetched as a long flight moves on.
 * **Wind** — boundary-layer gradient, gusts, mechanical and convective
   turbulence, thermals under the cumulus that drift with the wind aloft.
-* **Ten real aircraft** from FlightGear's open hangar — Cessna 172P,
-  ASK 21, Spitfire Mk IX, F-16C, ATR 72-500, Embraer E190, Airbus A320 and
+* **Fourteen real aircraft** from FlightGear's open hangar — Cessna 172P,
+  ASK 21, Spitfire Mk IX, F-16C, ATR 72-500, Embraer E190, Airbus A320,
+  Boeing 777-300ER, Bombardier CRJ700, Cessna Citation X, **Concorde** and
   the heavies: Lockheed C-130H Hercules, C-5M Super Galaxy, Avro Vulcan B.2 — with
   their textured 3D models, cockpits and animations (surfaces, gear, props,
   lights, instruments), and their **JSBSim aerodynamics** evaluated at run
-  time (C172, ASK 21, F-16, E190, A320, C-5, Vulcan — the last two with
-  Skyward calibration patches, the Vulcan with delta-wing aerodynamics; the
-  YASim-based Spitfire, ATR and C-130 use a calibrated model) inside one 6-DoF flight model (ISA atmosphere, engines and
+  time (C172, ASK 21, F-16, E190, A320, CRJ700, C-5, Vulcan, Concorde — the
+  last four with Skyward calibration patches, the Vulcan and Concorde with
+  delta-wing aerodynamics, Concorde with Mach-dependent centre of pressure
+  and trim-fuel transfer; the YASim-based Spitfire, ATR, C-130, 777 and
+  Citation X use a calibrated model) inside one 6-DoF flight model (ISA atmosphere, engines and
   propellers, gear, spoilers, reversers, asymmetric thrust, FBW laws).
 * **Rotorcraft** — an Airbus Helicopters **EC130 B4** (FlightGear model with
   its working B4 panel and VEMD screens) on Skyward's own rotor flight
@@ -259,6 +262,10 @@ suitable airfield.
 | `hercules` (`c130`) | **Lockheed C-130H Hercules** | Four T56 turboprops, high wing, short and rough fields (from ~900 m, grass OK), reverse pitch. |
 | `galaxy` (`c5`) | **Lockheed C-5M Super Galaxy** | 280 t strategic airlifter: slow-spooling CF6s, huge inertia, spoilers and reversers. Needs 2,400 m. |
 | `vulcan` | **Avro Vulcan B.2** | Delta-wing V-bomber: no stall break but huge drag at high alpha, T/W 0.6, the Olympus howl. Flap lever = airbrakes. Needs 2,000 m. |
+| `triple7` (`777`, `b777`) | **Boeing 777-300ER** | Widebody twin, 2 × GE90-115B (513 kN), FBW with protections, glass PFD / ND / EICAS / MFD / CDUs in the 3D cockpit. 250 t as flown; needs 2,500 m. Parked on the widebody stands at the hubs. |
+| `crj700` (`crj`) | **Bombardier CRJ700** | Regional jet: rear-mounted CF34s, T-tail, JSBSim aero; glass PFD / MFD / EICAS. Needs 1,600 m. |
+| `citationx` (`citation`, `c750`) | **Cessna Citation X** | Mach 0.92 business jet with its live Primus 2000 panel; parked on business / GA aprons with the airstair down. Needs 1,200 m. |
+| `concorde` (`sst`) | **Aerospatiale/BAC Concorde** | Supersonic airliner: reheat for take-off and the transonic push, Mach 2 at FL550-600 (air starts above FL400 begin in the cruise), slender-delta vortex lift (no stall break, 17° alpha limit), trim-fuel CG transfer, the classic analogue cockpit live. Flap lever = droop nose / visor (UP, visor, 5°, 12.5°). Needs 2,800 m. |
 | `ec130` (`heli`, `h130`) | **Airbus Helicopters EC130 B4** | Single-turboshaft light helicopter: collective on the throttle, cyclic on the stick, pedals on the rudder; G or F6 cycles the stability assist (attitude hold → off → SAS); K fails the engine (autorotation). Starts beside the runway, rotors turning. |
 | `fpv` (`quad`, `drone`) | **5" FPV quadcopter** | Angle (self-levelling) or rate (acro) mode on G / ;, throttle on the throttle; C → cockpit = the FPV camera with OSD. On a gamepad both sticks fly "mode 2" (left: throttle / yaw, right: pitch / roll). |
 
@@ -369,7 +376,7 @@ The cinematic camera cycles chase angles, fly-bys, tower, nose and wingtip shots
 | `--no-menu` | fly straight away (skip the main menu) |
 | `--vsync on\|off` | present with vsync (default on: smooth); off = mailbox / immediate |
 | `--hud full\|minimal\|off`, `--map corner\|large\|off` | instrument / map mode |
-| `--aircraft ID` | `kestrel` `swift` `peregrine` `lancer` `aerolink` `meridian190` `meridian320` `hercules` `galaxy` `vulcan` `ec130` `fpv` (or `c172` `ask21` `spitfire` `f16` `atr72` `e190` `a320` `c130` `c5` `heli` `quad` `drone`) |
+| `--aircraft ID` | `kestrel` `swift` `peregrine` `lancer` `aerolink` `meridian190` `meridian320` `hercules` `galaxy` `vulcan` `triple7` `crj700` `citationx` `concorde` `ec130` `fpv` (or `c172` `ask21` `spitfire` `f16` `atr72` `e190` `a320` `c130` `c5` `777` `crj` `citation` `sst` `heli` `quad` `drone`) |
 | `--start S` | `runway` `approach` `city` `thermal` |
 | `--bot` | hand the aircraft to the auto-flight bot |
 | `--watch` | auto flight + cinematic camera (+ glider relaunch) |

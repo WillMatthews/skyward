@@ -125,6 +125,12 @@ Built by `tools/build_vulcan.py` (numpy + ffmpeg; same processing as
 DHC-8 (PW100) turboprop set and the C-5 the CFM56-5B set as the nearest
 recorded engines; their own packages' sounds were not imported.
 
+The H2a jets (Track H2a) reuse recorded sets, no new samples: the 777-300ER
+the CFM56-5B set (with the GE90's 22-blade fan tone), the CRJ700 and the
+Citation X the CF34-class set of the E-Jet, and Concorde the Vulcan's
+Olympus set above (the Olympus 593 is the 301's descendant; reheat and the
+supersonic boom are synthesised).
+
 ## Rotorcraft (Track Q)
 
 The EC130 B4 and the FPV quad are fully procedural (`src/audio/rotorcraft.rs`:

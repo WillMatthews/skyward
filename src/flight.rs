@@ -65,6 +65,9 @@ use std::f32::consts::{PI, TAU};
 #[path = "rotor/glue.rs"]
 mod rotor_glue;
 
+/// Track H2a jets: 777-300ER, CRJ700, Citation X, Concorde (src/flight/jets.rs).
+mod jets;
+
 /// Gravitational acceleration, m/s².
 pub const GRAVITY: f32 = 9.81;
 /// Sea-level ISA air density, kg/m³.
@@ -681,6 +684,13 @@ pub struct AircraftDef {
     /// Rotorcraft flight model (src/rotor): replaces the fixed-wing engines,
     /// control law and aerodynamics in [`Aircraft::step`].
     pub rotor: Option<std::sync::Arc<crate::rotor::RotorDef>>,
+
+    // ================= v3 H2a jets =================
+    /// Automatic trim-fuel transfer (Concorde): CG travel aft of the loaded
+    /// CG scheduled on Mach, (Mach, metres aft); empty = none.
+    pub cg_schedule: &'static [(f32, f32)],
+    /// Fuel-transfer CG travel rate, m/s.
+    pub cg_rate: f32,
 }
 
 /// A JSBSim aerodynamic model plus how Skyward's normalised surfaces map onto
@@ -721,6 +731,12 @@ impl std::fmt::Debug for JsbDef {
 }
 
 impl AircraftDef {
+    /// Trim-fuel CG travel aft (m) the transfer schedule sets at Mach `m`
+    /// (0 without one).
+    pub fn cg_scheduled(&self, m: f32) -> f32 {
+        if self.cg_schedule.is_empty() { 0.0 } else { interp_table(self.cg_schedule, m) }
+    }
+
     pub fn aspect_ratio(&self) -> f32 {
         self.wingspan * self.wingspan / self.wing_area
     }
@@ -1160,7 +1176,9 @@ impl AircraftDef {
             let s = JsbSurf { elevator: e, flaps: flap, gear, ..Default::default() };
             let q_slip = self.slipstream_q(thrust);
             let wash = if q_slip > 0.0 { ((tas * tas + 2.0 * q_slip / atm.density).sqrt() - tas).max(0.0) } else { 0.0 };
-            let i = j.input(vb, Vec3::ZERO, atm.density, mach, &s, 1000.0, 1000.0, wash, atm.pressure);
+            let mut i = j.input(vb, Vec3::ZERO, atm.density, mach, &s, 1000.0, 1000.0, wash, atm.pressure);
+            // Trim with the trim fuel where its schedule puts it (Concorde).
+            i.cg_aft_m = self.cg_scheduled(mach);
             j.aero.eval_steady(&i)
         };
         let (mut a, mut e, mut thrust, mut gamma) = (deg(3.0), 0.0f32, 0.0f32, 0.0f32);
@@ -1478,6 +1496,10 @@ pub fn catalogue() -> Vec<AircraftDef> {
             vulcan_def(),
             crate::rotor::ec130_def(),
             crate::rotor::quad_def(),
+            jets::triple7_def(),
+            jets::crj700_def(),
+            jets::citationx_def(),
+            jets::concorde_def(),
         ];
         for d in &mut v {
             rig_for_cruise(d);
@@ -1520,6 +1542,21 @@ pub const ALIASES: &[(&str, &str)] = &[
     ("quad", "fpv"),
     ("drone", "fpv"),
     ("quadcopter", "fpv"),
+    ("777", "triple7"),
+    ("b777", "triple7"),
+    ("777-300er", "triple7"),
+    ("777300er", "triple7"),
+    ("boeing777", "triple7"),
+    ("crj", "crj700"),
+    ("crj-700", "crj700"),
+    ("crj700er", "crj700"),
+    ("cl600", "crj700"),
+    ("citation", "citationx"),
+    ("citation-x", "citationx"),
+    ("c750", "citationx"),
+    ("cessna750", "citationx"),
+    ("sst", "concorde"),
+    ("ba-concorde", "concorde"),
 ];
 
 /// Canonical id for an id or alias (case-insensitive).
@@ -3113,6 +3150,8 @@ pub struct Aircraft {
     pub sys: crate::systems::Systems,
     /// Rotorcraft state (rotor speed, inflow, engine, assist; src/rotor).
     pub rotor: crate::rotor::RotorState,
+    /// Trim-fuel CG travel aft of the loaded CG, m (`AircraftDef::cg_schedule`).
+    cg_aft: f32,
 }
 
 /// Kinematic state captured when the aircraft crashed.
@@ -3173,6 +3212,7 @@ impl Aircraft {
             impact: None,
             sys: Default::default(),
             rotor: Default::default(),
+            cg_aft: 0.0,
         };
         a.settle_engines(def, 0.0, 0.0, &isa(0.0));
         a
@@ -3290,6 +3330,7 @@ impl Aircraft {
         };
         a.ias = speed;
         a.mach = tas / atm.speed_of_sound;
+        a.cg_aft = def.cg_scheduled(a.mach);
         a.oat = atm.temperature_c();
         a.law_blend = if def.control_law == ControlLaw::Direct { 0.0 } else { 1.0 };
         // Wings already bent by the 1 g flight load.
@@ -3383,6 +3424,10 @@ impl Aircraft {
         // World angular velocity about the vertical axis; heading grows clockwise.
         let w_world = self.rot * self.omega;
         -w_world.y
+    }
+    /// Trim-fuel CG travel aft of the loaded CG, m (Concorde; 0 for others).
+    pub fn cg_aft(&self) -> f32 {
+        self.cg_aft
     }
     /// Stall-warning horn: within ~3° of the stall angle (or 2° of the FBW AoA
     /// limit) while airborne.
@@ -3543,6 +3588,10 @@ impl Aircraft {
         self.mach = tas / atm.speed_of_sound;
         self.ias = cas_from_qc(impact_pressure(atm.pressure, self.mach));
         self.oat = atm.temperature_c();
+        // Trim-fuel transfer follows its Mach schedule at the pumps' rate.
+        if !def.cg_schedule.is_empty() {
+            self.cg_aft = move_toward(self.cg_aft, def.cg_scheduled(self.mach), def.cg_rate * dt);
+        }
 
         // ---- landing gear, spoilers, reversers ------------------------------
         if def.retractable_gear {
@@ -3941,7 +3990,8 @@ impl Aircraft {
         let (cg, cphi) = (gamma.cos(), phi.cos());
         let jet = def.control_law == ControlLaw::FastJet;
         let gear_dn = self.gear_pos > 0.5;
-        let flaps_out = self.surf.flaps > 0.05;
+        // (Concorde's lever droops the nose: no high-lift devices, so no relaxed limits.)
+        let flaps_out = self.surf.flaps > 0.05 && def.flap_max_deg > 0.0;
 
         // ---- limits ----
         let (nz_max, nz_min, a_max) = if jet {
@@ -4145,7 +4195,11 @@ impl Aircraft {
         };
         let h_cg = agl.max(0.0);
         let h_wing = (agl + def.wing_height).max(0.0);
-        let ev = |w: Vec3, s: &JsbSurf| j.aero.eval(&j.input(vb, w, rho, mach, s, h_cg, h_wing, wash, atm.pressure), &self.jsb);
+        let ev = |w: Vec3, s: &JsbSurf| {
+            let mut i = j.input(vb, w, rho, mach, s, h_cg, h_wing, wash, atm.pressure);
+            i.cg_aft_m = self.cg_aft;
+            j.aero.eval(&i, &self.jsb)
+        };
         let (o, st) = ev(self.omega, &s);
         // Rate damping per axis: -dM_i/dω_i.
         let h = 0.05;
@@ -4458,6 +4512,7 @@ impl JsbDef {
             stab_deg: 0.0,
             stab_norm: 0.0,
             lef_norm: lef,
+            cg_aft_m: 0.0,
         }
     }
 
@@ -4863,6 +4918,9 @@ mod tests {
             "lancer" => 350.0,
             "aerolink" => 180.0,
             "hercules" => 200.0,
+            // Below ~300 kt the slender delta is on the back of the drag curve
+            // (speed-unstable at a fixed throttle, as the real one: autothrottle).
+            "concorde" => 380.0,
             _ => 250.0,
         }
     }
@@ -5004,7 +5062,7 @@ mod tests {
     fn catalogue_order() {
         let c = fixed_wing();
         let ids: Vec<_> = c.iter().map(|d| d.id).collect();
-        assert_eq!(ids, ["kestrel", "swift", "peregrine", "lancer", "aerolink", "meridian190", "meridian320", "hercules", "galaxy", "vulcan"]);
+        assert_eq!(ids, ["kestrel", "swift", "peregrine", "lancer", "aerolink", "meridian190", "meridian320", "hercules", "galaxy", "vulcan", "triple7", "crj700", "citationx", "concorde"]);
         assert!(c[0].has_engine && !c[1].has_engine);
         assert_eq!(c[1].flap_label, "Airbrakes");
         for d in &c {
@@ -5861,7 +5919,15 @@ mod tests {
         };
         let (mut a, base) = flying(def, Vec3::new(0.0, def.gear_height + 0.5, 0.0), 0.0, kt * KT, flap);
         let tp = def.trim_point_at(kt * KT, flap, 0.0, true);
-        let pitch = pitch_override.unwrap_or(if def.taildragger { def.rest_pitch() - deg(0.5) } else { tp.pitch + deg(2.0) });
+        // Concorde: ~14° alpha on the approach, but she touches down at ~10.5°
+        // (ground effect carries her; the nozzles reach the runway at ~13.5°).
+        let pitch = pitch_override.unwrap_or(if def.taildragger {
+            def.rest_pitch() - deg(0.5)
+        } else if def.id == "concorde" {
+            deg(10.5)
+        } else {
+            tp.pitch + deg(2.0)
+        });
         a.rot = attitude(0.0, pitch, bank);
         a.vel = Vec3::new(0.0, -sink_fpm * FPM, -kt * KT);
         // Start with the low-side wheels (not the CG) 0.25 m above the runway:
@@ -5907,7 +5973,8 @@ mod tests {
             assert!(a.on_ground && a.vel.length() < 0.2, "{} still moving {}", def.id, a.vel.length());
             // The Vulcan's low, far-aft delta tips (nose-high touchdown) leave
             // only ~5° of bank at touchdown, as on the real aircraft.
-            let bank = if def.id == "vulcan" { 3.5 } else { 6.0 };
+            // (Concorde's slender delta likewise: tips far aft and low.)
+            let bank = if def.id == "vulcan" || def.id == "concorde" { 3.5 } else { 6.0 };
             let a = land(&def, 300.0, deg(bank), None);
             assert!(a.crashed.is_none(), "{} {:?}", def.id, a.crashed);
             let a = land(&def, 1000.0, 0.0, None);
@@ -6332,8 +6399,9 @@ mod tests {
                 // A fixed 65 % throttle is a big thrust excess for the jets (they
                 // zoom-climb): the app should start them with trimmed_controls_at().
                 let vs_lim = match def.category {
-                    // The lightly loaded Vulcan has a fighter-like T/W (0.6).
-                    _ if def.id == "vulcan" => 45.0,
+                    // The lightly loaded Vulcan has a fighter-like T/W (0.6), the
+                    // Citation X 0.44.
+                    _ if def.id == "vulcan" || def.id == "citationx" => 45.0,
                     Category::Airliner | Category::FastJet => 35.0,
                     _ => 9.0,
                 };
@@ -7090,5 +7158,204 @@ mod tests {
         assert!(need("meridian320") >= 1800.0);
         assert!(need("galaxy") >= 2400.0 && need("vulcan") >= 2000.0);
         assert!(need("kestrel") < 600.0 && need("lancer") >= 1400.0);
+    }
+
+    /// Full-throttle level acceleration of an FBW type from `start_ktas` at
+    /// `alt`: the law's flight-path hold with a small altitude trim on the
+    /// stick. Settled (TAS kt, Mach).
+    fn fbw_max_level(def: &AircraftDef, alt: f32, start_ktas: f32, secs: f32) -> (f32, f32) {
+        let env = TestEnv::default();
+        let ias = cas_from_tas(start_ktas * KT, alt);
+        let mut a = Aircraft::airborne(def, Vec3::new(0.0, alt, 0.0), 0.0, ias);
+        let base = Controls { throttle: 1.0, gear_down: false, ..trimmed_controls_at(def, ias, alt) };
+        run(&mut a, def, &env, secs, |a| Controls { elevator: (0.004 * (alt - a.pos.y) - 0.03 * a.vertical_speed()).clamp(-0.3, 0.3), ..base });
+        assert!(a.crashed.is_none(), "{} {:?}", def.id, a.crashed);
+        (a.tas() / KT, a.mach())
+    }
+
+    /// Landing roll of a slender delta: touchdown from a held 10.5° attitude
+    /// a few knots below Vref (ground effect cushions it), nose lowered,
+    /// maximum braking and reverse. Distance from touchdown to stop, m.
+    fn delta_landing_roll(def: &AircraftDef) -> f32 {
+        let env = TestEnv::default();
+        let kt = def.vref_kt - 8.0;
+        let (mut a, base) = flying(def, Vec3::new(0.0, 50.0, 0.0), 0.0, kt * KT, 1.0);
+        let pitch = deg(10.5);
+        a.rot = attitude(0.0, pitch, 0.0);
+        a.vel = Vec3::new(0.0, -1.0, -tas_from_cas(kt * KT, 0.0));
+        let low = def.gear.iter().map(|g| (a.rot * g.pos).y).fold(f32::MAX, f32::min);
+        a.pos.y = -low + 0.4;
+        let mut pilot = Pilot::default();
+        let mut touch: Option<Vec3> = None;
+        let mut t_ground = 0.0;
+        run(&mut a, def, &env, 120.0, |a| {
+            if a.on_ground {
+                touch.get_or_insert(a.pos);
+                t_ground += DT;
+            }
+            let gs = Vec2::new(a.vel.x, a.vel.z).length();
+            let rev = t_ground > 1.0 && gs > 30.0 * KT;
+            let mut c = if t_ground > 0.0 { Controls { elevator: (2.0 * (deg(-1.0) - a.pitch())).clamp(-0.3, 0.3), ..base } } else { pilot.fly(def, a, base, Vert::Pitch(pitch), 0.0, DT) };
+            c.throttle = if rev { 1.0 } else { 0.0 };
+            c.reverse = rev;
+            c.brakes = if t_ground > 2.0 { 1.0 } else { 0.0 };
+            c.rudder = (-2.0 * a.heading()).clamp(-1.0, 1.0);
+            c
+        });
+        assert!(a.crashed.is_none(), "{} {:?}", def.id, a.crashed);
+        assert!(a.vel.length() < 0.3);
+        (a.pos - touch.unwrap()).length()
+    }
+
+    /// Track H2a jets against published figures (sources in each
+    /// `assets/aircraft/<id>/CREDITS.md`), at the simulated weights: 777-300ER
+    /// 250 t, CRJ700 29.7 t, Citation X 14 t, Concorde 118 t. `H2A_REPORT=1`
+    /// prints the table without asserting.
+    #[test]
+    fn h2a_jets_published_numbers() {
+        struct Row {
+            id: &'static str,
+            /// (clean, landing config) 1-g stall / minimum speed, kt IAS.
+            stall: (f32, f32),
+            /// Take-off: flap lever, rotation pitch°, ground-roll range m, lift-off kt range.
+            to: (f32, f32, std::ops::Range<f32>, std::ops::Range<f32>),
+            /// (alt m, KIAS, target fpm): full-power climb.
+            climb: (f32, f32, f32),
+            /// (alt m, target max level KTAS, tolerance kt).
+            vmax: (f32, f32, f32),
+            /// Landing roll (brakes + spoilers if fitted + reverse), m.
+            roll: std::ops::Range<f32>,
+            /// Engine-out check: (KIAS, flap lever).
+            eo: (f32, f32),
+        }
+        let rows = [
+            // 777-300ER at 250 t: Vref30 151 kt (FCOM table at 551,000 lb) → Vs0 ~123,
+            // clean 1-g stall ~148; flaps 15, Vr ~150, lift-off ~160 after ~1,300 m;
+            // T/W 0.42 gives ~5,000 fpm at 250 KIAS (physics estimate, no published
+            // figure at this weight); Mmo 0.89 (512 KTAS) at FL350, max level ~M0.89;
+            // landing roll with autobrake max + reverse ~1,200 m.
+            Row { id: "triple7", stall: (148.0, 123.0), to: (0.5, 9.0, 1000.0..1750.0, 150.0..175.0), climb: (0.0, 250.0, 5000.0), vmax: (10_670.0, 512.0, 20.0), roll: 650.0..1300.0, eo: (170.0, 0.5) },
+            // CRJ700 at 29.7 t: Vref45 ~136 kt → Vs0 ~108, clean ~139; flaps 8, Vr 135,
+            // ~1,100 m ground roll (TOFL 1,564 m at MTOW); full-power climb ~4,500 fpm;
+            // Mmo 0.825 → max level ~465 KTAS at FL350; landing roll ~800 m (LFL 1,536 m).
+            Row { id: "crj700", stall: (139.0, 108.0), to: (0.44, 9.0, 700.0..1300.0, 128.0..155.0), climb: (0.0, 250.0, 5800.0), vmax: (10_670.0, 470.0, 20.0), roll: 550.0..1100.0, eo: (150.0, 0.18) },
+            // Citation X at 14 t: Vref ~121 kt → Vs0 ~93, clean ~113; flaps 15, Vr 120,
+            // ~800 m ground roll (TOFL 1,567 m at MTOW 16.2 t); climb 3,650 fpm at MTOW on
+            // climb thrust → ~6,200 fpm on take-off thrust at 14 t (T/W 0.44, physics
+            // estimate); Mmo 0.92 → 527 KTAS at FL370;
+            // landing roll ~600 m (LFL 1,067 m).
+            Row { id: "citationx", stall: (113.0, 93.0), to: (0.43, 10.0, 550.0..1100.0, 115.0..145.0), climb: (0.0, 250.0, 6200.0), vmax: (11_280.0, 527.0, 20.0), roll: 400.0..900.0, eo: (140.0, 0.43) },
+            // CRJ700 take-off on flaps 20 (lever 0.44).
+            // Concorde at 118 t: no stall break; the FBW's 17° alpha limit sets
+            // the minimum speed (~128 kt; the wing itself flies to ~30°); reheat take-off, rotation 165 kt to 12°, unstick ~185 kt
+            // (published Vr 195 / V2 220 at 185 t), ~1,100 m at this weight;
+            // climb at 400 KIAS with reheat ~16,000 fpm (physics estimate: T/W
+            // 0.53); max level with full reheat at FL550 ~M2.2 (1,250 KTAS; the
+            // record is M2.23, Mmo 2.04 in service); landing roll with reverse ~1,300 m
+            // (LFL 2,220 m at MLW),
+            // flown the Concorde way (10.5° attitude through the flare, see below).
+            Row { id: "concorde", stall: (128.0, 128.0), to: (0.68, 12.0, 800.0..1500.0, 170.0..205.0), climb: (0.0, 400.0, 16_000.0), vmax: (16_760.0, 1_250.0, 60.0), roll: 1000.0..2000.0, eo: (230.0, 0.0) },
+        ];
+        let only = std::env::var("H2A_ONLY").ok();
+        for r in rows {
+            if only.as_deref().is_some_and(|o| o != r.id) {
+                continue;
+            }
+            let def = ac(r.id);
+            if std::env::var("H2A_REPORT").is_ok() {
+                eprintln!(
+                    "  {}: analytic stall {:.0}/{:.0} kt, alpha usable {:.1}/{:.1}°, CLmax {:.2}/{:.2}",
+                    r.id,
+                    def.stall_speed(0.0) / KT,
+                    def.stall_speed(1.0) / KT,
+                    def.alpha_usable(0.0).to_degrees(),
+                    def.alpha_usable(1.0).to_degrees(),
+                    def.cl_max(0.0),
+                    def.cl_max(1.0)
+                );
+            }
+            let s_clean = sim_stall_speed(&def, 0.0);
+            let s_full = sim_stall_speed(&def, 1.0);
+            let t = takeoff(&def, r.to.0, deg(r.to.1), false, true);
+            let roc = climb_rate(&def, r.climb.0 + 300.0, r.climb.1);
+            // At Mach 2 the test pilot's attitude loop is far too slow through a
+            // g-command law (0.1 g is 0.1°/s at 600 m/s): Concorde's FBW holds
+            // the flight path, with a gentle altitude trim.
+            let (vmax, m) = if r.id == "concorde" { fbw_max_level(&def, r.vmax.0, r.vmax.1 * 0.9, 600.0) } else { max_level_tas(&def, r.vmax.0, cas_from_tas(r.vmax.1 * 0.9 * KT, r.vmax.0) / KT, 300.0) };
+            // The slender delta approaches at ~14° alpha: the generic roll test
+            // (trimmed attitude + 1°, just above the runway) would start it with
+            // the nozzles in the concrete. Concorde holds ~10.5° through the flare.
+            let roll = if r.id == "concorde" { delta_landing_roll(&def) } else { landing_roll(&def, def.has_spoilers, def.has_reverser) };
+            let (yaw_free, max_rud, max_dev, eo_roc) = engine_out(&def, r.eo.0, r.eo.1);
+            eprintln!(
+                "H2A {:9} stall {:5.1}/{:5.1} kt (target {}/{}) | T/O roll {:5.0} m lift-off {:4.0} kt | climb {:5.0} fpm (target {}) | max {:4.0} KTAS M{:.2} (target {}) | landing roll {:4.0} m | eng-out yaw {:5.1}° rud {:.2} dev {:.1}° climb {:5.0} fpm",
+                r.id, s_clean, s_full, r.stall.0, r.stall.1, t.roll_m, t.liftoff_kt, roc, r.climb.2, vmax, m, r.vmax.1, roll, yaw_free.to_degrees(), max_rud, max_dev.to_degrees(), eo_roc
+            );
+            if std::env::var("H2A_REPORT").is_ok() {
+                continue;
+            }
+            assert!((s_clean / r.stall.0 - 1.0).abs() < 0.07, "{} clean stall {s_clean}", r.id);
+            assert!((s_full / r.stall.1 - 1.0).abs() < 0.08, "{} landing stall {s_full}", r.id);
+            assert!(r.to.2.contains(&t.roll_m), "{} ground roll {}", r.id, t.roll_m);
+            assert!(r.to.3.contains(&t.liftoff_kt), "{} lift-off {}", r.id, t.liftoff_kt);
+            assert!(t.climb_15s > 40.0, "{} climb-out {}", r.id, t.climb_15s);
+            assert!((roc / r.climb.2 - 1.0).abs() < 0.3, "{} climb {roc}", r.id);
+            assert!((vmax - r.vmax.1).abs() < r.vmax.2 + 10.0, "{} max speed {vmax}", r.id);
+            assert!(r.roll.contains(&roll), "{} landing roll {roll}", r.id);
+            // FBW types (777) compensate the thrust asymmetry themselves (TAC).
+            if def.control_law != ControlLaw::Airliner {
+                assert!(yaw_free < deg(-1.0), "{} free yaw {}", r.id, yaw_free.to_degrees());
+                assert!(max_rud < 0.95, "{} rudder {max_rud}", r.id);
+            }
+            assert!(max_dev < deg(10.0), "{} heading dev {}", r.id, max_dev.to_degrees());
+            assert!(eo_roc > 300.0, "{} engine-out climb {eo_roc}", r.id);
+        }
+    }
+
+    /// Concorde's supersonic envelope: she holds Mach 2 at FL550 on dry thrust
+    /// (supercruise, throttle at the reheat gate), needs reheat for the
+    /// transonic push (M0.95 → M1.7 at FL400 in about 10 min — the FDM's
+    /// "Mach 0.95 to 1.7 in 10 minutes" in the climb), the trim fuel moves
+    /// the CG aft on the way, and the nose-temperature limit caps her near
+    /// M2.2 even with full reheat.
+    #[test]
+    fn concorde_supercruise_and_transonic_push() {
+        let def = ac("concorde");
+        let env = TestEnv::default();
+        // FBW flight-path hold, small altitude trim on the stick.
+        let fly = |a: &mut Aircraft, throttle: f32, alt: f32, secs: f32| {
+            let base = Controls { throttle, gear_down: false, ..Default::default() };
+            run(a, &def, &env, secs, |a| Controls { elevator: (0.004 * (alt - a.pos.y) - 0.03 * a.vertical_speed()).clamp(-0.3, 0.3), ..base });
+            assert!(a.crashed.is_none(), "{:?}", a.crashed);
+        };
+        let at_mach = |m: f32, alt: f32| Aircraft::airborne(&def, Vec3::new(0.0, alt, 0.0), 0.0, cas_from_tas(m * isa(alt).speed_of_sound, alt));
+        // Supercruise.
+        let mut a = at_mach(2.0, 16_760.0);
+        fly(&mut a, 0.9, 16_760.0, 240.0);
+        eprintln!("concorde dry at FL550: M{:.3}, cg aft {:.2} m, afterburner {:.2}", a.mach(), a.cg_aft(), a.surfaces().afterburner);
+        assert!(a.mach() > 1.97, "supercruise M{}", a.mach());
+        assert!(a.surfaces().afterburner < 0.01);
+        assert!((a.cg_aft() - 1.65).abs() < 0.05, "trim fuel {}", a.cg_aft());
+        // Transonic push with reheat.
+        let mut a = at_mach(0.95, 12_190.0);
+        let cg0 = a.cg_aft();
+        let mut t = 0.0;
+        while a.mach() < 1.7 && t < 900.0 {
+            fly(&mut a, 1.0, 12_190.0, 10.0);
+            t += 10.0;
+        }
+        eprintln!("concorde M0.95 → M{:.2} at FL400 with reheat in {t:.0} s, cg aft {:.2} m", a.mach(), a.cg_aft());
+        assert!(a.mach() >= 1.7 && t <= 600.0, "transonic push: M{} after {t} s", a.mach());
+        assert!(a.cg_aft() > cg0 + 0.4, "trim fuel moving aft: {cg0} → {}", a.cg_aft());
+        // Dry thrust alone stalls in the transonic drag hump.
+        let mut a = at_mach(0.98, 13_700.0);
+        fly(&mut a, 0.9, 13_700.0, 300.0);
+        eprintln!("concorde dry from M0.98 at FL450: M{:.2} after 300 s", a.mach());
+        assert!(a.mach() < 1.3, "dry through the transonic: M{}", a.mach());
+        // Full reheat at FL550: the nose-temperature limit holds her near M2.2.
+        let mut a = at_mach(2.1, 16_760.0);
+        fly(&mut a, 1.0, 16_760.0, 300.0);
+        eprintln!("concorde full reheat at FL550: M{:.2}", a.mach());
+        assert!(a.mach() < 2.3, "temperature limit: M{}", a.mach());
     }
 }

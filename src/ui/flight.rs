@@ -311,7 +311,12 @@ fn annunciators(p: &egui::Painter, screen: Rect, sim: &Sim, y: f32) -> f32 {
         let lab = if sim.ctl.reverse { format!("REV {t:.0}%") } else { format!("THR {t:.0}%") };
         items.push((lab, if sim.ctl.reverse { pal::AMBER } else { pal::TEXT }, true));
     }
-    let flap = if def.flap_label == "Airbrakes" { format!("AIRBRAKE {}", sim.flap_label()) } else { format!("FLAPS {}", sim.flap_label()) };
+    let flap = match def.flap_label {
+        "Airbrakes" => format!("AIRBRAKE {}", sim.flap_label()),
+        // Concorde: the lever droops the nose / visor.
+        "Nose" => format!("NOSE {}", sim.flap_label()),
+        _ => format!("FLAPS {}", sim.flap_label()),
+    };
     items.push((flap, pal::TEXT, sim.ctl.flaps > 0.01));
     if def.has_spoilers {
         let s = ac.surfaces().spoilers;

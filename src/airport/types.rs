@@ -30,7 +30,7 @@ impl Type {
     }
 }
 
-pub const TYPES: [Type; 8] = [
+pub const TYPES: [Type; 11] = [
     Type { id: "meridian320", role: Role::Jet, span: 34.1, nose: 16.37, tail: -21.24, door: Some((10.6, 1.98, 3.4)) },
     Type { id: "meridian190", role: Role::Jet, span: 28.2, nose: 15.03, tail: -20.80, door: Some((11.2, 1.50, 2.3)) },
     Type { id: "aerolink", role: Role::Turboprop, span: 27.0, nose: 11.83, tail: -15.33, door: None },
@@ -41,6 +41,11 @@ pub const TYPES: [Type; 8] = [
     // ramp / crew door open.
     Type { id: "hercules", role: Role::Turboprop, span: 40.3, nose: 12.82, tail: -16.82, door: None },
     Type { id: "vulcan", role: Role::Warbird, span: 33.6, nose: 18.36, tail: -13.73, door: None },
+    // Track H2a: the 777 on the widebody stands at hubs, the CRJ with the
+    // regional jets, the Citation X on business / GA aprons (airstair down).
+    Type { id: "triple7", role: Role::Jet, span: 64.8, nose: 35.49, tail: -38.88, door: Some((28.2, 3.05, 5.3)) },
+    Type { id: "crj700", role: Role::Jet, span: 23.3, nose: 15.59, tail: -16.88, door: Some((12.0, 1.35, 2.0)) },
+    Type { id: "citationx", role: Role::Light, span: 19.6, nose: 9.70, tail: -12.24, door: None },
 ];
 
 pub const A320: u16 = 0;
@@ -51,6 +56,9 @@ pub const GLIDER: u16 = 4;
 pub const SPITFIRE: u16 = 5;
 pub const C130: u16 = 6;
 pub const VULCAN: u16 = 7;
+pub const TRIPLE7: u16 = 8;
+pub const CRJ700: u16 = 9;
+pub const CITATIONX: u16 = 10;
 
 pub fn get(i: u16) -> &'static Type {
     &TYPES[(i as usize).min(TYPES.len() - 1)]

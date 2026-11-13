@@ -150,6 +150,26 @@ const SPIT_HYD: &[Hyd] = &[Hyd { name: "HYD", pumps: &[0], elec: false, rat: fal
 const HELI_HYD: &[Hyd] = &[Hyd { name: "HYD", pumps: &[], elec: false, rat: false }];
 const HELI_TANK: &[(&str, f32, f32)] = &[("MAIN", 1.0, 0.0)];
 
+/// Boeing 777: left / centre / right, engine-driven pumps on L and R, the
+/// centre system on electric and air-driven pumps plus the RAT.
+const B777_HYD: &[Hyd] =
+    &[Hyd { name: "L", pumps: &[0], elec: true, rat: false }, Hyd { name: "C", pumps: &[], elec: true, rat: true }, Hyd { name: "R", pumps: &[LAST], elec: true, rat: false }];
+/// CRJ700: systems 1 / 2 on the engine-driven pumps (+ AC backups), system 3 electric + the ADG.
+const CRJ_HYD: &[Hyd] =
+    &[Hyd { name: "1", pumps: &[0], elec: true, rat: false }, Hyd { name: "2", pumps: &[LAST], elec: true, rat: false }, Hyd { name: "3", pumps: &[], elec: true, rat: true }];
+/// Citation X: systems A / B, one engine-driven pump each.
+const C750_HYD: &[Hyd] = &[Hyd { name: "A", pumps: &[0], elec: false, rat: false }, Hyd { name: "B", pumps: &[LAST], elec: false, rat: false }];
+/// Concorde: Green (engines 1 + 2), Blue (3 + 4), Yellow standby (2 + 4, RAT).
+const CONCORDE_HYD: &[Hyd] = &[
+    Hyd { name: "GREEN", pumps: &[0, 1], elec: false, rat: false },
+    Hyd { name: "BLUE", pumps: &[2, LAST], elec: false, rat: false },
+    Hyd { name: "YELLOW", pumps: &[1, LAST], elec: false, rat: true },
+];
+const T7_TANKS: &[(&str, f32, f32)] = &[("L", 0.36, 9.0), ("R", 0.36, -9.0), ("CTR", 0.28, 0.0)];
+/// Concorde: wing / collector tanks, and the trim tanks fore and aft (the
+/// trim-fuel transfer itself is the flight model's `cg_schedule`).
+const CONCORDE_TANKS: &[(&str, f32, f32)] = &[("L", 0.38, 4.5), ("R", 0.38, -4.5), ("TRIM FWD", 0.08, 0.0), ("TRIM AFT", 0.16, 0.0)];
+
 const WING3: &[(&str, f32, f32)] = &[("L", 0.4, 4.0), ("R", 0.4, -4.0), ("CTR", 0.2, 0.0)];
 const WING2: &[(&str, f32, f32)] = &[("L", 0.5, 4.0), ("R", 0.5, -4.0)];
 const C172_TANKS: &[(&str, f32, f32)] = &[("L", 0.5, 2.6), ("R", 0.5, -2.6)];
@@ -403,6 +423,75 @@ pub fn sys_def(def: &AircraftDef) -> SysDef {
             ..jet_airliner()
         },
         "meridian320" => jet_airliner(),
+        "triple7" => SysDef {
+            hyd: B777_HYD,
+            gear_hyd: 0b010,
+            flap_hyd: 0b010,
+            spoiler_hyd: 0b111,
+            brake_hyd: 0b100,
+            brake_alt_hyd: 0b010,
+            nws_hyd: 0b010,
+            ptu: false,
+            batt_ah: 47.0,
+            load_a: 90.0,
+            gens_per_engine: 2,
+            tanks: T7_TANKS,
+            alerting: Alerting::Eicas,
+            ..jet_airliner()
+        },
+        "crj700" => SysDef {
+            hyd: CRJ_HYD,
+            gear_hyd: 0b100,
+            flap_hyd: 0,
+            flaps_electric: true,
+            spoiler_hyd: 0b011,
+            brake_hyd: 0b110,
+            brake_alt_hyd: 0,
+            nws_hyd: 0b100,
+            ptu: false,
+            batt_ah: 43.0,
+            load_a: 50.0,
+            alerting: Alerting::Eicas,
+            ..jet_airliner()
+        },
+        "citationx" => SysDef {
+            hyd: C750_HYD,
+            gear_hyd: 0b11,
+            flap_hyd: 0b11,
+            spoiler_hyd: 0b11,
+            brake_hyd: 0b01,
+            brake_alt_hyd: 0,
+            brake_accu: 10,
+            nws_hyd: 0b10,
+            fcs_hyd: 0b11,
+            ptu: false,
+            rat: false,
+            batt_ah: 44.0,
+            load_a: 35.0,
+            tanks: WING3,
+            bottles: 1,
+            alerting: Alerting::Eicas,
+            ..jet_airliner()
+        },
+        "concorde" => SysDef {
+            hyd: CONCORDE_HYD,
+            gear_hyd: 0b001,
+            flap_hyd: 0b001,
+            spoiler_hyd: 0,
+            brake_hyd: 0b001,
+            brake_alt_hyd: 0b100,
+            nws_hyd: 0b001,
+            fcs_hyd: 0b111,
+            ptu: false,
+            // No APU: ground air starts the first engine (modelled as the APU bleed).
+            apu: true,
+            batt_ah: 40.0,
+            load_a: 80.0,
+            tanks: CONCORDE_TANKS,
+            glass: false,
+            alerting: Alerting::Eicas,
+            ..jet_airliner()
+        },
         _ => match (def.category, def.engine_kind) {
             (Category::Helicopter, _) => helicopter(),
             (Category::Drone, _) | (_, EngineKind::Electric) => drone(),

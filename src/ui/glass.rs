@@ -1041,7 +1041,7 @@ pub fn ewd(p: &egui::Painter, r: Rect, sim: &Sim) {
     // flaps: slat / flap track with the lever target
     let fy = rows_y + 7.0 * u;
     let flaps = ac.surfaces().flaps.clamp(0.0, 1.0);
-    txt(p, Pos2::new(s.min.x + 4.0 * u, fy), Align2::LEFT_CENTER, "FLAP", 3.0 * u, WHITE);
+    txt(p, Pos2::new(s.min.x + 4.0 * u, fy), Align2::LEFT_CENTER, if sim.def().flap_label == "Nose" { "NOSE" } else { "FLAP" }, 3.0 * u, WHITE);
     let track = [Pos2::new(s.min.x + 22.0 * u, fy - 1.5 * u), Pos2::new(s.max.x - 20.0 * u, fy + 2.5 * u)];
     let d = track[1] - track[0];
     for k in 0..=4 {

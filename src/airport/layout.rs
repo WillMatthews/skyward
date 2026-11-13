@@ -528,6 +528,9 @@ fn pick_type(c: &Ctx, span: f32, k: u64) -> Option<u16> {
         AKind::Medium if !c.scheduled => {
             if span >= 30.0 && r < 0.25 {
                 Some(types::E190)
+            } else if span >= 20.0 && r < 0.6 {
+                // Business jets.
+                Some(types::CITATIONX)
             } else if span >= 12.0 {
                 Some(if r > 0.93 { types::SPITFIRE } else { types::C172 })
             } else {
@@ -535,16 +538,29 @@ fn pick_type(c: &Ctx, span: f32, k: u64) -> Option<u16> {
             }
         }
         AKind::Large | AKind::Medium => {
-            if span >= 35.0 {
-                Some(if r < 0.75 || c.kind == AKind::Large && r < 0.85 {
+            if span >= 62.0 && c.kind == AKind::Large {
+                // Widebody stands at the hubs.
+                Some(if r < 0.8 { types::TRIPLE7 } else { types::A320 })
+            } else if span >= 35.0 {
+                Some(if r < 0.72 || c.kind == AKind::Large && r < 0.82 {
                     types::A320
-                } else if r < 0.92 {
+                } else if r < 0.88 {
                     types::E190
+                } else if r < 0.94 {
+                    types::CRJ700
                 } else {
                     types::ATR
                 })
             } else if span >= 29.0 {
-                Some(if r < 0.7 { types::E190 } else { types::ATR })
+                Some(if r < 0.45 {
+                    types::E190
+                } else if r < 0.7 {
+                    types::CRJ700
+                } else {
+                    types::ATR
+                })
+            } else if span >= 23.5 && r < 0.5 {
+                Some(types::CRJ700)
             } else if span >= 27.5 {
                 Some(types::ATR)
             } else if span >= 12.0 {
@@ -588,7 +604,10 @@ fn stands(c: &Ctx, osm: Option<&OsmAirport>, osm_xy: &dyn Fn((f64, f64)) -> Vec2
                     continue;
                 }
                 let contact = facade(c, stop, 35.0, true).filter(|f| bridge_ok && f.1.dot(-dir) > 0.5).map(|f| (f.0, f.1));
-                add(&mut out, Stand { name: name.clone(), stop, hdg: mesh::dir_heading(dir), span: 36.0, contact });
+                // Hub stands may be widebody stands: the spacing to the
+                // neighbours (below) decides.
+                let span = if c.kind == AKind::Large { 80.0 } else { 36.0 };
+                add(&mut out, Stand { name: name.clone(), stop, hdg: mesh::dir_heading(dir), span, contact });
             } else {
                 gate_stand(c, ps[0], name, bridge_ok).into_iter().for_each(|s| add(&mut out, s));
             }
@@ -736,14 +755,16 @@ fn gate_stand(c: &Ctx, g: Vec2, name: &str, bridge_ok: bool) -> Option<Stand> {
             return None;
         }
         let contact = (bridge_ok && class == BClass::Terminal).then_some((x, n));
-        return Some(Stand { name: name.to_string(), stop, hdg: mesh::dir_heading(-n), span: 40.0, contact });
+        let span = if c.kind == AKind::Large { 80.0 } else { 40.0 };
+        return Some(Stand { name: name.to_string(), stop, hdg: mesh::dir_heading(-n), span, contact });
     }
     if !c.in_apron(g) {
         return None;
     }
     let (_, q, _, _) = c.nearest_taxi(g, 120.0)?;
     let dir = (g - q).normalize_or_zero();
-    (dir != Vec2::ZERO).then(|| Stand { name: name.to_string(), stop: g, hdg: mesh::dir_heading(dir), span: 40.0, contact: None })
+    let span = if c.kind == AKind::Large { 80.0 } else { 40.0 };
+    (dir != Vec2::ZERO).then(|| Stand { name: name.to_string(), stop: g, hdg: mesh::dir_heading(dir), span, contact: None })
 }
 
 // ---------------------------------------------------------------- parked aircraft, bridges, vehicles

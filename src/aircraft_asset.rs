@@ -755,6 +755,27 @@ mod tests {
             }
         }
         println!("{id}: exterior bbox lo {lo:?} hi {hi:?} (span {:.2}, length {:.2}, height {:.2})", hi.x - lo.x, hi.z - lo.z, hi.y - lo.y);
+        // SKAC_PROFILE=1: lowest / highest exterior point per 1 m body station
+        // within |x| < 3 m (belly / tail-strike / ground-clearance geometry);
+        // SKAC_PROFILE_X=<x> centres the 6 m wide strip on x (nacelles).
+        if std::env::var_os("SKAC_PROFILE").is_some() {
+            let xc: f32 = std::env::var("SKAC_PROFILE_X").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
+            let mut st: std::collections::BTreeMap<i32, (f32, f32)> = Default::default();
+            for c in a.chunks.iter().filter(|c| !c.interior && pose.visible[c.node]) {
+                let m = pose.world[c.node];
+                for k in c.first..c.first + c.count {
+                    let p = m.transform_point3(Vec3::from(a.vertices[(a.indices[k as usize] + c.base_vertex) as usize].pos));
+                    if (p.x - xc).abs() < 3.0 {
+                        let e = st.entry(p.z.floor() as i32).or_insert((f32::MAX, f32::MIN));
+                        e.0 = e.0.min(p.y);
+                        e.1 = e.1.max(p.y);
+                    }
+                }
+            }
+            for (z, (l, h)) in st {
+                println!("  station z {z:4}: y {l:6.2} .. {h:6.2}");
+            }
+        }
         let re = std::env::var("SKAC_NODES").unwrap_or_else(|_| "(?i)wheel|tyre|tire|gear|strut|prop|spinner|nozzle|engine|eng|fan".into());
         let _ = re;
         for (n, (l, h)) in per_node {

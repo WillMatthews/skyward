@@ -524,6 +524,8 @@ fn touchdown_pitch(def: &AircraftDef) -> f32 {
         Category::FastJet => 9.0,
         // Delta: nose-high (but the tail is ~10° away).
         Category::Airliner if def.id == "vulcan" => 7.5,
+        // Concorde touches down at ~11° (the tail bumper is at ~12.5°).
+        Category::Airliner if def.id == "concorde" => 11.0,
         Category::Airliner if def.id == "hercules" => 5.0,
         Category::Airliner => {
             if def.engine_kind == EngineKind::Jet {
@@ -539,9 +541,10 @@ fn touchdown_pitch(def: &AircraftDef) -> f32 {
     d.to_radians()
 }
 
-/// The v3 heavies (C-130, C-5, Vulcan): slower pitch response, longer flares.
+/// The v3 heavies (C-130, C-5, Vulcan) and the H2a big jets (777,
+/// Concorde): slower pitch response, longer flares.
 fn heavy(def: &AircraftDef) -> bool {
-    matches!(def.id, "hercules" | "galaxy" | "vulcan")
+    matches!(def.id, "hercules" | "galaxy" | "vulcan" | "triple7" | "concorde")
 }
 
 /// `SKYWARD_BOT_TRACE=1`: per-step flare trace on stderr (debugging).
@@ -1796,6 +1799,54 @@ impl Profile {
                 p.climb_pitch = deg(15.0);
                 p.flare_h = 8.0;
             }
+            // H2a jets.
+            "triple7" => {
+                // Flaps 15 for take-off, 25 / 30 to land; the long body: a
+                // careful rotation (tail strike ~9.5°) and a high flare (the
+                // main gear is ~36 m behind the eye).
+                p.to_flap = 3.min(def.flap_detents.len() - 1);
+                p.final_dist = 15_000.0;
+                p.flare_h = 14.0;
+                p.turn_r = 3_000.0;
+                p.rot_pitch = deg(8.0);
+                p.climb_pitch = deg(11.0);
+                p.tour_alt = 900.0;
+                p.taxi = 9.0;
+            }
+            "crj700" => {
+                // Flaps 20 for take-off, 30 / 45 to land.
+                p.to_flap = 3.min(def.flap_detents.len() - 1);
+            }
+            "citationx" => {
+                // Flaps 15 for take-off and the approach, 35 to land; a brisk climb.
+                p.to_flap = 2.min(def.flap_detents.len() - 1);
+                p.app_flap = 2.min(def.flap_detents.len() - 1);
+                p.climb_ias = 240.0 * KT;
+                p.cruise_ias = 270.0 * KT;
+                p.climb_pitch = deg(14.0);
+                // Narrow track, tall gear: taxi gently.
+                p.taxi = 7.0;
+            }
+            "concorde" => {
+                // The flap lever is the droop nose: 5° for take-off and the
+                // approach, 12.5° to land, up (visor up) past 260 kt. Reheat
+                // for take-off; rotation to ~11.5° (bumper at ~12.5°); fast,
+                // wide circuits flown above the back of the drag curve.
+                p.to_flap = 2.min(def.flap_detents.len() - 1);
+                p.app_flap = 2.min(def.flap_detents.len() - 1);
+                p.land_flap = def.flap_detents.len() - 1;
+                p.flap_up_ias = 260.0 * KT;
+                p.climb_ias = 300.0 * KT;
+                p.cruise_ias = 320.0 * KT;
+                p.rot_pitch = deg(11.0);
+                p.climb_pitch = deg(14.0);
+                p.tour_alt = 1_500.0;
+                p.final_dist = 15_000.0;
+                p.flare_h = 12.0;
+                p.turn_r = 4_000.0;
+                p.tour_r = 35_000.0;
+                p.taxi = 9.0;
+            }
             _ => {}
         }
         p
@@ -2652,7 +2703,14 @@ impl Powered {
                 // Pitch per m/s of sink error: gentler for faster aircraft (vs responds faster to pitch).
                 let k_vs = (1.8 / ac.tas().max(20.0)).clamp(0.015, 0.06);
                 self.sink_i = (self.sink_i + 0.8 * k_vs * err * dt).clamp(-0.05, 0.12);
-                let max_pitch = if def.category == Category::Airliner { 8f32.to_radians() } else { 13f32.to_radians() };
+                // (Concorde flies the whole approach at ~11°: her flare starts there.)
+                let max_pitch = if def.id == "concorde" {
+                    12.5f32.to_radians()
+                } else if def.category == Category::Airliner {
+                    8f32.to_radians()
+                } else {
+                    13f32.to_radians()
+                };
                 // Ease the nose up to the touchdown attitude as the wheels near the runway.
                 let td = touchdown_pitch(def);
                 let frac = (1.0 - h / pf.flare_h).clamp(0.0, 1.0);

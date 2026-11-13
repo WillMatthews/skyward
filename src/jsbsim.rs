@@ -383,6 +383,9 @@ pub struct AeroInput {
     pub stab_norm: f32,
     /// Leading-edge flap 0..1 (F-16 schedule).
     pub lef_norm: f32,
+    /// CG travel aft of the loaded CG, m (Concorde fuel transfer): moves
+    /// the moment reference forward relative to the CG.
+    pub cg_aft_m: f32,
 }
 
 /// Forces / moments in Skyward body axes, about the CG (N, N·m), plus coefficients.
@@ -415,6 +418,9 @@ pub struct JsbAero {
     /// Wing incidence (rad), added for aero/alpha-wing-rad.
     pub incidence: f64,
     alpha_hyst: Option<(f64, f64)>,
+    /// `<aero_ref_pt_shift_x>`: the reference point moves aft by this many
+    /// chords (Concorde's centre-of-pressure shift with Mach).
+    arp_shift: Option<F>,
     stall_slot: Option<usize>,
     cl2_slot: Option<usize>,
     pub unresolved: Vec<String>,
@@ -474,6 +480,7 @@ impl JsbAero {
             arp: Vec3::ZERO,
             incidence: 0.0,
             alpha_hyst: None,
+            arp_shift: None,
             stall_slot: None,
             cl2_slot: None,
             unresolved: Vec::new(),
@@ -561,6 +568,17 @@ impl JsbAero {
                     if let Some(f) = a.func_body(c) {
                         let s = a.slot(&name);
                         a.pre.push((s, f));
+                    }
+                }
+                "aero_ref_pt_shift_x" => {
+                    if let Some(f) = c.children().find(|f| f.is_element() && f.tag_name().name() == "function") {
+                        if let Some(body) = a.func_body(f) {
+                            if let Some(n) = f.attribute("name") {
+                                let s = a.slot(n);
+                                a.pre.push((s, body.clone()));
+                            }
+                            a.arp_shift = Some(body);
+                        }
                     }
                 }
                 "axis" => {
@@ -877,7 +895,11 @@ impl JsbAero {
         let force = Vec3::new((-fb.y * LBF) as f32, (-fb.z * LBF) as f32, (fb.x * LBF) as f32);
         let k = LBF * FT;
         let mut moment = Vec3::new((-mb.y * k) as f32, (-mb.z * k) as f32, (mb.x * k) as f32);
-        moment += self.arp.cross(force);
+        // JSBSim FGAerodynamics: the reference point shifts aft by
+        // shift × chord; a CG moved aft (fuel transfer, `i.cg_aft_m`) brings
+        // it closer.
+        let shift = self.arp_shift.as_ref().map(|f| eval(f, p) * self.cbar_m).unwrap_or(0.0) as f32 - i.cg_aft_m;
+        moment += (self.arp - Vec3::Z * shift).cross(force);
         // Coefficients from the total force in wind axes (works for any axis system).
         let qs_n = p[self.inputs[In::Qbar as usize][0]] * self.sw_m2 / 0.092_903 * LBF;
         let vbf = i.vb.as_dvec3();
