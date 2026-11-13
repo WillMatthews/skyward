@@ -33,7 +33,13 @@ pub enum Kind {
     ElecFire,
     BirdStrike,
     Icing,
+    NavRadio,
+    GlideSlope,
+    Adf,
 }
+
+/// Number of failure kinds.
+pub const N_KINDS: usize = 27;
 
 /// Menu groups.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -73,10 +79,12 @@ pub enum Index {
     Hyd,
     Axis,
     Side,
+    /// NAV 1 / NAV 2.
+    Radio,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 24] = [
+    pub const ALL: [Kind; N_KINDS] = [
         Kind::EngineFire,
         Kind::Flameout,
         Kind::PartialPower,
@@ -101,6 +109,9 @@ impl Kind {
         Kind::ElecFire,
         Kind::BirdStrike,
         Kind::Icing,
+        Kind::NavRadio,
+        Kind::GlideSlope,
+        Kind::Adf,
     ];
     pub fn bit(self) -> usize {
         Kind::ALL.iter().position(|k| *k == self).unwrap_or(0)
@@ -132,6 +143,9 @@ impl Kind {
             Kind::ElecFire => "smoke",
             Kind::BirdStrike => "bird",
             Kind::Icing => "icing",
+            Kind::NavRadio => "nav",
+            Kind::GlideSlope => "gs",
+            Kind::Adf => "adf",
         }
     }
     pub fn group(self) -> Group {
@@ -140,7 +154,9 @@ impl Kind {
             Kind::FuelLeak | Kind::FuelPump => Group::Fuel,
             Kind::Generator | Kind::ElecFire => Group::Electrical,
             Kind::Hydraulic => Group::Hydraulics,
-            Kind::Vacuum | Kind::PitotBlock | Kind::StaticBlock | Kind::AttitudeInd | Kind::HeadingInd | Kind::DisplayFail => Group::Instruments,
+            Kind::Vacuum | Kind::PitotBlock | Kind::StaticBlock | Kind::AttitudeInd | Kind::HeadingInd | Kind::DisplayFail | Kind::NavRadio | Kind::GlideSlope | Kind::Adf => {
+                Group::Instruments
+            }
             Kind::FlapAsym | Kind::FlapJam | Kind::ControlJam => Group::Controls,
             Kind::GearExtend | Kind::Brakes | Kind::TyreBurst => Group::Gear,
             Kind::BirdStrike | Kind::Icing => Group::Airframe,
@@ -153,6 +169,7 @@ impl Kind {
             Kind::Hydraulic => Index::Hyd,
             Kind::ControlJam => Index::Axis,
             Kind::TyreBurst => Index::Side,
+            Kind::NavRadio | Kind::GlideSlope => Index::Radio,
             _ => Index::None,
         }
     }
@@ -165,6 +182,7 @@ impl Kind {
             Index::Hyd => sd.hyd.len(),
             Index::Axis => 3,
             Index::Side => 2,
+            Index::Radio => 2,
         }
     }
     /// Can this happen on aircraft `def`?
@@ -191,6 +209,7 @@ impl Kind {
             Kind::ElecFire => sd.gens_per_engine > 0 || sd.glass,
             Kind::BirdStrike => true,
             Kind::Icing => true,
+            Kind::NavRadio | Kind::GlideSlope | Kind::Adf => crate::nav::state::has_radios(def),
         }
     }
     /// Menu label for index `i` on `def`.
@@ -228,6 +247,9 @@ impl Kind {
             Kind::ElecFire => "Electrical fire / smoke".into(),
             Kind::BirdStrike => "Bird strike".into(),
             Kind::Icing => "Severe airframe icing".into(),
+            Kind::NavRadio => format!("NAV {} receiver (VOR / LOC)", i + 1),
+            Kind::GlideSlope => format!("NAV {} glideslope receiver", i + 1),
+            Kind::Adf => "ADF receiver".into(),
         }
     }
     /// One-line hint on the effect / what to do, for the menu.
@@ -281,6 +303,9 @@ impl Kind {
             Kind::ElecFire => "Smoke in the cockpit; isolate the avionics",
             Kind::BirdStrike => "Engine damage (vibration, power loss) and a cracked windscreen",
             Kind::Icing => "Ice builds up: more drag, earlier stall",
+            Kind::NavRadio => "NAV flag: CDI, HSI and the coupled autopilot lose the beam",
+            Kind::GlideSlope => "GS flag: localizer only (non-precision); the autopilot loses G/S",
+            Kind::Adf => "ADF needle parks at 90°",
         }
     }
     /// Parse "fire", "fire2", "eng2fire", "jam-rudder", "tyre-right"... (1-based indices).
@@ -340,7 +365,7 @@ impl Failure {
 
 /// The set of active failures: one bit per (kind, index).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Active([u8; 24]);
+pub struct Active([u8; N_KINDS]);
 
 impl Active {
     pub fn has(&self, f: Failure) -> bool {
@@ -363,7 +388,7 @@ impl Active {
         self.0.iter().all(|b| *b == 0)
     }
     pub fn clear(&mut self) {
-        self.0 = [0; 24];
+        self.0 = [0; N_KINDS];
     }
     pub fn list(&self) -> Vec<Failure> {
         let mut v = Vec::new();

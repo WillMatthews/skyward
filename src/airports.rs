@@ -516,7 +516,7 @@ pub fn to_world(a: &Airport, r: &Rwy, proj: &Proj) -> Option<Runway> {
 // ---------------------------------------------------------------- CSV import
 
 /// Minimal RFC-4180 CSV row splitter (quotes, doubled quotes, commas in fields).
-fn csv_rows(text: &str) -> impl Iterator<Item = Vec<String>> + '_ {
+pub(crate) fn csv_rows(text: &str) -> impl Iterator<Item = Vec<String>> + '_ {
     let mut chars = text.chars().peekable();
     std::iter::from_fn(move || {
         chars.peek()?;

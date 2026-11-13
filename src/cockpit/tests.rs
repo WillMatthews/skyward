@@ -63,7 +63,7 @@ fn model_channel(n: &str) -> bool {
 }
 
 fn inputs<'a>(def: &'a flight::AircraftDef, ac: &'a Aircraft, ctl: &'a Controls, ap: &'a Autopilot, time: f32) -> ModelInputs<'a> {
-    ModelInputs { def, ac, ctl, time, nav: true, beacon: true, strobe: true, landing: false, ap: Some(ap), qnh_hpa: 1018.0, hours: 14.5, daylight: 1.0 }
+    ModelInputs { def, ac, ctl, time, nav: true, beacon: true, strobe: true, landing: false, ap: Some(ap), qnh_hpa: 1018.0, hours: 14.5, daylight: 1.0, radios: None }
 }
 
 #[test]

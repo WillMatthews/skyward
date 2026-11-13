@@ -359,6 +359,18 @@ impl<'a> Builder<'a> {
         id
     }
 
+    /// The outermost animation node wrapping `t` alone (see [`Self::wrap`]), or `t`.
+    fn outermost_wrapper(&self, mut t: usize) -> usize {
+        while let Some(p) = self.nodes[t].parent {
+            if self.nodes[p].anim.is_some() && self.nodes[p].kids.len() == 1 {
+                t = p;
+            } else {
+                break;
+            }
+        }
+        t
+    }
+
     /// Insert an animation node directly above `target`.
     fn wrap(&mut self, target: usize, anim: Anim, label: &str) -> usize {
         let parent = self.nodes[target].parent;
@@ -418,8 +430,13 @@ impl<'a> Builder<'a> {
         }
         // A named animation groups its objects under that name (later
         // animations can then refer to the group).
+        // (Objects already wrapped by animations move with their wrappers, or
+        // the grouping would detach them from those animations.)
         let targets = match a.text_of("name") {
-            Some(n) if !n.is_empty() && !names.is_empty() => vec![self.group_under(n, &targets)],
+            Some(n) if !n.is_empty() && !names.is_empty() => {
+                let outer: Vec<usize> = targets.iter().map(|&t| self.outermost_wrapper(t)).collect();
+                vec![self.group_under(n, &outer)]
+            }
             _ => targets,
         };
         let anim = match ty.as_str() {

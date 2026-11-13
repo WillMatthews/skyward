@@ -156,6 +156,9 @@ pub struct Frame {
     pub gear_warn: bool,
     /// Glider total-energy vario (m/s), None for powered aircraft.
     pub vario: Option<f32>,
+    /// Navaid Morse ident in the headset (nav/): up to 4 letters (0 = none) and its level.
+    pub ident: [u8; 4],
+    pub ident_gain: f32,
 
     // --- environment ---
     pub rain: f32,

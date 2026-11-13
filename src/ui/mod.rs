@@ -19,6 +19,7 @@ pub mod map;
 pub mod mapdata;
 pub mod menus;
 pub mod overview;
+pub mod radio;
 pub mod settings;
 pub mod toast;
 
@@ -495,6 +496,8 @@ pub struct UiState {
     pub ap_open: bool,
     /// Systems & failures panel (ui/failures.rs).
     pub fail: failures::FailUi,
+    /// Radios & flight-plan panel (ui/radio.rs).
+    pub radio: radio::RadioUi,
     pub audio_status: String,
     /// Game controllers, rebinding and the mouse yoke (input/).
     pub input: crate::input::InputSystem,
@@ -530,6 +533,7 @@ impl UiState {
             show_wx: true,
             ap_open: true,
             fail: Default::default(),
+            radio: Default::default(),
             audio_status: String::new(),
             input: crate::input::InputSystem::new(),
             controls_page: 0,

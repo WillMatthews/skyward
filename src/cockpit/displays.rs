@@ -352,7 +352,7 @@ pub fn draw(p: &egui::Painter, kind: &str, r: Rect, sim: &Sim, world: &World, ti
         "pfd" | "isis" => {
             glass::pfd_unit(p, bare(top), sim, world, kind == "isis");
             if let Some(b) = bottom {
-                hsi(p, b, sim);
+                hsi(p, b, sim, world);
             }
         }
         "nd" => {
@@ -377,7 +377,7 @@ fn fd(s: f32) -> egui::FontId {
 }
 
 /// Compass rose with heading bug and lubber line (lower half of a portrait PFD).
-fn hsi(p: &egui::Painter, r: Rect, sim: &Sim) {
+fn hsi(p: &egui::Painter, r: Rect, sim: &Sim, world: &World) {
     let u = r.width() / 100.0;
     let c = Pos2::new(r.center().x, r.min.y + r.height() * 0.62);
     let rad = (r.height() * 0.52).min(r.width() * 0.4);
@@ -412,6 +412,35 @@ fn hsi(p: &egui::Painter, r: Rect, sim: &Sim) {
         p.add(Shape::convex_polygon(vec![polar(c, rad + 0.2 * u, a - 0.05), polar(c, rad + 0.2 * u, a + 0.05), polar(c, rad - 2.4 * u, a)], pal::CYAN, Stroke::NONE));
     }
     p.add(Shape::convex_polygon(vec![polar(c, rad + 3.4 * u, -0.05), polar(c, rad + 3.4 * u, 0.05), polar(c, rad + 0.6 * u, 0.0)], pal::WHITE, Stroke::NONE));
+    // Course pointer and deviation bar: NAV 1 (green) or the FMS leg (magenta).
+    let o = &sim.nav.radios.nav[0].out;
+    let src = if o.valid && sim.nav.equipped {
+        Some((o.course, o.cdi, pal::GREEN))
+    } else {
+        let env_ok = !sim.nav.plan.legs.is_empty();
+        env_ok
+            .then(|| {
+                let w = crate::nav::state::WorldEnv(world);
+                let g = sim.nav.plan.lnav(&w, glam::vec2(sim.ac.pos.x, sim.ac.pos.z));
+                g.map(|g| (g.track, (g.xtk / 1852.0 / 2.0).clamp(-1.0, 1.0), pal::MAGENTA))
+            })
+            .flatten()
+    };
+    if let Some((crs, cdi, col)) = src {
+        let a = crs - hdg;
+        let d = Vec2::new(a.sin(), -a.cos());
+        let n = Vec2::new(-d.y, d.x);
+        let head = c + d * (rad - 4.0 * u);
+        p.line_segment([c + d * rad * 0.45, head], Stroke::new(2.4, col));
+        p.add(Shape::convex_polygon(vec![head, head - d * 3.4 * u + n * 1.8 * u, head - d * 3.4 * u - n * 1.8 * u], col, Stroke::NONE));
+        p.line_segment([c - d * rad * 0.45, c - d * (rad - 4.0 * u)], Stroke::new(2.4, col));
+        let dot = rad * 0.17;
+        for k in [-2.0f32, -1.0, 1.0, 2.0] {
+            p.circle_stroke(c + n * k * dot, 0.8 * u, Stroke::new(1.2, pal::WHITE));
+        }
+        let x = (cdi * 2.0).clamp(-2.4, 2.4) * dot;
+        p.line_segment([c + n * x + d * rad * 0.4, c + n * x - d * rad * 0.4], Stroke::new(2.4, col));
+    }
     // Aircraft symbol.
     let w = pal::WHITE;
     p.line_segment([c + Vec2::new(0.0, -5.0 * u), c + Vec2::new(0.0, 6.0 * u)], Stroke::new(2.0, w));
@@ -575,8 +604,76 @@ fn system_display(p: &egui::Painter, r: Rect, sim: &Sim, world: &World) {
     }
 }
 
-/// MCDU progress page.
+/// MCDU: the flight plan (F-PLN A page) when there is one, else PROG.
 fn mcdu(p: &egui::Painter, r: Rect, sim: &Sim, world: &World) {
+    if sim.nav.plan.legs.is_empty() || sim.bot.is_some() {
+        mcdu_prog(p, r, sim, world);
+    } else {
+        mcdu_fpln(p, r, sim, world);
+    }
+}
+
+/// F-PLN A: FROM / waypoints (the TO waypoint white, the rest green) with
+/// leg course and distance, time over and constraints (magenta), and the
+/// DEST line with time, distance and fuel at the destination (nav/).
+pub fn mcdu_fpln(p: &egui::Painter, r: Rect, sim: &Sim, world: &World) {
+    // Fourteen MCDU lines: title, six label / data pairs, scratchpad.
+    let lh = r.height() / 14.0;
+    let env = crate::nav::state::WorldEnv(world);
+    let plan = &sim.nav.plan;
+    let ac = &sim.ac;
+    let pos = glam::vec2(ac.pos.x, ac.pos.z);
+    let gs = glam::Vec2::new(ac.vel.x, ac.vel.z).length();
+    let (fob, flow) = crate::nav::state::fuel(ac);
+    let preds = plan.predictions(&env, pos, gs, fob, flow);
+    let y = |k: usize| r.min.y + (k as f32 + 0.55) * lh;
+    let (big, small) = (fd(lh * 0.86), fi(lh * 0.66));
+    let (xl, xr, xm) = (r.min.x + 0.4 * lh, r.max.x - 0.4 * lh, r.min.x + r.width() * 0.52);
+    p.text(Pos2::new(xl, y(0)), Align2::LEFT_CENTER, " FROM", small.clone(), pal::WHITE);
+    let title = plan.approach.as_ref().map(|a| a.name()).unwrap_or_default();
+    p.text(Pos2::new(xr, y(0)), Align2::RIGHT_CENTER, title, small.clone(), pal::WHITE);
+    let clock = |eta: f32| {
+        let t = (sim.hours + eta / 3600.0).rem_euclid(24.0);
+        format!("{:02}{:02}", t as i32, (t.fract() * 60.0) as i32)
+    };
+    let mut line = 1;
+    if let Some(o) = &plan.origin {
+        p.text(Pos2::new(xl, y(line)), Align2::LEFT_CENTER, &o.ident, big.clone(), pal::GREEN);
+        p.text(Pos2::new(xr, y(line)), Align2::RIGHT_CENTER, "---/-----", big.clone(), pal::GREEN);
+        line += 2;
+    }
+    let rows = (12 - line) / 2 + usize::from(line == 1);
+    for (k, pr) in preds.iter().take(rows).enumerate() {
+        // Label line: the leg's course and distance.
+        p.text(
+            Pos2::new(xl + 2.0 * lh, y(line - 1)),
+            Align2::LEFT_CENTER,
+            format!("C{:03.0}°   {:.0}NM", pr.course.to_degrees().round().rem_euclid(360.0), pr.leg / 1852.0),
+            small.clone(),
+            pal::GREEN,
+        );
+        let col = if k == 0 { pal::WHITE } else { pal::GREEN };
+        p.text(Pos2::new(xl, y(line)), Align2::LEFT_CENTER, &pr.ident, big.clone(), col);
+        p.text(Pos2::new(xm, y(line)), Align2::CENTER_CENTER, clock(pr.eta), big.clone(), col);
+        let alt = pr.alt.map(|a| format!("/{:5.0}", (a / 0.3048 / 10.0).round() * 10.0)).unwrap_or_else(|| "/ -----".into());
+        p.text(Pos2::new(xr, y(line)), Align2::RIGHT_CENTER, alt, big.clone(), if pr.alt.is_some() { pal::MAGENTA } else { col });
+        line += 2;
+    }
+    // DEST line.
+    p.text(Pos2::new(xl, y(12)), Align2::LEFT_CENTER, " DEST", small.clone(), pal::WHITE);
+    p.text(Pos2::new(xm, y(12)), Align2::CENTER_CENTER, "UTC", small.clone(), pal::WHITE);
+    p.text(Pos2::new(xr, y(12)), Align2::RIGHT_CENTER, "DIST  EFOB", small, pal::WHITE);
+    if let Some(l) = preds.last() {
+        let dest = plan.approach.as_ref().map(|a| format!("{}{}", a.airport, a.runway)).or(plan.dest.as_ref().map(|d| d.ident.clone())).unwrap_or_else(|| l.ident.clone());
+        let efob = l.efob.map(|f| format!("{:.1}", f / 1000.0)).unwrap_or_else(|| "--.-".into());
+        p.text(Pos2::new(xl, y(13)), Align2::LEFT_CENTER, dest, big.clone(), pal::WHITE);
+        p.text(Pos2::new(xm, y(13)), Align2::CENTER_CENTER, clock(l.eta), big.clone(), pal::GREEN);
+        p.text(Pos2::new(xr, y(13)), Align2::RIGHT_CENTER, format!("{:4.0}  {efob}", l.dist / 1852.0), big, pal::GREEN);
+    }
+}
+
+/// MCDU progress page.
+fn mcdu_prog(p: &egui::Painter, r: Rect, sim: &Sim, world: &World) {
     let u = r.width() / 100.0;
     let ac = &sim.ac;
     let line = |row: f32| r.min.y + (6.0 + row * 6.6) * u;

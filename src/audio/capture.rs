@@ -622,6 +622,8 @@ impl Director {
             stall_warn: ac.stall_warning() && !crashed,
             gear_warn,
             vario,
+            ident: sim.nav.radios.ident_audio().map(|(id, _)| ident_bytes(id)).unwrap_or_default(),
+            ident_gain: sim.nav.radios.ident_audio().map_or(0.0, |(_, g)| g),
             rain: wr.rain,
             snow: wr.snow,
             wind_surface: world.wind.surface.length(),
@@ -631,4 +633,13 @@ impl Director {
             urban: world.roughness(ear_xz),
         }
     }
+}
+
+/// A navaid ident as the audio frame carries it (up to 4 letters).
+fn ident_bytes(id: &str) -> [u8; 4] {
+    let mut b = [0u8; 4];
+    for (k, c) in id.bytes().filter(|c| c.is_ascii_alphanumeric()).take(4).enumerate() {
+        b[k] = c.to_ascii_uppercase();
+    }
+    b
 }

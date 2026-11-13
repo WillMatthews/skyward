@@ -78,6 +78,12 @@ fn flight_director(sim: &Sim) -> Option<(f32, f32)> {
     if !sim.ap.engaged {
         return None;
     }
+    // The autopilot's own lateral / vertical commands (its NAV / LOC / G/S modes included).
+    if sim.bot.is_none() {
+        if let Some(fd) = sim.ap.fd {
+            return Some(fd);
+        }
+    }
     let ac = &sim.ac;
     let bank_cmd = match sim.ap.hdg {
         Some(h) => (wrap_pi(h - ac.heading()) * 2.2).clamp(-25f32.to_radians(), 25f32.to_radians()),
@@ -156,6 +162,12 @@ pub fn pfd_unit(p: &egui::Painter, r: Rect, sim: &Sim, world: &World, standby: b
         flag_box(p, att.center(), "ATT", u);
     } else {
         attitude(p, att, sim, u, ad.pitch, ad.roll);
+        if !standby && ls_tuned(sim) {
+            ls_scales(p, att, sim, u);
+        }
+    }
+    if !standby && ls_tuned(sim) {
+        ls_info(p, Pos2::new(s.min.x + 2.0 * u, s.max.y - 12.0 * u), sim, u);
     }
     // --- speed tape
     let st = Rect::from_min_max(Pos2::new(s.min.x + 3.0 * u, att.min.y - 2.0 * u), Pos2::new(s.min.x + 17.0 * u, att.max.y + 2.0 * u));
@@ -205,40 +217,101 @@ fn fma_band(p: &egui::Painter, r: Rect, sim: &Sim, u: f32) {
         }
     };
     let bot = sim.bot.is_some();
-    if ap.engaged || bot {
+    if ap.engaged && !bot {
+        // Airbus FMA: thrust · vertical · lateral · approach capability · engagement;
+        // active modes green, armed cyan, engagement white.
+        let f = ap.fma(def, &sim.ac);
+        if !f[0].is_empty() {
+            cell(0, 0, &f[0], GREEN, f[0] == "RETARD");
+        }
+        cell(1, 0, &f[1], GREEN, ap.gs_star > 0.0);
+        if !f[2].is_empty() {
+            cell(1, 1, &f[2], CYAN, false);
+        } else if let Some(a) = ap.alt.filter(|a| (a - sim.ac.pos.y).abs() >= 15.0 && ap.vert == crate::autopilot::Vert::Basic) {
+            cell(1, 1, &format!("ALT {:.0}", a * FT), CYAN, false);
+        }
+        cell(2, 0, &f[3], GREEN, ap.capturing);
+        if !f[4].is_empty() {
+            cell(2, 1, &f[4], CYAN, false);
+        }
+        if ap.appr {
+            let auto = crate::autopilot::Autopilot::autoland(def);
+            cell(3, 0, if auto { "CAT 3" } else { "CAT 1" }, WHITE, false);
+            cell(3, 1, if auto { "DUAL" } else { "DH 200" }, if auto { WHITE } else { CYAN }, false);
+        }
+        cell(4, 0, "AP1", WHITE, false);
+        cell(4, 1, if def.has_engine && ap.ias.is_some() || ap.retard { "A/THR" } else { "1FD2" }, WHITE, false);
+    } else if bot {
         // A/THR
         if def.has_engine {
             if ap.ias.is_some() {
                 cell(0, 0, "SPEED", GREEN, false);
-            } else if bot {
+            } else {
                 cell(0, 0, "THR", GREEN, false);
             }
         }
-        // vertical
-        let v = match (ap.alt, ap.vs) {
-            (Some(a), _) if (a - sim.ac.pos.y).abs() < 15.0 => "ALT".to_string(),
-            (Some(a), _) if a > sim.ac.pos.y => "CLB".to_string(),
-            (Some(_), _) => "DES".to_string(),
-            (None, Some(v)) => format!("V/S {:+.0}", v * FT * 60.0),
-            _ => if bot { "AUTO".into() } else { "PITCH".into() },
-        };
-        cell(1, 0, &v, GREEN, false);
-        if let Some(a) = ap.alt.filter(|a| (a - sim.ac.pos.y).abs() >= 15.0) {
-            cell(1, 1, &format!("ALT {:.0}", a * FT), CYAN, false);
-        }
-        let l = if bot { "NAV".to_string() } else if ap.hdg.is_some() { "HDG".to_string() } else { "ROLL".to_string() };
-        cell(2, 0, &l, GREEN, false);
-        if bot {
-            cell(3, 0, "AUTO FLT", MAG, false);
-        }
-        if ap.engaged {
-            cell(4, 0, "AP1", WHITE, false);
-        }
-        if def.has_engine && (ap.ias.is_some() || bot) {
+        cell(1, 0, "AUTO", GREEN, false);
+        cell(2, 0, "NAV", GREEN, false);
+        cell(3, 0, "AUTO FLT", MAG, false);
+        if def.has_engine {
             cell(4, 1, "A/THR", WHITE, false);
         }
     } else if sim.ap_warn > 0.0 && (sim.time * 3.0).fract() < 0.6 {
         cell(4, 0, "AP OFF", pal::RED, true);
+    }
+}
+
+/// NAV 1 tuned to a localizer frequency (the PFD shows the LS scales).
+fn ls_tuned(sim: &Sim) -> bool {
+    sim.nav.equipped && crate::nav::db::is_ils_freq(sim.nav.radios.nav[0].active)
+}
+
+/// Localizer / glideslope deviation scales with magenta diamonds (2 dots = full scale).
+fn ls_scales(p: &egui::Painter, att: Rect, sim: &Sim, u: f32) {
+    let o = &sim.nav.radios.nav[0].out;
+    let dot = att.width() * 0.085;
+    // LOC: below the attitude sphere.
+    let ly = att.max.y + 4.4 * u;
+    let lc = Pos2::new(att.center().x, ly);
+    for k in [-2.0f32, -1.0, 1.0, 2.0] {
+        p.circle_stroke(lc + Vec2::new(k * dot, 0.0), 0.75 * u, Stroke::new(1.3, WHITE));
+    }
+    p.line_segment([lc + Vec2::new(0.0, -1.6 * u), lc + Vec2::new(0.0, 1.6 * u)], Stroke::new(2.0, YELLOW));
+    let diamond = |c: Pos2, filled: bool| {
+        let (w, h) = (1.6 * u, 1.2 * u);
+        let pts = vec![c + Vec2::new(-w, 0.0), c + Vec2::new(0.0, -h), c + Vec2::new(w, 0.0), c + Vec2::new(0.0, h)];
+        if filled {
+            p.add(Shape::convex_polygon(pts, MAG, Stroke::new(1.0, MAG)));
+        } else {
+            p.add(Shape::closed_line(pts, Stroke::new(1.4, MAG)));
+        }
+    };
+    if o.loc && o.valid {
+        let x = (o.cdi * 2.0).clamp(-2.2, 2.2);
+        diamond(lc + Vec2::new(x * dot, 0.0), x.abs() < 2.0);
+    }
+    // G/S: right of the attitude sphere.
+    let gx = att.max.x - 3.0 * u;
+    let gc = Pos2::new(gx, att.center().y);
+    for k in [-2.0f32, -1.0, 1.0, 2.0] {
+        p.circle_stroke(gc + Vec2::new(0.0, k * dot), 0.75 * u, Stroke::new(1.3, WHITE));
+    }
+    p.line_segment([gc + Vec2::new(-1.6 * u, 0.0), gc + Vec2::new(1.6 * u, 0.0)], Stroke::new(2.0, YELLOW));
+    if o.loc && o.gs_valid {
+        let y = (o.gs * 2.0).clamp(-2.2, 2.2);
+        diamond(gc - Vec2::new(0.0, y * dot), y.abs() < 2.0);
+    }
+}
+
+/// ILS ident / frequency / DME, bottom left of the PFD (magenta).
+fn ls_info(p: &egui::Painter, at: Pos2, sim: &Sim, u: f32) {
+    let rx = &sim.nav.radios.nav[0];
+    let o = &rx.out;
+    let ident = if o.valid { o.ident.clone() } else { String::new() };
+    txt(p, at, Align2::LEFT_TOP, ident, 2.8 * u, MAG);
+    txt(p, at + Vec2::new(0.0, 3.4 * u), Align2::LEFT_TOP, crate::nav::db::freq_label(rx.active, false), 2.8 * u, MAG);
+    if let Some(d) = o.dme {
+        txt(p, at + Vec2::new(0.0, 6.8 * u), Align2::LEFT_TOP, format!("{:.1}NM", d / 1852.0), 2.8 * u, MAG);
     }
 }
 
@@ -543,6 +616,14 @@ fn heading_tape(p: &egui::Painter, r: Rect, sim: &Sim, u: f32, heading: f32) {
         let col = if sim.bot.is_some() { MAG } else { CYAN };
         p.add(Shape::convex_polygon(vec![Pos2::new(xx, r.min.y), Pos2::new(xx - 1.3 * u, r.min.y - 2.0 * u), Pos2::new(xx + 1.3 * u, r.min.y - 2.0 * u)], col, Stroke::NONE));
     }
+    // ILS course (magenta), when NAV 1 has a localizer.
+    let o = &sim.nav.radios.nav[0].out;
+    if o.loc && o.valid {
+        let xx = x(o.course.to_degrees());
+        if xx > r.min.x && xx < r.max.x {
+            p.line_segment([Pos2::new(xx, r.min.y), Pos2::new(xx, r.min.y + 3.4 * u)], Stroke::new(2.0, MAG));
+        }
+    }
     p.line_segment([Pos2::new(c.x, r.min.y - 2.4 * u), Pos2::new(c.x, r.min.y + 3.0 * u)], Stroke::new(2.0, YELLOW));
 }
 
@@ -554,31 +635,72 @@ fn wrap_deg(d: f32) -> f32 {
 
 pub const ND_RANGES_NM: [f32; 6] = [2.5, 5.0, 10.0, 20.0, 40.0, 80.0];
 
-/// Navigation display (map mode, track-up arc).
+/// Navigation display: ARC / ROSE NAV (map, flight plan), ROSE ILS / ROSE
+/// VOR (course and deviation from NAV 1) and PLAN (north up around the TO
+/// waypoint); `route` = the remaining waypoints (flight plan or the bot's).
 #[allow(clippy::too_many_arguments)]
 pub fn nd(p: &egui::Painter, cv: &mut canvas::Frame, ppp: f32, r: Rect, sim: &Sim, world: &World, tiles: &Tiles, route: &[(String, glam::Vec2)]) {
+    use crate::nav::state::NdMode;
     let s = housing(p, r);
     if !sim.ac.sys.display_on("nd") {
         dark(p, s);
         return;
     }
+    let mode = if sim.nav.equipped { sim.nav.nd_mode } else { NdMode::Arc };
+    match mode {
+        NdMode::Arc => nd_map(p, cv, ppp, s, sim, world, tiles, route, false),
+        NdMode::RoseNav => nd_map(p, cv, ppp, s, sim, world, tiles, route, true),
+        NdMode::RoseIls | NdMode::RoseVor => nd_rose_radio(p, s, sim, mode == NdMode::RoseIls),
+        NdMode::Plan => nd_plan(p, s, sim, world, route),
+    }
+}
+
+/// Heading / track pointers, compass ticks for an ND rose (`full`) or arc.
+fn nd_compass(pc: &egui::Painter, anchor: Pos2, rad: f32, up: f32, full: bool, u: f32) {
+    let lim = if full { PI + 0.01 } else { PI / 2.2 };
+    if full {
+        pc.circle_stroke(anchor, rad, Stroke::new(1.5, WHITE));
+    } else {
+        super::arc(pc, anchor, rad, -PI / 2.2, PI / 2.2, 1.5, WHITE);
+    }
+    let tdeg = up.to_degrees();
+    for d in 0..72 {
+        let deg = d as f32 * 5.0;
+        let a = wrap_deg(deg - tdeg).to_radians();
+        if a.abs() > lim {
+            continue;
+        }
+        let major = d % 2 == 0;
+        let (r0, r1) = if full { (rad, rad - if major { 2.4 * u } else { 1.2 * u }) } else { (rad, rad + if major { 2.4 * u } else { 1.2 * u }) };
+        pc.line_segment([polar(anchor, r0, a), polar(anchor, r1, a)], Stroke::new(1.2, WHITE));
+        if d % 6 == 0 {
+            let lr = if full { rad - 5.0 * u } else { rad + 5.0 * u };
+            pc.text(polar(anchor, lr, a), Align2::CENTER_CENTER, format!("{}", (deg as i32 / 10) % 36), fd(if d % 18 == 0 { 3.4 } else { 2.8 } * u), WHITE);
+        }
+    }
+}
+
+/// ARC / ROSE NAV: the moving map with the route and navaids.
+#[allow(clippy::too_many_arguments)]
+fn nd_map(p: &egui::Painter, cv: &mut canvas::Frame, ppp: f32, s: Rect, sim: &Sim, world: &World, tiles: &Tiles, route: &[(String, glam::Vec2)], rose: bool) {
     let pc = p.with_clip_rect(s);
     let u = s.width() / 100.0;
     let ac = &sim.ac;
     let range_nm = ND_RANGES_NM[sim.map_zoom.min(ND_RANGES_NM.len() - 1)];
-    let range_m = range_nm * 1852.0;
-    let anchor = Pos2::new(s.center().x, s.min.y + 78.0 * u);
-    let arc_r = 66.0 * u;
+    let range_m = range_nm * 1852.0 * if rose { 0.5 } else { 1.0 };
+    let anchor = if rose { Pos2::new(s.center().x, s.min.y + 54.0 * u) } else { Pos2::new(s.center().x, s.min.y + 78.0 * u) };
+    let arc_r = if rose { 36.0 * u } else { 66.0 * u };
     let v = vec2(ac.vel.x, ac.vel.z);
     let trk = if v.length() > 8.0 { v.x.atan2(-v.y) } else { ac.heading() };
     let pos = vec2(ac.pos.x, ac.pos.z);
     let view = View { rect: s, anchor, centre: pos, s: arc_r / range_m, up: trk };
     // map underneath, clipped to the compass circle
-    let id = if cv.due("nd", s.size()) {
+    let key = if rose { "nd_rose" } else { "nd" };
+    let id = if cv.due(key, s.size()) {
         let shapes = map::base_shapes(&view, world, tiles, Style::Nd);
-        cv.draw("nd", s.size(), ppp, map::bg(Style::Nd), shapes)
+        cv.draw(key, s.size(), ppp, map::bg(Style::Nd), shapes)
     } else {
-        cv.ids.get("nd").copied()
+        cv.ids.get(key).copied()
     };
     if let Some(id) = id {
         canvas::image_circle(&pc, id, s, anchor, arc_r * 1.02, Color32::from_gray(255));
@@ -586,43 +708,49 @@ pub fn nd(p: &egui::Painter, cv: &mut canvas::Frame, ppp: f32, r: Rect, sim: &Si
     let mut taken = Vec::new();
     let clip = pc.with_clip_rect(Rect::from_min_max(s.min + Vec2::new(0.0, 8.0 * u), s.max - Vec2::new(0.0, 8.0 * u)));
     map::airports(&clip, &view, world, Style::Nd, &mut taken);
-    // bot route (magenta)
-    map::route(&clip, &view, pos, route, MAG);
-    // heading arc + ticks
-    super::arc(&pc, anchor, arc_r, -PI / 2.2, PI / 2.2, 1.5, WHITE);
-    let tdeg = trk.to_degrees();
-    for d in 0..72 {
-        let deg = d as f32 * 5.0;
-        let a = wrap_deg(deg - tdeg).to_radians();
-        if a.abs() > PI / 2.2 {
-            continue;
-        }
-        let major = d % 2 == 0;
-        pc.line_segment([polar(anchor, arc_r, a), polar(anchor, arc_r + if major { 2.4 * u } else { 1.2 * u }, a)], Stroke::new(1.2, WHITE));
-        if d % 6 == 0 {
-            pc.text(polar(anchor, arc_r + 5.0 * u, a), Align2::CENTER_CENTER, format!("{}", (deg as i32 / 10) % 36), fd(if d % 18 == 0 { 3.4 } else { 2.8 } * u), WHITE);
-        }
+    if sim.nav.equipped && sim.nav.show_navaids {
+        let env = crate::nav::state::WorldEnv(world);
+        let near = sim.nav.navaids_near(&env, pos, range_m * 1.2);
+        map::navaids(&clip, &view, world, &near, CYAN, &mut taken);
     }
-    // half-range arc
+    // route (magenta)
+    map::route(&clip, &view, pos, route, MAG);
+    nd_compass(&pc, anchor, arc_r, trk, rose, u);
+    // range arcs
     let half = arc_r * 0.5;
-    for i in 0..40 {
+    let n = if rose { 80 } else { 40 };
+    let span = if rose { 2.0 * PI } else { PI / 1.1 };
+    let a_start = if rose { -PI } else { -PI / 2.2 };
+    for i in 0..n {
         if i % 2 == 0 {
-            let a0 = -PI / 2.2 + i as f32 / 40.0 * (PI / 1.1);
-            let a1 = a0 + (PI / 1.1) / 40.0;
+            let a0 = a_start + i as f32 / n as f32 * span;
+            let a1 = a0 + span / n as f32;
             pc.line_segment([polar(anchor, half, a0), polar(anchor, half, a1)], Stroke::new(1.0, Color32::from_gray(150)));
         }
     }
-    txt(&pc, polar(anchor, half, -1.15) + Vec2::new(-1.0 * u, 0.0), Align2::RIGHT_CENTER, format!("{}", range_nm / 2.0), 2.6 * u, CYAN);
-    txt(&pc, polar(anchor, arc_r, -1.15) + Vec2::new(-1.4 * u, 0.0), Align2::RIGHT_CENTER, format!("{}", range_nm), 2.6 * u, CYAN);
+    let shown = range_m / 1852.0;
+    txt(&pc, polar(anchor, half, -1.15) + Vec2::new(-1.0 * u, 0.0), Align2::RIGHT_CENTER, format!("{}", shown / 2.0), 2.6 * u, CYAN);
+    if !rose {
+        txt(&pc, polar(anchor, arc_r, -1.15) + Vec2::new(-1.4 * u, 0.0), Align2::RIGHT_CENTER, format!("{}", shown), 2.6 * u, CYAN);
+    }
     // heading pointer (yellow lubber at track) and heading triangle
-    pc.line_segment([polar(anchor, arc_r - 2.0 * u, 0.0), polar(anchor, arc_r + 3.0 * u, 0.0)], Stroke::new(2.0, YELLOW));
+    let (r_in, r_out) = if rose { (arc_r + 1.0 * u, arc_r + 4.0 * u) } else { (arc_r - 2.0 * u, arc_r + 3.0 * u) };
+    pc.line_segment([polar(anchor, r_in, 0.0), polar(anchor, r_out, 0.0)], Stroke::new(2.0, YELLOW));
     let ha = wrap_pi(ac.heading() - trk);
     pc.add(Shape::convex_polygon(vec![polar(anchor, arc_r + 0.2 * u, ha), polar(anchor, arc_r + 2.6 * u, ha - 0.03), polar(anchor, arc_r + 2.6 * u, ha + 0.03)], YELLOW, Stroke::NONE));
-    if let Some(h) = sim.ap.hdg.filter(|_| sim.ap.engaged) {
+    if let Some(h) = sim.ap.hdg.filter(|_| sim.ap.engaged && sim.ap.lat == crate::autopilot::Lat::Hdg) {
         let a = wrap_pi(h - trk);
-        if a.abs() < PI / 2.2 {
+        if rose || a.abs() < PI / 2.2 {
             let col = if sim.bot.is_some() { MAG } else { CYAN };
             pc.add(Shape::closed_line(vec![polar(anchor, arc_r, a), polar(anchor, arc_r + 2.4 * u, a - 0.035), polar(anchor, arc_r + 2.4 * u, a + 0.035)], Stroke::new(1.6, col)));
+        }
+    }
+    // ILS course (magenta) when NAV 1 has a localizer.
+    let o = &sim.nav.radios.nav[0].out;
+    if o.loc && o.valid {
+        let a = wrap_pi(o.course - trk);
+        if rose || a.abs() < PI / 2.2 {
+            pc.line_segment([polar(anchor, arc_r - 3.0 * u, a), polar(anchor, arc_r + 3.0 * u, a)], Stroke::new(2.4, MAG));
         }
     }
     // track line (green dashed)
@@ -631,12 +759,25 @@ pub fn nd(p: &egui::Painter, cv: &mut canvas::Frame, ppp: f32, r: Rect, sim: &Si
         let b = anchor + Vec2::new(0.0, -arc_r * (i as f32 + 0.5) / 12.0);
         pc.line_segment([a, b], Stroke::new(1.4, GREEN));
     }
-    // aircraft symbol
+    aircraft_mark(&pc, anchor, u);
+    nd_corner_info(&pc, s, sim, world, route, u);
+    adf_vor_footer(&pc, s, sim, u);
+    pc.text(Pos2::new(s.max.x - 2.0 * u, s.max.y - 2.0 * u), Align2::RIGHT_BOTTOM, format!("{}  {range_nm} NM", if rose { "ROSE NAV" } else { "ARC" }), fi(2.6 * u), CYAN);
+}
+
+fn aircraft_mark(pc: &egui::Painter, anchor: Pos2, u: f32) {
     let y = YELLOW;
     pc.line_segment([anchor + Vec2::new(0.0, -2.0 * u), anchor + Vec2::new(0.0, 4.6 * u)], Stroke::new(2.4, y));
     pc.line_segment([anchor + Vec2::new(-3.4 * u, 0.4 * u), anchor + Vec2::new(3.4 * u, 0.4 * u)], Stroke::new(2.4, y));
     pc.line_segment([anchor + Vec2::new(-1.4 * u, 3.8 * u), anchor + Vec2::new(1.4 * u, 3.8 * u)], Stroke::new(2.4, y));
-    // top-left: GS / TAS, wind
+}
+
+/// GS / TAS / wind (top left) and the TO waypoint (top right).
+fn nd_corner_info(pc: &egui::Painter, s: Rect, sim: &Sim, world: &World, route: &[(String, glam::Vec2)], u: f32) {
+    let ac = &sim.ac;
+    let v = vec2(ac.vel.x, ac.vel.z);
+    let trk = if v.length() > 8.0 { v.x.atan2(-v.y) } else { ac.heading() };
+    let pos = vec2(ac.pos.x, ac.pos.z);
     let gs = v.length() / KT;
     let tl = s.min + Vec2::new(2.0 * u, 2.4 * u);
     pc.text(tl, Align2::LEFT_TOP, "GS", fi(2.6 * u), WHITE);
@@ -653,16 +794,160 @@ pub fn nd(p: &egui::Painter, cv: &mut canvas::Frame, ppp: f32, r: Rect, sim: &Si
         let n = Vec2::new(-d.y, d.x) * 0.4;
         pc.add(Shape::line(vec![c + d * 0.4 + n, c + d, c + d * 0.4 - n], Stroke::new(2.0, GREEN)));
     }
-    // top-right: next waypoint
     if let Some((name, wp)) = route.first() {
         let d = *wp - pos;
         let brg = d.x.atan2(-d.y).to_degrees().rem_euclid(360.0);
         let tr = Pos2::new(s.max.x - 2.0 * u, s.min.y + 2.4 * u);
-        pc.text(tr, Align2::RIGHT_TOP, name.to_uppercase(), fib(2.8 * u), MAG);
+        pc.text(tr, Align2::RIGHT_TOP, name.to_uppercase(), fib(2.8 * u), if sim.bot.is_some() { MAG } else { WHITE });
         pc.text(tr + Vec2::new(0.0, 4.0 * u), Align2::RIGHT_TOP, format!("{brg:03.0}°   {:.1} NM", d.length() / 1852.0), fdb(2.8 * u), GREEN);
+        if sim.bot.is_none() {
+            let gsm = v.length().max(30.0);
+            let t = (sim.hours + d.length() / gsm / 3600.0).rem_euclid(24.0);
+            pc.text(tr + Vec2::new(0.0, 8.0 * u), Align2::RIGHT_TOP, format!("{:02}:{:02}", t as i32, (t.fract() * 60.0) as i32), fdb(2.8 * u), GREEN);
+        }
     }
-    // bottom: mode / range
-    pc.text(Pos2::new(s.max.x - 2.0 * u, s.max.y - 2.0 * u), Align2::RIGHT_BOTTOM, format!("ARC  {range_nm} NM"), fi(2.6 * u), CYAN);
+}
+
+/// Bottom corners: VOR 1 / ADF (ident, DME) as on the Airbus ND.
+fn adf_vor_footer(pc: &egui::Painter, s: Rect, sim: &Sim, u: f32) {
+    if !sim.nav.equipped {
+        return;
+    }
+    let o = &sim.nav.radios.nav[0].out;
+    let bl = Pos2::new(s.min.x + 2.0 * u, s.max.y - 10.0 * u);
+    if o.valid && !o.loc {
+        pc.text(bl, Align2::LEFT_TOP, format!("VOR1 {}", o.ident), fi(2.6 * u), WHITE);
+        if let Some(d) = o.dme {
+            pc.text(bl + Vec2::new(0.0, 3.6 * u), Align2::LEFT_TOP, format!("{:.1} NM", d / 1852.0), fdb(2.8 * u), GREEN);
+        }
+    }
+    let a = &sim.nav.radios.adf.out;
+    if a.valid {
+        pc.text(Pos2::new(s.max.x - 2.0 * u, s.max.y - 10.0 * u), Align2::RIGHT_TOP, format!("ADF1 {}", a.ident), fi(2.6 * u), GREEN);
+    }
+}
+
+/// ROSE ILS / ROSE VOR: NAV 1 course pointer, deviation bar and dots,
+/// TO / FROM, glideslope scale, ADF needle.
+fn nd_rose_radio(p: &egui::Painter, s: Rect, sim: &Sim, ils: bool) {
+    let pc = p.with_clip_rect(s);
+    let u = s.width() / 100.0;
+    let ac = &sim.ac;
+    let hdg = sim.ac.sys.air_data(ac).heading;
+    let c = Pos2::new(s.center().x, s.min.y + 54.0 * u);
+    let rad = 36.0 * u;
+    nd_compass(&pc, c, rad, hdg, true, u);
+    pc.line_segment([polar(c, rad + 1.0 * u, 0.0), polar(c, rad + 4.0 * u, 0.0)], Stroke::new(2.0, YELLOW));
+    let rx = &sim.nav.radios.nav[0];
+    let o = &rx.out;
+    let course = if o.loc { o.course } else { rx.obs };
+    let a = wrap_pi(course - hdg);
+    let dir = Vec2::new(a.sin(), -a.cos());
+    let side = Vec2::new(-dir.y, dir.x);
+    let col = if ils { MAG } else { CYAN };
+    // course pointer (head and tail)
+    let head = c + dir * (rad - 2.0 * u);
+    pc.line_segment([c + dir * (rad * 0.42), head], Stroke::new(2.6, col));
+    pc.add(Shape::convex_polygon(vec![head, head - dir * 3.0 * u + side * 1.6 * u, head - dir * 3.0 * u - side * 1.6 * u], col, Stroke::NONE));
+    pc.line_segment([c - dir * (rad * 0.42), c - dir * (rad - 2.0 * u)], Stroke::new(2.6, col));
+    // deviation dots (±2) and the bar
+    let dot = rad * 0.17;
+    for k in [-2.0f32, -1.0, 1.0, 2.0] {
+        pc.circle_stroke(c + side * k * dot, 0.8 * u, Stroke::new(1.3, WHITE));
+    }
+    let ok = o.valid && (o.loc == ils || !ils && !o.loc);
+    if ok {
+        let x = (o.cdi * 2.0).clamp(-2.4, 2.4) * dot;
+        pc.line_segment([c + side * x + dir * rad * 0.38, c + side * x - dir * rad * 0.38], Stroke::new(2.6, col));
+        if let Some(to) = o.to.filter(|_| !o.loc) {
+            let t = c + dir * if to { rad * 0.24 } else { -rad * 0.24 };
+            let d = if to { dir } else { -dir };
+            pc.add(Shape::convex_polygon(vec![t + d * 2.4 * u, t + side * 1.8 * u, t - side * 1.8 * u], WHITE, Stroke::NONE));
+        }
+    } else {
+        let flag = if ils { "LOC" } else { "VOR" };
+        txt(&pc, c + Vec2::new(0.0, -rad * 0.6), Align2::CENTER_CENTER, flag, 3.4 * u, pal::RED);
+    }
+    // glideslope (right)
+    if ils {
+        let gx = s.max.x - 6.0 * u;
+        for k in [-2.0f32, -1.0, 1.0, 2.0] {
+            pc.circle_stroke(Pos2::new(gx, c.y + k * dot), 0.8 * u, Stroke::new(1.3, WHITE));
+        }
+        pc.line_segment([Pos2::new(gx - 2.0 * u, c.y), Pos2::new(gx + 2.0 * u, c.y)], Stroke::new(2.0, YELLOW));
+        if o.loc && o.gs_valid {
+            let y = c.y - (o.gs * 2.0).clamp(-2.3, 2.3) * dot;
+            let (w, h) = (1.6 * u, 1.3 * u);
+            pc.add(Shape::convex_polygon(vec![Pos2::new(gx - w, y), Pos2::new(gx, y - h), Pos2::new(gx + w, y), Pos2::new(gx, y + h)], MAG, Stroke::NONE));
+        } else if o.loc && o.valid {
+            txt(&pc, Pos2::new(gx, c.y - 3.0 * dot), Align2::CENTER_CENTER, "G/S", 2.6 * u, pal::RED);
+        }
+    }
+    // ADF needle (green, single)
+    let adf = &sim.nav.radios.adf.out;
+    if adf.valid {
+        let a = wrap_pi(adf.bearing - hdg);
+        let d = Vec2::new(a.sin(), -a.cos());
+        pc.line_segment([c + d * rad * 0.7, c + d * (rad - 1.0 * u)], Stroke::new(2.0, GREEN));
+        pc.line_segment([c - d * rad * 0.7, c - d * (rad - 1.0 * u)], Stroke::new(2.0, GREEN));
+    }
+    aircraft_mark(&pc, c, u);
+    // top right: receiver, course, ident, DME
+    let tr = Pos2::new(s.max.x - 2.0 * u, s.min.y + 2.4 * u);
+    pc.text(tr, Align2::RIGHT_TOP, format!("{}1 {}", if ils { "ILS" } else { "VOR" }, crate::nav::db::freq_label(rx.active, false)), fib(2.8 * u), WHITE);
+    pc.text(tr + Vec2::new(0.0, 4.0 * u), Align2::RIGHT_TOP, format!("CRS {:03.0}°", course.to_degrees().round().rem_euclid(360.0)), fdb(2.8 * u), col);
+    if o.valid {
+        pc.text(tr + Vec2::new(0.0, 8.0 * u), Align2::RIGHT_TOP, &o.ident, fib(2.8 * u), col);
+    }
+    // top left: GS / TAS
+    let tl = s.min + Vec2::new(2.0 * u, 2.4 * u);
+    let v = vec2(ac.vel.x, ac.vel.z);
+    pc.text(tl, Align2::LEFT_TOP, "GS", fi(2.6 * u), WHITE);
+    pc.text(tl + Vec2::new(4.6 * u, -0.3 * u), Align2::LEFT_TOP, format!("{:.0}", v.length() / KT), fdb(3.2 * u), GREEN);
+    pc.text(tl + Vec2::new(13.0 * u, 0.0), Align2::LEFT_TOP, "TAS", fi(2.6 * u), WHITE);
+    pc.text(tl + Vec2::new(19.0 * u, -0.3 * u), Align2::LEFT_TOP, format!("{:.0}", ac.tas() / KT), fdb(3.2 * u), GREEN);
+    if let Some(d) = o.dme {
+        pc.text(Pos2::new(s.min.x + 2.0 * u, s.max.y - 10.0 * u), Align2::LEFT_TOP, "DME", fi(2.6 * u), WHITE);
+        pc.text(Pos2::new(s.min.x + 2.0 * u, s.max.y - 6.4 * u), Align2::LEFT_TOP, format!("{:.1} NM", d / 1852.0), fdb(2.8 * u), GREEN);
+    }
+    pc.text(Pos2::new(s.max.x - 2.0 * u, s.max.y - 2.0 * u), Align2::RIGHT_BOTTOM, if ils { "ROSE ILS" } else { "ROSE VOR" }, fi(2.6 * u), CYAN);
+}
+
+/// PLAN: north up, centred on the TO waypoint, the route and the aircraft.
+fn nd_plan(p: &egui::Painter, s: Rect, sim: &Sim, world: &World, route: &[(String, glam::Vec2)]) {
+    let pc = p.with_clip_rect(s);
+    let u = s.width() / 100.0;
+    let ac = &sim.ac;
+    let pos = vec2(ac.pos.x, ac.pos.z);
+    let range_nm = ND_RANGES_NM[sim.map_zoom.min(ND_RANGES_NM.len() - 1)];
+    let rad = 36.0 * u;
+    let c = Pos2::new(s.center().x, s.min.y + 54.0 * u);
+    let centre = route.first().map(|r| r.1).unwrap_or(pos);
+    let view = View { rect: s, anchor: c, centre, s: rad / (range_nm * 0.5 * 1852.0), up: 0.0 };
+    pc.circle_stroke(c, rad, Stroke::new(1.3, WHITE));
+    pc.circle_stroke(c, rad * 0.5, Stroke::new(1.0, Color32::from_gray(140)));
+    for (lab, a) in [("N", 0.0f32), ("E", PI / 2.0), ("S", PI), ("W", -PI / 2.0)] {
+        txt(&pc, polar(c, rad + 3.0 * u, a), Align2::CENTER_CENTER, lab, 3.0 * u, WHITE);
+    }
+    let env = crate::nav::state::WorldEnv(world);
+    if sim.bot.is_some() {
+        map::route(&pc, &view, pos, route, MAG);
+    } else {
+        let all = sim.nav.plan.all_world(&env);
+        let off = usize::from(sim.nav.plan.origin.is_some());
+        map::flight_plan(&pc, &view, pos, &all, sim.nav.plan.active + off, GREEN, Color32::from_gray(110));
+    }
+    let me = view.to_screen(pos);
+    if s.contains(me) {
+        let a = ac.heading();
+        let d = Vec2::new(a.sin(), -a.cos());
+        let n = Vec2::new(-d.y, d.x);
+        pc.line_segment([me - d * 2.0 * u, me + d * 4.6 * u], Stroke::new(2.4, YELLOW));
+        pc.line_segment([me + d * 2.0 * u - n * 3.4 * u, me + d * 2.0 * u + n * 3.4 * u], Stroke::new(2.4, YELLOW));
+    }
+    txt(&pc, polar(c, rad * 0.5, -0.8), Align2::RIGHT_CENTER, format!("{}", range_nm / 4.0), 2.6 * u, CYAN);
+    nd_corner_info(&pc, s, sim, world, route, u);
+    pc.text(Pos2::new(s.max.x - 2.0 * u, s.max.y - 2.0 * u), Align2::RIGHT_BOTTOM, format!("PLAN  {range_nm} NM"), fi(2.6 * u), CYAN);
 }
 
 // ---------------------------------------------------------------- engine / warning display

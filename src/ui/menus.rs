@@ -245,6 +245,7 @@ pub fn credits(ui: &mut Ui, st: &mut UiState) {
         ("Map data", "© OpenMapTiles · © OpenStreetMap contributors (ODbL)"),
         ("Vector tiles", "OpenFreeMap · airport detail: OSM via the Overpass API"),
         ("Airports & runways", "OurAirports — public domain (ourairports.com/data)"),
+        ("Navaids", "VOR / DME / NDB: OurAirports — public domain · ILS: synthetic, derived from the runway data (a few London ILS from public charts)"),
         ("Weather", "METARs: aviationweather.gov (NOAA) · forecasts: Open-Meteo (CC BY 4.0)"),
         ("Elevation", "Terrain Tiles on AWS (Mapzen / Tilezen: SRTM, GMTED2010, 3DEP, ETOPO1, EU-DEM and more)"),
         ("Aircraft & sounds", "FlightGear aircraft and recordings — GPL v2 / v2+ (per-aircraft credits in the source)"),

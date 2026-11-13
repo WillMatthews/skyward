@@ -151,6 +151,8 @@ pub struct ModelInputs<'a> {
     pub hours: f32,
     /// Ambient daylight 0 (night) .. 1 (day): panel lighting / display brightness.
     pub daylight: f32,
+    /// Radios (nav/): frequency drums, CDI / glideslope needles, flags, DME, transponder.
+    pub radios: Option<&'a crate::nav::radio::Radios>,
 }
 
 /// Stand still (on the ground, throttles idle) this long before the cargo doors open, s.
