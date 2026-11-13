@@ -112,7 +112,7 @@ fn doppler_matches_moving_source_formula() {
 
 #[test]
 fn every_family_is_finite_and_limited() {
-    for id in ["kestrel", "swift", "peregrine", "lancer", "aerolink", "meridian190", "meridian320"] {
+    for id in ["kestrel", "swift", "peregrine", "lancer", "aerolink", "meridian190", "meridian320", "hercules", "galaxy", "vulcan"] {
         let mut f = frame_for(id);
         f.rain = 1.0;
         f.buffet = 1.0;
@@ -218,7 +218,7 @@ fn switching_aircraft_is_cheap_on_the_audio_thread() {
     // callback when the aircraft changes: keep that well under a buffer.
     let mut s = Synth::new(SR);
     let mut buf = vec![0.0f32; 512];
-    for id in ["kestrel", "peregrine", "aerolink", "lancer", "meridian190", "meridian320"] {
+    for id in ["kestrel", "peregrine", "aerolink", "lancer", "meridian190", "meridian320", "hercules", "galaxy", "vulcan"] {
         let f = frame_for(id);
         let t = std::time::Instant::now();
         s.push_frame(&f);
@@ -324,7 +324,7 @@ fn runup(id: &str, interior: f32) -> Vec<f32> {
 
 #[test]
 fn recorded_sets_have_no_clicks_through_the_power_range() {
-    for id in ["kestrel", "peregrine", "lancer", "aerolink", "meridian190", "meridian320"] {
+    for id in ["kestrel", "peregrine", "lancer", "aerolink", "meridian190", "meridian320", "vulcan"] {
         for interior in [0.0, 1.0] {
             let x = runup(id, interior);
             save(&format!("runup_{id}_{interior}.wav"), &x);

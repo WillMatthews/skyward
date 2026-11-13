@@ -219,6 +219,9 @@ const KNOWN_FIELDS: &[(&str, &str, f64, f64, f32)] = &[
 
 /// Runway length an aircraft type needs (m).
 pub fn min_runway(def: &AircraftDef) -> f32 {
+    if def.min_runway_m > 0.0 {
+        return def.min_runway_m;
+    }
     match def.category {
         Category::Airliner => 1800.0,
         Category::FastJet => 1400.0,
@@ -1229,7 +1232,8 @@ impl Sim {
     pub fn flap_label(&self) -> String {
         let def = self.def();
         let v = def.flap_detents.get(self.flap_idx).copied().unwrap_or(0.0);
-        if def.has_engine {
+        // (The Vulcan's flap lever drives its airbrakes: shown like the glider's.)
+        if def.has_engine && def.flap_label != "Airbrakes" {
             format!("{v:.0}°")
         } else if self.ctl.flaps < 0.02 {
             "closed".into()

@@ -40,12 +40,14 @@ anywhere on Earth, for as long as you like. wgpu (Vulkan), winit, egui.
   local time and date. The weather is re-fetched as a long flight moves on.
 * **Wind** — boundary-layer gradient, gusts, mechanical and convective
   turbulence, thermals under the cumulus that drift with the wind aloft.
-* **Seven real aircraft** from FlightGear's open hangar — Cessna 172P,
-  ASK 21, Spitfire Mk IX, F-16C, ATR 72-500, Embraer E190, Airbus A320 — with
+* **Ten real aircraft** from FlightGear's open hangar — Cessna 172P,
+  ASK 21, Spitfire Mk IX, F-16C, ATR 72-500, Embraer E190, Airbus A320 and
+  the heavies: Lockheed C-130H Hercules, C-5M Super Galaxy, Avro Vulcan B.2 — with
   their textured 3D models, cockpits and animations (surfaces, gear, props,
   lights, instruments), and their **JSBSim aerodynamics** evaluated at run
-  time (C172, ASK 21, F-16, E190, A320; the YASim-based Spitfire and ATR use a
-  calibrated model) inside one 6-DoF flight model (ISA atmosphere, engines and
+  time (C172, ASK 21, F-16, E190, A320, C-5, Vulcan — the last two with
+  Skyward calibration patches, the Vulcan with delta-wing aerodynamics; the
+  YASim-based Spitfire, ATR and C-130 use a calibrated model) inside one 6-DoF flight model (ISA atmosphere, engines and
   propellers, gear, spoilers, reversers, asymmetric thrust, FBW laws).
 * **Structure and crashes** — wings bend with the load on each half (first
   bending mode; an A320's tips rise ≈ 1.2 m in 1 g flight, ≈ 2.5 m at 2.5 g),
@@ -179,7 +181,10 @@ suitable airfield.
 | `peregrine` (`spitfire`) | **Supermarine Spitfire Mk IX** | Merlin warbird, taildragger — swings left on take-off (right rudder), retractable gear. |
 | `lancer` (`f16`) | **General Dynamics F-16C** | FBW fighter with JSBSim aero, afterburner above 90 % throttle, speed brake, supersonic. |
 | `aerolink` (`atr72`) | **ATR 72-500** | Twin turboprop regional airliner, reverse pitch. |
-| `meridian190` (`e190`) / `meridian320` (`a320`) | **Embraer E190 / Airbus A320** | Twin-jet airliners with JSBSim aero: spoilers, reversers, slats/flaps, autopilot (A320: normal-law FBW). Need 1,800 m. |
+| `meridian190` (`e190`) / `meridian320` (`a320`) | **Embraer E190 / Airbus A320** | Twin-jet airliners with JSBSim aero: spoilers, reversers, slats/flaps, autopilot (A320: normal-law FBW). Need 1,450 / 1,800 m. |
+| `hercules` (`c130`) | **Lockheed C-130H Hercules** | Four T56 turboprops, high wing, short and rough fields (from ~900 m, grass OK), reverse pitch. |
+| `galaxy` (`c5`) | **Lockheed C-5M Super Galaxy** | 280 t strategic airlifter: slow-spooling CF6s, huge inertia, spoilers and reversers. Needs 2,400 m. |
+| `vulcan` | **Avro Vulcan B.2** | Delta-wing V-bomber: no stall break but huge drag at high alpha, T/W 0.6, the Olympus howl. Flap lever = airbrakes. Needs 2,000 m. |
 
 The models, textures and FDM data come from FlightGear (GPL); sources,
 authors and licences per aircraft are in `assets/aircraft/<id>/CREDITS.md`,
@@ -281,7 +286,7 @@ The cinematic camera cycles chase angles, fly-bys, tower, nose and wingtip shots
 | `--no-menu` | fly straight away (skip the main menu) |
 | `--vsync on\|off` | present with vsync (default on: smooth); off = mailbox / immediate |
 | `--hud full\|minimal\|off`, `--map corner\|large\|off` | instrument / map mode |
-| `--aircraft ID` | `kestrel` `swift` `peregrine` `lancer` `aerolink` `meridian190` `meridian320` (or `c172` `ask21` `spitfire` `f16` `atr72` `e190` `a320`) |
+| `--aircraft ID` | `kestrel` `swift` `peregrine` `lancer` `aerolink` `meridian190` `meridian320` `hercules` `galaxy` `vulcan` (or `c172` `ask21` `spitfire` `f16` `atr72` `e190` `a320` `c130` `c5`) |
 | `--start S` | `runway` `approach` `city` `thermal` |
 | `--bot` | hand the aircraft to the auto-flight bot |
 | `--watch` | auto flight + cinematic camera (+ glider relaunch) |

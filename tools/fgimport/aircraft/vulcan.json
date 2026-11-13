@@ -1,0 +1,55 @@
+{
+ "props": {},
+ "channels": [],
+ "light_models": [
+  "procedural_light",
+  "Effects/lights/",
+  "[Ll]ights?/.*(nav|beacon|strobe|landing|taxi)",
+  "/(nav|beacon|strobe)",
+  "Lights/(beacon|RedLight|GreenLight|StrobeWhite)\\.xml$"
+ ],
+ "max_tex": 2048,
+ "range_m": 5,
+ "interior_max_tex": 1024,
+ "id": "vulcan",
+ "name": "Avro Vulcan B.2",
+ "fg_name": "AvroVulcanB2",
+ "model": "Models/AvroVulcanB2.xml",
+ "fdm": {
+  "jsbsim": "vulcanb2.xml"
+ },
+ "exclude_models": [
+  "Effects/",
+  "marker",
+  "[Ss]hrike",
+  "dash10",
+  "bomb",
+  "RedBeard",
+  "WE177",
+  "BlueSteel",
+  "crater",
+  "Jaguar",
+  "copilot",
+  "Vulcan-CoPilot",
+  "light-cone"
+ ],
+ "interior_models": [
+  "cockpit",
+  "Instruments"
+ ],
+ "textures": {
+  "XM597.rgb": "Skyward/vulcan-neutral.png",
+  "XM597.png": "Skyward/vulcan-neutral.png"
+ },
+ "fuel_kg": 4500,
+ "eye_body": [
+  0.34,
+  1.95,
+  11.85
+ ],
+ "exclude_objects": [
+  "^SwitchCover",
+  "^Button1",
+  "^blah"
+ ]
+}

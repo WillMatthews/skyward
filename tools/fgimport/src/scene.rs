@@ -657,7 +657,7 @@ fn light_kind(s: &str) -> String {
         if s.contains("tail") { "strobe_tail" } else { side("strobe_l", "strobe_r", "strobe") }
     } else if s.contains("beacon") {
         "beacon"
-    } else if s.contains("nav") || s.contains("position") {
+    } else if s.contains("nav") || s.contains("position") || s.contains("redlight") || s.contains("greenlight") {
         if s.contains("tail") || s.contains("rear") || s.contains("white") { "nav_tail" } else { side("nav_l", "nav_r", "nav_tail") }
     } else if s.contains("landing") {
         "landing"

@@ -122,6 +122,13 @@ embed!(
     "crash_f16",
     "crash_explode",
     "crash_water",
+    "vul_x_turb",
+    "vul_x_jet",
+    "vul_x_blast",
+    "vul_x_howl",
+    "vul_i_eng",
+    "vul_start",
+    "vul_stop",
 );
 
 const N: usize = NAMES.len();

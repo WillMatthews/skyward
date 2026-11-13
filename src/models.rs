@@ -11,6 +11,9 @@
 //! | `aerolink` | ATR 72-500 | FGAddon ATR-72-500 |
 //! | `meridian190` | Embraer E190 | E-jet-family-YV |
 //! | `meridian320` | Airbus A320-200 | FGAddon A320-family |
+//! | `hercules` | Lockheed C-130H Hercules | FGAddon C130 |
+//! | `galaxy` | Lockheed C-5M Super Galaxy | FGMEMBERS/C-5 |
+//! | `vulcan` | Avro Vulcan B.2 | FGMEMBERS/AvroVulcanB2 (FGUK) |
 //!
 //! Body frame: metres, +Z nose, +Y up, +X left wing, origin = CG (as
 //! `flight.rs`). The model is a node tree with FlightGear animations mapped

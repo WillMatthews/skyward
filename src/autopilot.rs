@@ -72,6 +72,19 @@ struct Gains {
 }
 
 fn gains(def: &AircraftDef) -> Gains {
+    let mut g = base_gains(def);
+    if def.mass > 150_000.0 {
+        // Strategic heavies (C-5): slow pitch response to the elevator —
+        // gentler captures, more rate damping, a slower integrator.
+        g.vs_accel = 0.25;
+        g.kp = 3.0;
+        g.kd = 4.0;
+        g.ki = 0.25;
+    }
+    g
+}
+
+fn base_gains(def: &AircraftDef) -> Gains {
     let deg = |d: f32| d.to_radians();
     match def.category {
         Category::Airliner => Gains {

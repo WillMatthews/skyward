@@ -396,6 +396,8 @@ impl Hands {
             Self::nz_stick(def, nz_neutral, dnz)
         } else {
             let (kp, ki, kd) = match def.category {
+                // C-130: stiff in pitch (big tailplane) — more elevator per degree.
+                Category::Airliner if def.id == "hercules" => (4.0, 0.9, 2.5),
                 Category::Airliner => (2.4, 0.5, 2.0),
                 Category::FastJet => (2.0, 0.5, 1.0),
                 Category::Warbird => (2.2, 0.6, 0.9),
@@ -520,6 +522,9 @@ fn touchdown_pitch(def: &AircraftDef) -> f32 {
         Category::Trainer => 5.0,
         Category::Warbird => def.rest_pitch().to_degrees() - 1.0,
         Category::FastJet => 9.0,
+        // Delta: nose-high (but the tail is ~10° away).
+        Category::Airliner if def.id == "vulcan" => 7.5,
+        Category::Airliner if def.id == "hercules" => 5.0,
         Category::Airliner => {
             if def.engine_kind == EngineKind::Jet {
                 4.5
@@ -530,6 +535,17 @@ fn touchdown_pitch(def: &AircraftDef) -> f32 {
         Category::Glider => 2.0,
     };
     d.to_radians()
+}
+
+/// The v3 heavies (C-130, C-5, Vulcan): slower pitch response, longer flares.
+fn heavy(def: &AircraftDef) -> bool {
+    matches!(def.id, "hercules" | "galaxy" | "vulcan")
+}
+
+/// `SKYWARD_BOT_TRACE=1`: per-step flare trace on stderr (debugging).
+fn trace() -> bool {
+    static T: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *T.get_or_init(|| std::env::var("SKYWARD_BOT_TRACE").is_ok())
 }
 
 fn gs(ac: &Aircraft) -> f32 {
@@ -1726,6 +1742,46 @@ struct Profile {
 
 impl Profile {
     fn of(def: &AircraftDef) -> Profile {
+        let mut p = Self::base(def);
+        let deg = |d: f32| d.to_radians();
+        // v3 heavies on top of the airliner profile.
+        match def.id {
+            "hercules" => {
+                // Flaps 50 % (18°) for take-off, 100 % to land; rotate to ~9°.
+                p.rot_pitch = deg(9.0);
+                p.climb_pitch = deg(8.0);
+                p.flare_h = 10.0;
+            }
+            "galaxy" => {
+                // Flaps 40 % (16°) for take-off; long, stable finals; a slow,
+                // deliberate rotation and a high flare (the wheels are ~20 m behind the eye).
+                p.to_flap = 2.min(def.flap_detents.len() - 1);
+                p.final_dist = 13_000.0;
+                p.flare_h = 14.0;
+                p.turn_r = 3_000.0;
+                p.rot_pitch = deg(9.0);
+                p.climb_pitch = deg(10.0);
+                p.tour_alt = 1_100.0;
+                p.taxi = 9.0;
+            }
+            "vulcan" => {
+                // The flap lever is the airbrakes: clean take-off, half airbrakes on
+                // the approach, full for the landing; a fast climb.
+                p.to_flap = 0;
+                p.app_flap = 1.min(def.flap_detents.len() - 1);
+                p.flap_up_ias = 0.0;
+                p.climb_ias = 250.0 * KT;
+                p.cruise_ias = 280.0 * KT;
+                p.rot_pitch = deg(9.0);
+                p.climb_pitch = deg(15.0);
+                p.flare_h = 8.0;
+            }
+            _ => {}
+        }
+        p
+    }
+
+    fn base(def: &AircraftDef) -> Profile {
         let n = def.flap_detents.len();
         let last = n.saturating_sub(1);
         let kt = KT;
@@ -2071,6 +2127,21 @@ impl Powered {
         let terrain_alt = terrain_floor(world, p, vec2(ac.vel.x, ac.vel.z), 9000.0) + pf.tour_alt.min(450.0);
         let rwname = self.rw.as_ref().map(|r| r.name.clone()).unwrap_or_default();
         let fbw = def.control_law != ControlLaw::Direct;
+        if trace() && (t * 2.0).fract() < dt * 2.0 {
+            eprintln!(
+                "bot t {t:7.1} {:?} wheels {wheels:6.1} ias {:5.1} alpha {:5.1} pitch {:5.1} roll {:5.1} vs {:5.1} flaps {:.2} thr {:.2} el {:.2} ap {}",
+                self.phase,
+                ac.airspeed_kt(),
+                ac.alpha().to_degrees(),
+                ac.pitch().to_degrees(),
+                ac.roll().to_degrees(),
+                ac.vertical_speed(),
+                ac.surfaces().flaps,
+                ctl.throttle,
+                ctl.elevator,
+                ap.engaged
+            );
+        }
         // Throttle never touched by the AP on the ground.
         match self.phase {
             PPhase::Stuck => {
@@ -2461,7 +2532,9 @@ impl Powered {
                 let steepest = if high { vs_gp * 2.4 - 1.5 } else { vs_gp * 1.8 - 1.0 };
                 ap.vs = Some((vs_gp + 0.12 * (gp - ay)).clamp(steepest, 1.5));
                 ctl.spoilers = if high && def.has_spoilers { 1.0 } else { 0.0 };
-                ap.ias = Some(self.vapp);
+                // Never below 1.3 Vs of the flaps actually out (they may still be
+                // running when the final starts: the C-130's clean stall is ~1.1 Vref).
+                ap.ias = Some(self.vapp.max(1.3 * def.stall_speed(ac.surfaces().flaps)));
                 if !ap.update(def, ac, ctl, dt) {
                     ap.engage_hold_current(ac);
                 }
@@ -2489,8 +2562,9 @@ impl Powered {
                         return;
                     }
                 }
-                // Flare earlier on a steep / fast approach (fast jets: ~4 s of sink).
-                let lead = 3.0;
+                // Flare earlier on a steep / fast approach (fast jets: ~4 s of sink;
+                // the heavies' slow pitch response wants more).
+                let lead = if heavy(def) { 4.5 } else { 3.0 };
                 if wheels < pf.flare_h.max(-ac.vertical_speed() * lead) {
                     ap.disengage();
                     self.flare_h0 = wheels;
@@ -2519,8 +2593,9 @@ impl Powered {
                     if h < 1.0 {
                         ctl.throttle = approach_to(ctl.throttle, 0.0, 0.6, dt);
                     }
-                } else if def.engine_kind == EngineKind::Jet || h < pf.flare_h * 0.5 {
-                    ctl.throttle = approach_to(ctl.throttle, 0.0, 0.6, dt);
+                } else if (def.engine_kind == EngineKind::Jet && !heavy(def)) || h < pf.flare_h * 0.5 {
+                    // (Heavies keep power until half-way down the flare.)
+                    ctl.throttle = approach_to(ctl.throttle, 0.0, if heavy(def) { 0.3 } else { 0.6 }, dt);
                 }
                 let target_vs = -(0.45 + 0.28 * h).min(4.0);
                 let err = target_vs - ac.vertical_speed();
@@ -2561,6 +2636,20 @@ impl Powered {
                 ctl.rudder = rud;
                 ctl.aileron = ail;
                 *status = format!("Flare — {:.0} ft", h / FT);
+                if trace() {
+                    eprintln!(
+                        "flare h {h:5.1} vs {:5.2} tgt {target_vs:5.2} pitch {:5.2} cmd {:5.2} el {:5.2} thr {:.2} ias {:.0} roll {:5.1} ail {:5.2} rud {:5.2}",
+                        ac.vertical_speed(),
+                        ac.pitch().to_degrees(),
+                        pitch_cmd.to_degrees(),
+                        ctl.elevator,
+                        ctl.throttle,
+                        ias / KT,
+                        ac.roll().to_degrees(),
+                        ctl.aileron,
+                        ctl.rudder
+                    );
+                }
                 if ac.on_ground {
                     stats.landings += 1;
                     let d = end.along(p);

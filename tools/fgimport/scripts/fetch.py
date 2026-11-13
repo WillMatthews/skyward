@@ -10,7 +10,7 @@ Prints a manifest (n/src/<id>/_fetched.txt) and skipped external references.
 import os, re, sys, urllib.request, urllib.error
 
 ROOT = os.environ.get("FG_SRC", "fgsrc")
-UA = "skyward-flightsim/0.1"
+UA = os.environ.get("FG_UA", "skyward-flightsim/0.3 (fgimport)")
 TEX = (".png", ".rgb", ".rgba", ".sgi", ".jpg", ".jpeg", ".dds", ".bw")
 SKIP = [p for p in os.environ.get("SKIP", "").split(",") if p]
 

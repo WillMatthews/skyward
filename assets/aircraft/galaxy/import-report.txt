@@ -1,0 +1,43 @@
+"galaxy": 202 nodes (201 animated out of 202), 21 materials, 11 textures (0.9 MB), 194 chunks
+triangles: exterior 83397, interior 5967; vertices 87822; model.skac 1.1 MB; radius 46.8 m
+eye: Some(Vec3(0.75, 4.0, 24.0))
+lights: 15
+channels used: aileron_l alt_ft elevator eng0_n1 eng0_reverser eng1_n1 eng1_reverser eng2_n1 eng2_reverser eng3_n1 eng3_reverser flaps gear0_comp_norm gear0_roll_ms gear1_comp_norm gear2_comp_norm gear3_comp_norm gear4_comp_norm gear_pos roll_deg rudder spoilers steer_norm
+animation types: [("", 16), ("material", 5), ("range", 1), ("rotate", 88), ("select", 29), ("spin", 13), ("texmultiple", 1), ("texrotate", 1), ("textranslate", 16), ("translate", 32)]
+unmapped properties (count):
+     6 fdm/jsbsim/aero/coefficient/CLalpha
+     5 instrumentation/afds/ap-modes/pitch-mode
+     4 instrumentation/doors/cargodoorrear/position-norm
+     3 sim/model/A320neo/ias-bug-kt-norm
+     3 instrumentation/doors/ramprearkneeled/position-norm
+     3 instrumentation/doors/rampfrontkneeled/position-norm
+     3 instrumentation/doors/cargoramprear/position-norm
+     3 instrumentation/doors/cargorampfront/position-norm
+     3 instrumentation/afds/ap-modes/speed-mode
+     2 sim/model/kneelac/position-norm
+     2 instrumentation/nav/nav-loc
+     2 instrumentation/nav/has-gs
+     2 instrumentation/afds/inputs/FD
+     2 instrumentation/afds/ap-modes/roll-mode
+     1 velocities/vertical-speed-fps
+     1 systems/electrical/outputs/efis
+     1 position/altitude-agl-ft
+     1 instrumentation/nav/in-range
+     1 instrumentation/nav/heading-needle-deflection-norm
+     1 instrumentation/nav/gs-needle-deflection-norm
+     1 instrumentation/nav/gs-in-range
+     1 instrumentation/doors/crewdoor/position-norm
+     1 instrumentation/doors/cargodoorfront/position-norm
+     1 instrumentation/afds/inputs/loc-armed
+     1 instrumentation/afds/inputs/lateral-index
+     1 instrumentation/afds/inputs/ias-mach-selected
+     1 instrumentation/afds/inputs/gs-armed
+     1 instrumentation/afds/ap-modes/roll-mode-arm
+     1 controls/lighting/logo-lights
+     1 controls/lighting/dome-norm
+     1 autopilot/settings/vertical-speed-fpm
+     1 autopilot/settings/speed-mode
+     1 autopilot/locks/passive-mode
+     1 autopilot/internal/target-roll-deg
+     1 autopilot/internal/target-pitch-deg
+log:

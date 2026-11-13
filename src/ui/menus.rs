@@ -125,6 +125,11 @@ fn backdrop(p: &egui::Painter, screen: Rect, strength: f32) {
     p.add(Shape::mesh(m));
 }
 
+/// Display class of a type (its role, else the category name).
+pub fn class_name(d: &AircraftDef) -> &'static str {
+    if d.role.is_empty() { category_name(d.category) } else { d.role }
+}
+
 pub fn category_name(c: Category) -> &'static str {
     match c {
         Category::Trainer => "Light aircraft",
@@ -137,7 +142,7 @@ pub fn category_name(c: Category) -> &'static str {
 
 /// Runway length (m) and surface a type needs.
 pub fn needs(def: &AircraftDef) -> (f32, bool) {
-    (crate::sim::min_runway(def), matches!(def.category, Category::Airliner | Category::FastJet))
+    (crate::sim::min_runway(def), matches!(def.category, Category::Airliner | Category::FastJet) && !def.rough_field)
 }
 
 pub fn suitable(a: &Airport, def: &AircraftDef) -> bool {
@@ -156,7 +161,8 @@ fn spec_lines(d: &AircraftDef) -> Vec<(&'static str, String)> {
             if d.has_afterburner {
                 format!("{n} × turbofan, {:.0} kN · {:.0} kN reheat", dry, (d.static_thrust + d.ab_static_thrust) / 1000.0)
             } else {
-                format!("{n} × turbofan, {:.0} kN", dry)
+                // (The Vulcan's Olympus 301s are pure turbojets.)
+                format!("{n} × {}, {:.0} kN", if d.id == "vulcan" { "turbojet" } else { "turbofan" }, dry)
             }
         }
     };
@@ -302,7 +308,7 @@ pub fn aircraft(ui: &mut Ui, st: &mut UiState) {
             }
         }
         p.text(Pos2::new(r.min.x + 16.0, img.max.y + 12.0), Align2::LEFT_TOP, d.name, f_semi(16.0), pal::TEXT);
-        p.text(Pos2::new(r.min.x + 16.0, img.max.y + 34.0), Align2::LEFT_TOP, category_name(d.category), f_ui(12.5), pal::TEXT3);
+        p.text(Pos2::new(r.min.x + 16.0, img.max.y + 34.0), Align2::LEFT_TOP, class_name(d), f_ui(12.5), pal::TEXT3);
         if sel {
             p.rect_stroke(r, sp::R_CARD, Stroke::new(2.0, pal::ACCENT), egui::StrokeKind::Inside);
         }
@@ -330,7 +336,7 @@ pub fn aircraft(ui: &mut Ui, st: &mut UiState) {
     let mut yy = img.max.y + 18.0;
     p.text(Pos2::new(dr.min.x + 22.0, yy), Align2::LEFT_TOP, d.name, f_display(26.0), pal::TEXT);
     yy += 36.0;
-    p.text(Pos2::new(dr.min.x + 22.0, yy), Align2::LEFT_TOP, category_name(d.category).to_uppercase(), f_inst_b(11.5), pal::ACCENT);
+    p.text(Pos2::new(dr.min.x + 22.0, yy), Align2::LEFT_TOP, class_name(&d).to_uppercase(), f_inst_b(11.5), pal::ACCENT);
     yy += 24.0;
     let g = p.layout(d.description.to_string(), f_ui(14.0), pal::TEXT2, dr.width() - 44.0);
     let gh = g.size().y;

@@ -65,7 +65,9 @@ item lands; keep entries one line.
 - [ ] **P2** Cockpit follow-ups: hide the 2D glass/gauge overlay in cockpit view by default; radio/transponder frequency drums (no nav radios yet); clickable knobs; F-16 combiner HUD as a collimated texture; ATR glass EFIS pages
 - [ ] **P1** Systems depth per type: electrics, fuel (burn + CG), hydraulics, engine start procedures, failures menu
 - [ ] **P1** Ground handling: taxiing with tillers, pushback, chocks, wheel friction by surface
-- [ ] **P2** v3 types: C-130, C-5, Avro Vulcan; helicopter; quadcopter
+- [x] **P2** v3 heavies: C-130H Hercules (FGAddon C130, calibrated to YASim + published), C-5M Super Galaxy (FGMEMBERS C-5, patched JSBSim), Avro Vulcan B.2 (FGUK, JSBSim + delta-wing aero, Olympus howl); neutral liveries, bot / audio / per-type runway minima (H)
+- [ ] **P1** Heavies follow-ups: C-130 bot floats ~850 m before touchdown at EGLC; C-130 / C-5 use the PW100 / CFM56 recordings (no T56 / CF6 set); C-130 ramp and C-5 kneeling / visor not driven; C-5 & Vulcan cockpits are basic FG models (no working gauges); Vulcan brake chute; fuel burn (all flown at one weight)
+- [ ] **P2** v3 types: helicopter; quadcopter
 - [ ] **P2** Livery selector (house liveries; user-supplied)
 
 ## 4. Audio
@@ -129,4 +131,7 @@ item lands; keep entries one line.
 | T | Terrain elevation + landmarks | ✅ |
 | L | Structure/flex/crashes + supersonic/atmospheric VFX (damage, debris, vfx) | ✅ |
 | A (v3) | Airport detail: markings, buildings, stands, jet bridges, parked aircraft, vehicles, signs, windsocks, airfield lights, airfield grading (`src/airport/`) | ✅ |
-| next | Live 3D cockpit instruments, ATC, missions, release packaging | ⏳ to schedule |
+| C (v3) | Live 3D cockpit instruments (steam gauges + glass displays) | ✅ |
+| H | v3 heavies: C-130H, C-5M, Vulcan B.2 | ✅ |
+| S | Systems + realistic failures | ⏳ running |
+| next | ILS/FMS (F), rotorcraft (Q), ATC/ATIS (R) | ⏳ queued |

@@ -1,0 +1,58 @@
+"vulcan": 91 nodes (90 animated out of 92), 25 materials, 12 textures (0.4 MB), 71 chunks
+triangles: exterior 6988, interior 9376; vertices 24693; model.skac 0.2 MB; radius 19.7 m
+eye: Some(Vec3(0.34, 1.95, 11.85))
+lights: 7
+channels used: ctl_aileron ctl_elevator ctl_rudder gear0_comp_norm gear_pos pitch_deg roll_deg spoilers steer_norm
+animation types: [("", 2), ("material", 7), ("pick", 15), ("range", 38), ("rotate", 114), ("scale", 1), ("select", 14), ("spin", 5), ("textranslate", 16), ("translate", 17)]
+unmapped properties (count):
+     6 instrumentation/heading-indicator/heading-source
+     5 gear/gear/groundspeed-fps
+     4 instrumentation/heading-indicator/heading-bug-deg
+     4 instrumentation/attitude-indicator/horizon-offset-deg
+     3 controls/doors/cockpit-door-pos-norm
+     2 systems/electrical/outputs/MRG
+     2 instrumentation/nav/in-range
+     2 instrumentation/heading-indicator/heading-bug-deg/
+     2 controls/flight/aileron-trim
+     2 controls/doors/bb-door-pos-norm
+     2 controls/chute-pos-norm
+     2 accelerations/pilot-gmin
+     2 accelerations/pilot-gmax
+     2 accelerations/pilot-g
+     1 sim/armament
+     1 instrumentation/tacan/indicated-bearing-true-deg
+     1 instrumentation/radar-altimeter/radar-altitude-lowpass-ft
+     1 instrumentation/nav/indicated-bearing-deg
+     1 instrumentation/nav/heading-needle-deflection
+     1 instrumentation/nav/has-gs
+     1 instrumentation/nav/gs-needle-deflection
+     1 engines/engine[3]/oil-pressure-psi
+     1 engines/engine[3]/egt_degf
+     1 engines/engine[2]/oil-pressure-psi
+     1 engines/engine[2]/egt_degf
+     1 engines/engine[1]/oil-pressure-psi
+     1 engines/engine[1]/egt_degf
+     1 engines/engine/oil-pressure-psi
+     1 engines/engine/egt_degf
+     1 controls/radar/sensitivity-five-thousand
+     1 controls/radar/limiter-light-test
+     1 controls/radar/limiter-light-red
+     1 controls/radar/limiter-light-green
+     1 controls/radar/limiter-light-amber
+     1 controls/radar/limiter-active
+     1 controls/gear/gear-guard
+     1 controls/flight/rudder-trim
+     1 controls/engines/starter-selected
+     1 controls/engines/starter-engaged
+     1 controls/engines/master
+     1 controls/doors/chute-switch-pos
+     1 controls/doors/chute-door-pos-norm
+log:
+  skip external/missing submodel Aircraft/Instruments-3d/pedals/pedals.xml
+  skip external/missing submodel Aircraft/Instruments-3d/pedals/pedals.xml
+  skip external/missing submodel Aircraft/vulcanb2/Models/Instruments/fuel-1.xml
+  skip external/missing submodel Aircraft/vulcanb2/Models/Instruments/fuel-2.xml
+  skip external/missing submodel Aircraft/vulcanb2/Models/Instruments/fuel-3.xml
+  skip external/missing submodel Aircraft/vulcanb2/Models/Instruments/fuel-4.xml
+  skip external/missing submodel Aircraft/vulcanb2/Models/Instruments/radar-limiter.xml
+  skip external/missing submodel Aircraft/Instruments-3d/adf/adf.xml

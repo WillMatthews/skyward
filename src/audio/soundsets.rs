@@ -506,6 +506,48 @@ pub static ATR: Set = Set {
     ],
 };
 
+// ------------------------------------------------------------ Vulcan B.2 Olympus 301
+// FGUK AvroVulcanB2 Sounds/vulcanb2-sound.xml layers (turbine whine, exhaust,
+// distorted jet blast, the intake howl). The FG volume factors are tied to its
+// JSBSim N2 (which runs past 100 %); the tables are re-fitted to Skyward's
+// N2 so the howl comes in at climb power (~85 %) as on the real aircraft.
+const VUL_TURB_V: &[(f32, f32)] = &[(5.0, 0.0), (30.0, 0.5), (55.0, 0.9), (100.0, 1.0)];
+const VUL_JET_V: &[(f32, f32)] = &[(45.0, 0.0), (70.0, 0.3), (100.0, 0.75)];
+const VUL_BLAST_V: &[(f32, f32)] = &[(60.0, 0.0), (80.0, 0.3), (100.0, 0.65)];
+const VUL_HOWL_V: &[(f32, f32)] = &[(78.0, 0.0), (88.0, 0.35), (100.0, 0.6)];
+const VUL_INT_V: &[(f32, f32)] = &[(10.0, 0.0), (40.0, 0.45), (100.0, 1.0)];
+
+pub static OLYMPUS: Set = Set {
+    layers: &[
+        l("vul_x_turb", Front, (N2, VUL_TURB_V), Lin(N2, 0.75, 0.0075, 0.75, 1.5)).g(0.55),
+        l("vul_x_howl", Front, (N2, VUL_HOWL_V), Lin(N2, 0.7, 0.003, 0.9, 1.0)),
+        l("vul_x_jet", Rear, (N2, VUL_JET_V), Lin(N2, 0.7, 0.003, 0.85, 1.0)),
+        l("vul_x_blast", Rear, (N2, VUL_BLAST_V), Lin(N2, 0.75, 0.0025, 0.9, 1.0)),
+        l("vul_i_eng", Int, (N2, VUL_INT_V), Lin(N2, 0.7, 0.003, 0.8, 1.0)),
+    ],
+    groups: &[],
+    start: &[
+        shot("vul_start", Case, 0.7, 0.0),
+        shot("vul_start", Int, 0.3, 0.0),
+    ],
+    stop: &[
+        shot("vul_stop", Case, 0.6, 0.0),
+        shot("vul_stop", Int, 0.3, 0.0),
+    ],
+    detail: Detail {
+        front: 0.4,
+        rear: 0.5,
+        case: 0.3,
+    },
+    int_from_ext: 0.3,
+    gain: 0.8,
+    // Turbojets: idle → full ~22 dB outside (the exhaust dominates).
+    level: (N2, &[(30.0, -22.0), (60.0, -13.0), (85.0, -5.0), (100.0, 0.0)]),
+    level_int: (N2, &[(30.0, -10.0), (100.0, 0.0)]),
+    gain_int: 0.6,
+    samples: &["vul_x_turb", "vul_x_howl", "vul_x_jet", "vul_x_blast", "vul_i_eng", "vul_start", "vul_stop"],
+};
+
 // ------------------------------------------------------------ A320 CFM56-5B
 // FG A320-family Systems/cfm56-sound.xml tables, verbatim.
 const CFM_IDLE_V: &[(f32, f32)] = &[
@@ -976,6 +1018,7 @@ pub fn set(s: SoundSet) -> Option<&'static Set> {
         SoundSet::Atr => &ATR,
         SoundSet::Cfm56 => &CFM56,
         SoundSet::V2500 => &V2500,
+        SoundSet::Olympus => &OLYMPUS,
     })
 }
 
