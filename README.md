@@ -152,8 +152,10 @@ painted over or composited.
 - **Watch mode.** An AI pilot flies the real flight model through the controls: take-off,
   sightseeing tour, approach and landing, wind-aware, doing its own radio calls. The glider bot
   thermals under cumulus. Add the cinematic camera and leave it running.
-- **Menus.** Aircraft cards, a world-map airport picker with fuzzy search, runway diagrams with
-  live crosswind, and conditions from live to any METAR.
+- **Menus.** Aircraft cards, a world-map airport picker with fuzzy search that zooms smoothly from
+  the whole globe down to a single stand (day / night map styles, runways to scale, full airport
+  diagrams with stands, holding points and helipads; click a runway end, stand or helipad to start
+  there), live crosswind, and conditions from live to any METAR.
 
 ## Aircraft
 
@@ -468,6 +470,7 @@ on this page, the golden tests and soak tests.
 | `--audio-script "2:atc=clearance,40:atc=taxi"` | scripted cues, including ATC requests (see `src/audio/render.rs`) |
 | `--eye x,y,z --look x,y,z`, `--eye-ll lat,lon,h --look-ll lat,lon,h` | fixed camera (local frame / by geography) |
 | `--menu-screen S` | capture a menu: `main` `aircraft` `airport` `conditions` `settings` `pause` `loading` `credits` `missions` `multiplayer` |
+| `--map-view LAT,LON,ZOOM`, `--map-style day\|night` | departure map centre / zoom (1.2 world – 19 stands) and cartography, for captures |
 | `--no-hud`, `--stats` | hide the HUD, print the final state |
 | `--realtime [--fps HZ]`, `--then-reset` | stream + render in real time; frame-time / streaming report |
 | `--soak [--shot-every S]` | fly the bot for `--seconds` of sim time; minute log, events, PNGs |

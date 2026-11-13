@@ -27,6 +27,7 @@ pub mod radio;
 pub mod scroll;
 pub mod settings;
 pub mod toast;
+pub mod worldmap;
 
 use egui::{epaint, Align2, Color32, CornerRadius, FontFamily, FontId, Pos2, Rect, Shape, Stroke, Vec2};
 

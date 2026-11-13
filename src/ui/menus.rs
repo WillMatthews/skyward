@@ -3,6 +3,7 @@
 //! the loading screen.
 
 use super::overview::{self, View as OView};
+use super::worldmap::{self, style::MapStyle as WStyle};
 use super::settings::{HudMode, MapStyle, DETAIL_NAMES};
 use super::{alpha, f_display, f_inst, f_inst_b, f_mono, f_semi, f_ui, gradient_rect, hhmm, pal, panel, panel_with, sp, thousands, Action, AltUnit, Screen, SpeedUnit, UiState};
 use crate::airports::{self, Airport, Db, Kind};
@@ -703,7 +704,16 @@ pub struct Picker {
     pub tab: Tab,
     pub show_all: bool,
     pub view: OView,
+    /// Fly the map here (x, y, zoom), and the flight under way.
     target: Option<(f64, f64, f64)>,
+    fly: Option<worldmap::flyto::FlyTo>,
+    /// The flight frames an airport (its runways' extent): re-aimed if the map resizes.
+    fit: Option<(f64, f64)>,
+    fly_rect: Rect,
+    /// Smooth zoom: the zoom being eased to and the point kept fixed.
+    zoom_goal: Option<(f64, Pos2)>,
+    /// Pan inertia after a drag (points / s).
+    vel: Vec2,
     pub selected: Option<usize>,
     pub air_point: Option<(f64, f64)>,
     pub air_alt_ft: f32,
@@ -712,6 +722,12 @@ pub struct Picker {
     focus: bool,
     /// The runway end was chosen automatically: re-choose into wind once the METAR is in.
     auto_end: Option<String>,
+    /// Day / night cartography of the departure map.
+    pub map_style: WStyle,
+    /// Put the map here (lat, lon, zoom) once the screen is up (captures).
+    pub pending_view: Option<(f64, f64, f64)>,
+    /// A fixed METAR instead of the live one (captures: `--no-live --metar`).
+    pub fixed_metar: Option<String>,
     pub overview: overview::Overview,
 }
 
@@ -727,6 +743,11 @@ impl Default for Picker {
             show_all: false,
             view: OView { cx, cy, zoom: 5.5, rect: Rect::from_min_size(Pos2::ZERO, Vec2::splat(100.0)) },
             target: None,
+            fly: None,
+            fit: None,
+            fly_rect: Rect::NOTHING,
+            zoom_goal: None,
+            vel: Vec2::ZERO,
             selected: None,
             air_point: None,
             air_alt_ft: 3000.0,
@@ -734,35 +755,140 @@ impl Default for Picker {
             metar: None,
             focus: true,
             auto_end: None,
+            map_style: WStyle::Day,
+            pending_view: None,
+            fixed_metar: None,
             overview: overview::Overview::new(),
         }
     }
 }
 
+/// An airport's runways' extent (Mercator units, x / y).
+fn runway_span(a: &Airport) -> (f64, f64) {
+    let (mut x0, mut y0) = overview::merc(a.lat, a.lon);
+    let (mut x1, mut y1) = (x0, y0);
+    for rw in &a.runways {
+        if let Some(ends) = worldmap::pick::runway_ends(a, rw) {
+            for (la, lo) in ends {
+                let (x, y) = overview::merc(la, lo);
+                x0 = x0.min(x);
+                x1 = x1.max(x);
+                y0 = y0.min(y);
+                y1 = y1.max(y);
+            }
+        }
+    }
+    (x1 - x0, y1 - y0)
+}
+
+/// Zoom that frames a runway extent in a `w` × `h` point map.
+fn fit_span(span: (f64, f64), w: f32, h: f32) -> f64 {
+    let s = (span.0 / (w.max(100.0) as f64 * 0.62)).max(span.1 / (h.max(100.0) as f64 * 0.62)).max(1e-12);
+    (1.0 / (256.0 * s)).log2().clamp(11.5, 16.0)
+}
+
+/// Zoom that frames an airport's runways in a `w` × `h` point map.
+pub fn fit_zoom(a: &Airport, w: f32, h: f32) -> f64 {
+    fit_span(runway_span(a), w, h)
+}
+
 impl Picker {
-    /// Select an airport (and fly the map there).
-    pub fn select(&mut self, db: &Db, i: usize, zoom: f64) {
+    /// Select an airport and fly the map there (`zoom`: None frames its runways).
+    pub fn select(&mut self, db: &Db, i: usize, zoom: Option<f64>) {
         self.selected = Some(i);
         let a = &db.airports[i];
         let (x, y) = overview::merc(a.lat, a.lon);
-        self.target = Some((x, y, zoom));
+        let z = zoom.unwrap_or_else(|| fit_zoom(a, self.view.rect.width(), self.view.rect.height()));
+        self.target = Some((x, y, z));
+        self.fit = zoom.is_none().then(|| runway_span(a));
+        self.fly = None;
+        self.zoom_goal = None;
+        self.vel = Vec2::ZERO;
         if self.metar.as_ref().is_none_or(|m| m.ident != a.ident) {
-            self.metar = Some(airports::MetarFetch::start(&a.ident, &a.icao, a.lat, a.lon));
+            self.metar = Some(self.metar_for(a));
         }
     }
 
+    /// The airport's METAR: fetched live, or the fixed one of a capture (`--no-live --metar`).
+    pub fn metar_for(&self, a: &Airport) -> airports::MetarFetch {
+        self.fixed_metar.as_deref().and_then(|raw| airports::MetarFetch::fixed(&a.ident, raw)).unwrap_or_else(|| airports::MetarFetch::start(&a.ident, &a.icao, a.lat, a.lon))
+    }
+
+    /// No animation under way (captures wait for this).
+    pub fn settled(&self) -> bool {
+        self.target.is_none() && self.fly.is_none() && self.zoom_goal.is_none() && self.vel == Vec2::ZERO
+    }
+
+    /// Stop any animation (the user took the map).
+    fn hold(&mut self) {
+        self.target = None;
+        self.fly = None;
+        self.fit = None;
+    }
+
+    /// Put the map at (lat, lon, zoom) at once (headless captures).
+    pub fn set_view(&mut self, lat: f64, lon: f64, zoom: f64) {
+        let (x, y) = overview::merc(lat, lon);
+        self.view.cx = x;
+        self.view.cy = y;
+        self.view.zoom = zoom.clamp(overview::MIN_ZOOM, overview::MAX_ZOOM);
+        self.hold();
+        self.zoom_goal = None;
+        self.vel = Vec2::ZERO;
+    }
+
     fn animate(&mut self, dt: f32) {
-        if let Some((x, y, z)) = self.target {
-            let k = (dt as f64 * 6.0).min(1.0);
-            let mut dx = x - self.view.cx;
-            dx -= dx.round();
-            self.view.cx += dx * k;
-            self.view.cy += (y - self.view.cy) * k;
-            self.view.zoom += (z - self.view.zoom) * k;
-            if dx.abs() < 1e-7 && (y - self.view.cy).abs() < 1e-7 && (z - self.view.zoom).abs() < 1e-3 {
-                self.target = None;
+        let dt = dt.clamp(0.0, 0.1);
+        // The map changed size under a framing flight (first frames, a resize): re-aim.
+        if let (Some(f), Some(span)) = (&self.fly, self.fit) {
+            if self.fly_rect != self.view.rect {
+                let (x, y, _) = f.at(1.0);
+                self.target = Some((x, y, fit_span(span, self.view.rect.width(), self.view.rect.height())));
             }
         }
+        if let Some(mut t) = self.target.take() {
+            if let Some(span) = self.fit {
+                t.2 = fit_span(span, self.view.rect.width(), self.view.rect.height());
+            }
+            let v = &self.view;
+            self.fly = Some(worldmap::flyto::FlyTo::new((v.cx, v.cy, v.zoom), t, v.rect.width() as f64));
+            self.fly_rect = v.rect;
+        }
+        if let Some(f) = &mut self.fly {
+            let ((x, y, z), done) = f.step(dt as f64);
+            self.view.cx = x;
+            self.view.cy = y.clamp(0.0, 1.0);
+            self.view.zoom = z.clamp(overview::MIN_ZOOM, overview::MAX_ZOOM);
+            if done {
+                self.fly = None;
+                self.fit = None;
+            }
+        }
+        // Eased wheel / button zoom about its anchor.
+        if let Some((goal, at)) = self.zoom_goal {
+            let k = 1.0 - (-(dt as f64) * 16.0).exp();
+            let dz = (goal - self.view.zoom) * k;
+            self.view.zoom_at(at, dz);
+            if (goal - self.view.zoom).abs() < 1e-3 || dz.abs() < 1e-6 {
+                self.zoom_goal = None;
+            }
+        }
+        // Inertial pan.
+        if self.vel.length() > 4.0 {
+            let s = self.view.scale();
+            self.view.cx -= (self.vel.x * dt) as f64 / s;
+            self.view.cy = (self.view.cy - (self.vel.y * dt) as f64 / s).clamp(0.0, 1.0);
+            self.vel *= (-dt * 4.5).exp();
+        } else {
+            self.vel = Vec2::ZERO;
+        }
+    }
+
+    /// Ease the zoom by `dz` levels about `at`.
+    fn zoom_by(&mut self, dz: f64, at: Pos2) {
+        let from = self.zoom_goal.map(|g| g.0).unwrap_or(self.view.zoom);
+        self.zoom_goal = Some(((from + dz).clamp(overview::MIN_ZOOM, overview::MAX_ZOOM), at));
+        self.hold();
     }
 }
 
@@ -771,6 +897,53 @@ fn picker_wind(pk: &Picker) -> Option<(f32, f32, Option<f32>, crate::weather::Me
     match pk.metar.as_ref()?.result.as_ref()? {
         Ok((m, _)) => Some((m.wind_dir.unwrap_or(0.0), m.wind_kt, m.gust_kt, m.clone())),
         Err(_) => None,
+    }
+}
+
+/// Map pan / zoom from the keyboard (when no text field has focus) and a gamepad.
+fn map_keys(ui: &Ui, st: &mut UiState, map_r: Rect) {
+    let typing = ui.ctx().memory(|m| m.focused().is_some());
+    let dt = st.dt.clamp(0.0, 0.1);
+    let mut pan = Vec2::ZERO;
+    let mut dz = 0.0;
+    if !typing {
+        ui.input(|i| {
+            use egui::Key;
+            let k = |a: Key, b: Key| if i.key_down(a) || i.key_down(b) { 1.0 } else { 0.0 };
+            pan.x += k(Key::ArrowRight, Key::D) - k(Key::ArrowLeft, Key::A);
+            pan.y += k(Key::ArrowDown, Key::S) - k(Key::ArrowUp, Key::W);
+            for (key, d) in [(Key::Plus, 1.0), (Key::Equals, 1.0), (Key::PageUp, 1.0), (Key::Minus, -1.0), (Key::PageDown, -1.0)] {
+                if i.key_pressed(key) {
+                    dz += d;
+                }
+            }
+        });
+    }
+    // Gamepads: left stick pans, right stick zooms.
+    let mut zr = 0.0;
+    for d in st.input.devices.iter().filter(|d| d.info.kind == crate::input::DevKind::Gamepad) {
+        let ax = |s: crate::input::Std| d.info.std(s).and_then(|c| d.value(c)).map(|v| if v.abs() < 0.18 { 0.0 } else { v }).unwrap_or(0.0);
+        use crate::input::Std;
+        pan.x += ax(Std::X);
+        pan.y += ax(Std::Y);
+        zr -= ax(Std::Ry);
+    }
+    let pk = &mut st.picker;
+    if pan != Vec2::ZERO {
+        let s = pk.view.scale();
+        let d = pan.normalized() * pan.length().min(1.5) * 520.0 * dt;
+        pk.view.cx += d.x as f64 / s;
+        pk.view.cy = (pk.view.cy + d.y as f64 / s).clamp(0.0, 1.0);
+        pk.hold();
+        pk.vel = Vec2::ZERO;
+    }
+    if zr != 0.0 {
+        let c = map_r.center();
+        pk.view.zoom_at(c, (zr * 2.0 * dt) as f64);
+        pk.hold();
+    }
+    if dz != 0.0 {
+        pk.zoom_by(dz, map_r.center());
     }
 }
 
@@ -791,17 +964,6 @@ pub fn departure(ui: &mut Ui, st: &mut UiState) {
         return;
     };
     let def = st.defs[st.plan.aircraft.min(st.defs.len() - 1)].clone();
-    st.picker.animate(st.dt);
-    if st.picker.selected.is_none() {
-        if let Some(i) = db.index_of(&st.plan.airport) {
-            st.picker.select(&db, i, 13.0);
-            if matches!(&st.plan.spec, Spec::Runway(e) | Spec::Final(e, _) if e.is_empty()) {
-                pick_default_spec(st, &db, i);
-            }
-            st.picker.view.cx = st.picker.target.map(|t| t.0).unwrap_or(st.picker.view.cx);
-            st.picker.view.cy = st.picker.target.map(|t| t.1).unwrap_or(st.picker.view.cy);
-        }
-    }
     // ---- layout: list (left) | map (centre) | details (right)
     let list_w = 380.0;
     let det_w = 420.0;
@@ -809,41 +971,167 @@ pub fn departure(ui: &mut Ui, st: &mut UiState) {
     let right = Rect::from_min_max(Pos2::new(screen.max.x - det_w, screen.min.y), screen.max);
     let map_r = Rect::from_min_max(Pos2::new(left.max.x, screen.min.y), Pos2::new(right.min.x, screen.max.y));
     st.picker.view.rect = map_r;
+    if st.picker.selected.is_none() {
+        if let Some(i) = db.index_of(&st.plan.airport) {
+            st.picker.select(&db, i, None);
+            if matches!(&st.plan.spec, Spec::Runway(e) | Spec::Final(e, _) if e.is_empty()) {
+                pick_default_spec(st, &db, i);
+            }
+            // Start over the airport (zooming in), not flying across the world.
+            if let Some((x, y, _)) = st.picker.target {
+                st.picker.view.cx = x;
+                st.picker.view.cy = y;
+            }
+        }
+    }
+    if let Some((la, lo, z)) = st.picker.pending_view.take() {
+        st.picker.set_view(la, lo, z);
+    }
+    st.picker.animate(st.dt);
     // ---- map
-    let dark = true;
     let ppp = ui.ctx().pixels_per_point();
-    let taken = st.picker.overview.draw(&p, &mut st.canvas, "overview", ppp, &st.picker.view, dark);
+    let style = st.picker.map_style;
+    let focus = focus_airport(st, &db);
+    let diag = focus.and_then(|i| (st.picker.view.zoom >= worldmap::aviation::DIAGRAM_FROM - 0.6).then(|| st.picker.overview.map.diagram(&db.airports[i], &db)).flatten());
+    let opts = worldmap::Opts { key: "overview", max_z: worldmap::pyramid::MAX_TILE_Z, style, labels: true, gates: diag.is_none() };
+    // Labels stay clear of the controls over the map.
+    let blocked = [
+        Rect::from_min_size(map_r.min + Vec2::new(12.0, 10.0), Vec2::new(408.0, 42.0)),
+        Rect::from_min_size(Pos2::new(map_r.max.x - 56.0, map_r.min.y + 70.0), Vec2::new(48.0, 240.0)),
+        Rect::from_min_max(Pos2::new(map_r.min.x, map_r.max.y - 64.0), Pos2::new(map_r.min.x + 200.0, map_r.max.y)),
+        Rect::from_min_max(Pos2::new(map_r.max.x - 330.0, map_r.max.y - 22.0), map_r.max),
+    ];
+    // Under the map's labels: runways to scale, the diagram's ground layer.
+    let view = st.picker.view;
+    let runway_fields: Vec<usize> = if view.zoom >= worldmap::aviation::RUNWAYS_FROM {
+        let (lat0, lat1, lon0, lon1) = view.bounds();
+        db.in_box(lat0.min(lat1) - 0.1, lat0.max(lat1) + 0.1, lon0.min(lon1) - 0.1, lon0.max(lon1) + 0.1)
+            .into_iter()
+            .filter(|&i| (st.picker.show_all || suitable(&db.airports[i], &def) || Some(i) == focus || Some(i) == st.picker.selected) && worldmap::aviation::to_scale(&db.airports[i], &view))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let wind = picker_wind(&st.picker).map(|w| (w.0, w.1));
+    let mp = p.with_clip_rect(map_r);
+    let mut under = |_: &egui::Painter| {
+        for &i in &runway_fields {
+            worldmap::aviation::runways(&mp, &view, &db.airports[i], style, Some(i) == focus && view.zoom >= 12.0);
+        }
+        if let Some(d) = diag.as_deref() {
+            worldmap::aviation::diagram_base(&mp, &view, d, style, wind);
+        }
+    };
+    let taken = st.picker.overview.draw_with(&p, &mut st.canvas, ppp, &view, &opts, &blocked, &mut under);
     let map_resp = ui.interact(map_r, ui.id().with("ovmap"), Sense::click_and_drag());
-    draw_airports_layer(ui, &p, st, &db, &def, map_r, &taken, &map_resp);
+    draw_airports_layer(ui, &p, st, &db, &def, map_r, &taken, &map_resp, focus, diag.as_deref());
+    // drag with inertia
     if map_resp.dragged() {
         let d = map_resp.drag_delta();
         let s = st.picker.view.scale();
         st.picker.view.cx -= d.x as f64 / s;
         st.picker.view.cy = (st.picker.view.cy - d.y as f64 / s).clamp(0.0, 1.0);
-        st.picker.target = None;
+        st.picker.hold();
+        st.picker.zoom_goal = None;
+        let v = d / st.dt.max(1.0 / 240.0);
+        st.picker.vel = st.picker.vel * 0.6 + v * 0.4;
+        if d == Vec2::ZERO && ui.input(|i| i.pointer.time_since_last_movement() > 0.06) {
+            st.picker.vel = Vec2::ZERO;
+        }
     }
+    if map_resp.drag_started() {
+        st.picker.vel = Vec2::ZERO;
+    }
+    // wheel / pinch zoom about the pointer, double-click to zoom in
     if map_resp.hovered() {
-        let (scroll, pos) = ui.input(|i| (i.smooth_scroll_delta.y, i.pointer.hover_pos()));
-        if scroll.abs() > 0.1 {
-            if let Some(pos) = pos {
-                st.picker.view.zoom_at(pos, scroll as f64 * 0.004);
-                st.picker.target = None;
+        // (egui already eases wheel steps into smooth_scroll_delta.)
+        let (scroll, pinch, pos) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta(), i.pointer.hover_pos()));
+        if let Some(pos) = pos {
+            let mut dz = scroll as f64 * 0.0045;
+            if (pinch - 1.0).abs() > 1e-4 {
+                dz += (pinch as f64).log2();
+            }
+            if dz.abs() > 1e-5 {
+                st.picker.view.zoom_at(pos, dz);
+                st.picker.hold();
+                st.picker.zoom_goal = None;
+                st.picker.vel = Vec2::ZERO;
             }
         }
     }
-    // map controls (zoom buttons)
-    for (k, (lbl, dz)) in [("+", 1.0), ("−", -1.0)].into_iter().enumerate() {
-        let r = Rect::from_min_size(Pos2::new(map_r.max.x - 52.0, map_r.min.y + 76.0 + k as f32 * 44.0), Vec2::splat(38.0));
-        if button(ui, r, ("zoom", k), lbl, Btn::Secondary, true).clicked() {
-            let c = st.picker.view.rect.center();
-            st.picker.view.zoom_at(c, dz);
-            st.picker.target = None;
+    if map_resp.double_clicked() {
+        if let Some(pos) = map_resp.interact_pointer_pos() {
+            st.picker.zoom_by(1.0, pos);
         }
     }
-    p.text(Pos2::new(map_r.max.x - 10.0, map_r.max.y - 8.0), Align2::RIGHT_BOTTOM, "© OpenMapTiles © OpenStreetMap contributors · OurAirports", f_ui(10.5), Color32::from_white_alpha(140));
+    map_keys(ui, st, map_r);
+    // map controls: zoom, recentre, day / night
+    let bx = map_r.max.x - 52.0;
+    for (k, (lbl, dz)) in [("+", 1.0), ("−", -1.0)].into_iter().enumerate() {
+        let r = Rect::from_min_size(Pos2::new(bx, map_r.min.y + 76.0 + k as f32 * 44.0), Vec2::splat(38.0));
+        if button(ui, r, ("zoom", k), lbl, Btn::Secondary, true).clicked() {
+            st.picker.zoom_by(dz, map_r.center());
+        }
+    }
+    let rc = Rect::from_min_size(Pos2::new(bx, map_r.min.y + 76.0 + 2.0 * 44.0 + 8.0), Vec2::splat(38.0));
+    let has_sel = st.picker.selected.is_some();
+    if button(ui, rc, "recentre", "", Btn::Secondary, has_sel).on_hover_text("Zoom to the airport").clicked() {
+        if let Some(i) = st.picker.selected {
+            let a = &db.airports[i];
+            let (x, y) = overview::merc(a.lat, a.lon);
+            st.picker.target = Some((x, y, fit_zoom(a, map_r.width(), map_r.height())));
+            st.picker.fit = Some(runway_span(a));
+        }
+    }
+    {
+        // crosshair icon
+        let c = rc.center();
+        let col = if has_sel { pal::TEXT } else { alpha(pal::TEXT, 0.4) };
+        p.circle_stroke(c, 7.0, Stroke::new(1.6, col));
+        p.circle_filled(c, 2.2, col);
+        for d in [Vec2::X, -Vec2::X, Vec2::Y, -Vec2::Y] {
+            p.line_segment([c + d * 7.0, c + d * 11.0], Stroke::new(1.6, col));
+        }
+    }
+    let sr = Rect::from_min_size(Pos2::new(bx, rc.max.y + 6.0), Vec2::splat(38.0));
+    let tip = match style {
+        WStyle::Day => "Night map",
+        WStyle::Night => "Day map",
+    };
+    if button(ui, sr, "mapstyle", "", Btn::Secondary, true).on_hover_text(tip).clicked() {
+        st.picker.map_style = match style {
+            WStyle::Day => WStyle::Night,
+            WStyle::Night => WStyle::Day,
+        };
+    }
+    {
+        let c = sr.center();
+        match style {
+            // a crescent: what the button switches to
+            WStyle::Day => {
+                p.circle_filled(c, 8.0, pal::TEXT);
+                p.circle_filled(c + Vec2::new(4.0, -3.0), 7.0, pal::RAISED);
+            }
+            WStyle::Night => {
+                p.circle_filled(c, 4.5, pal::AMBER);
+                for k in 0..8 {
+                    let a = k as f32 * std::f32::consts::FRAC_PI_4;
+                    let d = Vec2::new(a.cos(), a.sin());
+                    p.line_segment([c + d * 7.0, c + d * 10.0], Stroke::new(1.6, pal::AMBER));
+                }
+            }
+        }
+    }
+    worldmap::aviation::scale_bar(&p, &st.picker.view, Pos2::new(map_r.min.x + 22.0, map_r.max.y - 26.0), style);
+    let attr = match style {
+        WStyle::Day => Color32::from_black_alpha(150),
+        WStyle::Night => Color32::from_white_alpha(140),
+    };
+    p.text(Pos2::new(map_r.max.x - 10.0, map_r.max.y - 8.0), Align2::RIGHT_BOTTOM, "© OpenMapTiles © OpenStreetMap contributors · OurAirports", f_ui(10.5), attr);
     // ---- top bar over the map
     let bar = Rect::from_min_max(Pos2::new(map_r.min.x, map_r.min.y), Pos2::new(map_r.max.x, map_r.min.y + 64.0));
-    gradient_rect(&p, bar, Color32::from_rgba_premultiplied(6, 8, 11, 220), Color32::TRANSPARENT);
+    gradient_rect(&p, bar, Color32::from_rgba_premultiplied(6, 8, 11, 160), Color32::TRANSPARENT);
+    p.rect_filled(Rect::from_min_size(bar.min + Vec2::new(12.0, 10.0), Vec2::new(408.0, 42.0)), 21, Color32::from_rgba_premultiplied(15, 19, 25, 235));
     if let Some(s) = steps(ui, bar.min + Vec2::new(20.0, 16.0), 1) {
         st.actions.push(Action::Goto([Screen::Aircraft, Screen::Departure, Screen::Conditions][s]));
     }
@@ -853,17 +1141,76 @@ pub fn departure(ui: &mut Ui, st: &mut UiState) {
     details_panel(ui, st, &db, &def, right);
 }
 
-fn draw_airports_layer(ui: &mut Ui, p: &egui::Painter, st: &mut UiState, db: &Arc<Db>, def: &AircraftDef, map_r: Rect, taken: &[Rect], resp: &Response) {
+/// The airport whose diagram the map shows: the selected one when it's in
+/// view, else (zoomed in) the one nearest the middle of the map.
+fn focus_airport(st: &UiState, db: &Db) -> Option<usize> {
+    let v = &st.picker.view;
+    let inside = |i: usize| v.rect.expand(v.rect.width() * 0.25).contains(v.ll_to_screen(db.airports[i].lat, db.airports[i].lon));
+    if let Some(i) = st.picker.selected.filter(|&i| inside(i)) {
+        return Some(i);
+    }
+    if v.zoom < worldmap::aviation::DIAGRAM_FROM - 0.6 {
+        return None;
+    }
+    let (lat, lon) = v.to_ll(v.rect.center());
+    // The field whose runways (plus an apron margin) are nearest the middle.
+    let reach = |a: &Airport| -> f64 {
+        let mut best = airports::distance_km((a.lat, a.lon), (lat, lon));
+        for rw in &a.runways {
+            if let Some([e0, e1]) = worldmap::pick::runway_ends(a, rw) {
+                let (bx, by) = worldmap::pick::enu(e0, e1);
+                let (px, py) = worldmap::pick::enu(e0, (lat, lon));
+                let l2 = (bx * bx + by * by).max(1.0);
+                let t = ((px * bx + py * by) / l2).clamp(0.0, 1.0);
+                best = best.min(((px - bx * t).powi(2) + (py - by * t).powi(2)).sqrt() / 1000.0);
+            }
+        }
+        best
+    };
+    db.near(lat, lon, 8.0)
+        .into_iter()
+        .map(|x| x.0)
+        .filter(|&i| db.airports[i].kind != Kind::Seaplane && !db.airports[i].runways.is_empty())
+        .map(|i| (i, reach(&db.airports[i])))
+        .filter(|x| x.1 < 2.5)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|x| x.0)
+}
+
+/// What the current start is, for the diagram.
+fn chosen(st: &UiState, a: &Airport) -> worldmap::aviation::Chosen {
+    use worldmap::aviation::Chosen;
+    if st.plan.airport != a.ident || st.picker.air_point.is_some() {
+        return Chosen::None;
+    }
+    match &st.plan.spec {
+        Spec::Runway(e) => Chosen::End(e.clone()),
+        Spec::Final(e, nm) => Chosen::Final(e.clone(), *nm),
+        Spec::Stand { lat, lon, hdg, .. } => Chosen::Spot(*lat, *lon, *hdg),
+        _ => Chosen::None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_airports_layer(ui: &mut Ui, p: &egui::Painter, st: &mut UiState, db: &Arc<Db>, def: &AircraftDef, map_r: Rect, taken: &[Rect], resp: &Response, focus: Option<usize>, diag: Option<&worldmap::diagram::Diagram>) {
+    use worldmap::aviation::{self, Focus};
     let v = st.picker.view;
     let (lat0, lat1, lon0, lon1) = v.bounds();
     let z = v.zoom;
     let mp = p.with_clip_rect(map_r);
+    let style = st.picker.map_style;
     let mut hover: Option<(usize, f32)> = None;
-    let hp = ui.input(|i| i.pointer.hover_pos());
+    let hp = ui.input(|i| i.pointer.hover_pos()).filter(|q| map_r.contains(*q) && resp.hovered());
     let mut labels: Vec<Rect> = taken.to_vec();
+    let mut code_click: Option<usize> = None;
     let mut idx = db.in_box(lat0.min(lat1) - 0.5, lat0.max(lat1) + 0.5, lon0.min(lon1) - 0.5, lon0.max(lon1) + 0.5);
     idx.sort_by_key(|&i| std::cmp::Reverse(db.airports[i].kind));
     let fav = |a: &Airport| st.settings.is_favourite(&a.ident);
+    let mpp = v.m_per_pt() as f32;
+    let (dot_ring, code_col_ok) = match style {
+        worldmap::style::MapStyle::Day => (Color32::from_white_alpha(230), Color32::from_rgb(20, 70, 140)),
+        worldmap::style::MapStyle::Night => (Color32::from_black_alpha(160), Color32::from_rgb(120, 200, 255)),
+    };
     for i in idx {
         let a = &db.airports[i];
         let show = match a.kind {
@@ -872,14 +1219,22 @@ fn draw_airports_layer(ui: &mut Ui, p: &egui::Painter, st: &mut UiState, db: &Ar
             Kind::Small => z > 6.6,
             Kind::Seaplane => z > 8.0 && st.picker.show_all,
         };
-        if !show && Some(i) != st.picker.selected {
+        let is_focus = Some(i) == focus;
+        if !show && Some(i) != st.picker.selected && !is_focus {
             continue;
         }
         let ok = suitable(a, def);
-        if !ok && !st.picker.show_all && Some(i) != st.picker.selected {
+        if !ok && !st.picker.show_all && Some(i) != st.picker.selected && !is_focus {
             continue;
         }
         let q = v.ll_to_screen(a.lat, a.lon);
+        if !map_r.expand(200.0).contains(q) {
+            continue;
+        }
+        // Runways to scale once they're big enough to see (drawn under the
+        // map labels, departure()); a symbol before.
+        let on_screen = a.longest_m() / mpp;
+        let scaled = aviation::to_scale(a, &v);
         if !map_r.contains(q) {
             continue;
         }
@@ -887,18 +1242,18 @@ fn draw_airports_layer(ui: &mut Ui, p: &egui::Painter, st: &mut UiState, db: &Ar
             Kind::Large => 5.5,
             Kind::Medium => 4.2,
             _ => 3.0,
-        } * (z as f32 / 6.0).clamp(0.8, 1.4);
+        } * (z as f32 / 6.0).clamp(0.55, 1.4);
         let col = if !ok {
-            Color32::from_gray(110)
+            Color32::from_gray(130)
         } else {
             match a.kind {
-                Kind::Large => Color32::from_rgb(92, 178, 255),
-                Kind::Medium => Color32::from_rgb(120, 200, 255),
-                _ => Color32::from_rgb(214, 120, 214),
+                Kind::Large => Color32::from_rgb(60, 150, 245),
+                Kind::Medium => Color32::from_rgb(92, 178, 255),
+                _ => Color32::from_rgb(200, 100, 200),
             }
         };
-        if z < 11.0 || Some(i) != st.picker.selected {
-            mp.circle_filled(q, r + 1.5, Color32::from_black_alpha(160));
+        if !scaled {
+            mp.circle_filled(q, r + 1.5, dot_ring);
             mp.circle_filled(q, r, col);
             if fav(a) {
                 mp.text(q + Vec2::new(r + 2.0, -r - 2.0), Align2::LEFT_BOTTOM, "★", f_ui(11.0), pal::AMBER);
@@ -906,29 +1261,82 @@ fn draw_airports_layer(ui: &mut Ui, p: &egui::Painter, st: &mut UiState, db: &Ar
         }
         if let Some(h) = hp {
             let d = h.distance(q);
-            if d < 12.0 && hover.is_none_or(|(_, dd)| d < dd) {
+            if !scaled && d < 12.0 && hover.is_none_or(|(_, dd)| d < dd) {
                 hover = Some((i, d));
             }
         }
-        // code labels when there is room
-        if z > 5.0 && (a.kind != Kind::Small || z > 8.0) && (z < 11.0 || Some(i) != st.picker.selected) {
-            let g = mp.layout_no_wrap(a.code().to_string(), f_inst_b(10.5), col);
-            let lr = Rect::from_min_size(q + Vec2::new(r + 4.0, -g.size().y * 0.5), g.size());
+        // code labels when there is room (a label beside the field once it's drawn to scale)
+        if z > 5.0 && (a.kind != Kind::Small || z > 8.0) && (z < 13.0 || !is_focus) {
+            let lc = if ok { code_col_ok } else { Color32::from_gray(120) };
+            let g = mp.layout_no_wrap(a.code().to_string(), f_inst_b(if scaled { 12.0 } else { 10.5 }), lc);
+            let lr = if scaled { Rect::from_center_size(q + Vec2::new(0.0, -(on_screen * 0.5).clamp(12.0, 60.0)), g.size() + Vec2::new(8.0, 4.0)) } else { Rect::from_min_size(q + Vec2::new(r + 4.0, -g.size().y * 0.5), g.size()) };
             if !labels.iter().any(|t| t.intersects(lr)) {
                 labels.push(lr);
-                mp.galley(lr.min, g, col);
+                if scaled {
+                    mp.rect_filled(lr, 4, dot_ring);
+                    let rr = ui.interact(lr, ui.id().with(("apcode", i)), Sense::click());
+                    if rr.hovered() {
+                        hover = Some((i, 0.0));
+                    }
+                    if rr.clicked() {
+                        code_click = Some(i);
+                    }
+                }
+                mp.galley(lr.center() - g.size() * 0.5, g, lc);
             }
         }
     }
-    // selected airport: diagram at high zoom, ring at low zoom
-    if let Some(si) = st.picker.selected {
-        let a = &db.airports[si];
+    // the airport in focus: diagram, runway-end badges, start picking
+    let mut picked: Option<worldmap::pick::Pick> = None;
+    let mut diag_hover = false;
+    if let Some(fi) = focus {
+        let a = db.airports[fi].clone();
         let q = v.ll_to_screen(a.lat, a.lon);
         if z >= 11.0 {
-            airport_diagram(ui, &mp, st, a, &v);
-        } else {
+            let wind = picker_wind(&st.picker).map(|w| (w.0, w.1));
+            let click = if resp.clicked() && !resp.double_clicked() { resp.interact_pointer_pos() } else { None };
+            let f = Focus { style, diag, chosen: chosen(st, &a), wind, hover: hp.filter(|_| !resp.dragged() && hover.is_none()), click };
+            let out = aviation::diagram(&mp, &v, &a, &f, &mut labels);
+            if let Some((t, s, at)) = &out.hover {
+                aviation::tooltip(p, t, s, *at, map_r);
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                diag_hover = true;
+            }
+            if Some(fi) == st.picker.selected || out.clicked.is_some() {
+                runway_badges(ui, &mp, st, &a, &v);
+            }
+            if let Some(pk) = out.clicked {
+                picked = Some(pk);
+                if st.picker.selected != Some(fi) {
+                    st.picker.selected = Some(fi);
+                    if st.picker.metar.as_ref().is_none_or(|m| m.ident != a.ident) {
+                        st.picker.metar = Some(st.picker.metar_for(&a));
+                    }
+                }
+            }
+        } else if Some(fi) == st.picker.selected {
             mp.circle_stroke(q, 11.0, Stroke::new(2.5, pal::AMBER));
             mp.circle_stroke(q, 15.0, Stroke::new(1.0, alpha(pal::AMBER, 0.5)));
+        }
+        if let Some(pk) = picked.clone() {
+            st.plan.airport = a.ident.clone();
+            st.picker.air_point = None;
+            st.picker.auto_end = None;
+            st.plan.spec = match pk {
+                worldmap::pick::Pick::RunwayEnd(e) => match &st.plan.spec {
+                    Spec::Final(_, nm) => Spec::Final(e, *nm),
+                    _ => Spec::Runway(e),
+                },
+                worldmap::pick::Pick::Stand { name, lat, lon, hdg } => Spec::Stand { name: format!("Stand {name}"), lat, lon, hdg },
+                worldmap::pick::Pick::Pad { name, lat, lon, hdg } => Spec::Stand { name: format!("Helipad {name}"), lat, lon, hdg },
+            };
+        }
+    }
+    if let Some(si) = st.picker.selected.filter(|s| Some(*s) != focus) {
+        let a = &db.airports[si];
+        let q = v.ll_to_screen(a.lat, a.lon);
+        if map_r.contains(q) {
+            mp.circle_stroke(q, 11.0, Stroke::new(2.5, pal::AMBER));
         }
     }
     // air start marker
@@ -938,25 +1346,19 @@ fn draw_airports_layer(ui: &mut Ui, p: &egui::Painter, st: &mut UiState, db: &Ar
         super::map::aircraft_symbol(&mp, q, h, 16.0, pal::AMBER);
     }
     // hover tooltip
-    if let Some((i, _)) = hover.filter(|_| !resp.dragged()) {
+    if let Some((i, _)) = hover.filter(|_| !resp.dragged() && !diag_hover) {
         let a = &db.airports[i];
         let q = v.ll_to_screen(a.lat, a.lon);
         let text = format!("{}  {}", a.code(), a.name);
         let sub = format!("{} · longest {} m", if a.city.is_empty() { a.country.clone() } else { format!("{}, {}", a.city, a.country) }, thousands(a.longest_m()));
-        let g1 = p.layout_no_wrap(text, f_semi(13.0), pal::TEXT);
-        let g2 = p.layout_no_wrap(sub, f_ui(12.0), pal::TEXT2);
-        let w = g1.size().x.max(g2.size().x) + 20.0;
-        let r = Rect::from_min_size(q + Vec2::new(14.0, -24.0), Vec2::new(w, 46.0));
-        panel_with(p, r, 8, pal::PANEL_SOLID);
-        p.galley(r.min + Vec2::new(10.0, 6.0), g1, pal::TEXT);
-        p.galley(r.min + Vec2::new(10.0, 25.0), g2, pal::TEXT2);
+        worldmap::aviation::tooltip(p, &text, &sub, q, map_r);
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        if resp.clicked() {
-            st.picker.select(db, i, v.zoom.max(12.0));
+        if resp.clicked() || code_click == Some(i) {
+            st.picker.select(db, i, None);
             st.picker.air_point = None;
             pick_default_spec(st, db, i);
         }
-    } else if resp.clicked() && z >= 6.0 {
+    } else if resp.clicked() && !resp.double_clicked() && picked.is_none() && (6.0..13.0).contains(&z) {
         // empty map: an air start here (nearest airport becomes the reference)
         if let Some(pos) = resp.interact_pointer_pos() {
             let (la, lo) = v.to_ll(pos);
@@ -967,7 +1369,7 @@ fn draw_airports_layer(ui: &mut Ui, p: &egui::Painter, st: &mut UiState, db: &Ar
                 st.plan.airport = db.airports[*ni].ident.clone();
                 let a = &db.airports[*ni];
                 if st.picker.metar.as_ref().is_none_or(|m| m.ident != a.ident) {
-                    st.picker.metar = Some(airports::MetarFetch::start(&a.ident, &a.icao, a.lat, a.lon));
+                    st.picker.metar = Some(st.picker.metar_for(a));
                 }
             }
         }
@@ -1002,45 +1404,16 @@ pub fn pick_default_spec(st: &mut UiState, db: &Db, i: usize) {
     st.picker.auto_end = if picker_wind(&st.picker).is_none() { Some(a.ident.clone()) } else { None };
 }
 
-/// Runways of the selected airport drawn to scale, with clickable ends.
-fn airport_diagram(ui: &mut Ui, p: &egui::Painter, st: &mut UiState, a: &Airport, v: &OView) {
+/// Clickable runway-end badges (ident, coloured by the wind component) beyond each end.
+fn runway_badges(ui: &mut Ui, p: &egui::Painter, st: &mut UiState, a: &Airport, v: &OView) {
     let wind = picker_wind(&st.picker);
     for (ri, rw) in a.runways.iter().enumerate() {
-        let (pa, pb) = match (rw.ends[0].lat, rw.ends[0].lon, rw.ends[1].lat, rw.ends[1].lon) {
-            (Some(la), Some(lo), Some(lb), Some(lob)) => (v.ll_to_screen(la, lo), v.ll_to_screen(lb, lob)),
-            _ => {
-                let Some(h) = rw.heading(0) else { continue };
-                let c = v.ll_to_screen(a.lat, a.lon);
-                let mpp = 1.0 / (v.scale() / 40_075_000.0 * (1.0 / a.lat.to_radians().cos())) as f32;
-                let d = Vec2::new(h.to_radians().sin(), -h.to_radians().cos()) * rw.length_m * 0.5 / mpp;
-                (c - d, c + d)
-            }
-        };
-        let m_per_pt = (40_075_000.0 * a.lat.to_radians().cos() / v.scale()) as f32;
-        let w = (rw.width_m.max(18.0) / m_per_pt).max(4.0);
-        let paved = rw.surface.paved();
-        p.line_segment([pa, pb], Stroke::new(w + 2.0, Color32::from_black_alpha(200)));
-        p.line_segment([pa, pb], Stroke::new(w, if paved { Color32::from_rgb(120, 126, 140) } else { Color32::from_rgb(96, 136, 92) }));
+        if rw.ends[0].ident.starts_with('H') {
+            continue;
+        }
+        let Some([e0, e1]) = worldmap::pick::runway_ends(a, rw) else { continue };
+        let (pa, pb) = (v.ll_to_screen(e0.0, e0.1), v.ll_to_screen(e1.0, e1.1));
         let d = (pb - pa).normalized();
-        // centreline
-        if w > 6.0 {
-            let len = (pb - pa).length();
-            let mut t = 0.06;
-            while t < 0.94 {
-                p.line_segment([pa + d * len * t, pa + d * len * (t + 0.025)], Stroke::new(1.2, Color32::WHITE));
-                t += 0.05;
-            }
-        }
-        // displaced thresholds
-        for (end, (pt, dir)) in [(pa, d), (pb, -d)].into_iter().enumerate() {
-            let disp = rw.ends[end].displaced_m / m_per_pt;
-            if disp > 1.0 {
-                let q = pt + dir * disp;
-                let n = dir.rot90() * w * 0.5;
-                p.line_segment([q - n, q + n], Stroke::new(2.0, Color32::WHITE));
-            }
-        }
-        // ends: badges with ident + wind component, clickable
         for (end, (pt, dir)) in [(pa, d), (pb, -d)].into_iter().enumerate() {
             let e = &rw.ends[end];
             if e.ident.is_empty() {
@@ -1074,20 +1447,6 @@ fn airport_diagram(ui: &mut Ui, p: &egui::Painter, st: &mut UiState, a: &Airport
             }
             if resp.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
-        }
-        // final approach path for the chosen end
-        if let Spec::Final(x, nm) = &st.plan.spec {
-            for (end, (pt, dir)) in [(pa, d), (pb, -d)].into_iter().enumerate() {
-                if rw.ends[end].ident == *x && st.plan.airport == a.ident {
-                    let m_per_pt = (40_075_000.0 * a.lat.to_radians().cos() / v.scale()) as f32;
-                    let far = pt - dir * (nm * 1852.0 / m_per_pt);
-                    for k in 0..20 {
-                        let t0 = k as f32 / 20.0;
-                        p.line_segment([pt + (far - pt) * t0, pt + (far - pt) * (t0 + 0.025)], Stroke::new(2.0, pal::MAGENTA));
-                    }
-                    super::map::aircraft_symbol(p, far, dir.x.atan2(-dir.y), 14.0, pal::AMBER);
-                }
             }
         }
     }
@@ -1211,7 +1570,7 @@ fn list_panel(ui: &mut Ui, st: &mut UiState, db: &Arc<Db>, def: &AircraftDef, r:
         }
     });
     if let Some(i) = clicked {
-        st.picker.select(db, i, 12.5);
+        st.picker.select(db, i, None);
         st.picker.air_point = None;
         pick_default_spec(st, db, i);
     }
@@ -1227,7 +1586,7 @@ fn list_panel(ui: &mut Ui, st: &mut UiState, db: &Arc<Db>, def: &AircraftDef, r:
         }).collect();
         if !pool.is_empty() {
             let k = (crate::scene::hash(st.frame_no ^ 0x9e37_79b9) as usize) % pool.len();
-            st.picker.select(db, pool[k], 12.0);
+            st.picker.select(db, pool[k], None);
             st.picker.air_point = None;
             pick_default_spec(st, db, pool[k]);
         }
@@ -1406,6 +1765,12 @@ fn details_panel(ui: &mut Ui, st: &mut UiState, db: &Arc<Db>, def: &AircraftDef,
         } else {
             opts.push(("Thermal".into(), Spec::Thermal));
         }
+        // A stand / helipad picked on the diagram.
+        if let Spec::Stand { name, .. } = &st.plan.spec {
+            if st.plan.airport == a.ident {
+                opts.push((name.clone(), st.plan.spec.clone()));
+            }
+        }
         let cw = (w - 8.0 * 2.0) / 3.0;
         for (k, (label, spec)) in opts.iter().enumerate() {
             let (row, col) = (k / 3, k % 3);
@@ -1418,6 +1783,10 @@ fn details_panel(ui: &mut Ui, st: &mut UiState, db: &Arc<Db>, def: &AircraftDef,
             }
         }
         y += ((opts.len() + 2) / 3) as f32 * 40.0 + 4.0;
+        if def.has_engine && !matches!(st.plan.spec, Spec::Stand { .. }) {
+            p.text(Pos2::new(x, y - 2.0), Align2::LEFT_TOP, "Or zoom in and click a runway, stand or helipad on the map", f_ui(12.0), pal::TEXT3);
+            y += 22.0;
+        }
         // air start
         let air_on = matches!(st.plan.spec, Spec::Air { .. });
         let ar = Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, if air_on { 92.0 } else { 40.0 }));
