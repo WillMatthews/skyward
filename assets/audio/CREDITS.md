@@ -108,3 +108,11 @@ Built by `tools/build_vulcan.py` (numpy + ffmpeg; same processing as
 `build_samples.py`, whose MANIFEST also lists them). The C-130 uses the
 DHC-8 (PW100) turboprop set and the C-5 the CFM56-5B set as the nearest
 recorded engines; their own packages' sounds were not imported.
+
+## Rotorcraft (Track Q)
+
+The EC130 B4 and the FPV quad are fully procedural (`src/audio/rotorcraft.rs`:
+main-rotor blade passage and blade slap, Arriel turbine and exhaust, main
+gearbox whine, the Fenestron's unevenly spaced blades; four motor / prop
+voices with their beating, ESC whine and prop wash). No recordings were
+imported for them.

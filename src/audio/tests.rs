@@ -112,7 +112,7 @@ fn doppler_matches_moving_source_formula() {
 
 #[test]
 fn every_family_is_finite_and_limited() {
-    for id in ["kestrel", "swift", "peregrine", "lancer", "aerolink", "meridian190", "meridian320", "hercules", "galaxy", "vulcan"] {
+    for id in ["kestrel", "swift", "peregrine", "lancer", "aerolink", "meridian190", "meridian320", "hercules", "galaxy", "vulcan", "ec130", "fpv"] {
         let mut f = frame_for(id);
         f.rain = 1.0;
         f.buffet = 1.0;
@@ -529,4 +529,126 @@ fn debris_event_api_is_positional() {
     let (t_far, far) = level(600.0);
     assert!(near > 3.0 * far, "near {near} far {far}");
     assert!(t_far - t_near > 1.5, "delay near {t_near} far {t_far}");
+}
+
+// ------------------------------------------------------------------ rotorcraft
+
+/// Stereo → mono.
+fn mono(x: &[f32]) -> Vec<f32> {
+    x.chunks(2).map(|c| 0.5 * (c[0] + c[1])).collect()
+}
+
+fn seg(x: &[f32], t0: f32, t1: f32) -> &[f32] {
+    &x[(t0 * SR) as usize..((t1 * SR) as usize).min(x.len())]
+}
+
+fn rms(x: &[f32]) -> f32 {
+    (x.iter().map(|v| v * v).sum::<f32>() / x.len().max(1) as f32).sqrt()
+}
+
+/// Energy in [lo, hi] Hz (Hann-windowed DFT, 2 Hz steps).
+fn band(x: &[f32], lo: f32, hi: f32) -> f32 {
+    let n = x.len();
+    let mut e = 0.0f64;
+    let mut f = lo;
+    while f < hi {
+        let (mut re, mut im) = (0.0f64, 0.0f64);
+        for (i, v) in x.iter().enumerate().step_by(2) {
+            let w = 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / n as f32).cos();
+            let a = std::f64::consts::TAU * f as f64 * i as f64 / SR as f64;
+            re += (v * w) as f64 * a.cos();
+            im += (v * w) as f64 * a.sin();
+        }
+        e += re * re + im * im;
+        f += 2.0;
+    }
+    e as f32
+}
+
+/// Hovering EC130 heard from 30 m: optional slap, engine lit or not.
+fn heli_hover(slap: f32, lit: bool, nr: f32, secs: f32) -> Vec<f32> {
+    let mut f = frame_for("ec130");
+    let mut s = Synth::new(SR);
+    let mut out = Vec::new();
+    let mut buf = vec![0.0f32; 1600];
+    f.ac_pos = Vec3::new(0.0, 15.0, -30.0);
+    f.eng[0] = EngineFrame { pos: f.ac_pos + Vec3::new(0.0, 1.0, 1.4), rpm: 386.0 * nr, spool: if lit { 0.9 } else { 0.0 }, running: lit, ..Default::default() };
+    f.rotor = RotorFrame { nr_rpm: 386.0 * nr, nr, ng: if lit { 0.9 } else { 0.0 }, torque: if lit { 0.75 } else { 0.0 }, power: if lit { 0.75 } else { 0.0 }, tail_rpm: 3568.0 * nr, tail_pitch: 16.0, slap, load: 1.0, ..Default::default() };
+    for k in 0..(secs * 60.0) as usize {
+        f.cut = k == 0;
+        s.push_frame(&f);
+        s.render(&mut buf);
+        out.extend_from_slice(&buf);
+    }
+    mono(&out)
+}
+
+#[test]
+fn heli_rotor_and_fenestron_tones() {
+    let x = heli_hover(0.0, true, 1.0, 3.0);
+    save("heli_hover.wav", &x);
+    let y = seg(&x, 1.0, 3.0);
+    // Main-rotor blade passage: 3 × 386 rpm = 19.3 Hz.
+    let bp = peak_freq(y, 12.0, 30.0);
+    assert!((bp - 19.3).abs() < 1.5, "blade passage {bp} Hz");
+    // Fenestron: 10 (unevenly spaced) blades at 3,568 rpm → energy at shaft
+    // orders around the 595 Hz blade passage.
+    let ft = peak_freq(seg(&x, 1.0, 1.5), 480.0, 720.0);
+    let order = ft / (3568.0 / 60.0);
+    assert!((order - order.round()).abs() < 0.08 && (8.0..=12.0).contains(&order.round()), "fenestron {ft} Hz (order {order})");
+}
+
+#[test]
+fn heli_blade_slap_is_impulsive() {
+    let calm = heli_hover(0.0, true, 1.0, 3.0);
+    let slap = heli_hover(1.0, true, 1.0, 3.0);
+    save("heli_slap.wav", &slap);
+    let crest = |x: &[f32]| x.iter().fold(0.0f32, |m, v| m.max(v.abs())) / rms(x).max(1e-9);
+    let (c0, c1) = (crest(seg(&calm, 1.0, 3.0)), crest(seg(&slap, 1.0, 3.0)));
+    // BVI: sharp pulses with energy up into the kHz range.
+    let (h0, h1) = (band(seg(&calm, 1.0, 1.5), 800.0, 2400.0), band(seg(&slap, 1.0, 1.5), 800.0, 2400.0));
+    assert!(c1 > 1.3 * c0, "crest {c0} → {c1}");
+    assert!(h1 > 3.0 * h0, "0.8–2.4 kHz energy {h0} → {h1}");
+}
+
+#[test]
+fn heli_rotor_runs_on_after_engine_failure() {
+    let lit = heli_hover(0.0, true, 1.0, 3.0);
+    let dead = heli_hover(0.0, false, 0.95, 3.0);
+    let (a, b) = (seg(&lit, 1.0, 1.5), seg(&dead, 1.0, 1.5));
+    // Rotor thump still there; the gas generator / combustion gone.
+    let (r0, r1) = (band(a, 14.0, 70.0), band(b, 14.0, 70.0));
+    // Compressor tone: 4.6 × the gas-generator shaft (52,110 rpm at 100 %): ≈ 3.6 kHz at 90 % Ng.
+    let (w0, w1) = (band(a, 3500.0, 3700.0), band(b, 3500.0, 3700.0));
+    assert!(r1 > 0.5 * r0, "rotor {r0} → {r1}");
+    assert!(w1 < 0.25 * w0, "turbine whine {w0} → {w1}");
+    for v in &dead {
+        assert!(v.is_finite());
+    }
+}
+
+#[test]
+fn heli_scenarios_are_clean() {
+    for (name, x) in [("approach_slap", super::scenarios::heli_approach_slap()), ("autorotation", super::scenarios::heli_autorotation(true)), ("startup", super::scenarios::heli_startup())] {
+        let m = mono(&x);
+        save(&format!("heli_{name}.wav"), &m);
+        assert!(m.iter().all(|v| v.is_finite() && v.abs() <= 1.0), "{name}");
+        assert!(rms(&m) > 1e-3, "{name} silent");
+    }
+}
+
+#[test]
+fn drone_motor_tones_follow_speed() {
+    let x = mono(&super::scenarios::drone_flight());
+    save("drone_flight.wav", &x);
+    // Hover (0.34 of 3,300 rad/s ≈ 10.7k rpm): tri-blade passage ≈ 535 Hz;
+    // punch-out (1.0): ≈ 1.58 kHz.
+    let hover = peak_freq(seg(&x, 2.5, 3.0), 450.0, 650.0);
+    let punch = peak_freq(seg(&x, 5.0, 5.5), 1300.0, 1800.0);
+    let bpf = |m: f32| m * 3300.0 / std::f32::consts::TAU * 3.0;
+    assert!((hover / bpf(0.355) - 1.0).abs() < 0.06, "hover {hover} Hz vs {}", bpf(0.355));
+    assert!((punch / bpf(1.0) - 1.0).abs() < 0.04, "punch {punch} Hz vs {}", bpf(1.0));
+    // Punch-out is much louder than the hover.
+    assert!(rms(seg(&x, 5.0, 5.5)) > 2.0 * rms(seg(&x, 2.5, 3.0)));
+    assert!(x.iter().all(|v| v.is_finite() && v.abs() <= 1.0));
 }

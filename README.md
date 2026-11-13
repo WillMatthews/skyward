@@ -49,6 +49,19 @@ anywhere on Earth, for as long as you like. wgpu (Vulkan), winit, egui.
   Skyward calibration patches, the Vulcan with delta-wing aerodynamics; the
   YASim-based Spitfire, ATR and C-130 use a calibrated model) inside one 6-DoF flight model (ISA atmosphere, engines and
   propellers, gear, spoilers, reversers, asymmetric thrust, FBW laws).
+* **Rotorcraft** — an Airbus Helicopters **EC130 B4** (FlightGear model with
+  its working B4 panel and VEMD screens) on Skyward's own rotor flight
+  model: blade-element / momentum main rotor with collective, cyclic and
+  rotor RPM, free-turbine engine with FADEC governor (Nr / N2 / Ng /
+  torque / T4 / first-limit indicator), Fenestron and pedals, translational
+  lift, ground effect, vortex ring state, retreating-blade stall, dynamic
+  rollover on the skids and **autorotation** (engine failure → entry, Nr
+  on the collective, flare, cushion); tail-rotor and hydraulic failures;
+  rotor wash (dust / spray); a stability assist (attitude hold, SAS, off).
+  And an original **5-inch FPV quadcopter**: four motors and props, X
+  mixer with airmode, rate (acro) and angle modes with Betaflight-style
+  rates, a sagging 6S LiPo, prop wash, a tilted wide-angle FPV camera and
+  an OSD.
 * **Structure and crashes** — wings bend with the load on each half (first
   bending mode; an A320's tips rise ≈ 1.2 m in 1 g flight, ≈ 2.5 m at 2.5 g),
   limit / ultimate load factors per type, permanent set and flutter, flap and
@@ -204,6 +217,8 @@ suitable airfield.
 | `hercules` (`c130`) | **Lockheed C-130H Hercules** | Four T56 turboprops, high wing, short and rough fields (from ~900 m, grass OK), reverse pitch. |
 | `galaxy` (`c5`) | **Lockheed C-5M Super Galaxy** | 280 t strategic airlifter: slow-spooling CF6s, huge inertia, spoilers and reversers. Needs 2,400 m. |
 | `vulcan` | **Avro Vulcan B.2** | Delta-wing V-bomber: no stall break but huge drag at high alpha, T/W 0.6, the Olympus howl. Flap lever = airbrakes. Needs 2,000 m. |
+| `ec130` (`heli`, `h130`) | **Airbus Helicopters EC130 B4** | Single-turboshaft light helicopter: collective on the throttle, cyclic on the stick, pedals on the rudder; G or ; cycles the stability assist (attitude hold → off → SAS); K fails the engine (autorotation). Starts beside the runway, rotors turning. |
+| `fpv` (`quad`, `drone`) | **5" FPV quadcopter** | Angle (self-levelling) or rate (acro) mode on G / ;, throttle on the throttle; C → cockpit = the FPV camera with OSD. On a gamepad both sticks fly "mode 2" (left: throttle / yaw, right: pitch / roll). |
 
 The models, textures and FDM data come from FlightGear (GPL); sources,
 authors and licences per aircraft are in `assets/aircraft/<id>/CREDITS.md`,
@@ -307,7 +322,7 @@ The cinematic camera cycles chase angles, fly-bys, tower, nose and wingtip shots
 | `--no-menu` | fly straight away (skip the main menu) |
 | `--vsync on\|off` | present with vsync (default on: smooth); off = mailbox / immediate |
 | `--hud full\|minimal\|off`, `--map corner\|large\|off` | instrument / map mode |
-| `--aircraft ID` | `kestrel` `swift` `peregrine` `lancer` `aerolink` `meridian190` `meridian320` `hercules` `galaxy` `vulcan` (or `c172` `ask21` `spitfire` `f16` `atr72` `e190` `a320` `c130` `c5`) |
+| `--aircraft ID` | `kestrel` `swift` `peregrine` `lancer` `aerolink` `meridian190` `meridian320` `hercules` `galaxy` `vulcan` `ec130` `fpv` (or `c172` `ask21` `spitfire` `f16` `atr72` `e190` `a320` `c130` `c5` `heli` `quad` `drone`) |
 | `--start S` | `runway` `approach` `city` `thermal` |
 | `--bot` | hand the aircraft to the auto-flight bot |
 | `--watch` | auto flight + cinematic camera (+ glider relaunch) |
@@ -438,6 +453,7 @@ A shift costs well under 0.1 ms.
 | `src/clouds.rs` | volumetric cloud field + renderer, thermals |
 | `src/weather.rs` | METAR / Open-Meteo, weather → clouds / wind / precipitation, seasons |
 | `src/flight.rs` | flight dynamics + aircraft definitions (unit-tested) |
+| `src/rotor/` | rotorcraft: helicopter rotor / engine / Fenestron model and stability assist (`heli.rs`), FPV quad motors / flight controller / battery (`quad.rs`), definitions (`defs.rs`), the step inside the airframe (`glue.rs`), bot + autopilot (`bot.rs`), VEMD / OSD / panel (`instruments.rs`), the quad's procedural model (`quad_model.rs`), published-numbers tests (`tests.rs`); rotor wash in `src/vfx/rotorwash.rs`, sound in `src/audio/rotorcraft.rs` |
 | `src/systems/` | aircraft systems per type (`defs.rs`), failures + schedule (`failures.rs`), warnings / ECAM / EICAS (`alerts.rs`), session glue; `src/ui/failures.rs` the panel |
 | `src/damage.rs` | structural data per type, loads, wing bending mode, damage / failures, aero of lost surfaces |
 | `src/debris.rs` | wreckage: rigid-body debris (terrain, buildings, water), crash break-up, fires, sound / effect events |

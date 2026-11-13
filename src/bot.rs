@@ -533,6 +533,8 @@ fn touchdown_pitch(def: &AircraftDef) -> f32 {
             }
         }
         Category::Glider => 2.0,
+        // (Rotorcraft are flown by src/rotor/bot.rs.)
+        Category::Helicopter | Category::Drone => 0.0,
     };
     d.to_radians()
 }
@@ -601,11 +603,15 @@ pub struct Bot {
 enum Kind {
     Glider(Box<Glider>),
     Powered(Box<Powered>),
+    /// Helicopter / quadcopter (src/rotor/bot.rs).
+    Rotor(Box<crate::rotor::bot::RotorBot>),
 }
 
 impl Bot {
     pub fn new(def: &AircraftDef, ac: &Aircraft, world: &World, home: Option<&Runway>) -> Bot {
-        let kind = if def.has_engine {
+        let kind = if def.rotor.is_some() {
+            Kind::Rotor(Box::new(crate::rotor::bot::RotorBot::new(def, ac, world, home)))
+        } else if def.has_engine {
             Kind::Powered(Box::new(Powered::new(def, ac, world, home)))
         } else {
             Kind::Glider(Box::new(Glider::new(def, ac, world, home)))
@@ -635,6 +641,7 @@ impl Bot {
         match &self.kind {
             Kind::Glider(g) => format!("{:?}", g.mode_name()),
             Kind::Powered(p) => format!("{:?}", p.phase),
+            Kind::Rotor(r) => r.phase_name(),
         }
     }
 
@@ -646,6 +653,7 @@ impl Bot {
                 PPhase::Enroute => p.tour.get(p.wp).map(|l| (l.name.clone(), l.pos)),
                 _ => None,
             },
+            Kind::Rotor(r) => r.waypoint(),
         }
     }
 
@@ -657,6 +665,7 @@ impl Bot {
                 PPhase::Enroute => (&p.tour, p.wp),
                 _ => return Vec::new(),
             },
+            Kind::Rotor(r) => return r.route(),
         };
         tour.iter().skip(wp).map(|l| (l.name.clone(), l.pos)).collect()
     }
@@ -666,6 +675,7 @@ impl Bot {
         match &self.kind {
             Kind::Glider(g) => g.land.as_ref().map(|l| l.end.clone()),
             Kind::Powered(p) => p.rw.clone(),
+            Kind::Rotor(_) => None,
         }
     }
 
@@ -716,6 +726,7 @@ impl Bot {
                 }
                 p.gate = r.ground(p.gate);
             }
+            Kind::Rotor(b) => b.rebase(r),
         }
     }
 
@@ -754,10 +765,12 @@ impl Bot {
                 g.wind_sfc = world.wind.surface;
             }
             Kind::Powered(p) => p.wind = wind,
+            Kind::Rotor(r) => r.wind = wind,
         }
         match &mut self.kind {
             Kind::Glider(g) => g.update(def, ac, ctl, ap, world, &mut self.hands, &mut self.stats, &mut ev, &mut self.status, &mut self.wants_relaunch, self.t, dt),
             Kind::Powered(p) => p.update(def, ac, ctl, ap, world, &mut self.hands, &mut self.stats, &mut ev, &mut self.status, self.t, dt),
+            Kind::Rotor(r) => r.update(def, ac, ctl, ap, world, &mut self.stats, &mut ev, &mut self.status, dt),
         }
         for e in ev {
             self.log(e);

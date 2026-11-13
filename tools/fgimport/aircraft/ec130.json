@@ -1,0 +1,56 @@
+{
+ "id": "ec130",
+ "name": "Airbus Helicopters EC130 B4",
+ "fg_name": "ec130",
+ "model": "Models/ec130b4.xml",
+ "fdm": {
+  "cg_model": [
+   -1.598,
+   0,
+   -0.13
+  ]
+ },
+ "eye_view": [
+  -0.67,
+  0.03,
+  -3.75
+ ],
+ "props": {
+  "sim/model/variant": 0
+ },
+ "channels": [],
+ "exclude_models": [
+  "Effects/",
+  "People/",
+  "Luggage/",
+  "Floats/",
+  "SearchLight/",
+  "mgpu",
+  "marker",
+  "Wakes/"
+ ],
+ "interior_models": [
+  "Instruments/",
+  "interior"
+ ],
+ "light_models": [
+  "procedural_light",
+  "Effects/lights/",
+  "Light/"
+ ],
+ "max_tex": 2048,
+ "interior_max_tex": 1024,
+ "textures": {
+  "default.png": "Skyward/default-neutral.png"
+ },
+ "displays": [
+  [
+   "^vemd\\.screen1$",
+   "vemd1"
+  ],
+  [
+   "^vemd\\.screen2$",
+   "vemd2"
+  ]
+ ]
+}

@@ -185,6 +185,23 @@ def vulcan():
     ], flat=True)
     im.save(out("AvroVulcanB2", "vulcan-neutral.png"))
 
+def ec130():
+    """EC130 B4 FlightGear demo scheme with the type lettering and web address
+    removed (flat paint: each box is filled with the paint colour around it)."""
+    from PIL import ImageDraw
+    im = Image.open(os.path.join(root, "ec130/Models/default.png")).convert("RGB")
+    d = ImageDraw.Draw(im)
+    for (x0, y0, x1, y1), probe in [
+        ((704, 100, 1116, 179), (1150, 140)),   # www.FlightGear.org (upper side)
+        ((760, 179, 1116, 194), (1150, 140)),   # (its descenders, clear of the stripe tip)
+        ((712, 622, 1116, 700), (1150, 660)),   # (lower side)
+        ((702, 640, 712, 700), (1150, 660)),
+        ((385, 250, 620, 310), (650, 280)),     # "EC 130" in the blue band
+        ((385, 495, 620, 560), (650, 525)),
+    ]:
+        d.rectangle((x0, y0, x1, y1), fill=im.getpixel(probe))
+    im.save(out("ec130", "default-neutral.png"))
+
 which = sys.argv[2:] or ["a320", "atr72"]
 for w in which:
     globals()[w]()

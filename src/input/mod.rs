@@ -150,6 +150,7 @@ pub const BUTTONS: &[(Key, &str, &str, &str)] = &[
     (Key::LandingLights, "landing_lights", "Landing lights", "Engines & levers"),
     (Key::EngineFail, "engine_fail", "Engine failure practice", "Engines & levers"),
     (Key::MasterAck, "master_ack", "Master warning / caution reset", "Engines & levers"),
+    (Key::Assist, "assist", "Rotorcraft: stability assist / flight mode", "Flight controls"),
     (Key::ApToggle, "ap", "Autopilot on / off", "Autopilot"),
     (Key::ApHdgLeft, "ap_hdg_left", "Heading −5°", "Autopilot"),
     (Key::ApHdgRight, "ap_hdg_right", "Heading +5°", "Autopilot"),

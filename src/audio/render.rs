@@ -241,6 +241,10 @@ impl Recorder {
             Family::Turboprop => [e.rpm * p.prop_gear / 60.0 * p.blades as f32, 0.0],
             Family::Airliner | Family::Fighter => [e.rpm / 60.0 * p.fan_blades as f32, e.rpm / 60.0],
             Family::Glider => [0.0, 0.0],
+            // Main-rotor blade passage and Fenestron blade passage.
+            Family::Helicopter => [f.rotor.nr_rpm / 60.0 * p.blades as f32, f.rotor.tail_rpm / 60.0 * p.fan_blades as f32],
+            // Prop blade passage and electrical order of motor 1.
+            Family::Drone => [e.rpm / 60.0 * p.blades as f32, e.rpm / 60.0 * p.cylinders as f32],
         };
         self.lines.push((self.t, lines));
         if std::env::var_os("SKYWARD_AUDIO_DEBUG").is_some() && (self.t * 2.0).floor() != ((self.t + dt) * 2.0).floor() {

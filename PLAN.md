@@ -68,7 +68,8 @@ item lands; keep entries one line.
 - [ ] **P1** Ground handling: taxiing with tillers, pushback, chocks, wheel friction by surface
 - [x] **P2** v3 heavies: C-130H Hercules (FGAddon C130, calibrated to YASim + published), C-5M Super Galaxy (FGMEMBERS C-5, patched JSBSim), Avro Vulcan B.2 (FGUK, JSBSim + delta-wing aero, Olympus howl); neutral liveries, bot / audio / per-type runway minima (H)
 - [ ] **P1** Heavies follow-ups: C-130 bot floats ~850 m before touchdown at EGLC; C-130 / C-5 use the PW100 / CFM56 recordings (no T56 / CF6 set); C-130 ramp and C-5 kneeling / visor not driven; C-5 & Vulcan cockpits are basic FG models (no working gauges); Vulcan brake chute; fuel burn (all flown at one weight)
-- [ ] **P2** v3 types: helicopter; quadcopter
+- [x] **P2** v3 rotorcraft: Airbus Helicopters EC130 B4 (FGAddon ec130, GPL v2+: model, B4 panel, VEMD) on an own rotor FDM (blade element + momentum, Nr state, FADEC turboshaft, Fenestron, ETL, ground effect, VRS, retreating-blade stall, dynamic rollover, autorotation + flare), stability assist, tail-rotor / hydraulic failures, rotor wash, turbine + blade-slap audio, bot (lift, tour, approach to hover, landing) and autopilot; original 5" FPV quad (motors, mixer + airmode, acro / angle, LiPo sag, prop wash, FPV camera + OSD, gamepad mode 2, orbit bot) (Q)
+- [ ] **P1** Rotorcraft follow-ups: helipads (OSM `aeroway=helipad` not yet carried through the tiles — rotorcraft start beside the runway); FPV camera is a rectilinear 120° view with a vignette (no barrel-distortion pass); autorotation descent ≈ 2,000 fpm vs ≈ 1,700 published; cruise needs ~5° of bank against the Fenestron side force (no sideslip trim); cyclic / collective / pedal cockpit animations follow the effective (assisted) inputs; no rotor brake / start sequence on the rotor (cold & dark starts the engine with the rotor at flight idle); VEMD lower page shows derived values (no oil system); quad turtle mode / crash recovery; water landings (floats) not modelled
 - [ ] **P2** Livery selector (house liveries; user-supplied)
 
 ## 4. Audio
@@ -135,4 +136,5 @@ item lands; keep entries one line.
 | C (v3) | Live 3D cockpit instruments (steam gauges + glass displays) | ✅ |
 | H | v3 heavies: C-130H, C-5M, Vulcan B.2 | ✅ |
 | S | Aircraft systems + realistic failures (systems/, failures panel, ECAM / EICAS, aural) | ✅ |
-| next | ILS/FMS (F), rotorcraft (Q), ATC/ATIS (R) | ⏳ queued |
+| Q | Rotorcraft: EC130 B4 helicopter + FPV quad (src/rotor, rotor wash, audio, bot) | ✅ |
+| next | ILS/FMS (F), ATC/ATIS (R) | ⏳ queued |

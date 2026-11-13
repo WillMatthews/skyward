@@ -31,6 +31,7 @@ mod fx;
 mod output;
 pub mod params;
 pub mod render;
+mod rotorcraft;
 mod sampled;
 pub mod samples;
 mod soundsets;

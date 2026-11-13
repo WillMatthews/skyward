@@ -58,6 +58,7 @@ pub fn keyboard() -> Vec<(Key, Vec<K>)> {
         (Key::WeatherPanel, vec![K::KeyI]),
         (Key::Failures, vec![K::KeyO, K::F2]),
         (Key::Mute, vec![K::KeyN]),
+        (Key::Assist, vec![K::Semicolon]),
     ]
 }
 

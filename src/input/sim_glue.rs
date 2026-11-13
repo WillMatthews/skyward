@@ -125,7 +125,7 @@ impl Sim {
     }
 
     /// Analog axes → controls (after the keyboard's smoothing).
-    pub(super) fn apply_analog(&mut self, input: &Input) {
+    pub(super) fn apply_analog(&mut self, input: &Input, dt: f32) {
         let an = input.analog;
         let held = |k: Key| input.held.contains(&k) || input.pad_held.contains(&k);
         let thr = throttle_lever(&an);
@@ -140,6 +140,11 @@ impl Sim {
             return;
         }
         let def = self.defs[self.sel].clone();
+        // Rotorcraft on a gamepad (both sticks): "mode 2" (src/rotor/defs.rs).
+        if def.rotor.is_some() && (an.get(A::LookX).is_some() || an.get(A::LookY).is_some()) && !self.ap.engaged {
+            crate::rotor::defs::gamepad_mode2(&def, &mut self.ctl, an.get(A::Pitch), an.get(A::Roll), an.get(A::LookY), an.get(A::LookX), dt);
+            return;
+        }
         if !self.ap.engaged {
             if let Some(v) = an.get(A::Pitch).filter(|_| !held(Key::PitchUp) && !held(Key::PitchDown)) {
                 self.ctl.elevator = v;
@@ -175,7 +180,9 @@ impl Sim {
     pub(super) fn update_look(&mut self, input: &mut Input, dt: f32) {
         let m = &input.mouse;
         let held = |k: Key| input.held.contains(&k) || input.pad_held.contains(&k);
-        let (lx, ly) = (input.analog.get(A::LookX).unwrap_or(0.0), input.analog.get(A::LookY).unwrap_or(0.0));
+        // (Rotorcraft fly with the right stick: see apply_analog.)
+        let flies = self.defs[self.sel].rotor.is_some();
+        let (lx, ly) = if flies { (0.0, 0.0) } else { (input.analog.get(A::LookX).unwrap_or(0.0), input.analog.get(A::LookY).unwrap_or(0.0)) };
         let d = input.orbit_delta;
         if self.cam == CamMode::Cockpit {
             let inv = if m.invert_look { -1.0 } else { 1.0 };

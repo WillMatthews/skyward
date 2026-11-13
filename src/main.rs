@@ -36,6 +36,7 @@ mod lights;
 mod models;
 mod mvt;
 mod osm;
+mod rotor;
 mod scenario;
 mod scene;
 mod input;
@@ -628,7 +629,12 @@ fn aircraft_assets(sel: usize) -> Option<String> {
     {
         use platform::web::DirState;
         let cat = flight::catalogue();
-        let id = cat.get(sel).or(cat.first())?.id;
+        let def = cat.get(sel).or(cat.first())?;
+        // (The FPV quad's model is procedural: nothing to download.)
+        if def.rotor.as_ref().is_some_and(|r| r.quad().is_some()) {
+            return None;
+        }
+        let id = def.id;
         let dir = format!("aircraft/{id}/");
         return match platform::web::dir_state(&dir) {
             DirState::Ready | DirState::Failed(_) => None,
@@ -986,7 +992,7 @@ fn render_thumbs(gpu: &Gpu, renderer: &mut Renderer, ui: &mut Ui, s: &Session, f
         let (fv, dynm) = sim.frame(w as f32 / h as f32);
         let (pos, _) = sim.render_pose();
         let dir = vec3(cam_az.sin(), 0.0, -cam_az.cos()) * 12f32.to_radians().cos() + Vec3::Y * 12f32.to_radians().sin();
-        let dist = sim.size * 2.2 + 3.0;
+        let dist = if def.category == flight::Category::Drone { 0.62 } else { sim.size * 2.2 + 3.0 };
         let eye = pos + dir * dist;
         let mut dynm = dynm;
         let d = fv.eye - eye;

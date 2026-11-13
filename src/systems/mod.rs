@@ -411,7 +411,7 @@ pub struct Systems {
     // ---- alerting
     pub master_warn: bool,
     pub master_caut: bool,
-    known: [u32; 24],
+    known: [u32; 25],
     /// Aural alert sequence (bumped for one-shots) and the continuous one.
     pub aural_seq: u32,
     pub aural: Aural,
@@ -473,7 +473,7 @@ impl Default for Systems {
             protect: false,
             master_warn: false,
             master_caut: false,
-            known: [0; 24],
+            known: [0; 25],
             aural_seq: 0,
             aural: Aural::None,
             aural_loop: Aural::None,
@@ -923,6 +923,8 @@ impl Systems {
                 e < n && self.eng[e].run && !self.sw.fire_handle[e]
             });
             let elec = h.elec && self.sw.hyd_elec && self.power >= Power::Normal;
+            // Helicopters: the pump is on the main gearbox (works in autorotation).
+            let eng_pump = eng_pump || (def.category == crate::flight::Category::Helicopter && ac.rotor.out.nr_pct > 50.0);
             let rat = h.rat && self.rat_out && ias > 60.0;
             let mut target = if lost {
                 0.0
@@ -1040,6 +1042,10 @@ impl Systems {
     /// Burn fuel; returns whether each engine is getting fuel.
     fn engine_fuel(&mut self, def: &AircraftDef, ac: &Aircraft, alt: f32, dt: f32) -> [bool; ME] {
         let mut ok = [false; ME];
+        if def.engine_kind == EngineKind::Electric {
+            // Battery-electric (drones): the pack is modelled with the motors (src/rotor/quad.rs).
+            return [true; ME];
+        }
         let total0 = self.fuel_total();
         for i in 0..self.n_eng {
             let mask = self.feed_tanks(i);
@@ -1561,7 +1567,7 @@ impl Systems {
             return;
         }
         let list = alerts::alerts(self, def, ac, ctl);
-        let mut ids = [0u32; 24];
+        let mut ids = [0u32; 25];
         for (k, a) in list.iter().take(24).enumerate() {
             ids[k] = a.id;
         }

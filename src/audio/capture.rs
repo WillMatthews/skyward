@@ -40,6 +40,8 @@ pub fn profile_for(def: &AircraftDef, size: f32) -> Profile {
             }
         }
         EngineKind::Turboprop => Family::Turboprop,
+        EngineKind::Turboshaft => Family::Helicopter,
+        EngineKind::Electric => Family::Drone,
         EngineKind::Jet => {
             if def.has_afterburner || def.category == Category::FastJet {
                 Family::Fighter
@@ -81,9 +83,18 @@ pub fn profile_for(def: &AircraftDef, size: f32) -> Profile {
             Family::Fighter => SoundSet::F16,
             Family::Turboprop => SoundSet::Atr,
             Family::Airliner => SoundSet::Cfm56,
-            Family::Glider => SoundSet::None,
+            // Rotorcraft: procedural (rotorcraft.rs).
+            Family::Glider | Family::Helicopter | Family::Drone => SoundSet::None,
         }
     };
+    match def.category {
+        Category::Helicopter => p.family = Family::Helicopter,
+        Category::Drone => p.family = Family::Drone,
+        _ => {}
+    }
+    if matches!(p.family, Family::Helicopter | Family::Drone) {
+        p.set = SoundSet::None;
+    }
     match def.id {
         "kestrel" => {
             p.cylinders = 4;
@@ -100,7 +111,25 @@ pub fn profile_for(def: &AircraftDef, size: f32) -> Profile {
         "hercules" => p.blades = 4,
         "galaxy" => p.fan_blades = 38,
         "vulcan" => p.fan_blades = 22,
+        // EC130 B4: 3-blade Starflex main rotor (Ø 10.69 m), 10-blade Fenestron.
+        "ec130" => {
+            p.blades = 3;
+            p.fan_blades = 10;
+            p.prop_radius = 5.345;
+        }
         _ => match p.family {
+            Family::Helicopter => {
+                p.blades = 3;
+                p.fan_blades = 10;
+                p.prop_radius = (def.wingspan * 0.5).max(2.0);
+            }
+            Family::Drone => {
+                // 5-inch tri-blade props on 2207 motors (7 pole pairs).
+                p.blades = 3;
+                p.cylinders = 7;
+                p.prop_radius = 0.0635;
+                p.thrust_max = 12.0;
+            }
             Family::Warbird => {
                 p.cylinders = 12;
                 p.blades = 4;
@@ -217,6 +246,54 @@ impl Default for Director {
             next_thunder: 20.0,
             rng: 0x1234_5678,
         }
+    }
+}
+
+/// Rotor sound drivers from the rotorcraft model (`src/rotor`).
+///
+/// Blade slap is blade-vortex interaction: each blade meets the tip vortex
+/// shed by the one ahead when the wake stays in the tip-path plane — the
+/// net flow through the disc (climb component + induced velocity) near zero
+/// at moderate advance ratio: shallow approach descents and decelerations.
+/// Strength grows with the vortex strength (blade loading). High-g turns
+/// (advancing-tip loading) and the vortex ring add their own impulsive
+/// noise.
+pub fn rotor_frame(def: &AircraftDef, ac: &crate::flight::Aircraft, p: &Profile) -> RotorFrame {
+    let o = &ac.rotor.out;
+    if def.rotor.is_none() {
+        return RotorFrame::default();
+    }
+    let (nr_nom, power_ref) = match def.rotor.as_deref().and_then(|r| r.heli()) {
+        Some(h) => (h.omega * 60.0 / std::f32::consts::TAU, h.p_mgb),
+        None => (o.nr_rpm.max(1.0) / (o.nr_pct.max(1.0) / 100.0), 1.0),
+    };
+    let nr = o.nr_rpm / nr_nom.max(1.0);
+    let vt = (o.nr_rpm / 60.0 * std::f32::consts::TAU * p.prop_radius).max(1.0);
+    let tas = ac.tas();
+    // Disc tilt forward (rad): shaft tilt + flapping, less the nose-up attitude.
+    let tilt = 0.035 - ac.pitch() - o.tilt_deg[0].to_radians();
+    let w = ac.vertical_speed() * tilt.cos() + tas * tilt.sin();
+    let net = w + o.v_induced;
+    let load = (o.thrust / (def.mass * GRAVITY)).clamp(0.0, 2.5);
+    let mu = o.mu;
+    let bvi = (-(net / 3.0).powi(2)).exp() * smoothstep(0.05, 0.12, mu) * (1.0 - smoothstep(0.3, 0.42, mu)) * load.powf(1.5);
+    let turn = smoothstep(1.3, 1.9, ac.g_load()) * smoothstep(0.1, 0.22, mu);
+    let spin = smoothstep(0.45, 0.8, nr);
+    let slap = if ac.on_ground || ac.crashed.is_some() { 0.0 } else { ((1.15 * bvi + 0.6 * turn + 0.45 * o.vrs) * spin).min(1.3) };
+    let _ = vt;
+    RotorFrame {
+        nr_rpm: o.nr_rpm,
+        nr,
+        ng: o.ng_pct / 100.0,
+        torque: o.torque_pct / 100.0,
+        power: o.power_w / power_ref.max(1.0),
+        tail_rpm: o.tail_rpm,
+        tail_pitch: o.tail_pitch_deg,
+        slap,
+        load,
+        vrs: o.vrs,
+        stall: o.stall,
+        azimuth: o.azimuth / std::f32::consts::TAU,
     }
 }
 
@@ -567,6 +644,8 @@ impl Director {
         // geometry — see Synth::sonic_boom.)
         let interior = if sim.cam == CamMode::Cockpit { 1.0 } else { 0.0 };
         let m = ac.mach();
+        let rotor = rotor_frame(def, ac, &profile);
+        let rotorcraft = matches!(fam, Family::Helicopter | Family::Drone);
 
         // ---- weather
         let wr = world.render_weather();
@@ -601,12 +680,13 @@ impl Director {
             ac_vel: ac.vel * warp,
             ac_rot: rot,
             eng,
+            rotor,
             reverser: surf.reverser,
             tas,
             mach: m,
             qbar,
             beta: ac.beta(),
-            buffet,
+            buffet: if rotorcraft { (rotor.stall + 0.6 * rotor.vrs).min(1.0) } else { buffet },
             overspeed,
             gear: if profile.retract_gear { gear } else { 1.0 },
             flaps: surf.flaps,
@@ -619,7 +699,8 @@ impl Director {
             brakes: sim.ctl.brakes,
             shake: self.shake.min(1.5),
             crashed,
-            stall_warn: ac.stall_warning() && !crashed,
+            // Helicopters: the low rotor-RPM horn instead of a stall warning.
+            stall_warn: !crashed && if fam == Family::Helicopter { ac.rotor.out.low_nr } else { !rotorcraft && ac.stall_warning() },
             gear_warn,
             vario,
             rain: wr.rain,

@@ -129,7 +129,8 @@ fn base_gains(def: &AircraftDef) -> Gains {
             at_i: 0.012,
             at_d: 0.10,
         },
-        Category::Trainer | Category::Glider => Gains {
+        // (Rotorcraft use src/rotor/bot.rs's autopilot; these gains are unused.)
+        Category::Trainer | Category::Glider | Category::Helicopter | Category::Drone => Gains {
             bank_max: deg(30.0),
             pitch_up: deg(15.0),
             pitch_down: deg(-15.0),
@@ -385,6 +386,7 @@ mod tests {
             Category::Warbird => (200.0, 2000.0),
             Category::FastJet => (350.0, 3000.0),
             Category::Airliner => (if def.engine_kind == crate::flight::EngineKind::Turboprop { 180.0 } else { 250.0 }, 3000.0),
+            Category::Helicopter | Category::Drone => unreachable!("rotorcraft are filtered out"),
         }
     }
 
@@ -426,7 +428,7 @@ mod tests {
     /// combined descent + turn back + slow-down.
     #[test]
     fn captures_and_holds_alt_hdg_speed() {
-        for def in catalogue().into_iter().filter(|d| d.has_engine) {
+        for def in catalogue().into_iter().filter(|d| d.has_engine && d.rotor.is_none()) {
             let (kt, alt0) = start(&def);
             let mut a = Aircraft::airborne(&def, Vec3::new(0.0, alt0, 0.0), 0.3, kt * KT);
             let mut ctl = trimmed_controls_at(&def, kt * KT, alt0);
@@ -534,7 +536,7 @@ mod tests {
 
     #[test]
     fn recovers_from_upset_and_holds() {
-        for def in catalogue().into_iter().filter(|d| d.has_engine) {
+        for def in catalogue().into_iter().filter(|d| d.has_engine && d.rotor.is_none()) {
             let (kt, alt0) = start(&def);
             let mut a = Aircraft::airborne(&def, Vec3::new(0.0, alt0, 0.0), 1.0, kt * KT);
             let mut ctl = trimmed_controls_at(&def, kt * KT, alt0);

@@ -22,3 +22,8 @@ menu_main      | image | | --airport EGLC --aircraft kestrel --menu-screen main 
 menu_controls  | image | SKYWARD_FAKE_INPUT=xbox,x52,pedals,tca SKYWARD_SETTINGS_TAB=3:0:pitch | --airport EGLC --aircraft kestrel --menu-screen settings --time 14.00 --date 06-15 --metar "EGLC 151350Z 24008KT 9999 SCT040 18/09 Q1018" |
 audio_piston   | audio | | --airport EGLC --aircraft kestrel --cam chase --throttle 1.0 --seconds 6 --metar "EGLC 151350Z 24008KT 9999 SCT040 18/09 Q1018" |
 audio_jet      | audio | | --airport EGLC --aircraft meridian320 --cam cockpit --throttle 0.9 --seconds 6 --audio-script "3:gear" --metar "EGLC 151350Z 24008KT 9999 SCT040 18/09 Q1018" |
+# Rotorcraft (Track Q): the EC130 on the ground beside the runway (rotor disc,
+# livery), the FPV quad's camera view with the OSD, the helicopter lifting off.
+heli_ground    | image | SKYWARD_NO_VFX=1 SKYWARD_NO_OVERPASS=1 SKYWARD_ORBIT=140,22,17 | --airport EGLC --aircraft ec130 --cam chase --no-hud --time 14.00 --date 06-15 --metar "EGLC 151350Z 24008KT 9999 SCT040 18/09 Q1018" |
+quad_fpv       | image | SKYWARD_NO_VFX=1 SKYWARD_NO_OVERPASS=1 | --airport EGLC --aircraft fpv --start city --heading 270 --cam cockpit --time 14.00 --date 06-15 --metar "EGLC 151350Z 24008KT 9999 SCT040 18/09 Q1018" |
+audio_heli     | audio | | --airport EGLC --aircraft ec130 --cam chase --throttle 0.62 --seconds 6 --metar "EGLC 151350Z 24008KT 9999 SCT040 18/09 Q1018" |

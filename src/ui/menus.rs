@@ -137,6 +137,8 @@ pub fn category_name(c: Category) -> &'static str {
         Category::Warbird => "Warbird",
         Category::FastJet => "Fast jet",
         Category::Airliner => "Airliner",
+        Category::Helicopter => "Rotorcraft",
+        Category::Drone => "Drone",
     }
 }
 
@@ -151,11 +153,16 @@ pub fn suitable(a: &Airport, def: &AircraftDef) -> bool {
 }
 
 fn spec_lines(d: &AircraftDef) -> Vec<(&'static str, String)> {
+    if d.rotor.is_some() {
+        return crate::rotor::instruments::spec_lines(d);
+    }
     let n = d.engine_count;
     let engines = match d.engine_kind {
         EngineKind::None => "None".to_string(),
         EngineKind::Piston => format!("{n} × piston, {:.0} hp", d.engine_power_w / 745.7),
         EngineKind::Turboprop => format!("{n} × turboprop, {:.0} shp", d.engine_power_w / 745.7),
+        EngineKind::Turboshaft => format!("{n} × turboshaft, {:.0} shp", d.engine_power_w / 745.7),
+        EngineKind::Electric => format!("{n} × brushless motor, 6S LiPo"),
         EngineKind::Jet => {
             let dry = d.static_thrust / n.max(1) as f32 / 1000.0;
             if d.has_afterburner {

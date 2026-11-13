@@ -146,6 +146,9 @@ const ATR_HYD: &[Hyd] = &[
 ];
 const F16_HYD: &[Hyd] = &[Hyd { name: "A", pumps: &[0], elec: false, rat: false }, Hyd { name: "B", pumps: &[0], elec: false, rat: false }];
 const SPIT_HYD: &[Hyd] = &[Hyd { name: "HYD", pumps: &[0], elec: false, rat: false }];
+/// Helicopter flight-control servos: one system, pump on the main gearbox.
+const HELI_HYD: &[Hyd] = &[Hyd { name: "HYD", pumps: &[], elec: false, rat: false }];
+const HELI_TANK: &[(&str, f32, f32)] = &[("MAIN", 1.0, 0.0)];
 
 const WING3: &[(&str, f32, f32)] = &[("L", 0.4, 4.0), ("R", 0.4, -4.0), ("CTR", 0.2, 0.0)];
 const WING2: &[(&str, f32, f32)] = &[("L", 0.5, 4.0), ("R", 0.5, -4.0)];
@@ -344,6 +347,39 @@ fn turboprop_airliner() -> SysDef {
     }
 }
 
+/// Single-turboshaft helicopter (EC130 class): 24 V / 17 A·h battery,
+/// starter-generator, one fuel tank, MGB-driven hydraulic servos (boosted
+/// cyclic / collective / pedals), engine fire detection, annunciator panel.
+fn helicopter() -> SysDef {
+    SysDef {
+        volts: 28.0,
+        batt_v: 24.0,
+        batt_ah: 17.0,
+        load_a: 30.0,
+        pitot_heat_a: 7.0,
+        hyd: HELI_HYD,
+        fcs_hyd: 0b1,
+        tanks: HELI_TANK,
+        feed: Feed::Common,
+        boost_pumps: true,
+        starter: Starter::TurbopropBattery,
+        carburettor: false,
+        vacuum: false,
+        elec_turn: true,
+        glass: false,
+        fire_detect: true,
+        bottles: 0,
+        eng_anti_ice: false,
+        alerting: Alerting::Annunciators,
+        ..trainer()
+    }
+}
+
+/// Battery-electric drone: flight controller and video on the flight pack.
+fn drone() -> SysDef {
+    SysDef { volts: 25.0, batt_v: 25.0, batt_ah: 1.3, load_a: 0.2, gens_per_engine: 0, ..glider() }
+}
+
 /// The systems of aircraft `def`.
 pub fn sys_def(def: &AircraftDef) -> SysDef {
     let mut d = match def.id {
@@ -368,6 +404,8 @@ pub fn sys_def(def: &AircraftDef) -> SysDef {
         },
         "meridian320" => jet_airliner(),
         _ => match (def.category, def.engine_kind) {
+            (Category::Helicopter, _) => helicopter(),
+            (Category::Drone, _) | (_, EngineKind::Electric) => drone(),
             (Category::Glider, _) | (_, EngineKind::None) => glider(),
             (Category::FastJet, _) => fast_jet(),
             (Category::Trainer, _) => trainer(),

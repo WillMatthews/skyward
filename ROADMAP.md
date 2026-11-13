@@ -59,8 +59,17 @@ models later.
 - Runway minima are per type now (ATR 1,100 m, E190 1,450 m, C-130 900 m on
   grass too, C-5 2,400 m, Vulcan 2,000 m).
 - **Heavy airliner** handling, **ILS approaches** (approach charts per runway).
-- **Helicopter**: collective/cyclic/pedals, ground effect, autorotation.
-- **Quadcopter**: rate/angle modes, FPV camera.
+- ✅ **Helicopter** (2026-11-13): Airbus Helicopters EC130 B4 — FGAddon
+  model (GPL v2+) with its B4 panel and VEMD, on Skyward's own rotor
+  model: collective / cyclic / pedals, rotor RPM and FADEC turboshaft,
+  translational lift, ground effect, vortex ring, retreating-blade stall,
+  dynamic rollover, **autorotation** to a flared landing; tail-rotor and
+  hydraulic failures; attitude-hold / SAS assist for keyboard pilots;
+  rotor wash; blade slap. Within ~2–5 % of the published hover ceilings
+  and fast cruise.
+- ✅ **Quadcopter**: an original 5" FPV quad — acro / angle modes,
+  Betaflight-style rates, airmode mixer, 6S battery sag, prop wash, tilted
+  wide FPV camera with OSD, gamepad mode 2, a scenic-orbit bot.
 - Polish carried over from v2:
   - Moon and stars at night.
   - Glass facades reflecting their neighbours (not just the sky).

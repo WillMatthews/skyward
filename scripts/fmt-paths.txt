@@ -26,3 +26,14 @@ src/systems/failures.rs
 src/systems/session.rs
 src/systems/tests.rs
 src/ui/failures.rs
+src/rotor/mod.rs
+src/rotor/heli.rs
+src/rotor/quad.rs
+src/rotor/defs.rs
+src/rotor/bot.rs
+src/rotor/instruments.rs
+src/rotor/quad_model.rs
+src/rotor/tests.rs
+src/rotor/glue.rs
+src/vfx/rotorwash.rs
+src/audio/rotorcraft.rs

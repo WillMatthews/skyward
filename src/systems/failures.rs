@@ -33,6 +33,8 @@ pub enum Kind {
     ElecFire,
     BirdStrike,
     Icing,
+    /// Helicopters: 0 = tail-rotor drive failure, 1 = tail-rotor pitch control (pedals frozen).
+    TailRotor,
 }
 
 /// Menu groups.
@@ -76,7 +78,7 @@ pub enum Index {
 }
 
 impl Kind {
-    pub const ALL: [Kind; 24] = [
+    pub const ALL: [Kind; 25] = [
         Kind::EngineFire,
         Kind::Flameout,
         Kind::PartialPower,
@@ -101,6 +103,7 @@ impl Kind {
         Kind::ElecFire,
         Kind::BirdStrike,
         Kind::Icing,
+        Kind::TailRotor,
     ];
     pub fn bit(self) -> usize {
         Kind::ALL.iter().position(|k| *k == self).unwrap_or(0)
@@ -132,6 +135,7 @@ impl Kind {
             Kind::ElecFire => "smoke",
             Kind::BirdStrike => "bird",
             Kind::Icing => "icing",
+            Kind::TailRotor => "tailrotor",
         }
     }
     pub fn group(self) -> Group {
@@ -141,7 +145,7 @@ impl Kind {
             Kind::Generator | Kind::ElecFire => Group::Electrical,
             Kind::Hydraulic => Group::Hydraulics,
             Kind::Vacuum | Kind::PitotBlock | Kind::StaticBlock | Kind::AttitudeInd | Kind::HeadingInd | Kind::DisplayFail => Group::Instruments,
-            Kind::FlapAsym | Kind::FlapJam | Kind::ControlJam => Group::Controls,
+            Kind::FlapAsym | Kind::FlapJam | Kind::ControlJam | Kind::TailRotor => Group::Controls,
             Kind::GearExtend | Kind::Brakes | Kind::TyreBurst => Group::Gear,
             Kind::BirdStrike | Kind::Icing => Group::Airframe,
         }
@@ -152,7 +156,7 @@ impl Kind {
             Kind::FuelLeak => Index::Tank,
             Kind::Hydraulic => Index::Hyd,
             Kind::ControlJam => Index::Axis,
-            Kind::TyreBurst => Index::Side,
+            Kind::TyreBurst | Kind::TailRotor => Index::Side,
             _ => Index::None,
         }
     }
@@ -183,14 +187,15 @@ impl Kind {
             Kind::AttitudeInd | Kind::HeadingInd => sd.vacuum || powered_glass,
             Kind::DisplayFail => powered_glass && def.category != crate::flight::Category::FastJet,
             Kind::GearExtend => def.retractable_gear,
-            Kind::FlapAsym | Kind::FlapJam => eng && !def.flap_detents.is_empty(),
+            Kind::FlapAsym | Kind::FlapJam => eng && def.flap_max_deg > 0.0 && !def.flap_detents.is_empty(),
             Kind::Hydraulic => !sd.hyd.is_empty(),
-            Kind::ControlJam => true,
-            Kind::Brakes => true,
-            Kind::TyreBurst => def.category != crate::flight::Category::Glider,
+            Kind::ControlJam => def.rotor.is_none(),
+            Kind::Brakes => def.gear.iter().any(|g| matches!(g.kind, crate::flight::ContactKind::Wheel { braked: true, .. })),
+            Kind::TyreBurst => def.gear.iter().any(|g| matches!(g.kind, crate::flight::ContactKind::Wheel { .. })) && def.category != crate::flight::Category::Glider,
+            Kind::TailRotor => def.category == crate::flight::Category::Helicopter,
             Kind::ElecFire => sd.gens_per_engine > 0 || sd.glass,
             Kind::BirdStrike => true,
-            Kind::Icing => true,
+            Kind::Icing => def.rotor.is_none(),
         }
     }
     /// Menu label for index `i` on `def`.
@@ -228,6 +233,7 @@ impl Kind {
             Kind::ElecFire => "Electrical fire / smoke".into(),
             Kind::BirdStrike => "Bird strike".into(),
             Kind::Icing => "Severe airframe icing".into(),
+            Kind::TailRotor => (if i == 0 { "Tail rotor drive failure" } else { "Tail rotor pitch control (pedals frozen)" }).into(),
         }
     }
     /// One-line hint on the effect / what to do, for the menu.
@@ -281,6 +287,7 @@ impl Kind {
             Kind::ElecFire => "Smoke in the cockpit; isolate the avionics",
             Kind::BirdStrike => "Engine damage (vibration, power loss) and a cracked windscreen",
             Kind::Icing => "Ice builds up: more drag, earlier stall",
+            Kind::TailRotor => "Yaw towards the torque: keep speed (the fin works), run-on landing or autorotation",
         }
     }
     /// Parse "fire", "fire2", "eng2fire", "jam-rudder", "tyre-right"... (1-based indices).
@@ -304,6 +311,8 @@ impl Kind {
                 "leak-right" | "leakr" => (Kind::FuelLeak, 1),
                 "leak-centre" | "leak-center" | "leakc" => (Kind::FuelLeak, 2),
                 "engine" | "engfail" => (Kind::Flameout, 0),
+                "tr-drive" | "tail-drive" => (Kind::TailRotor, 0),
+                "tr-pitch" | "tail-pitch" | "tailpitch" => (Kind::TailRotor, 1),
                 _ => return None,
             })
         };
@@ -340,7 +349,7 @@ impl Failure {
 
 /// The set of active failures: one bit per (kind, index).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Active([u8; 24]);
+pub struct Active([u8; 25]);
 
 impl Active {
     pub fn has(&self, f: Failure) -> bool {
@@ -363,7 +372,7 @@ impl Active {
         self.0.iter().all(|b| *b == 0)
     }
     pub fn clear(&mut self) {
-        self.0 = [0; 24];
+        self.0 = [0; 25];
     }
     pub fn list(&self) -> Vec<Failure> {
         let mut v = Vec::new();

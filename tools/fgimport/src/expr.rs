@@ -328,6 +328,16 @@ const DEFAULT_RULES: &[(&str, &str, f32, f32)] = &[
     (r"^instrumentation/clock/lc2/indicated-min$", "clock_min", 1.0, 0.0),
     (r"^instrumentation/hobbs-meter/digits(\d)$", "digit10:hobbs_tenths:{1}", 1.0, 0.0),
     (r"^systems/hydraulic/.*psi.*$", "const", 0.0, 3000.0),
+    // Rotorcraft (Skyward src/rotor): rotor speeds, blade pitch / flapping, turboshaft gauges.
+    (r"^rotors/main/rpm$", "rotor_rpm", 1.0, 0.0),
+    (r"^rotors/tail/rpm$", "tail_rpm", 1.0, 0.0),
+    (r"^rotors/main/blade(?:\[\d\])?/flap-deg$", "rotor_coning_deg", 1.0, 0.0),
+    (r"^rotors/main/blade(?:\[\d\])?/incidence-deg$", "rotor_collective_deg", 1.0, 0.0),
+    (r"^rotors/tail/blade(?:\[\d\])?/incidence-deg$", "tail_pitch_deg", 1.0, 0.0),
+    (r"^rotors/main/(?:roll|yaw)-deg$|^rotors/main/blade(?:\[\d\])?/position-deg$|^rotors/tail/blade(?:\[\d\])?/position-deg$", "const", 0.0, 0.0),
+    (r"^rotors/main/torque$", "heli_tq_pct", 60.0, 0.0),
+    (r"^engines/engine(?:\[\d\])?/n2-rpm$", "heli_n2_rpm", 1.0, 0.0),
+    (r"^position/gear-agl-m$", "agl_m", 1.0, 0.0),
     // Warnings.
     (r"^f16/avionics/caution/master$|^instrumentation/eicas/master/caution$|^instrumentation/annunciators/master-caution(?:/state)?$", "master_caution", 1.0, 0.0),
     (r"^instrumentation/eicas/master/warning$|^instrumentation/annunciators/master-warning(?:/state)?$", "master_warning", 1.0, 0.0),

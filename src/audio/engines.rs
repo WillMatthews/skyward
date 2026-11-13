@@ -17,7 +17,8 @@
 //!   afterburner rumble + crackle.
 
 use super::dsp::*;
-use super::params::{EngineFrame, Family, Profile};
+use super::params::{EngineFrame, Family, Profile, RotorFrame};
+use super::rotorcraft::{Drone, Heli};
 use super::sampled::{Drivers, SampleEngine as SampledEngine, n2_from_n1};
 use super::soundsets::{self, Set};
 
@@ -42,6 +43,8 @@ pub struct EngCtl {
     pub dist: f32,
     /// The aircraft was destroyed: engines stop dead (no shutdown sequence).
     pub crashed: bool,
+    /// Rotorcraft state (zero for fixed wing).
+    pub rotor: RotorFrame,
 }
 
 fn prop_tables(blades: u32, max_rev_hz: f32, seed: u32) -> (Table, Table) {
@@ -646,6 +649,8 @@ enum Proc {
     Piston(Box<Piston>),
     Turboprop(Box<Turboprop>),
     Jet(Box<Jet>),
+    Heli(Box<Heli>),
+    Drone(Box<Drone>),
 }
 
 /// One engine's sound: the recorded set (when the aircraft has one and its
@@ -671,6 +676,8 @@ impl EngineVoice {
             Family::LightPiston | Family::Warbird => Proc::Piston(Box::new(Piston::new(p, idx, sr))),
             Family::Turboprop => Proc::Turboprop(Box::new(Turboprop::new(p, idx, sr))),
             Family::Fighter | Family::Airliner => Proc::Jet(Box::new(Jet::new(p, idx, sr))),
+            Family::Helicopter => Proc::Heli(Box::new(Heli::new(p, idx, sr))),
+            Family::Drone => Proc::Drone(Box::new(Drone::new(p, idx, sr))),
         };
         let seed = p.type_id ^ (idx as u32).wrapping_mul(0x9e37_79b9);
         let mut v = EngineVoice { proc_, samp: None, set: soundsets::set(p.set), seed, sr, pg: [Ramp::new(1.0); 3], sg: Ramp::new(0.0), n1_idle: p.n1_idle };
@@ -710,6 +717,8 @@ impl EngineVoice {
             Proc::Piston(v) => v.control(c, p, n),
             Proc::Turboprop(v) => v.control(c, p, n),
             Proc::Jet(v) => v.control(c, p, n),
+            Proc::Heli(v) => v.control(c, p, n),
+            Proc::Drone(v) => v.control(c, p, n),
         }
         if let Some(s) = &mut self.samp {
             let e = &c.e;
@@ -734,6 +743,8 @@ impl EngineVoice {
             Proc::Piston(v) => v.tick(),
             Proc::Turboprop(v) => v.tick(),
             Proc::Jet(v) => v.tick(),
+            Proc::Heli(v) => v.tick(),
+            Proc::Drone(v) => v.tick(),
         };
         let (a, b, c) = (self.pg[0].tick(), self.pg[1].tick(), self.pg[2].tick());
         o.front *= a;

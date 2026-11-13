@@ -618,6 +618,23 @@ impl<'a> Builder<'a> {
                 }
             }
         }
+        // Transparency driven by a property (e.g. a rotor-blur disc fading in
+        // with rotor rpm): shown while it is more than faintly visible.
+        if let Some(tr) = a.child("transparency") {
+            if let Some(p) = tr.text_of("alpha-prop") {
+                let mut v = op("add", vec![op("mul", vec![self.pm.prop(p), Expr::C(tr.f("factor").unwrap_or(1.0))]), Expr::C(tr.f("offset").unwrap_or(0.0))]);
+                if let Some(hi) = tr.f("max") {
+                    v = op("min", vec![v, Expr::C(hi)]);
+                }
+                let shown = op("gt", vec![v, Expr::C(0.15)]);
+                if shown.is_const().is_none() {
+                    for &t in targets {
+                        let name = format!("transparency:{}", self.nodes[t].name);
+                        self.wrap(t, Anim::Select(shown.clone()), &name);
+                    }
+                }
+            }
+        }
         // Static texture swap (e.g. a fixed livery part).
         if let Some(t) = a.text_of("texture") {
             if a.child("condition").is_none() {

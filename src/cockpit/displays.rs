@@ -365,6 +365,8 @@ pub fn draw(p: &egui::Painter, kind: &str, r: Rect, sim: &Sim, world: &World, ti
         "ewd" => glass::ewd(p, bare(r), sim),
         "sd" => system_display(p, r, sim, world),
         "mcdu" => mcdu(p, r, sim, world),
+        // Helicopter VEMD (src/rotor/instruments.rs).
+        "vemd1" | "vemd2" => crate::rotor::instruments::vemd(p, r, sim, kind == "vemd2"),
         _ => {}
     }
 }

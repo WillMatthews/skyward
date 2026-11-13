@@ -26,12 +26,15 @@ pub enum Panel {
     Trainer,
     Warbird,
     Glider,
+    /// Helicopter: flight instruments + rotor / engine (Nr / N2, FLI).
+    Helicopter,
 }
 
 pub fn panel_for(def: &AircraftDef) -> Panel {
     match def.category {
         Category::Glider => Panel::Glider,
         Category::Warbird => Panel::Warbird,
+        Category::Helicopter => Panel::Helicopter,
         _ => Panel::Trainer,
     }
 }
@@ -498,6 +501,61 @@ fn tach(p: &egui::Painter, c: Pos2, r: f32, sim: &Sim, ink: Color32) {
     glass(p, c, r);
 }
 
+/// Helicopter dual tachometer: rotor (Nr, white) and free turbine (N2,
+/// yellow-tipped) in %; power-on green 94–106 %, power-off band 83–111 %.
+fn rotor_tach(p: &egui::Painter, c: Pos2, r: f32, sim: &Sim) {
+    case(p, c, r);
+    let o = sim.ac.rotor.out;
+    let max = 120.0;
+    let ang = |v: f32| -0.75 * PI + (v.clamp(0.0, max) / max) * 1.5 * PI;
+    ring_sector(p, c, r * 0.80, r * 0.86, ang(83.0), ang(111.0), ARC_YELLOW);
+    ring_sector(p, c, r * 0.87, r * 0.94, ang(94.0), ang(106.0), ARC_GREEN);
+    for v in [83.0, 111.0] {
+        let a = ang(v);
+        p.line_segment([polar(c, r * 0.97, a), polar(c, r * 0.76, a)], Stroke::new(r * 0.045, ARC_RED));
+    }
+    ticks(p, c, r * 0.97, ang, 0.0, max, 5.0, r * 0.07, 1.1, INK);
+    ticks(p, c, r * 0.97, ang, 0.0, max, 20.0, r * 0.14, 2.2, INK);
+    let mut v = 0.0;
+    while v <= max + 0.5 {
+        label_b(p, polar(c, r * 0.64, ang(v)), &format!("{v:.0}"), r * 0.14, INK);
+        v += 20.0;
+    }
+    label(p, c + Vec2::new(0.0, -r * 0.28), "NR · N2 %", r * 0.10, INK_DIM);
+    let warn = o.low_nr || o.high_nr;
+    p.text(c + Vec2::new(0.0, r * 0.50), Align2::CENTER_CENTER, format!("{:3.0} RPM", o.nr_rpm), f_inst(r * 0.12), if warn { ARC_RED } else { INK_DIM });
+    needle(p, c, r * 0.84, ang(o.n2_pct), r * 0.06, ARC_YELLOW);
+    needle(p, c, r * 0.92, ang(o.nr_pct), r * 0.07, INK);
+    glass(p, c, r);
+}
+
+/// First Limitation Indicator (EC130 VEMD style): the engine parameter
+/// nearest its limit (torque / TOT / Ng) on a 0–12 scale, take-off limit at 10.
+fn fli(p: &egui::Painter, c: Pos2, r: f32, sim: &Sim) {
+    case(p, c, r);
+    let o = sim.ac.rotor.out;
+    let max = 12.0;
+    let ang = |v: f32| -0.75 * PI + (v.clamp(0.0, max) / max) * 1.5 * PI;
+    ring_sector(p, c, r * 0.86, r * 0.93, ang(0.0), ang(9.0), ARC_GREEN);
+    ring_sector(p, c, r * 0.86, r * 0.93, ang(9.0), ang(10.0), ARC_YELLOW);
+    let red = ang(10.0);
+    p.line_segment([polar(c, r * 0.97, red), polar(c, r * 0.76, red)], Stroke::new(r * 0.05, ARC_RED));
+    ticks(p, c, r * 0.97, ang, 0.0, max, 0.5, r * 0.07, 1.1, INK);
+    ticks(p, c, r * 0.97, ang, 0.0, max, 1.0, r * 0.14, 2.2, INK);
+    let mut v = 0.0;
+    while v <= max + 0.1 {
+        label_b(p, polar(c, r * 0.66, ang(v)), &format!("{v:.0}"), r * 0.14, INK);
+        v += 2.0;
+    }
+    label(p, c + Vec2::new(0.0, -r * 0.30), "FLI", r * 0.12, INK_DIM);
+    let col = |x: f32, lim: f32| if x > lim { ARC_RED } else { INK_DIM };
+    p.text(c + Vec2::new(0.0, r * 0.30), Align2::CENTER_CENTER, format!("TQ {:3.0}%", o.torque_pct), f_inst(r * 0.11), col(o.torque_pct, 100.0));
+    p.text(c + Vec2::new(0.0, r * 0.44), Align2::CENTER_CENTER, format!("NG {:4.1}%", o.ng_pct), f_inst(r * 0.11), col(o.ng_pct, 101.0));
+    p.text(c + Vec2::new(0.0, r * 0.58), Align2::CENTER_CENTER, format!("T4 {:3.0}°", o.tot_c), f_inst(r * 0.11), col(o.tot_c, 865.0));
+    needle(p, c, r * 0.9, ang(o.fli), r * 0.07, INK);
+    glass(p, c, r);
+}
+
 /// Spitfire boost gauge (lb/sq in).
 fn boost(p: &egui::Painter, c: Pos2, r: f32, sim: &Sim) {
     case(p, c, r);
@@ -599,6 +657,7 @@ pub fn draw_panel(p: &egui::Painter, screen: Rect, sim: &Sim, qnh_hpa: f32, comp
         Panel::Trainer => 7,
         Panel::Warbird => 8,
         Panel::Glider => 5,
+        Panel::Helicopter => 7,
     };
     let w = gap * n as f32 + 24.0;
     let h = r * 2.0 + 34.0;
@@ -644,6 +703,15 @@ pub fn draw_panel(p: &egui::Painter, screen: Rect, sim: &Sim, qnh_hpa: f32, comp
             altimeter(p, at(2), r, sim, qnh_hpa, true, INK);
             compass(p, at(3), r, sim);
             gmeter(p, at(4), r, sim);
+        }
+        Panel::Helicopter => {
+            asi(p, at(0), r, sim, 0, INK);
+            attitude(p, at(1), r, sim, false);
+            altimeter(p, at(2), r, sim, qnh_hpa, false, INK);
+            vsi(p, at(3), r, sim, None, INK);
+            heading(p, at(4), r, sim, INK);
+            rotor_tach(p, at(5), r, sim);
+            fli(p, at(6), r, sim);
         }
     }
     for i in 0..n {

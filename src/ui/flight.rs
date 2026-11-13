@@ -83,7 +83,18 @@ pub fn draw(ctx: &egui::Context, st: &mut UiState, sim: &mut Sim, world: &World,
     // ---- instruments
     if mode != HudMode::Off {
         let compact = mode == HudMode::Minimal;
-        if is_glass(sim) {
+        let rotor = sim.def().rotor.is_some();
+        if sim.def().category == Category::Drone {
+            // FPV quad: the on-screen display instead of instruments (src/rotor).
+            crate::rotor::instruments::osd(&p, screen, sim);
+            bottom = crate::rotor::instruments::status_strip(&p, screen, sim, screen.max.y - 64.0);
+        } else if rotor && !compact {
+            let qnh = world.wx.qnh_hpa;
+            let r = super::gauges::draw_panel(&p, screen, sim, qnh, false);
+            bottom = crate::rotor::instruments::status_strip(&p, screen, sim, r.min.y - 8.0);
+        } else if rotor {
+            bottom = crate::rotor::instruments::status_strip(&p, screen, sim, minimal_strip(&p, screen, sim, st) - 6.0);
+        } else if is_glass(sim) {
             let h = if compact { 290.0 } else { 340.0 };
             let y0 = screen.max.y - h - 12.0;
             let pfd_r = Rect::from_min_size(Pos2::new(screen.center().x - h - h * 0.5 - 12.0, y0), Vec2::splat(h));
@@ -685,6 +696,9 @@ fn cap(s: &str) -> String {
 
 /// Controls reference rows (also used by the settings screen).
 pub fn control_rows(def: &crate::flight::AircraftDef) -> Vec<(&'static str, &'static str, String)> {
+    if def.rotor.is_some() {
+        return crate::rotor::instruments::control_rows(def);
+    }
     let mut v: Vec<(&str, &str, String)> = vec![
         ("Flying", "W S  /  ↑ ↓", "Pitch".into()),
         ("Flying", "A D  /  ← →", "Roll".into()),

@@ -222,6 +222,9 @@ pub fn fuel_load(id: &str, cat: Category) -> (f32, usize) {
             Category::Warbird => (230.0, 2),
             Category::FastJet => (3_000.0, 2),
             Category::Airliner => (8_000.0, 3),
+            // EC130: 540 l in one tank (75 % at the start); drones: none.
+            Category::Helicopter => (320.0, 1),
+            Category::Drone => (0.0, 1),
         },
     }
 }
