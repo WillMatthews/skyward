@@ -10,11 +10,13 @@
 
 pub mod browser;
 pub mod canvas;
+pub mod chrome;
 pub mod comms;
 pub mod controls;
 pub mod failures;
 pub mod flight;
 pub mod gauges;
+pub mod geffects;
 pub mod glass;
 pub mod hudsym;
 pub mod weapons;
@@ -24,9 +26,13 @@ pub mod menus;
 pub mod mp;
 pub mod missions;
 pub mod overview;
+pub mod palette;
 pub mod radio;
 pub mod scroll;
 pub mod settings;
+pub mod settings_schema;
+pub mod settings_ui;
+pub mod settings_video;
 pub mod toast;
 
 use egui::{epaint, Align2, Color32, CornerRadius, FontFamily, FontId, Pos2, Rect, Shape, Stroke, Vec2};
@@ -50,7 +56,8 @@ pub mod pal {
     pub const HAIRLINE_HI: Color32 = Color32::from_rgba_premultiplied(48, 52, 60, 60);
     pub const TEXT: Color32 = Color32::from_rgb(236, 240, 245);
     pub const TEXT2: Color32 = Color32::from_rgb(164, 174, 188);
-    pub const TEXT3: Color32 = Color32::from_rgb(112, 122, 138);
+    /// (≥ 4.5 : 1 on PANEL_SOLID and RAISED: WCAG AA for the hint text.)
+    pub const TEXT3: Color32 = Color32::from_rgb(130, 140, 156);
     pub const ACCENT: Color32 = Color32::from_rgb(92, 178, 255);
     pub const ACCENT_DEEP: Color32 = Color32::from_rgb(38, 110, 196);
     pub const ACCENT_BG: Color32 = Color32::from_rgba_premultiplied(14, 28, 40, 46);
@@ -218,7 +225,7 @@ pub fn install_style(ctx: &egui::Context) {
 pub fn zoom_for(height_px: f32, native_ppp: f32, user_scale: f32) -> f32 {
     // egui's points-per-pixel = zoom × native; aim for ~1080 points of height.
     let native = native_ppp.max(0.5);
-    ((height_px / native / 1080.0).clamp(0.72, 3.0) * user_scale.clamp(0.6, 2.0)).max(0.5)
+    ((height_px / native / 1080.0).clamp(0.72, 3.0) * user_scale.clamp(settings::UI_SCALE_MIN, settings::UI_SCALE_MAX)).max(0.5)
 }
 
 // ---------------------------------------------------------------- painting helpers
@@ -505,7 +512,12 @@ pub struct UiState {
     pub back_to: Screen,
     pub settings: settings::Settings,
     pub settings_dirty: bool,
-    pub settings_tab: usize,
+    /// The settings screen: category, search, Apply / Revert base, focus (ui/settings_ui.rs).
+    pub settings_ui: settings_ui::SetUi,
+    /// Graphics adapter name (Settings › About).
+    pub gpu_name: String,
+    /// G-effects state (ui/geffects.rs).
+    pub g_stress: geffects::GStress,
     pub plan: Plan,
     pub defs: Vec<crate::flight::AircraftDef>,
     pub picker: menus::Picker,
@@ -552,7 +564,9 @@ impl UiState {
             back_to: Screen::Main,
             settings,
             settings_dirty: false,
-            settings_tab: 0,
+            settings_ui: Default::default(),
+            gpu_name: String::new(),
+            g_stress: Default::default(),
             plan: Plan { aircraft: 0, airport: "EGLC".into(), spec: crate::startpos::Spec::Runway(String::new()), watch: false, dogfight: None },
             dogfight: Default::default(),
             defs: crate::flight::catalogue(),

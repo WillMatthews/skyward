@@ -7,6 +7,7 @@
 //!                     [--menu-screen main|aircraft|airport|conditions|settings|pause|loading|credits] [--hud full|minimal|off] [--map corner|large|off]
 //!                     [--realtime [--warp N]]   (stream + render in real time, straight & level, report timings)
 //!                     [--gear up|down] [--flaps N] [--spoilers F] [--reverse] [--fail BITS] [--ap] [--fps HZ]   (setup / test knobs)
+//! Settings:   --menu-screen settings [--settings-category video|display|camera|flight|assists|weather|traffic|sound|controls|multiplayer|accessibility|interface|data|about] [--settings-search TEXT] [--settings-from pause] [--palette deuteranopia|protanopia|tritanopia] [--high-contrast]; SKYWARD_CONFIG_DIR=dir for the settings file
 //! Systems:    --fail pitot,vacuum,fire2@30,... (names, optional @seconds to arm) [--cold-dark] [--panel failures|armed|systems]
 //! Missions:   skyward --mission river|v1|decompression|... [--mission-bot]   (airline emergencies; --menu-screen missions|briefing|debrief)
 //! Auto flight: skyward [--bot | --watch] ...        (hand the aircraft to the AI pilot; --watch adds the cinematic camera)
@@ -138,6 +139,12 @@ struct Args {
     radio_panel: Option<usize>,
     /// Headless shots: open the ATC comms menu.
     comms_panel: bool,
+    /// Headless settings captures: category, search text, opened from the pause menu, palette.
+    settings_cat: Option<ui::settings_schema::Cat>,
+    settings_search: Option<String>,
+    settings_from_pause: bool,
+    palette: Option<ui::settings::Palette>,
+    high_contrast: bool,
     /// Keys to press after the spawn (`--press ap,ap_appr`; input/ ids).
     press: Vec<Key>,
     /// Flight plan (`--route BIG,LAM,EGLL/27R`, nav/).
@@ -269,6 +276,11 @@ fn parse_args_from(argv: Vec<String>) -> Args {
         panel: None,
         radio_panel: None,
         comms_panel: false,
+        settings_cat: None,
+        settings_search: None,
+        settings_from_pause: false,
+        palette: None,
+        high_contrast: false,
         press: Vec::new(),
         route: None,
         frame_dt: None,
@@ -395,6 +407,11 @@ fn parse_args_from(argv: Vec<String>) -> Args {
             "--look-ll" => a.look_ll = parse_geo(&next(&mut i)),
             "--menu" => a.menu = true,
             "--menu-screen" => a.menu_screen = Screen::parse(&next(&mut i)),
+            "--settings-category" => a.settings_cat = ui::settings_schema::Cat::parse(&next(&mut i)),
+            "--settings-search" => a.settings_search = Some(next(&mut i)),
+            "--settings-from" => a.settings_from_pause = next(&mut i) == "pause",
+            "--palette" => a.palette = ui::settings::Palette::parse(&next(&mut i)),
+            "--high-contrast" => a.high_contrast = true,
             "--no-menu" => a.no_menu = true,
             "--stats" => a.stats = true,
             "--realtime" => a.realtime = true,
@@ -992,6 +1009,16 @@ fn render_frame(
         Some(s) if flying => {
             let sim = s.sim.as_mut().unwrap();
             sim.qnh_hpa = s.world.wx.qnh_hpa;
+            // The player's settings the simulation reads (ui/settings.rs).
+            sim.prefs = ui.st.settings.sim_prefs();
+            if !sim.prefs_init {
+                sim.prefs_init = true;
+                let player = sim.bot.is_none() && sim.mission.is_none();
+                if player && sim.prefs.cockpit_first && sim.cam == CamMode::Chase {
+                    sim.cam = CamMode::Cockpit;
+                }
+                sim.failures.random.on |= player && sim.prefs.random_failures;
+            }
             let (mut fv, mut dynm) = sim.frame(w as f32 / h as f32);
             // Multiplayer spectator (net/): our aircraft is hidden, the camera follows another.
             let mut view_override = view_override;
@@ -1120,7 +1147,11 @@ fn render_frame(
     });
     let mut full = full;
     let t_tess = Instant::now();
-    let prims = ui.ctx.tessellate(std::mem::take(&mut full.shapes), full.pixels_per_point);
+    let mut prims = ui.ctx.tessellate(std::mem::take(&mut full.shapes), full.pixels_per_point);
+    // Accessibility palettes (ui/palette.rs): colour-blind variants, high contrast.
+    let pal_mode = ui::palette::Mode { palette: ui.st.settings.palette, high_contrast: ui.st.settings.high_contrast };
+    ui::palette::apply(&mut prims, pal_mode);
+    ui.st.canvas.palette = pal_mode;
     let t_canvas = Instant::now();
     for (id, deltas) in &full.textures_delta.set {
         for delta in deltas.iter() {
@@ -1295,7 +1326,7 @@ fn args_for_plan(base: &Args, st: &UiState) -> (Args, Option<startpos::CustomSta
         a.weather = clouds::Weather::ALL.into_iter().find(|w| w.name() == c.preset);
     }
     a.radius = Some(ui::settings::detail_radius(st.settings.detail));
-    a.traffic = Some(traffic::Level::from_u8(st.settings.traffic));
+    a.traffic = Some(traffic::Level::from_u8(st.settings.traffic.road));
     // A runway start with no end chosen yet: let the sim pick (into wind, long enough).
     let custom = match &plan.spec {
         startpos::Spec::Runway(e) | startpos::Spec::Final(e, _) if e.is_empty() => None,
@@ -1368,7 +1399,7 @@ fn headless(args: Args) -> Result<(), String> {
     let mut ui = Ui::new(&gpu.device, format, ui::settings::Settings::default());
     // Layout checks at a larger interface scale: SKYWARD_UI_SCALE=1.3.
     if let Some(v) = std::env::var("SKYWARD_UI_SCALE").ok().and_then(|v| v.parse::<f32>().ok()) {
-        ui.st.settings.ui_scale = v.clamp(0.7, 1.6);
+        ui.st.settings.ui_scale = v.clamp(ui::settings::UI_SCALE_MIN, ui::settings::UI_SCALE_MAX);
     }
     ui.hide_hud = args.no_hud;
     // (Captures neither read nor write the player's multiplayer favourites / recents.)
@@ -1415,9 +1446,27 @@ fn headless(args: Args) -> Result<(), String> {
         ui.st.radio.tab = t;
     }
     ui.st.comms.open = args.comms_panel;
+    // (Captures neither enumerate audio devices nor walk the cache.)
+    ui.st.settings_ui.headless = true;
+    ui.st.gpu_name = gpu.adapter_name();
+    if let Some(p) = args.palette {
+        ui.st.settings.palette = p;
+    }
+    ui.st.settings.high_contrast |= args.high_contrast;
+    if let Some(c) = args.settings_cat {
+        ui.st.settings_ui.open_at(c, args.settings_search.as_deref().unwrap_or(""));
+    } else if let Some(q) = &args.settings_search {
+        ui.st.settings_ui.query = q.clone();
+    }
+    if args.settings_from_pause {
+        ui.st.back_to = Screen::Pause;
+    }
     if let Ok(t) = std::env::var("SKYWARD_SETTINGS_TAB") {
         let mut it = t.split(':');
-        ui.st.settings_tab = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+        // (Old tab numbers: 0 Display → Video, 1 Units → Display & HUD, 2 Sound, 3 Controls.)
+        use ui::settings_schema::Cat;
+        let cat = [Cat::Video, Cat::Display, Cat::Sound, Cat::Controls].get(it.next().and_then(|x| x.parse::<usize>().ok()).unwrap_or(0)).copied().unwrap_or(Cat::Video);
+        ui.st.settings_ui.open_at(cat, "");
         ui.st.controls_page = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
         ui.st.controls_axis = it.next().and_then(input::AxisAction::from_id).map(|a| (a, 0));
     }
@@ -2497,6 +2546,8 @@ struct Running {
     cam_hold: Option<f32>,
     saved_at: Instant,
     applied: ui::settings::Settings,
+    /// The window has the keyboard focus (Settings › Sound › Mute in background).
+    focused: bool,
     /// Browser diagnostics: the longest frame since the last report.
     #[cfg(target_arch = "wasm32")]
     web_max_ms: f32,
@@ -2798,7 +2849,16 @@ impl App {
             None => (args2, custom),
         };
         ui.st.screen = if self.args.no_menu || self.args.mission.is_some() { Screen::Loading } else { Screen::Main };
-        let audio = audio::Audio::new(ui.st.settings.sound.muted);
+        // Settings that live elsewhere or act once at start-up (ui/settings.rs).
+        ui.st.settings.player_name = ui.st.mp.prefs.name.clone();
+        ui.st.mp.tags = ui.st.settings.mp.name_tags;
+        ui.st.gpu_name = gpu.adapter_name();
+        ui.st.settings_ui.launch = Some(ui.st.settings.clone());
+        platform::set_offline(ui.st.settings.data.offline);
+        #[cfg(not(target_arch = "wasm32"))]
+        ui::settings_ui::prune_cache(ui.st.settings.data.cache_limit_mb);
+        let mut audio = audio::Audio::new(ui.st.settings.sound.muted);
+        audio.set_device(&ui.st.settings.audio_device);
         ui.audio_status = audio.status().to_string();
         ui.st.audio_status = ui.audio_status.clone();
         let session = Session::new(&args2, db, custom);
@@ -2825,6 +2885,7 @@ impl App {
             cam_hold: None,
             saved_at: Instant::now(),
             applied,
+            focused: true,
             #[cfg(target_arch = "wasm32")]
             web_max_ms: 0.0,
             #[cfg(target_arch = "wasm32")]
@@ -2847,7 +2908,11 @@ impl ApplicationHandler for App {
         let typing = r.ui.ctx.egui_wants_keyboard_input();
         match &event {
             WindowEvent::CloseRequested => {
-                r.ui.st.settings.save();
+                // (Changes not applied on the settings screen are not kept.)
+                match r.ui.st.settings_ui.base.as_ref().filter(|b| **b != r.ui.st.settings) {
+                    Some(b) => b.save(),
+                    None => r.ui.st.settings.save(),
+                }
                 el.exit();
             }
             WindowEvent::Resized(s) => {
@@ -2945,6 +3010,7 @@ impl ApplicationHandler for App {
                     MouseScrollDelta::PixelDelta(p) => p.y as f32 / 40.0,
                 };
             }
+            WindowEvent::Focused(f) => r.focused = *f,
             WindowEvent::RedrawRequested => self.frame(),
             _ => {}
         }
@@ -3326,7 +3392,13 @@ impl App {
             r.audio.click();
             r.ui.audio_clicks = 0;
         }
-        r.audio.set_settings(r.ui.st.settings.sound);
+        {
+            let s = &r.ui.st.settings;
+            let mut snd = s.sound;
+            snd.muted |= s.mute_in_background && !r.focused;
+            r.audio.set_settings(snd);
+            r.audio.set_device(&s.audio_device);
+        }
         {
             // Other players' engines; the spectator camera is the listener.
             let mp = &r.ui.st.mp;
@@ -3455,13 +3527,16 @@ impl App {
                 sess.world.radius = ui::settings::detail_radius(s.detail);
             }
         }
-        if s.traffic != r.applied.traffic {
+        if s.traffic.road != r.applied.traffic.road {
             if let Some(sess) = r.session.as_mut() {
-                sess.world.traffic.set_level(traffic::Level::from_u8(s.traffic));
+                sess.world.traffic.set_level(traffic::Level::from_u8(s.traffic.road));
             }
         }
+        platform::set_offline(s.data.offline);
+        r.ui.st.mp.default_port = s.mp.default_port;
         r.applied = s;
-        if r.ui.st.settings_dirty && r.saved_at.elapsed() > Duration::from_secs(1) {
+        // (Unapplied changes on the settings screen wait for Apply.)
+        if r.ui.st.settings_dirty && r.saved_at.elapsed() > Duration::from_secs(1) && !r.ui.st.settings_ui.pending(&r.ui.st.settings) {
             r.ui.st.settings.save();
             r.ui.st.settings_dirty = false;
             r.saved_at = Instant::now();

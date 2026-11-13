@@ -112,6 +112,13 @@ src/traffic/vehicle.rs
 src/traffic/mesh.rs
 src/traffic/gpu.rs
 src/traffic/tests.rs
+src/ui/settings.rs
+src/ui/settings_schema.rs
+src/ui/settings_ui.rs
+src/ui/settings_video.rs
+src/ui/palette.rs
+src/ui/chrome.rs
+src/ui/geffects.rs
 src/weapons/mod.rs
 src/weapons/ai.rs
 src/weapons/ballistics.rs

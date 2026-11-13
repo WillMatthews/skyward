@@ -58,6 +58,8 @@ pub struct Audio {
     events: Vec<Event>,
     settings: Settings,
     retry_in: f32,
+    /// Output device id from the settings ("" = the system default).
+    device: String,
     status: String,
     clock: f32,
     stats_at: f32,
@@ -94,6 +96,7 @@ impl Audio {
             events: Vec::with_capacity(64),
             settings,
             retry_in: 0.0,
+            device: String::new(),
             status: String::new(),
             clock: 0.0,
             stats_at: 10.0,
@@ -105,7 +108,7 @@ impl Audio {
     }
 
     fn try_open(&mut self) {
-        match output::Output::open(self.shared.clone()) {
+        match output::Output::open(self.shared.clone(), &self.device) {
             Ok(o) => {
                 self.status = format!("{} · {} Hz", o.name, o.sample_rate);
                 eprintln!("audio: {}", self.status);
@@ -125,6 +128,15 @@ impl Audio {
     /// Device / state line for the menu.
     pub fn status(&self) -> &str {
         &self.status
+    }
+
+    /// Switch the output device (Settings › Sound): reopens the stream.
+    pub fn set_device(&mut self, id: &str) {
+        if self.device != id {
+            self.device = id.to_string();
+            self.out = None;
+            self.try_open();
+        }
     }
 
     pub fn set_settings(&mut self, s: Settings) {
@@ -219,4 +231,9 @@ pub fn menu_window(ctx: &egui::Context, s: &mut Settings, status: &str) -> bool 
             ui.label(egui::RichText::new(status).size(11.0).color(egui::Color32::GRAY));
         });
     ctx.input(|i| i.pointer.any_click())
+}
+
+/// Output devices as (id, name), for Settings › Sound (slow on some hosts: call off the UI thread).
+pub fn output_devices() -> Vec<(String, String)> {
+    output::devices()
 }

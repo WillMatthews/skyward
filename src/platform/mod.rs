@@ -32,3 +32,15 @@ pub fn spawn(name: &str, f: impl FnOnce() + Send + 'static) -> bool {
 
 /// True in the browser build.
 pub const WEB: bool = cfg!(target_arch = "wasm32");
+
+/// Offline mode (Settings › Data & Storage): no downloads; cached data only.
+static OFFLINE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_offline(on: bool) {
+    OFFLINE.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// True when the player chose offline mode: network fetches fail fast.
+pub fn offline() -> bool {
+    OFFLINE.load(std::sync::atomic::Ordering::Relaxed)
+}

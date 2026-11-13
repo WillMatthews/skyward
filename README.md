@@ -169,6 +169,9 @@ painted over or composited.
   thermals under cumulus. Add the cinematic camera and leave it running.
 - **Menus.** Aircraft cards, a world-map airport picker with fuzzy search, runway diagrams with
   live crosswind, and conditions from live to any METAR.
+- **Settings.** Fourteen categories with search across all of them, Apply / Revert, realism presets,
+  assists, camera and units options, and colour-blind and high-contrast palettes. Every screen works
+  with a keyboard or a game controller, at interface scales from 80 to 200 %.
 
 ## Aircraft
 
@@ -417,6 +420,51 @@ first time it's seen:
 - **Pedals.** Rudder plus toe brakes.
 
 Layouts are saved per device in the settings file.
+
+<details>
+<summary><b>Settings</b></summary>
+
+Open **Settings** from the main menu or the pause menu (Esc in flight). Categories run down the
+left. **Search** (Ctrl F, or /) finds any setting by name, description or keyword across every
+category, and key bindings by action name. Each row has a one-line description. A blue dot marks
+an unapplied change, and the rail shows which categories have one.
+
+- **Apply** saves your changes. **Revert** drops them. Changes preview live while you are on the
+  screen. If you leave with unapplied changes, you are asked whether to apply them.
+- **Reset category** and **Reset all** ask first. Reset all keeps your recent and favourite
+  airports and your player name.
+- Rows marked **Restart** take effect at the next start. Rows marked **Soon** are saved now but do
+  nothing until the feature lands.
+- Keyboard: ↑ ↓ move, ← → change a value, Enter selects, Tab / Shift+Tab change category, Esc goes
+  back. Controller: d-pad, A / B, LB / RB.
+
+| Category | Settings |
+|---|---|
+| Video | vertical sync, scenery detail (graphics presets come with the graphics update) |
+| Display & HUD | instruments, speed / altitude / pressure (hPa · inHg) / temperature (°C · °F) units, map style and orientation, name tags, subtitles, interface scale, colour palette, high contrast |
+| Camera | cockpit and outside field of view, head-look speed / invert, cockpit head motion, chase distance and lag, starting view |
+| Flight & Realism | realism preset (Casual / Standard / Hard), structural damage and crashes (Realistic / Forgiving / Off), engine damage, G-effects (grey-out, blackout, red-out), random failures (and the failures panel in flight), unlimited fuel, auto-rudder, auto-trim, autobrake |
+| Assists | taxi ribbon, landing guidance, on-screen STALL and OVERSPEED cues |
+| Weather & Time | default weather (live / fixed), fixed clouds, turbulence, time-acceleration limit |
+| Traffic | road traffic, parked aircraft, live (ADS-B) traffic and its radius |
+| Sound | mute, output device, mute in background, volumes (master, engines, environment, systems, callouts & cabin PA, ATC radio, interface) |
+| Controls | bindings, devices, curves, mouse and head-look (below) |
+| Multiplayer | player name, default port, name tags, chat filter |
+| Accessibility | interface scale, subtitles, colour palette (deuteranopia, protanopia, tritanopia), high contrast, reduced motion, hold or toggle brakes |
+| Interface & Language | language (English for now), interface scale, interface sounds |
+| Data & Storage | cache location and size, cache limit, clear map tiles / terrain, offline mode, settings file |
+| About | version, graphics adapter, licence, credits |
+
+The colour-blind palettes move the interface's status colours (green, red, amber, cyan, magenta)
+to versions that stay distinct for that kind of colour vision. Greys and text are unchanged.
+The tests check them with a colour-vision simulation and against WCAG AA text contrast.
+
+Settings are saved in `~/.config/skyward/settings.json`, or in `localStorage` in the browser.
+`SKYWARD_CONFIG_DIR` points somewhere else. Older files load with new settings at their defaults,
+and keys this version doesn't know are kept. Headless captures:
+`--menu-screen settings --settings-category camera [--settings-search fov] [--settings-from pause] [--palette deuteranopia] [--high-contrast]`.
+
+</details>
 
 **Settings › Controls** binds any axis or button when you move or press it. Each axis has a
 deadzone, response curve, sensitivity, invert and calibration, with a live response plot. You also
@@ -721,7 +769,7 @@ A shift costs well under 0.1 ms.
 The window presents with vsync (FIFO) by default. The simulation advances by the median of recent
 frame times, so hitches pass through and a slow correction keeps sim time on wall time. The physics
 pose is interpolated between 120 Hz steps, so motion is even at any refresh rate. `--vsync off` or
-Settings › Display switches to mailbox / immediate for the lowest latency.
+Settings › Video switches to mailbox / immediate for the lowest latency.
 
 </details>
 

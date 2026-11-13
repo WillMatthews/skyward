@@ -19,6 +19,9 @@ rain_low_cloud | image | SKYWARD_NO_VFX=1 SKYWARD_NO_OVERPASS=1 | --airport EGLC
 terrain_alps   | image | SKYWARD_NO_VFX=1 SKYWARD_NO_OVERPASS=1 | --airport LOWI --aircraft kestrel --start-at air:47.255:11.25:1500:90 --cam chase --no-hud --time 13.00 --date 06-15 --metar "LOWI 151250Z 27008KT 9999 SCT060 20/09 Q1018" |
 landmarks_city | image | SKYWARD_NO_VFX=1 SKYWARD_NO_OVERPASS=1 SKYWARD_ORBIT=160,-5,30 | --airport EGLC --aircraft kestrel --start-at air:51.5075:-0.1080:200:235 --cam chase --no-hud --time 14.00 --date 06-15 --metar "EGLC 151350Z 24008KT 9999 SCT040 18/09 Q1018" |
 menu_main      | image | | --airport EGLC --aircraft kestrel --menu-screen main --time 14.00 --date 06-15 --metar "EGLC 151350Z 24008KT 9999 SCT040 18/09 Q1018" |
+# Settings (Track SET): the Controls category in the redesigned shell (old
+# SKYWARD_SETTINGS_TAB numbers map 0 Video, 1 Display & HUD, 2 Sound, 3 Controls),
+# and the Flight & Realism category opened from the pause menu.
 menu_controls  | image | SKYWARD_FAKE_INPUT=xbox,x52,pedals,tca SKYWARD_SETTINGS_TAB=3:0:pitch | --airport EGLC --aircraft kestrel --menu-screen settings --time 14.00 --date 06-15 --metar "EGLC 151350Z 24008KT 9999 SCT040 18/09 Q1018" |
 audio_piston   | audio | | --airport EGLC --aircraft kestrel --cam chase --throttle 1.0 --seconds 6 --metar "EGLC 151350Z 24008KT 9999 SCT040 18/09 Q1018" |
 audio_jet      | audio | | --airport EGLC --aircraft meridian320 --cam cockpit --throttle 0.9 --seconds 6 --audio-script "3:gear" --metar "EGLC 151350Z 24008KT 9999 SCT040 18/09 Q1018" |
@@ -28,6 +31,7 @@ heli_ground    | image | SKYWARD_NO_VFX=1 SKYWARD_NO_OVERPASS=1 SKYWARD_ORBIT=14
 quad_fpv       | image | SKYWARD_NO_VFX=1 SKYWARD_NO_OVERPASS=1 | --airport EGLC --aircraft fpv --start city --heading 270 --cam cockpit --time 14.00 --date 06-15 --metar "EGLC 151350Z 24008KT 9999 SCT040 18/09 Q1018" |
 audio_heli     | audio | | --airport EGLC --aircraft ec130 --cam chase --throttle 0.62 --seconds 6 --metar "EGLC 151350Z 24008KT 9999 SCT040 18/09 Q1018" |
 # Aircraft selector: the last type selected, so the grid has scrolled it into view.
+menu_settings  | image | | --airport EGLC --aircraft kestrel --menu-screen settings --settings-category flight --settings-from pause --time 14.00 --date 06-15 --metar "EGLC 151350Z 24008KT 9999 SCT040 18/09 Q1018" |
 menu_aircraft  | image | | --airport EGLC --aircraft fpv --menu-screen aircraft --time 14.00 --date 06-15 --metar "EGLC 151350Z 24008KT 9999 SCT040 18/09 Q1018" |
 # Road traffic (Track RT): the A12 / A13 interchange at Poplar from 250 m at
 # the evening rush hour, High density. Reproducible: captures simulate the

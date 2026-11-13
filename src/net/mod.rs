@@ -116,6 +116,8 @@ fn set_picture(v: Vec<Traffic>) {
 
 pub struct Mp {
     pub status: Status,
+    /// Port for addresses typed without one (Settings › Multiplayer).
+    pub default_port: u16,
     #[cfg(not(target_arch = "wasm32"))]
     conn: Option<skyward_net::udp::UdpClient>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -194,6 +196,7 @@ impl Mp {
             spectate: None,
             spec_yaw: None,
             tags: true,
+            default_port: skyward_net::DEFAULT_PORT,
             show_players: false,
             chat_open: false,
             chat_open_frame: 0,
@@ -281,11 +284,12 @@ impl Mp {
         {
             let (tx, rx) = std::sync::mpsc::channel();
             let a = addr.trim().to_string();
+            let port = self.default_port;
             // (Name lookups block: off the frame.)
             let ok = std::thread::Builder::new()
                 .name("mp-resolve".into())
                 .spawn(move || {
-                    let _ = tx.send(skyward_net::discovery::resolve(&a, skyward_net::DEFAULT_PORT));
+                    let _ = tx.send(skyward_net::discovery::resolve(&a, port));
                 })
                 .is_ok();
             if ok {

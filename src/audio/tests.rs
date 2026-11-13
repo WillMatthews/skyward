@@ -195,7 +195,7 @@ fn null_device_stream_runs() {
     let mut f = frame_for("meridian320");
     f.ear_pos = Vec3::new(0.0, 2.0, 30.0);
     let shared = Arc::new(Mutex::new(Shared { frame: f, seq: 1, events: Vec::new(), settings: super::Settings::default(), cpu_ns: 0, cpu_audio_s: 0.0 }));
-    let out = Output::open(shared.clone()).expect("open null device");
+    let out = Output::open(shared.clone(), "").expect("open null device");
     eprintln!("opened {} @ {} Hz", out.name, out.sample_rate);
     for i in 0..20 {
         std::thread::sleep(std::time::Duration::from_millis(100));
