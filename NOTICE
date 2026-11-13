@@ -15,6 +15,20 @@ others; per-item sources, authors and licences are listed in:
       - vulcan: github.com/FGMEMBERS/AvroVulcanB2 (FGUK, 3064c65f), GPL-2.0
         (Stuart Buchanan, FGUK; after Jonathan Harris's GPL X-Plane model),
         including its engine recordings (assets/audio/samples/vul_*).
+    The H2a jets:
+      - triple7: FGAddon trunk/Aircraft/777 (SVN r21799), GPL-2.0
+        (Syd Adams, Justin Smithies, Thorsten Brehm, Joshua Davidson,
+        Isaak Dieleman et al.); the package's plain white livery;
+      - crj700: github.com/FGMEMBERS/CRJ700-family (4862db2f, 2016:
+        "models, textures, markup and scripts" GPL-2.0-or-later — later
+        FGAddon revisions moved the models / textures to CC-BY-4.0 and are
+        not used) and the FGAddon CRJ700jsb JSBSim FDM (SVN r21799,
+        markup GPL-2.0-or-later) (Ryan Miller, Daniel Meissner et al.);
+      - citationx: github.com/FGMEMBERS/CitationX (e497ad98), GPL-2.0
+        (repository COPYING; Syd Adams et al.);
+      - concorde: FGAddon trunk/Aircraft/Concorde (SVN r21799; FDM header
+        "GPL", FGMEMBERS mirror COPYING GPL-2.0) (FlightGear Concorde
+        developers); livery repainted plain white (no airline marks).
     The rotorcraft (Track Q):
       - ec130: FGAddon trunk/Aircraft/ec130 (SVN r21799), GPL-2.0-or-later
         (Heiko Schulz, Melchior Franz, Michael Habarta); neutral livery
@@ -46,6 +60,11 @@ others; per-item sources, authors and licences are listed in:
     facts from public charts. Airport radio frequencies (ATIS, delivery,
     ground, tower, approach) come from OurAirports' airport-frequencies.csv
     (public domain). No licence-restricted navigation data is used.
+  * Live traffic (src/adsb/): aircraft positions from the adsb.lol API,
+    made available under the Open Database License (ODbL) 1.0
+    (https://opendatacommons.org/licenses/odbl/1-0/) — © adsb.lol
+    contributors. tests/adsb/*.json are anonymised extracts of it (synthetic
+    addresses, no registrations, re-numbered flights), under the same licence.
 
 Because some bundled content is GPL version 2 only, the combined work is
 distributed under the terms of GPL version 2.

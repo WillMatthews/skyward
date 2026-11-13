@@ -291,6 +291,10 @@ pub fn fuel_load(id: &str, cat: Category) -> (f32, usize) {
         "aerolink" => (3_500.0, 2),
         "meridian190" => (9_000.0, 3),
         "meridian320" => (12_000.0, 3),
+        "triple7" => (60_000.0, 3),
+        "crj700" => (4_000.0, 3),
+        "citationx" => (3_500.0, 3),
+        "concorde" => (26_000.0, 4),
         _ => match cat {
             Category::Glider => (0.0, 1),
             Category::Trainer => (110.0, 2),

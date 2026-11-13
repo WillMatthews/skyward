@@ -1,6 +1,10 @@
 # Build, lint and test on every push / pull request.
 #
-#   check  — rustfmt (formatted paths), clippy -D warnings, unit tests, release build (Linux)
+#   check  — rustfmt (formatted paths), clippy -D warnings, unit tests, release build (Linux);
+#            the workspace: the game, crates/skyward-net (protocol, lossy-link and
+#            32-client tests) and crates/skyward-server
+#   server — the dedicated server alone on Linux / Windows / macOS (no graphics
+#            or audio dependencies), plus a start / clean-shutdown smoke test
 #   tools  — the golden-comparison tool's own tests (tools/regress)
 #   wasm   — wasm32: the browser build (src/platform/, tiles_web.rs) passes
 #            clippy -D warnings; pages.yml builds and publishes the site
@@ -56,13 +60,47 @@ jobs:
         run: scripts/fmt-check.sh
 
       - name: clippy
-        run: cargo clippy --locked --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       - name: tests
-        run: cargo test --locked -- --skip gpu_
+        run: cargo test --locked --workspace -- --skip gpu_
 
       - name: release build
-        run: cargo build --locked --release
+        run: cargo build --locked --release --workspace
+
+  server:
+    name: skyward-server (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: server
+      - name: build (server only)
+        run: cargo build --locked --release -p skyward-server
+      - name: no graphics / audio in the server's dependencies
+        shell: bash
+        run: |
+          if cargo tree --locked -p skyward-server -e normal | grep -E ' (wgpu|winit|cpal|egui|gilrs) '; then
+            echo "skyward-server must not depend on the game's renderer / audio / input" >&2
+            exit 1
+          fi
+      - name: protocol + server tests
+        run: cargo test --locked --release -p skyward-net -p skyward-server
+      - name: smoke (start, answer, shut down)
+        shell: bash
+        run: |
+          ./target/release/skyward-server --help
+          # The console's `quit` shuts it down cleanly (exit status 0).
+          (sleep 2; echo status; echo quit) | ./target/release/skyward-server --bind 127.0.0.1 --port 47999 --no-discovery --no-mdns --weather own
 
   tools:
     name: tools/regress tests
@@ -99,4 +137,4 @@ jobs:
           key: wasm32
 
       - name: clippy (wasm32)
-        run: cargo clippy --locked --target wasm32-unknown-unknown -- -D warnings
+        run: cargo clippy --locked -p skyward --target wasm32-unknown-unknown -- -D warnings

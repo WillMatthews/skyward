@@ -51,9 +51,21 @@ pub struct WakeField {
     pub wind: Vec3,
 }
 
-/// The generator ids the sim uses for its own aircraft (others are free for
-/// multiplayer / traffic).
+/// Generator ids: the player's own aircraft, multiplayer players (+ their
+/// id) and live ADS-B traffic (+ the ICAO address).
 pub const OWN_AIRCRAFT: u64 = 1;
+pub const MP_BASE: u64 = 0x1_0000;
+pub const ADSB_BASE: u64 = 0x1_0000_0000;
+
+/// A typical mass (kg) for an ICAO wake category letter (L / M / H / J).
+pub fn mass_for_category(c: char) -> f32 {
+    match c {
+        'L' => 5_000.0,
+        'H' => 230_000.0,
+        'J' => 500_000.0,
+        _ => 65_000.0,
+    }
+}
 
 impl WakeField {
     /// Record a generator's position (field coordinates), velocity (m/s),
@@ -69,6 +81,10 @@ impl WakeField {
             }
         };
         tr.span = span;
+        let tr_id = tr.id;
+        // (Generators that left — landed, out of range — leave empty trails: drop them.)
+        self.trails.retain(|t| !t.pts.is_empty() || t.id == tr_id);
+        let tr = self.trails.iter_mut().find(|t| t.id == tr_id).unwrap();
         while tr.pts.front().is_some_and(|p| t - p.t > LIFE || p.t > t) {
             tr.pts.pop_front();
         }

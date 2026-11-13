@@ -1,0 +1,94 @@
+"citationx": 125 nodes (124 animated out of 125), 68 materials, 19 textures (1.4 MB), 173 chunks
+triangles: exterior 7898, interior 45331; vertices 83178; model.skac 0.8 MB; radius 13.2 m
+eye: Some(Vec3(0.375, 0.41, 6.55))
+lights: 0
+channels used: aileron_l aileron_r alpha_deg alt_ft alt_set_inhg beacon ctl_elevator ctl_flaps ctl_gear ctl_rudder ctl_spoilers ctl_trim doors eng0_n1 eng0_reverser eng1_n1 flaps gear0_comp_m gear0_roll_ms gear1_comp_m gear1_roll_ms gear2_comp_m gear2_roll_ms gear_pos hdg_bug_deg heading_deg ias_kt landing_light master_caution master_warning nav panel_light pitch_deg roll_deg slip spoilers steer_norm strobe strobe_sw taxi_light throttle vs_fpm
+texture-animated chunks: 24; display screens: 0
+animation types: [("", 1), ("billboard", 4), ("dist-scale", 4), ("flash", 3), ("material", 30), ("pick", 82), ("range", 2), ("rotate", 88), ("select", 113), ("shader", 2), ("spin", 5), ("texmultiple", 7), ("texrotate", 4), ("textranslate", 104), ("translate", 24)]
+unmapped properties (count):
+    12 autopilot/internal/heading-bug-error-deg
+    11 autopilot/locks/altitude
+    10 instrumentation/primus2000/sc840/nav2ptr
+    10 instrumentation/primus2000/sc840/nav1ptr
+    10 instrumentation/primus2000/dc840/mfd-map
+     8 instrumentation/transponder/id-code
+     6 instrumentation/primus2000/dc840/tcas
+     6 instrumentation/adf[1]/frequencies/selected-khz
+     6 instrumentation/adf/frequencies/selected-khz
+     5 instrumentation/nav[1]/frequencies/standby-mhz
+     5 instrumentation/nav[1]/frequencies/selected-mhz
+     5 instrumentation/nav/frequencies/standby-mhz
+     5 instrumentation/nav/frequencies/selected-mhz
+     5 instrumentation/comm[1]/frequencies/standby-mhz
+     5 instrumentation/comm[1]/frequencies/selected-mhz
+     5 instrumentation/comm/frequencies/standby-mhz
+     5 instrumentation/comm/frequencies/selected-mhz
+     5 autopilot/locks/heading
+     4 instrumentation/primus2000/dc840/mfd-wx
+     4 instrumentation/altimeter/setting-kpa
+     3 engines/engine[1]/oilt-norm
+     3 engines/engine/oilt-norm
+     2 systems/electrical/xtie
+     2 instrumentation/primus2000/mfd/menu-num
+     2 instrumentation/marker-beacon/outer
+     2 instrumentation/marker-beacon/middle
+     2 instrumentation/marker-beacon/inner
+     2 autopilot/locks/heading-arm
+     2 autopilot/internal/to-flag
+     2 autopilot/internal/nav2-pointer
+     2 autopilot/internal/nav1-pointer
+     2 autopilot/internal/gs-valid
+     2 autopilot/internal/gs-deflection
+     2 autopilot/internal/from-flag
+     2 autopilot/internal/course-offset
+     2 autopilot/internal/cdi
+     1 systems/electrical/right-emer-bus
+     1 systems/electrical/right-bus
+     1 systems/electrical/left-emer-bus
+     1 systems/electrical/left-bus
+     1 surface-positions/slat-pos-norm
+     1 surface-positions/rh-roll-spoiler
+     1 surface-positions/lh-roll-spoiler
+     1 sim/model/shadeless
+     1 sim/current-view/view-number
+     1 rendering/scene/ambient/blue
+     1 instrumentation/rmu/unit[1]/selected-yoffset
+     1 instrumentation/rmu/unit[1]/selected-xoffset
+     1 instrumentation/rmu/unit[1]/nav-num
+     1 instrumentation/rmu/unit[1]/com-num
+     1 instrumentation/rmu/unit[1]/adf-num
+     1 instrumentation/rmu/unit/selected-yoffset
+     1 instrumentation/rmu/unit/selected-xoffset
+     1 instrumentation/rmu/unit/nav-num
+     1 instrumentation/rmu/unit/com-num
+     1 instrumentation/rmu/unit/adf-num
+     1 instrumentation/nav/heading-needle-deflection
+     1 instrumentation/nav/gs-needle-deflection
+     1 instrumentation/nav/back-course-btn
+     1 instrumentation/attitude-indicator/caged-flag
+     1 instrumentation/adf/indicated-bearing-deg
+     1 gear/unlocked
+     1 engines/engine[1]/oilp-norm
+     1 engines/engine[1]/itt-norm
+     1 engines/engine/oilp-norm
+     1 engines/engine/itt-norm
+     1 controls/lighting/recog-lights
+     1 controls/lighting/logo-lights
+     1 controls/flight/rudder-trim
+     1 controls/flight/aileron-trim
+     1 controls/engines/engine[1]/ignition
+     1 controls/engines/engine/ignition
+     1 controls/electric/engine[1]/generator
+     1 controls/electric/engine/generator
+     1 controls/electric/battery-switch[1]
+     1 controls/electric/battery-switch
+     1 controls/electric/avionics-switch
+     1 controls/APU/off-start-run
+     1 controls/APU/master
+     1 autopilot/settings/changeover
+     1 autopilot/settings/bank-limit
+     1 autopilot/locks/yaw-damper
+     1 autopilot/locks/m-trim
+     1 autopilot/locks/altitude-arm
+     1 autopilot/locks/AP-status
+log:

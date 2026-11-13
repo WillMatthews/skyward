@@ -1,60 +1,12 @@
 //! The weather as the crew meets it, kept with the sim (`Sim::wxc`): the
-//! windscreen and wipers, the pilot's head bouncing on its neck in
-//! turbulence (camera shake), and the weather radar sweep for the ND.
+//! windscreen and wipers, and the weather radar sweep for the ND. (The
+//! cockpit head motion in turbulence is the sim's `head_motion`, driven by
+//! the same accelerations: Settings › Camera.)
 
 use super::glass::{GlassState, WiperMode};
 use super::radar::{self, RadarCtl, RadarImage};
 use crate::flight::{Aircraft, AircraftDef, Category};
-use glam::{Vec2, Vec3, vec2, vec3};
-
-/// The pilot's head on its neck: a damped spring driven by the changes in
-/// the specific force the seat transmits (turbulence jolts, hard landings,
-/// the bump of a gust) — not by the steady g of a turn.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct HeadShake {
-    /// Head offset from the design eye (body frame, m) and its velocity.
-    pub pos: Vec3,
-    vel: Vec3,
-    /// Slow average of the specific force (body m/s²).
-    f_slow: Vec3,
-    prev_vel: Option<Vec3>,
-}
-
-impl HeadShake {
-    /// `vel` world velocity (m/s), `rot` attitude, `dt` frame time.
-    pub fn update(&mut self, vel: Vec3, rot: glam::Quat, on: bool, dt: f32) {
-        if !on || (dt.is_nan() || dt <= 0.0) || !vel.is_finite() {
-            *self = HeadShake { prev_vel: Some(vel), ..Default::default() };
-            return;
-        }
-        let dt = dt.min(0.05);
-        let acc = match self.prev_vel {
-            Some(p) => (vel - p) / dt,
-            None => Vec3::ZERO,
-        };
-        self.prev_vel = Some(vel);
-        // Specific force in the body frame (what the seat pushes with).
-        let f = rot.conjugate() * (acc + Vec3::Y * 9.81);
-        let f = if f.is_finite() { f.clamp_length_max(80.0) } else { Vec3::ZERO };
-        self.f_slow += (f - self.f_slow) * (dt / 0.5).min(1.0);
-        let jolt = f - self.f_slow;
-        // Neck: ~2 Hz, under-damped; ~1.5 cm per g of jolt (vertical), less sideways / fore-aft.
-        let w = std::f32::consts::TAU * 2.0;
-        let z = 0.42;
-        let gain = vec3(0.0009, 0.0016, 0.0007);
-        let a = -jolt * gain * w * w - self.pos * w * w - self.vel * 2.0 * z * w;
-        self.vel += a * dt;
-        self.pos += self.vel * dt;
-        self.pos = self.pos.clamp(Vec3::splat(-0.06), Vec3::splat(0.06));
-        if !self.pos.is_finite() {
-            *self = HeadShake::default();
-        }
-    }
-    /// Head nod (rad, pitch) that goes with the bounce.
-    pub fn nod(&self) -> f32 {
-        -self.pos.y * 1.6
-    }
-}
+use glam::{Vec2, Vec3, vec2};
 
 /// The weather radar: controls and the sweep in progress.
 #[derive(Clone, Debug)]
@@ -126,10 +78,7 @@ impl Radar {
 #[derive(Clone, Debug, Default)]
 pub struct WxCockpit {
     pub glass: GlassState,
-    pub head: HeadShake,
     pub radar: Radar,
-    /// Camera shake on / off (Settings).
-    pub shake: bool,
 }
 
 impl WxCockpit {
@@ -154,7 +103,6 @@ impl WxCockpit {
         if self.glass.wipers.mode == WiperMode::Off && def.category != Category::Airliner {
             self.glass.wipers = Default::default();
         }
-        self.head.update(ac.vel, ac.rot, self.shake && ac.crashed.is_none(), dt);
         if def.category == Category::Airliner {
             self.radar.update(world, ac, range_m, dt);
         }
@@ -179,37 +127,5 @@ impl WxCockpit {
         let i = g.iter().position(|x| *x == self.radar.ctl.gain).unwrap_or(0);
         self.radar.ctl.gain = g[(i + 1) % g.len()];
         if self.radar.ctl.gain == 0.0 { "Radar gain CAL".into() } else { format!("Radar gain {:+.0} dB", self.radar.ctl.gain) }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn head_bounces_with_jolts_not_steady_g() {
-        let mut h = HeadShake::default();
-        let rot = glam::Quat::IDENTITY;
-        // Steady climb / turn-free cruise: no shake.
-        for i in 0..240 {
-            h.update(vec3(0.0, 2.0, -70.0) + Vec3::Y * 0.0 * i as f32, rot, true, 1.0 / 60.0);
-        }
-        assert!(h.pos.length() < 1e-3, "{:?}", h.pos);
-        // A sharp 1 g upward jolt: the head drops a centimetre or two, then settles.
-        let mut v = vec3(0.0, 0.0, -70.0);
-        let mut peak: f32 = 0.0;
-        for i in 0..240 {
-            if (10..16).contains(&i) {
-                v.y += 9.81 / 60.0 * 1.0;
-            }
-            h.update(v, rot, true, 1.0 / 60.0);
-            peak = peak.max(h.pos.y.abs());
-        }
-        assert!(peak > 0.002 && peak < 0.06, "peak {peak}");
-        assert!(h.pos.length() < peak * 0.5);
-        // Off: nothing.
-        let mut o = HeadShake::default();
-        o.update(v, rot, false, 1.0 / 60.0);
-        assert_eq!(o.pos, Vec3::ZERO);
     }
 }

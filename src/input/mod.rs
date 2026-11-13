@@ -16,6 +16,7 @@
 
 pub mod backend;
 pub mod defaults;
+pub mod key_pitch;
 pub mod keys;
 #[cfg(test)]
 mod tests;
@@ -181,6 +182,13 @@ pub const BUTTONS: &[(Key, &str, &str, &str)] = &[
     (Key::CommsNext, "comms_next", "Comms menu: next", "Radios"),
     (Key::CommsPrev, "comms_prev", "Comms menu: previous", "Radios"),
     (Key::CommsSelect, "comms_select", "Comms menu: select", "Radios"),
+    (Key::GunTrigger, "gun_trigger", "Guns (hold)", "Weapons"),
+    (Key::WeaponRelease, "weapon_release", "Weapon release / Spitfire cannon (hold)", "Weapons"),
+    (Key::WeaponSelect, "weapon_select", "Master mode / gun selector", "Weapons"),
+    (Key::TargetLock, "target_lock", "Radar lock / seeker uncage", "Weapons"),
+    (Key::Countermeasures, "countermeasures", "Flares + chaff", "Weapons"),
+    (Key::SightMode, "sight_mode", "Gun harmonisation range", "Weapons"),
+    (Key::Eject, "eject", "Eject / bail out (press twice)", "Weapons"),
     (Key::Camera, "camera", "Next camera", "View"),
     (Key::LookLeft, "look_left", "Glance left (hold)", "View"),
     (Key::LookRight, "look_right", "Glance right (hold)", "View"),
@@ -201,7 +209,30 @@ pub const BUTTONS: &[(Key, &str, &str, &str)] = &[
     (Key::WeatherPanel, "weather_panel", "Weather panel", "Interface"),
     (Key::Failures, "failures", "Systems & failures", "Interface"),
     (Key::Mute, "mute", "Mute", "Interface"),
+    (Key::Chat, "mp_chat", "Chat", "Multiplayer"),
+    (Key::PlayerList, "mp_players", "Players & spectate", "Multiplayer"),
+    (Key::NameTags, "mp_tags", "Name tags on / off", "Multiplayer"),
+    (Key::QuickChat, "mp_quick_chat", "Quick-chat wheel", "Multiplayer"),
 ];
+
+/// Actions that may share a key because they never apply at the same time:
+/// the wheel brakes (on the ground) and the gun trigger (in the air, armed
+/// aircraft only), or the split-throttle keys (multi-engine) and the
+/// weapon controls (single-engine fighters).
+pub const SHARED: &[(Key, Key)] = &[
+    (Key::Brakes, Key::GunTrigger),
+    (Key::ThrottleSync, Key::WeaponSelect),
+    (Key::ThrottleLeftDown, Key::TargetLock),
+    (Key::ThrottleLeftUp, Key::Countermeasures),
+    (Key::ThrottleRightDown, Key::SightMode),
+    (Key::ThrottleRightUp, Key::Eject),
+    // Weather radar tilt (airliners) / weapon release (armed types).
+    (Key::RadarTilt, Key::WeaponRelease),
+];
+
+fn shared_ok(ks: &[Key]) -> bool {
+    ks.len() == 2 && SHARED.iter().any(|&(a, b)| (ks[0] == a && ks[1] == b) || (ks[0] == b && ks[1] == a))
+}
 
 pub fn key_id(k: Key) -> &'static str {
     BUTTONS.iter().find(|b| b.0 == k).map(|b| b.1).unwrap_or("?")
@@ -419,7 +450,7 @@ impl Config {
             }
         }
         for (c, ks) in by_key {
-            if ks.len() > 1 {
+            if ks.len() > 1 && !shared_ok(&ks) {
                 out.push((keys::label(c), ks));
             }
         }

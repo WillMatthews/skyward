@@ -1024,6 +1024,9 @@ fn agent() -> ureq::Agent {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn get(agent: &ureq::Agent, url: &str) -> Result<String, String> {
+    if crate::platform::offline() {
+        return Err("offline mode".into());
+    }
     agent.get(url).call().map_err(|e| e.to_string())?.into_string().map_err(|e| e.to_string())
 }
 

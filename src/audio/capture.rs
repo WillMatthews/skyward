@@ -43,7 +43,8 @@ pub fn profile_for(def: &AircraftDef, size: f32) -> Profile {
         EngineKind::Turboshaft => Family::Helicopter,
         EngineKind::Electric => Family::Drone,
         EngineKind::Jet => {
-            if def.has_afterburner || def.category == Category::FastJet {
+            // (Concorde's reheat does not make her a fighter.)
+            if (def.has_afterburner && def.category != Category::Airliner) || def.category == Category::FastJet {
                 Family::Fighter
             } else {
                 Family::Airliner
@@ -73,6 +74,15 @@ pub fn profile_for(def: &AircraftDef, size: f32) -> Profile {
     } else if id == "galaxy" || has(&["c5", "c-5", "galaxy"]) {
         // CF6-80C2 (big-fan turbofan): nearest recorded set.
         SoundSet::Cfm56
+    } else if id == "concorde" {
+        // Olympus 593: the Vulcan's Olympus 301 grown up — same recordings.
+        SoundSet::Olympus
+    } else if id == "triple7" || has(&["777", "b777"]) {
+        // GE90-115B: the big-fan CFM56 set, lower blade-pass tone.
+        SoundSet::Cfm56
+    } else if id == "crj700" || id == "citationx" || has(&["crj", "citation"]) {
+        // CF34-8C / AE3007C: small high-bypass fans, the E-Jet's (CF34) set.
+        SoundSet::V2500
     } else if id == "hercules" || has(&["c130", "c-130", "hercules"]) {
         // Allison T56: nearest recorded turboprop set (PW100), 4-blade props.
         SoundSet::Atr
@@ -117,6 +127,10 @@ pub fn profile_for(def: &AircraftDef, size: f32) -> Profile {
         "hercules" => p.blades = 4,
         "galaxy" => p.fan_blades = 38,
         "vulcan" => p.fan_blades = 22,
+        "triple7" => p.fan_blades = 22,
+        "crj700" => p.fan_blades = 28,
+        "citationx" => p.fan_blades = 24,
+        "concorde" => p.fan_blades = 22,
         // Track H2b.
         "extra500" => p.blades = 5,
         "cub" => {
@@ -782,6 +796,8 @@ impl Director {
             thunder: world.wx.thunder,
             day,
             urban: world.roughness(ear_xz),
+            traffic: Default::default(),
+            spectator: false,
         }
     }
 }

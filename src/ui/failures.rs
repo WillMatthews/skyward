@@ -6,7 +6,7 @@
 //! handles and extinguishers (systems/).
 
 use super::menus::{Btn, button, segmented};
-use super::{UiState, alpha, f_display, f_inst_b, f_semi, f_ui, pal, sp};
+use super::{UiState, alpha, f_inst_b, f_semi, f_ui, pal, sp};
 use crate::flight::{AircraftDef, EngineKind, KT};
 use crate::sim::Sim;
 use crate::systems::defs::{Feed, Starter};
@@ -66,36 +66,23 @@ pub fn panel(ctx: &egui::Context, st: &mut UiState, sim: &mut Sim) {
 fn header(ui: &mut Ui, st: &mut UiState, sim: &mut Sim) {
     let def = sim.def().clone();
     let n_fail = sim.ac.sys.fail.list().len();
-    ui.horizontal(|ui| {
-        ui.vertical(|ui| {
-            ui.label(egui::RichText::new("Systems & failures").font(f_display(22.0)).color(pal::TEXT));
-            let sub = if n_fail > 0 { format!("{} · {n_fail} active", def.name) } else { format!("{} · all systems normal", def.name) };
-            ui.label(egui::RichText::new(sub).font(f_ui(12.5)).color(if n_fail > 0 { pal::AMBER } else { pal::TEXT3 }));
-        });
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-            let (r, _) = ui.allocate_exact_size(Vec2::new(32.0, 32.0), Sense::hover());
-            if close_x(ui, r, "fail_close") {
-                st.fail.open = false;
-            }
-            let (r, _) = ui.allocate_exact_size(Vec2::new(104.0, 32.0), Sense::hover());
-            if button(ui, r, "repair_all", "Repair all", Btn::Secondary, n_fail > 0 || sim.ac.sys.ice > 0.0).clicked() {
-                systems::with_sys(&mut sim.ac, |s, a| s.repair_all(&def, a));
-                sim.say("All failures repaired", 2.5);
-            }
-        });
-    });
+    let sub = if n_fail > 0 { format!("{} · {n_fail} active", def.name) } else { format!("{} · all systems normal", def.name) };
+    let key = super::chrome::key_of(st, crate::sim::Key::Failures);
+    let can_repair = n_fail > 0 || sim.ac.sys.ice > 0.0;
+    let mut repair = false;
+    if super::chrome::panel_header(ui, "Systems & failures", &sub, if n_fail > 0 { pal::AMBER } else { pal::TEXT3 }, key.as_deref(), "fail", |ui| {
+        let (r, _) = ui.allocate_exact_size(Vec2::new(104.0, 32.0), Sense::hover());
+        repair = button(ui, r, "repair_all", "Repair all", Btn::Secondary, can_repair).clicked();
+    }) {
+        st.fail.open = false;
+    }
+    if repair {
+        systems::with_sys(&mut sim.ac, |s, a| s.repair_all(&def, a));
+        sim.say("All failures repaired", 2.5);
+    }
 }
 
-/// A small close / remove button (a drawn ×: the fonts have no ✕).
-fn close_x(ui: &mut Ui, r: Rect, id: impl std::hash::Hash + std::fmt::Debug) -> bool {
-    let resp = button(ui, r, id, "", Btn::Ghost, true);
-    let c = r.center();
-    let k = r.height() * 0.18;
-    let st = Stroke::new(1.6, if resp.hovered() { pal::TEXT } else { pal::TEXT2 });
-    ui.painter().line_segment([c + Vec2::new(-k, -k), c + Vec2::new(k, k)], st);
-    ui.painter().line_segment([c + Vec2::new(k, -k), c + Vec2::new(-k, k)], st);
-    resp.clicked()
-}
+use super::chrome::close_x;
 
 fn section(ui: &mut Ui, title: &str) {
     ui.add_space(sp::S);
