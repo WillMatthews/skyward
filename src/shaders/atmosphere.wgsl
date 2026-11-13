@@ -16,7 +16,7 @@ struct AtmosU {
     moon: vec4<f32>,            // toward the moon; w = moon irradiance / sun irradiance (top of the atmosphere)
     night: vec4<f32>,           // x airglow radiance, y city upward radiance (both / sun_e), z artificial metering illuminance,
                                 // w pre-exposure (sun_e above includes it; expo is divided by it)
-    glow_tint: vec4<f32>,       // skyglow colour
+    glow_tint: vec4<f32>,       // skyglow colour, w = lightning flash radiance (pre-exposed)
     glow: array<vec4<f32>, 32>, // skyglow radiance / sun_e: 8 elevation x 16 azimuth bins
 };
 
@@ -448,5 +448,12 @@ fn cs_ambient(@builtin(local_invocation_index) li: u32) {
         }
         // (The HDR image is pre-exposed by night.w.)
         outb.expo = vec4<f32>(k / A.night.w, metered, 0.0, 0.0);
+        // Lightning (wx/): the flash-lit cloud base overhead lights the scene
+        // for a moment — after metering, so the exposure doesn't flinch.
+        if (A.glow_tint.w > 0.0) {
+            let fl = vec3<f32>(0.82, 0.88, 1.0) * A.glow_tint.w;
+            outb.sh[0] = vec4<f32>(outb.sh[0].rgb + fl * c0 * 0.282095 * 2.0 * PI, 0.0);
+            outb.sh[2] = vec4<f32>(outb.sh[2].rgb + fl * c1 * 0.488603 * PI, 0.0);
+        }
     }
 }

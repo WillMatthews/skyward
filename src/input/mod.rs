@@ -173,6 +173,7 @@ pub const BUTTONS: &[(Key, &str, &str, &str)] = &[
     (Key::EngineFail, "engine_fail", "Engine failure practice", "Engines & levers"),
     (Key::MasterAck, "master_ack", "Master warning / caution reset", "Engines & levers"),
     (Key::Assist, "assist", "Rotorcraft: stability assist / flight mode", "Flight controls"),
+    (Key::Wipers, "wipers", "Windscreen wipers (off / slow / fast / auto)", "Engines & levers"),
     (Key::ApToggle, "ap", "Autopilot on / off", "Autopilot"),
     (Key::ApHdgLeft, "ap_hdg_left", "Heading −5°", "Autopilot"),
     (Key::ApHdgRight, "ap_hdg_right", "Heading +5°", "Autopilot"),
@@ -191,6 +192,8 @@ pub const BUTTONS: &[(Key, &str, &str, &str)] = &[
     (Key::Nav1Ident, "nav1_ident", "NAV 1 ident audio", "Radios"),
     (Key::RadioPanel, "radio_panel", "Radios & flight plan", "Radios"),
     (Key::NdMode, "nd_mode", "ND mode (ROSE / ARC / PLAN)", "Radios"),
+    (Key::RadarTilt, "radar_tilt", "Weather radar tilt (auto / +2° .. −5°)", "Radios"),
+    (Key::RadarGain, "radar_gain", "Weather radar gain", "Radios"),
     (Key::CommsMenu, "comms_menu", "ATC comms menu", "Radios"),
     (Key::CommsNext, "comms_next", "Comms menu: next", "Radios"),
     (Key::CommsPrev, "comms_prev", "Comms menu: previous", "Radios"),
@@ -239,6 +242,10 @@ pub const SHARED: &[(Key, Key)] = &[
     (Key::ThrottleLeftUp, Key::Countermeasures),
     (Key::ThrottleRightDown, Key::SightMode),
     (Key::ThrottleRightUp, Key::Eject),
+    // Weather radar tilt (airliners) / weapon release (armed types).
+    (Key::RadarTilt, Key::WeaponRelease),
+    // Parking brake (on the ground only) / weapon release (in the air only).
+    (Key::ParkingBrake, Key::WeaponRelease),
 ];
 
 fn shared_ok(ks: &[Key]) -> bool {

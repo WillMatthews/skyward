@@ -34,6 +34,7 @@ pub mod settings_schema;
 pub mod settings_ui;
 pub mod settings_video;
 pub mod toast;
+pub mod worldmap;
 
 use egui::{epaint, Align2, Color32, CornerRadius, FontFamily, FontId, Pos2, Rect, Shape, Stroke, Vec2};
 

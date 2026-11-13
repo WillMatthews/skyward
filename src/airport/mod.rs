@@ -138,6 +138,22 @@ impl Default for AirportScene {
     }
 }
 
+/// A start position picked on a stand (lat / lon of the stop point): the
+/// parked aircraft there is left out (startpos.rs sets it at spawn).
+static RESERVED: std::sync::Mutex<Option<(f64, f64)>> = std::sync::Mutex::new(None);
+
+/// Keep the stand at (lat, lon) free of parked aircraft (None: no reservation).
+pub fn reserve_spot(at: Option<(f64, f64)>) {
+    if let Ok(mut g) = RESERVED.lock() {
+        *g = at;
+    }
+}
+
+/// The stand reserved for the player (lat / lon), if any.
+pub fn reserved_spot() -> Option<(f64, f64)> {
+    RESERVED.lock().ok().and_then(|g| *g)
+}
+
 /// Rebuild a layout at most this often while its tiles keep arriving.
 const REBUILD_EVERY: Duration = Duration::from_millis(2500);
 /// Give up waiting for Overpass (headless shots wait for it) after this.
@@ -265,26 +281,7 @@ impl AirportScene {
     }
 
     fn fetch_osm(&self, ap: &crate::airports::Airport) {
-        // Box around the runways (+ apron margin).
-        let (mut s, mut w, mut n, mut e) = (ap.lat, ap.lon, ap.lat, ap.lon);
-        for r in &ap.runways {
-            for end in &r.ends {
-                if let (Some(la), Some(lo)) = (end.lat, end.lon) {
-                    s = s.min(la);
-                    n = n.max(la);
-                    w = w.min(lo);
-                    e = e.max(lo);
-                }
-            }
-        }
-        let m = match ap.kind {
-            crate::airports::Kind::Large => 1800.0,
-            crate::airports::Kind::Medium => 1000.0,
-            _ => 500.0,
-        };
-        let dlat = m / crate::osm::M_PER_DEG_LAT;
-        let dlon = dlat / ap.lat.to_radians().cos().max(0.1);
-        let bbox = (s - dlat, w - dlon, n + dlat, e + dlon);
+        let bbox = osm_bbox(ap);
         let ident = ap.ident.clone();
         let tx = self.tx.clone();
         #[cfg(not(target_arch = "wasm32"))]
@@ -431,9 +428,28 @@ impl AirportScene {
         let mut f = Frame::default();
         let (ex, ey, ez) = (eye.x as f64, eye.y as f64, eye.z as f64);
         let rel = |m: &crate::osm::Xform2, p: Vec3| -> Vec3 { Vec3::new((m.sx * p.x as f64 + m.tx - ex) as f32, (p.y as f64 - ey) as f32, (p.z as f64 + m.tz - ez) as f32) };
-        for (_, b) in self.bakes() {
+        // The parked aircraft nearest a reserved stand (the player's) stays out.
+        let reserved = reserved_spot().map(|(la, lo)| proj.to_world(la, lo));
+        let skip = reserved.and_then(|q| {
+            let mut best: Option<(f32, usize, usize)> = None;
+            for (bi, (_, b)) in self.bakes().enumerate() {
+                let m = Proj::tile_frame(b.id).map_to(proj);
+                for (pi, &(_, p, _, _)) in b.parked.iter().enumerate() {
+                    let w = m.apply(vec2(p.x, p.z));
+                    let d = w.distance(q);
+                    if d < 45.0 && best.is_none_or(|bb| d < bb.0) {
+                        best = Some((d, bi, pi));
+                    }
+                }
+            }
+            best.map(|b| (b.1, b.2))
+        });
+        for (bi, (_, b)) in self.bakes().enumerate() {
             let m = Proj::tile_frame(b.id).map_to(proj);
-            for &(ty, p, hdg, livery) in &b.parked {
+            for (pi, &(ty, p, hdg, livery)) in b.parked.iter().enumerate() {
+                if skip == Some((bi, pi)) {
+                    continue;
+                }
                 let r = rel(&m, p);
                 let d = r.length();
                 if d > 12_000.0 {
@@ -516,6 +532,30 @@ impl AirportScene {
         }
         out
     }
+}
+
+/// The Overpass query box of an airport (south, west, north, east): its
+/// runways plus an apron margin by class.
+pub fn osm_bbox(ap: &crate::airports::Airport) -> (f64, f64, f64, f64) {
+    let (mut s, mut w, mut n, mut e) = (ap.lat, ap.lon, ap.lat, ap.lon);
+    for r in &ap.runways {
+        for end in &r.ends {
+            if let (Some(la), Some(lo)) = (end.lat, end.lon) {
+                s = s.min(la);
+                n = n.max(la);
+                w = w.min(lo);
+                e = e.max(lo);
+            }
+        }
+    }
+    let m = match ap.kind {
+        crate::airports::Kind::Large => 1800.0,
+        crate::airports::Kind::Medium => 1000.0,
+        _ => 500.0,
+    };
+    let dlat = m / crate::osm::M_PER_DEG_LAT;
+    let dlon = dlat / ap.lat.to_radians().cos().max(0.1);
+    (s - dlat, w - dlon, n + dlat, e + dlon)
 }
 
 /// Hide the parked aircraft standing within 25 m of `at` (world points: stands

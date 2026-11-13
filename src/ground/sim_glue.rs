@@ -20,6 +20,8 @@ impl Sim {
         let def = self.defs[self.sel].clone();
         let sp = spec::spec(&def);
         match k {
+            // (In the air the key is weapon release on armed types: input::SHARED.)
+            Key::ParkingBrake if !self.ac.on_ground && !self.ctl.parking_brake => return false,
             Key::ParkingBrake => {
                 self.ctl.parking_brake = !self.ctl.parking_brake;
                 self.say(if self.ctl.parking_brake { "Parking brake set" } else { "Parking brake released" }, 2.0);
@@ -268,7 +270,7 @@ impl Sim {
     pub(super) fn ground_frame(&mut self, world: &World, dt: f32) {
         // A stand start waits for the airport layout (stands): retry every
         // 2 s; after a minute settle for the apron.
-        if self.needs_respawn && self.custom_start.as_ref().is_some_and(|c| matches!(c.spec, crate::startpos::Spec::Stand(_))) {
+        if self.needs_respawn && self.custom_start.as_ref().is_some_and(|c| matches!(&c.spec, crate::startpos::Spec::Stand { lat, .. } if lat.is_nan())) {
             let step = dt.max(1.0 / 60.0);
             let t = self.ground.respawn_t + step;
             if t > 60.0 {

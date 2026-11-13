@@ -4,7 +4,7 @@
 //! Windowed:   skyward [--airport ICAO | --lat L --lon L] [--aircraft ID] [--start runway|approach|city|thermal] [--start-at SPEC] [--no-menu]
 //! Headless:   skyward --shot out.png [--width W --height H] [--cam chase|cockpit|tower|flyby]
 //!                     [--seconds S --throttle T] [--heading DEG] [--eye x,y,z --look x,y,z] [--stats]
-//!                     [--menu-screen main|aircraft|airport|conditions|settings|pause|loading|credits] [--hud full|minimal|off] [--map corner|large|off]
+//!                     [--menu-screen main|aircraft|airport|conditions|settings|pause|loading|credits] [--map-view LAT,LON,ZOOM] [--map-style day|night] [--hud full|minimal|off] [--map corner|large|off]
 //!                     [--realtime [--warp N]]   (stream + render in real time, straight & level, report timings)
 //!                     [--gear up|down] [--flaps N] [--spoilers F] [--reverse] [--fail BITS] [--ap] [--fps HZ]   (setup / test knobs)
 //! Settings:   --menu-screen settings [--settings-category video|display|camera|flight|assists|weather|traffic|sound|controls|multiplayer|accessibility|interface|data|about] [--settings-search TEXT] [--settings-from pause] [--palette deuteranopia|protanopia|tritanopia] [--high-contrast]; SKYWARD_CONFIG_DIR=dir for the settings file
@@ -65,6 +65,7 @@ mod weapons;
 mod ui;
 mod weather;
 mod world;
+mod wx;
 mod platform;
 
 use gfx::{FrameView, Gpu, Renderer};
@@ -114,6 +115,9 @@ struct Args {
     look_ll: Option<(f64, f64, f32)>,
     menu: bool,
     menu_screen: Option<Screen>,
+    /// Departure map view for captures: (lat, lon, zoom), and its style.
+    map_view: Option<(f64, f64, f32)>,
+    map_style: Option<ui::worldmap::style::MapStyle>,
     no_menu: bool,
     stats: bool,
     realtime: bool,
@@ -260,6 +264,8 @@ fn parse_args_from(argv: Vec<String>) -> Args {
         look: None,
         menu: false,
         menu_screen: None,
+        map_view: None,
+        map_style: None,
         no_menu: false,
         stats: false,
         realtime: false,
@@ -418,6 +424,14 @@ fn parse_args_from(argv: Vec<String>) -> Args {
             "--look-ll" => a.look_ll = parse_geo(&next(&mut i)),
             "--menu" => a.menu = true,
             "--menu-screen" => a.menu_screen = Screen::parse(&next(&mut i)),
+            "--map-view" => a.map_view = parse_geo(&next(&mut i)),
+            "--map-style" => {
+                a.map_style = match next(&mut i).as_str() {
+                    "day" => Some(ui::worldmap::style::MapStyle::Day),
+                    "night" => Some(ui::worldmap::style::MapStyle::Night),
+                    _ => None,
+                }
+            }
             "--settings-category" => a.settings_cat = ui::settings_schema::Cat::parse(&next(&mut i)),
             "--settings-search" => a.settings_search = Some(next(&mut i)),
             "--settings-from" => a.settings_from_pause = next(&mut i) == "pause",
@@ -896,6 +910,32 @@ fn sync_gpu(s: &mut Session, renderer: &mut Renderer, ui: &mut Ui, gpu: &Gpu, bu
             w.tick_weather(0.0, (s.args.hours.unwrap_or(sim::DEFAULT_HOURS), s.args.day_of_year.unwrap_or(sim::DEFAULT_DAY)));
         }
     }
+    // Turbulence setting, cockpit head shake, the aircraft's own wake (wx/).
+    w.set_turbulence(ui.st.settings.wx.turbulence);
+    if let Some(sim) = s.sim.as_mut() {
+        let (span, mass) = (sim.def().wingspan, sim.def().mass);
+        let gh = flight::Environment::ground_height(w, vec2(sim.ac.pos.x, sim.ac.pos.z));
+        let airborne = !sim.ac.on_ground && sim.ac.crashed.is_none();
+        w.wxs.wakes.push(wx::wake::OWN_AIRCRAFT, w.to_field(sim.ac.pos), sim.ac.vel, mass, span, airborne, gh, sim.time);
+        w.wxs.wakes.wind = vec3(w.wind.aloft.x, 0.0, w.wind.aloft.y);
+        // Other aircraft's wakes: multiplayer players and live ADS-B traffic.
+        let t = sim.time;
+        let mut gens: Vec<(u64, Vec3, Vec3, f32, f32)> = Vec::new();
+        for (id, r) in &ui.st.mp.remotes {
+            if let Some(d) = sim.defs.get(r.def).filter(|_| !r.crashed && !r.spectating) {
+                gens.push((wx::wake::MP_BASE + *id as u64, r.pos, r.vel, d.mass, d.wingspan));
+            }
+        }
+        for g in ui.st.adsb.wake_sources().into_iter().filter(|g| !g.on_ground) {
+            let cat = format!("{:?}", g.wake).chars().next().unwrap_or('M');
+            gens.push((wx::wake::ADSB_BASE + g.id as u64, g.pos, g.vel, wx::wake::mass_for_category(cat), g.span));
+        }
+        for (id, pos, vel, mass, span) in gens {
+            let gh = flight::Environment::ground_height(w, vec2(pos.x, pos.z));
+            let pf = w.to_field(pos);
+            w.wxs.wakes.push(id, pf, vel, mass, span, pos.y - gh > 8.0, gh, t);
+        }
+    }
     renderer.set_weather(&w.render_weather(), &w.clouds);
     spent
 }
@@ -977,6 +1017,42 @@ fn loading_info(msg: &str) -> (String, String, Option<f32>) {
         Some(a / b.max(1.0))
     });
     (title, rest.join(" · "), frac)
+}
+
+/// Headless departure-map benchmark (SKYWARD_MAP_BENCH): frame times while
+/// the view zooms in from 4 to 17 over the departure airport, then pans.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
+fn map_bench(gpu: &Gpu, renderer: &mut Renderer, ui: &mut Ui, s: &mut Session, view: &wgpu::TextureView, w: u32, h: u32, raw: &dyn Fn() -> egui::RawInput, ov: Option<(Vec3, Vec3)>, n: usize) {
+    let (lat, lon) = ui.st.db.as_ref().and_then(|d| d.get(&ui.st.plan.airport)).map(|a| (a.lat, a.lon)).unwrap_or((51.47, -0.45));
+    let mut times = Vec::with_capacity(n);
+    let mut build = Vec::with_capacity(n);
+    let mut verts = 0;
+    for i in 0..n {
+        let t = i as f64 / n.max(1) as f64;
+        let (z, dl) = if t < 0.5 { (4.0 + 13.0 * (t / 0.5), 0.0) } else { (15.0, (t - 0.5) * 0.08) };
+        ui.st.picker.pending_view = Some((lat, lon - 0.02 + dl, z));
+        let t0 = Instant::now();
+        render_frame(gpu, renderer, ui, Some(&mut *s), view, w, h, raw(), 1.0, 0.0, None, ov);
+        let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+        times.push(t0.elapsed().as_secs_f32() * 1000.0);
+        let st = ui.st.picker.overview.map.stats;
+        build.push(st.build_ms);
+        verts = verts.max(st.verts);
+    }
+    let mut sorted = times.clone();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let avg = times.iter().sum::<f32>() / n.max(1) as f32;
+    let p95 = sorted.get(n * 95 / 100).copied().unwrap_or(0.0);
+    let map = &ui.st.picker.overview.map;
+    eprintln!(
+        "map bench: {n} frames at {w}x{h}: avg {avg:.2} ms, p95 {p95:.2} ms, max {:.2} ms; map mesh build avg {:.2} ms max {:.2} ms, max {verts} vertices; {} tiles resident, {:.0} MB",
+        sorted.last().copied().unwrap_or(0.0),
+        build.iter().sum::<f32>() / n.max(1) as f32,
+        build.iter().cloned().fold(0.0, f32::max),
+        map.store.len(),
+        map.store.bytes() as f64 / (1 << 20) as f64
+    );
 }
 
 /// What the traffic simulation needs of this frame: time, local hours and
@@ -1120,6 +1196,9 @@ fn render_frame(
                 let snap = wd.traffic.frame(traffic_frame(&fv, sim.time as f64, w, h, wd.traffic.level()));
                 renderer.road_traffic.prepare(device, queue, snap, sim.time as f64, fv.eye);
             }
+            // Storms, lightning, lenticulars, windscreen rain and wipers (wx/).
+            let cockpit = sim.cam == sim::CamMode::Cockpit && view_override.is_none();
+            fv.wx = Some(std::sync::Arc::new(wx::gpu::prepare(&s.world, sim, fv.eye, cockpit, fv.aircraft.as_ref(), &mut dynm)));
             renderer.render(device, queue, &mut enc, target, w, h, &fv, &dynm);
         }
         _ => {
@@ -1492,6 +1571,16 @@ fn headless(args: Args) -> Result<(), String> {
             c.metar = m.clone();
         }
     }
+    if let Some((la, lo, z)) = args.map_view {
+        ui.st.picker.pending_view = Some((la, lo, z as f64));
+    }
+    if let Some(s) = args.map_style {
+        ui.st.picker.map_style = s;
+    }
+    // Captures with a given METAR show it in the airport picker too (not the live one).
+    if !args.live {
+        ui.st.picker.fixed_metar = args.metar.clone();
+    }
     ui.st.screen = match args.menu_screen {
         Some(s) => s,
         None if args.menu => Screen::Aircraft,
@@ -1850,10 +1939,17 @@ fn headless(args: Args) -> Result<(), String> {
             if let Some(m) = ui.st.picker.metar.as_mut() {
                 m.poll();
             }
-            if (ui.st.picker.overview.busy() == 0 && !metar_pending && tw.elapsed() > Duration::from_secs(2)) || tw.elapsed() > Duration::from_secs(40) {
+            if (ui.st.picker.overview.busy() == 0 && ui.st.picker.settled() && !metar_pending && tw.elapsed() > Duration::from_secs(2)) || tw.elapsed() > Duration::from_secs(40) {
                 break;
             }
             std::thread::sleep(Duration::from_millis(30));
+        }
+    }
+    // Departure map benchmark: SKYWARD_MAP_BENCH=frames — zoom from Europe to
+    // the stands and pan, the tiles streaming in as they would for a player.
+    if ui.st.screen == Screen::Departure {
+        if let Some(n) = std::env::var("SKYWARD_MAP_BENCH").ok().and_then(|v| v.parse::<usize>().ok()) {
+            map_bench(&gpu, &mut renderer, &mut ui, &mut s, &view, w, h, &raw, ov, n);
         }
     }
     // Multiplayer captures: SKYWARD_MP_UI="players" | "wheel" | "chat:draft text" | "spectate:Name" | "tags-off".

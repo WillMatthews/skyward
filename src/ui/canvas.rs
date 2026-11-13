@@ -11,7 +11,7 @@ use egui::{epaint, Color32, Pos2, Rect, Shape, TextureId, Vec2};
 use std::collections::HashMap;
 
 pub const MSAA: u32 = 4;
-const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 /// One canvas to draw this frame. Shapes are in canvas points (origin top-left).
 pub struct Job {

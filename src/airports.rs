@@ -925,6 +925,11 @@ impl MetarFetch {
         });
         MetarFetch { ident: ident.to_string(), rx: Some(rx), result: None }
     }
+    /// A known METAR, no fetch (headless captures with a given METAR).
+    pub fn fixed(ident: &str, raw: &str) -> Option<MetarFetch> {
+        let m = crate::weather::Metar::parse(raw)?;
+        Some(MetarFetch { ident: ident.to_string(), rx: None, result: Some(Ok((m, 0.0))) })
+    }
     pub fn poll(&mut self) -> Option<&Result<(crate::weather::Metar, f64), String>> {
         if let Some(rx) = &self.rx {
             if let Ok(r) = rx.try_recv() {

@@ -211,6 +211,29 @@ pub trait Environment {
     }
 }
 
+/// Rotational gusts (body frame: pitch, yaw, roll rates in rad/s) from the
+/// spatial differences of the air's velocity across the span and along the
+/// fuselage, smoothed over the time the aircraft takes to fly its own span
+/// (`tau`; the MIL-F-8785C p_g / q_g / r_g span filters). `filt` keeps the state.
+pub fn rotational_gusts(env: &dyn Environment, pos: Vec3, rot: Quat, span: f32, filt: &mut Vec3, tau: f32, dt: f32) -> Vec3 {
+    let half_b = (span * 0.5).max(1.0);
+    let half_l = (span * 0.4).clamp(1.0, 25.0);
+    let air = |p: Vec3| {
+        let w = env.wind(p);
+        let w = if w.is_finite() { w.clamp_length_max(150.0) } else { Vec3::ZERO };
+        w + Vec3::Y * finite_or(env.updraft(p), 0.0)
+    };
+    let (lx, nz) = (rot * Vec3::X * half_b, rot * Vec3::Z * half_l);
+    let inv = rot.conjugate();
+    let dx = inv * (air(pos + lx) - air(pos - lx)) / (2.0 * half_b);
+    let dz = inv * (air(pos + nz) - air(pos - nz)) / (2.0 * half_l);
+    // Body +X left wing, +Y up, +Z nose: rel. velocity at r is ω×r − G r.
+    let og = Vec3::new(-dz.y, dz.x, dx.y);
+    let og = if og.is_finite() { og.clamp_length_max(2.0) } else { Vec3::ZERO };
+    *filt += (og - *filt) * (dt / tau.max(dt)).min(1.0);
+    *filt
+}
+
 /// Pilot inputs. All values are clamped (and NaN-scrubbed) by the model.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Controls {
@@ -3227,6 +3250,9 @@ pub struct Aircraft {
     brake_anchor: Option<Vec2>,
     /// Wind as the airframe feels it (span-averaged turbulence).
     wind_f: Option<Vec3>,
+    /// Rotational gusts (body rad/s: pitch, yaw, roll axes): the air's
+    /// rotation across the span / along the fuselage (wx/turbulence.rs).
+    pub gust_rates: Vec3,
     /// Tyre / strut compression per gear point (m), for the model's struts.
     gear_comp: [f32; 8],
     /// JSBSim aerodynamics state (stall hysteresis).
@@ -3311,6 +3337,7 @@ impl Aircraft {
             q_int: 0.0,
             brake_anchor: None,
             wind_f: None,
+            gust_rates: Vec3::ZERO,
             gear_comp: [0.0; 8],
             jsb: Default::default(),
             bank_hold: None,
@@ -3766,6 +3793,10 @@ impl Aircraft {
         // Air-relative velocity: airspeed differs from groundspeed by the wind.
         let air_world = self.vel - wind - Vec3::Y * updraft;
         let inv = self.rot.conjugate();
+        // Rotational gusts: the air moving differently at the wingtips / nose
+        // and tail (turbulence, wake vortices, rotors, shear) rolls / pitches
+        // / yaws the aircraft through its rate damping (MIL-F-8785C p_g, q_g, r_g).
+        let og = rotational_gusts(env, self.pos, self.rot, def.wingspan, &mut self.gust_rates, tau, dt);
         let vb = inv * air_world;
         let ground_h = finite_or(env.ground_height(Vec2::new(self.pos.x, self.pos.z)), 0.0);
         let agl = self.pos.y - ground_h;
@@ -3860,7 +3891,8 @@ impl Aircraft {
         let load_lift = aero.force.dot(lift_dir);
         let load_roll = aero.moment.z - aero.damping.z * self.omega.z;
         let f_body = aero.force + f_eng;
-        let mut m_body = aero.moment + m_eng;
+        // (Aerodynamic rate moments act on the rotation relative to the air: -D (ω - ω_gust).)
+        let mut m_body = aero.moment + m_eng + aero.damping * og;
         if fx.cg != Vec3::ZERO {
             // Fuel imbalance: the weight acts off the centre of gravity (systems/).
             let w_body = inv * Vec3::new(0.0, -(self.dmg.mass(def) + fx.mass_delta) * GRAVITY, 0.0);

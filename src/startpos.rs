@@ -18,14 +18,17 @@ pub enum Spec {
     Final(String, f32),
     /// Parked on the apron near the airport reference point.
     Apron,
-    /// Parked nose-in on a stand (by name, or "" = a free one near the
-    /// terminal), parking brake set, chocks in and ground power on (src/ground):
-    /// push back to leave.
-    Stand(String),
     /// In the air: lat, lon, altitude (m), heading (deg true).
     Air { lat: f64, lon: f64, alt_m: f32, hdg: f32 },
     /// Gliders: released near the best thermal around the field.
     Thermal,
+    /// On the ground at a stand / gate or helipad picked on the airport
+    /// diagram: its label ("Stand 23", "Helipad H1"), the nose-wheel stop
+    /// point (lat, lon) and heading (deg true). From the command line
+    /// (`stand`, `stand:NAME`) the position is NaN: the airport layout's stand
+    /// of that name (or a free one near the terminal) once it is built. Parking
+    /// brake set, chocks in, ground power on (src/ground): push back to leave.
+    Stand { name: String, lat: f64, lon: f64, hdg: f32 },
 }
 
 impl Spec {
@@ -34,10 +37,11 @@ impl Spec {
             Spec::Runway(e) => format!("runway:{e}"),
             Spec::Final(e, nm) => format!("final:{e}:{nm}"),
             Spec::Apron => "apron".into(),
-            Spec::Stand(n) if n.is_empty() => "stand".into(),
-            Spec::Stand(n) => format!("stand:{n}"),
+            Spec::Stand { name, lat, .. } if lat.is_nan() && name.is_empty() => "stand".into(),
+            Spec::Stand { name, lat, .. } if lat.is_nan() => format!("stand:{}", name.replace(':', " ")),
             Spec::Air { lat, lon, alt_m, hdg } => format!("air:{lat:.5}:{lon:.5}:{alt_m:.0}:{hdg:.0}"),
             Spec::Thermal => "thermal".into(),
+            Spec::Stand { name, lat, lon, hdg } => format!("stand:{}:{lat:.7}:{lon:.7}:{hdg:.1}", name.replace(':', " ")),
         }
     }
     pub fn decode(s: &str) -> Option<Spec> {
@@ -46,9 +50,10 @@ impl Spec {
             &"runway" => Spec::Runway(f.get(1)?.to_string()),
             &"final" => Spec::Final(f.get(1)?.to_string(), f.get(2)?.parse().ok()?),
             &"apron" => Spec::Apron,
-            &"stand" => Spec::Stand(f.get(1).map(|x| x.to_string()).unwrap_or_default()),
+            &"stand" if f.len() <= 2 => Spec::Stand { name: f.get(1).map(|x| x.to_string()).unwrap_or_default(), lat: f64::NAN, lon: f64::NAN, hdg: f32::NAN },
             &"thermal" => Spec::Thermal,
             &"air" => Spec::Air { lat: f.get(1)?.parse().ok()?, lon: f.get(2)?.parse().ok()?, alt_m: f.get(3)?.parse().ok()?, hdg: f.get(4)?.parse().ok()? },
+            &"stand" => Spec::Stand { name: f.get(1)?.to_string(), lat: f.get(2)?.parse().ok()?, lon: f.get(3)?.parse().ok()?, hdg: f.get(4)?.parse().ok()? },
             _ => return None,
         })
     }
@@ -59,17 +64,17 @@ impl Spec {
             Spec::Runway(e) => format!("Runway {e}"),
             Spec::Final(e, nm) => format!("{nm:.0} NM final, runway {e}"),
             Spec::Apron => "Apron".into(),
-            Spec::Stand(n) if n.is_empty() => "Stand (push back)".into(),
-            Spec::Stand(n) => format!("Stand {n}"),
+            Spec::Stand { name, .. } if name.is_empty() => "Stand (push back)".into(),
             Spec::Air { alt_m, hdg, .. } => format!("Airborne, {:.0} ft, heading {:03.0}°", alt_m * 3.280_84, hdg),
             Spec::Thermal => "Thermal near the field".into(),
+            Spec::Stand { name, .. } => name.clone(),
         }
     }
     /// The matching generic start (labels, bot behaviour).
     pub fn as_start(&self) -> crate::sim::Start {
         use crate::sim::Start;
         match self {
-            Spec::Runway(_) | Spec::Apron | Spec::Stand(_) => Start::Runway,
+            Spec::Runway(_) | Spec::Apron | Spec::Stand { .. } => Start::Runway,
             Spec::Final(..) => Start::Approach,
             Spec::Air { .. } => Start::City,
             Spec::Thermal => Start::Thermal,
@@ -77,8 +82,7 @@ impl Spec {
     }
     pub fn valid_for(&self, def: &AircraftDef) -> bool {
         match self {
-            Spec::Runway(_) | Spec::Apron => def.has_engine,
-            Spec::Stand(_) => def.has_engine && crate::ground::pushback::can_push(def),
+            Spec::Runway(_) | Spec::Apron | Spec::Stand { .. } => def.has_engine,
             Spec::Thermal => !def.has_engine,
             _ => true,
         }
@@ -154,7 +158,8 @@ pub fn point(world: &World, cs: &CustomStart) -> Option<Vec2> {
             thr - d * nm * 1852.0
         }),
         Spec::Air { lat, lon, .. } => Some(world.proj.to_world(*lat, *lon)),
-        Spec::Apron | Spec::Thermal | Spec::Stand(_) => {
+        Spec::Stand { lat, lon, .. } if !lat.is_nan() => Some(world.proj.to_world(*lat, *lon)),
+        Spec::Apron | Spec::Thermal | Spec::Stand { .. } => {
             let a = world.airport_db.as_ref()?.get(&cs.airport)?;
             Some(world.proj.to_world(a.lat, a.lon))
         }
@@ -170,6 +175,10 @@ pub fn spawn(def: &AircraftDef, world: &World, cs: &CustomStart) -> Option<(Airc
         ctl.gear_down = ac.gear_pos() > 0.5;
         (ac, ctl)
     };
+    crate::airport::reserve_spot(match &cs.spec {
+        Spec::Stand { lat, lon, .. } if !lat.is_nan() => Some((*lat, *lon)),
+        _ => None,
+    });
     let nearest_runway = |p: Vec2| -> Option<Runway> {
         world.runways.iter().filter(|r| r.airport == cs.airport).max_by(|a, b| a.length().total_cmp(&b.length())).cloned().or_else(|| world.spawn_runway(p).cloned())
     };
@@ -263,7 +272,7 @@ pub fn spawn(def: &AircraftDef, world: &World, cs: &CustomStart) -> Option<(Airc
             };
             Some((Aircraft::on_runway(def, q, hdg, world), Controls { brakes: 1.0, ..Controls::default() }, 0, rw))
         }
-        Spec::Stand(name) => {
+        Spec::Stand { name, lat, .. } if lat.is_nan() => {
             // A free stand big enough (the airport layout must be built: else
             // None, and the sim waits for it).
             let l = world.airport_detail.layout(&cs.airport)?;
@@ -312,6 +321,16 @@ pub fn spawn(def: &AircraftDef, world: &World, cs: &CustomStart) -> Option<(Airc
             let (ac, ctl) = air(vec3(p.x, alt_m.max(world.ground_height(p) + 60.0), p.y), hdg.to_radians(), v);
             Some((ac, ctl, 0, nearest_runway(p)))
         }
+        Spec::Stand { lat, lon, hdg, .. } => {
+            // The stop point is where the nose wheel stops: the aircraft's
+            // origin sits behind it by the nose gear's distance.
+            let h = hdg.to_radians();
+            let fwd = vec2(h.sin(), -h.cos());
+            let nose = def.gear.iter().map(|g| g.pos.z).fold(0.0f32, f32::max);
+            let q = world.proj.to_world(*lat, *lon) - fwd * nose;
+            let rw = nearest_runway(q);
+            Some((Aircraft::on_runway(def, q, h, world), Controls { parking_brake: true, ..Controls::default() }, 0, rw))
+        }
         Spec::Thermal => None,
     }
 }
@@ -328,7 +347,14 @@ mod tests {
 
     #[test]
     fn specs_round_trip() {
-        for s in [Spec::Runway("27L".into()), Spec::Final("09".into(), 5.0), Spec::Apron, Spec::Thermal, Spec::Air { lat: 51.5, lon: -0.1, alt_m: 900.0, hdg: 270.0 }] {
+        for s in [
+            Spec::Runway("27L".into()),
+            Spec::Final("09".into(), 5.0),
+            Spec::Apron,
+            Spec::Thermal,
+            Spec::Air { lat: 51.5, lon: -0.1, alt_m: 900.0, hdg: 270.0 },
+            Spec::Stand { name: "Stand 23".into(), lat: 51.4712345, lon: -0.4567891, hdg: 92.5 },
+        ] {
             assert_eq!(Spec::decode(&s.encode()), Some(s.clone()));
         }
     }

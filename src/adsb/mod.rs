@@ -77,6 +77,8 @@ pub const BUDGETS: [usize; 4] = [50, 100, 150, 250];
 /// One aircraft's wake for the weather / wake-turbulence model.
 #[derive(Clone, Copy, Debug)]
 pub struct WakeSource {
+    /// ICAO 24-bit address (a stable id for the wake trail).
+    pub id: u32,
     /// Current world frame, m.
     pub pos: Vec3,
     pub vel: Vec3,
@@ -561,6 +563,7 @@ impl LiveTraffic {
     /// Play out every aircraft at `t` and place it in the world.
     fn place_all(&mut self, env: &Env, t: f64, dt: f32, last: bool) {
         let proj = env.proj;
+        let player_stand = crate::airport::reserved_spot().map(|(la, lo)| proj.to_world(la, lo));
         let world = env.env;
         let qnh_corr = ((env.qnh_hpa as f64) - 1013.25) * 8.23;
         let ground_y = |lat: f64, lon: f64| -> f64 {
@@ -667,7 +670,9 @@ impl LiveTraffic {
             let (lat, lon) = proj.to_latlon(xz);
             a.state.lat = lat;
             a.state.lon = lon;
-            a.shown = !(on_ground && !show_ground);
+            // The player's own stand (a stand start, startpos.rs) stays theirs.
+            let on_player_stand = a.parked_at.is_some() && player_stand.is_some_and(|q| q.distance(xz) < 45.0);
+            a.shown = !(on_ground && !show_ground) && !on_player_stand;
         }
     }
 
@@ -692,7 +697,11 @@ impl LiveTraffic {
 
     /// Wake-turbulence generators (hook for the weather track's wake model).
     pub fn wake_sources(&self) -> Vec<WakeSource> {
-        self.aircraft.values().filter(|a| a.shown).map(|a| WakeSource { pos: a.pos, vel: a.vel, span: a.stand.span, wake: a.stand.wake, on_ground: a.on_ground }).collect()
+        self.aircraft
+            .values()
+            .filter(|a| a.shown)
+            .map(|a| WakeSource { id: a.hex, pos: a.pos, vel: a.vel, span: a.stand.span, wake: a.stand.wake, on_ground: a.on_ground })
+            .collect()
     }
 
     /// Draw lists for the renderer (eye-relative): models for the nearest

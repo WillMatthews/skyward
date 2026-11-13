@@ -345,6 +345,11 @@ pub struct OpenMeteo {
     pub vis_m: Option<f32>,
     pub aloft_kt: Option<f32>,
     pub aloft_dir: Option<f32>,
+    /// Winds aloft at 500 hPa (~5.6 km) and 250 hPa (~10.4 km, the jet), kt / from.
+    pub mid_kt: Option<f32>,
+    pub mid_dir: Option<f32>,
+    pub jet_kt: Option<f32>,
+    pub jet_dir: Option<f32>,
     pub cape: f32,
     pub snow_depth_m: f32,
 }
@@ -377,6 +382,10 @@ impl OpenMeteo {
             vis_m: f("visibility"),
             aloft_kt: h("wind_speed_850hPa"),
             aloft_dir: h("wind_direction_850hPa"),
+            mid_kt: h("wind_speed_500hPa"),
+            mid_dir: h("wind_direction_500hPa"),
+            jet_kt: h("wind_speed_250hPa"),
+            jet_dir: h("wind_direction_250hPa"),
             cape: h("cape").unwrap_or(0.0),
             snow_depth_m: h("snow_depth").unwrap_or(0.0),
         })
@@ -401,6 +410,12 @@ pub struct Wx {
     /// Wind at ~1500 m (850 hPa): from, kt.
     pub aloft_from: f32,
     pub aloft_kt: f32,
+    /// Winds aloft at ~5.6 km (500 hPa) and the jet level ~10.4 km (250 hPa):
+    /// from, kt (estimated from the 850 hPa wind without Open-Meteo).
+    pub mid_from: f32,
+    pub mid_kt: f32,
+    pub jet_from: f32,
+    pub jet_kt: f32,
     pub vis_m: f32,
     pub temp_c: f32,
     pub dew_c: f32,
@@ -458,6 +473,10 @@ impl Wx {
             gust_kt: 0.0,
             aloft_from: 250.0,
             aloft_kt: 18.0,
+            mid_from: 260.0,
+            mid_kt: 32.0,
+            jet_from: 265.0,
+            jet_kt: 70.0,
             vis_m: vis,
             temp_c: 17.0,
             dew_c: 9.0,
@@ -609,6 +628,21 @@ impl Wx {
             }
         }
         w.layers.sort_by(|a, b| a.base_ft.total_cmp(&b.base_ft));
+        // Upper winds: Open-Meteo's 500 / 250 hPa, else a typical increase with height.
+        w.mid_kt = (w.aloft_kt * 1.7 + 6.0).min(90.0);
+        w.mid_from = w.aloft_from + 8.0;
+        w.jet_kt = (w.aloft_kt * 3.2 + 15.0).min(150.0);
+        w.jet_from = w.aloft_from + 12.0;
+        if let Some(o) = &om {
+            if let (Some(k), Some(d)) = (o.mid_kt, o.mid_dir) {
+                w.mid_kt = k;
+                w.mid_from = d;
+            }
+            if let (Some(k), Some(d)) = (o.jet_kt, o.jet_dir) {
+                w.jet_kt = k;
+                w.jet_from = d;
+            }
+        }
         w.om = om;
         w.source = if src.is_empty() { "no data".into() } else { src.join(" + ") };
         w
@@ -681,9 +715,11 @@ impl Wx {
                     low_used = true;
                     s.cu_base = base;
                     if l.convective {
-                        // CB / TCU: big towers, strong lift.
-                        s.cumulus = (c * 1.1 + 0.3).min(0.95);
-                        s.cu_depth = if self.thunder { 7000.0 } else { 3500.0 };
+                        // CB / TCU: the storm cells themselves are drawn by
+                        // wx/storm.rs; around them, a field of building
+                        // cumulus with strong lift.
+                        s.cumulus = (c * 0.55 + 0.1).min(0.6);
+                        s.cu_depth = if self.thunder { 2600.0 } else { 2200.0 };
                         s.thermal = s.thermal.max(1.2);
                         continue;
                     }
@@ -1018,7 +1054,7 @@ fn metar_url(lat: f64, lon: f64, box_i: usize) -> String {
 
 fn open_meteo_url(lat: f64, lon: f64) -> String {
     format!(
-        "https://api.open-meteo.com/v1/forecast?latitude={lat:.4}&longitude={lon:.4}&current=temperature_2m,dew_point_2m,precipitation,rain,showers,snowfall,weather_code,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,pressure_msl,wind_speed_10m,wind_direction_10m,wind_gusts_10m,visibility&hourly=wind_speed_850hPa,wind_direction_850hPa,cape,snow_depth&forecast_hours=1&wind_speed_unit=kn&timezone=auto"
+        "https://api.open-meteo.com/v1/forecast?latitude={lat:.4}&longitude={lon:.4}&current=temperature_2m,dew_point_2m,precipitation,rain,showers,snowfall,weather_code,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,pressure_msl,wind_speed_10m,wind_direction_10m,wind_gusts_10m,visibility&hourly=wind_speed_850hPa,wind_direction_850hPa,wind_speed_500hPa,wind_direction_500hPa,wind_speed_250hPa,wind_direction_250hPa,cape,snow_depth&forecast_hours=1&wind_speed_unit=kn&timezone=auto"
     )
 }
 
@@ -1464,24 +1500,34 @@ mod tests {
 // ================================================================== wind field
 
 /// The wind the aircraft flies through: a mean profile (surface wind → wind
-/// aloft, log-law gradient near the ground), gusts and turbulence carried
-/// along with the air ("frozen" turbulence advected by the mean wind), with
-/// mechanical turbulence over rough (city) ground and convective turbulence
-/// near cumulus / thermals.
+/// aloft, log-law gradient near the ground, on up to the 500 hPa wind and the
+/// jet), gusts, and turbulence carried along with the air ("frozen"
+/// turbulence advected by the wind aloft): the Dryden model of
+/// MIL-F-8785C (wx/turbulence.rs) — low-altitude intensities from the wind at
+/// 20 ft over rough or open ground, medium / high altitude intensities from a
+/// severity (light .. extreme) built from the weather, convection, storms,
+/// mountain waves and clear-air turbulence in the jet's shear.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WindField {
     /// Wind at 10 m and at ~1500 m (m/s, world xz, direction of motion).
     pub surface: Vec2,
     pub aloft: Vec2,
+    /// 500 hPa (~5.6 km) and 250 hPa (jet, ~10.4 km) winds.
+    pub mid: Vec2,
+    pub jet: Vec2,
     /// Gust increment (m/s): METAR gust − mean.
     pub gust: f32,
-    /// Background turbulence intensity (m/s rms).
-    pub turb: f32,
+    /// Background turbulence severity (0 none .. 4 extreme) from the weather.
+    pub severity: f32,
+    /// Clear-air turbulence severity in the jet's shear band (patchy).
+    pub cat: f32,
+    /// The player's turbulence setting (wx::turbulence::Mode::scale).
+    pub scale: f32,
 }
 
 impl Default for WindField {
     fn default() -> Self {
-        WindField { surface: Vec2::ZERO, aloft: Vec2::ZERO, gust: 0.0, turb: 0.0 }
+        WindField { surface: Vec2::ZERO, aloft: Vec2::ZERO, mid: Vec2::ZERO, jet: Vec2::ZERO, gust: 0.0, severity: 0.0, cat: 0.0, scale: 1.0 }
     }
 }
 
@@ -1510,11 +1556,47 @@ fn vnoise3(p: glam::Vec3, k: u32) -> f32 {
     acc * 2.0 - 1.0
 }
 
+/// Clear-air turbulence severity from the vertical wind shear between the
+/// 500 hPa and 250 hPa levels (kt per 1000 ft: ~4 light, ~6 moderate, ~9 severe).
+pub fn cat_severity(mid: Vec2, jet: Vec2) -> f32 {
+    let shear = (jet - mid).length() / KT / 15.7;
+    let pts = [(3.0, 0.0), (4.5, 1.0), (6.0, 2.0), (9.0, 3.0), (13.0, 3.6)];
+    if shear <= pts[0].0 {
+        return 0.0;
+    }
+    for w in pts.windows(2) {
+        if shear <= w[1].0 {
+            return w[0].1 + (w[1].1 - w[0].1) * (shear - w[0].0) / (w[1].0 - w[0].0);
+        }
+    }
+    3.6
+}
+
 impl WindField {
     pub fn from_wx(wx: &Wx) -> WindField {
         let surface = wx.wind();
         let gust = ((wx.gust_kt - wx.wind_kt).max(0.0)) * KT;
-        WindField { surface, aloft: wx.wind_aloft(), gust, turb: 0.25 + 0.04 * surface.length() + 0.2 * gust }
+        let mid = wind_vec(wx.mid_from, wx.mid_kt);
+        let jet = wind_vec(wx.jet_from, wx.jet_kt);
+        // Background chop aloft: near-smooth on a fair day, light with
+        // showers / strong gusts, more around thunderstorms.
+        let mut severity = 0.15 + if wx.showers { 0.45 } else { 0.0 } + if wx.thunder { 0.5 } else { 0.0 } + (gust / (12.0 * KT)).min(0.6);
+        // A PIREP-style remark ("RMK MOD TURB", "SEV TURB BLW 080", "TURB EXTRM") sets the category.
+        if let Some(raw) = wx.metar.as_ref().map(|m| m.raw.as_str()).filter(|r| r.contains("TURB")) {
+            let reported = if raw.contains("EXTRM") || raw.contains("EXTREME") {
+                4.0
+            } else if raw.contains("SEV") {
+                3.0
+            } else if raw.contains("MOD") {
+                2.0
+            } else if raw.contains("LGT") || raw.contains("LIGHT") {
+                1.0
+            } else {
+                0.0
+            };
+            severity = severity.max(reported);
+        }
+        WindField { surface, aloft: wx.wind_aloft(), mid, jet, gust, severity, cat: cat_severity(mid, jet), scale: 1.0 }
     }
 
     /// Mean wind at height `h` (m) over ground of roughness `rough` (0 open .. 1 city).
@@ -1527,14 +1609,41 @@ impl WindField {
             return self.surface * f;
         }
         // Boundary layer: stronger and veering with height up to ~1500 m.
-        let t = ((h - ref_h) / 1500.0).clamp(0.0, 1.0);
-        let k = t.powf(0.6);
-        self.surface.lerp(self.aloft, k)
+        if h <= 1500.0 {
+            let t = ((h - ref_h) / 1500.0).clamp(0.0, 1.0);
+            return self.surface.lerp(self.aloft, t.powf(0.6));
+        }
+        // Free atmosphere: on up to the 500 hPa wind and the jet, easing off in the stratosphere.
+        if self.mid == Vec2::ZERO && self.jet == Vec2::ZERO {
+            return self.aloft;
+        }
+        if h <= 5600.0 {
+            self.aloft.lerp(self.mid, (h - 1500.0) / 4100.0)
+        } else if h <= 10_400.0 {
+            self.mid.lerp(self.jet, (h - 5600.0) / 4800.0)
+        } else {
+            self.jet * (1.0 - 0.5 * smooth(10_400.0, 16_000.0, h))
+        }
     }
 
-    /// Wind vector at `p` and time `t` (s): mean + gusts + turbulence.
-    /// `conv` 0..1: convective turbulence (in / under cumulus, near thermals).
-    pub fn at(&self, p: glam::Vec3, t: f32, rough: f32, conv: f32) -> glam::Vec3 {
+    /// Turbulence severity (0..4) the weather gives at height `h` above the
+    /// ground and field point `q` (patchy clear-air turbulence in the jet's shear).
+    pub fn severity_at(&self, q: glam::Vec3, h: f32) -> f32 {
+        let mut s = self.severity;
+        if self.cat > 0.0 && h > 6000.0 {
+            let band = smooth(6500.0, 8500.0, h) * (1.0 - smooth(11_500.0, 13_000.0, h));
+            // CAT comes in patches tens of km across.
+            let patch = smooth(0.1, 0.55, vnoise3(glam::Vec3::new(q.x / 30_000.0, h / 1500.0, q.z / 30_000.0), 41));
+            s = s.max(self.cat * band * patch);
+        }
+        s
+    }
+
+    /// Wind vector at field point `p` (y = height above the ground) and time
+    /// `t` (s): mean + gusts + turbulence. `extra` = turbulence severity
+    /// (0..4) from local phenomena (convection, storms, rotors, ...).
+    pub fn at(&self, p: glam::Vec3, t: f32, rough: f32, extra: f32) -> glam::Vec3 {
+        use crate::wx::turbulence::{TurbField, dryden};
         if !p.is_finite() || !t.is_finite() {
             return glam::Vec3::ZERO;
         }
@@ -1542,20 +1651,25 @@ impl WindField {
         let m = self.mean(h, rough);
         let spd = m.length();
         let dir = if spd > 0.1 { m / spd } else { Vec2::X };
-        // Turbulence is carried with the air: sample a frozen field at p - m t.
-        let a = vec2(p.x, p.z) - m * (t % 100_000.0);
+        let k = self.scale.clamp(0.0, 1.0);
+        // The air (and the turbulence in it) moves with the wind aloft.
+        let adv = glam::DVec2::new(self.aloft.x as f64, self.aloft.y as f64) * (t as f64 % 1.0e6);
+        let qx = p.x as f64 - adv.x;
+        let qz = p.z as f64 - adv.y;
         // Gusts: slow (~10-20 s) surges along the wind.
-        let g = vnoise3(glam::Vec3::new(a.x / 220.0, h / 300.0, t * 0.06), 11);
-        let surge = smooth(0.15, 0.85, g) * self.gust * (1.0 - smooth(800.0, 2000.0, h));
-        // Turbulence intensity: background + mechanical (wind over rough
-        // ground, decaying with height) + convective.
-        let mech = (0.08 + 0.12 * rough.clamp(0.0, 1.0)) * spd * (1.0 - smooth(50.0, 600.0, h));
-        let sigma = (self.turb * (1.0 - 0.6 * smooth(1500.0, 3000.0, h)) + mech + 1.4 * conv.clamp(0.0, 1.0)).min(6.0);
-        let q = glam::Vec3::new(a.x, h, a.y);
-        let n = |k: u32| vnoise3(q / 70.0 + glam::Vec3::splat(t * 0.02), k) * 0.75 + vnoise3(q / 18.0, k + 7) * 0.25;
+        let g = vnoise3(glam::Vec3::new((qx / 220.0) as f32 % 1.0e4, h / 300.0, t * 0.06 % 1.0e4), 11);
+        let surge = smooth(0.15, 0.85, g) * self.gust * (1.0 - smooth(800.0, 2000.0, h)) * k;
+        if k <= 0.0 {
+            return glam::Vec3::new(m.x + dir.x * surge, 0.0, m.y + dir.y * surge);
+        }
+        // Dryden turbulence: W20 from the wind at 20 ft (gusts in, rough ground more).
+        let w20 = (self.mean(6.1, rough).length() + 0.5 * self.gust) * (1.0 + 0.6 * rough.clamp(0.0, 1.0));
+        let sev = self.severity_at(glam::Vec3::new(qx as f32 % 1.0e6, h, qz as f32 % 1.0e6), h).max(extra);
+        let mut d = dryden(h, w20, sev);
+        d.sigma *= k;
+        let turb = TurbField::global().sample(glam::DVec3::new(qx, h as f64, qz), &d);
         // Vertical gusts die out at the ground.
-        let wv = n(3) * 0.7 * smooth(0.0, 30.0, h);
-        let turb = glam::Vec3::new(n(1), wv, n(2)) * sigma;
+        let turb = glam::Vec3::new(turb.x, turb.y * smooth(0.0, 20.0, h), turb.z);
         glam::Vec3::new(m.x + dir.x * surge, 0.0, m.y + dir.y * surge) + turb
     }
 }
@@ -1585,7 +1699,7 @@ mod wind_tests {
         for i in 0..n {
             let t = i as f32 * 0.05;
             let p = vec3((i * 37 % 5000) as f32 - 2500.0, 20.0 + (i % 50) as f32 * 30.0, (i * 91 % 7000) as f32);
-            let w = wf.at(p, t, (i % 3) as f32 * 0.5, (i % 5) as f32 * 0.25);
+            let w = wf.at(p, t, (i % 3) as f32 * 0.5, (i % 5) as f32 * 0.5);
             assert!(w.is_finite());
             let dev = w - glam::Vec3::new(wf.mean(p.y, (i % 3) as f32 * 0.5).x, 0.0, wf.mean(p.y, (i % 3) as f32 * 0.5).y);
             max_dev = max_dev.max(dev.length());
@@ -1598,6 +1712,37 @@ mod wind_tests {
         // Calm day: next to nothing.
         let calm = WindField::from_wx(&Wx::from_metar_str("EGLC 121450Z 00000KT CAVOK 10/04 Q1012").unwrap());
         assert!(calm.at(vec3(10.0, 300.0, 5.0), 3.0, 0.0, 0.0).length() < 2.0);
+    }
+
+    #[test]
+    fn winds_aloft_and_clear_air_turbulence() {
+        let mut wx = Wx::from_metar_str("EGLC 121450Z 24010KT 9999 SCT030 10/04 Q1012").unwrap();
+        // A jet of 140 kt over a 500 hPa wind of 45 kt: ~6 kt per 1000 ft of shear (moderate CAT).
+        wx.mid_kt = 45.0;
+        wx.mid_from = 260.0;
+        wx.jet_kt = 140.0;
+        wx.jet_from = 262.0;
+        let wf = WindField::from_wx(&wx);
+        assert!((wf.cat - 2.0).abs() < 0.3, "CAT severity {}", wf.cat);
+        assert!(wf.mean(10_400.0, 0.0).length() > 65.0 && wf.mean(5600.0, 0.0).length() < 25.0);
+        // CAT is patchy and lives in the jet's shear band, not near the ground.
+        let mut hi: f32 = 0.0;
+        for i in 0..200 {
+            hi = hi.max(wf.severity_at(vec3(i as f32 * 3000.0, 0.0, i as f32 * 1700.0), 10_000.0));
+        }
+        assert!(hi > 1.8, "patches reach the CAT severity: {hi}");
+        assert!(wf.severity_at(vec3(0.0, 0.0, 0.0), 1500.0) < 1.0);
+        assert_eq!(cat_severity(wf.mid, wf.mid), 0.0);
+        // PIREP-like remarks set the category.
+        let sev = |raw: &str| WindField::from_wx(&Wx::from_metar_str(raw).unwrap()).severity;
+        assert!(sev("EGLC 121450Z 24010KT 9999 SCT030 10/04 Q1012 RMK MOD TURB") >= 2.0);
+        assert!(sev("EGLC 121450Z 24010KT 9999 SCT030 10/04 Q1012 RMK SEV TURB BLW 050") >= 3.0);
+        assert!(sev("EGLC 121450Z 24010KT 9999 SCT030 10/04 Q1012") < 1.0);
+        // The turbulence setting scales the gusts: off leaves the mean wind only.
+        let off = WindField { scale: 0.0, ..WindField::from_wx(&Wx::from_metar_str("EGLC 121450Z 24020G35KT 9999 SCT030 10/04 Q1012").unwrap()) };
+        let p = vec3(100.0, 300.0, -50.0);
+        let m = off.mean(300.0, 0.0);
+        assert!((off.at(p, 5.0, 0.0, 3.0) - vec3(m.x, 0.0, m.y)).length() < 1e-4);
     }
 }
 
@@ -1800,6 +1945,22 @@ pub fn save_report(shot: &str, world: &crate::world::World) {
     let _ = writeln!(s, "render: {r:?}");
     if let Some(o) = &w.om {
         let _ = writeln!(s, "open-meteo: {o:?}");
+    }
+    // Thunderstorms / mountain waves (wx/): where the cells are, for framing shots.
+    let wxs = &world.wxs;
+    if wxs.storms.active() {
+        let _ = writeln!(s, "storms: {:?}", wxs.storms.spec);
+        let f = world.focus();
+        let mut cells = wxs.storms.cells_near(f, 40_000.0);
+        cells.sort_by(|a, b| (a.center + wxs.storms.drift()).distance(f).total_cmp(&(b.center + wxs.storms.drift()).distance(f)));
+        for c in cells.iter().take(6) {
+            let w = c.center + wxs.storms.drift();
+            let (lat, lon) = world.proj.to_latlon(w);
+            let _ = writeln!(s, "  cell {:08x} at {:.4},{:.4} ({:.1} km, brg {:.0}°) r {:.0} m base {:.0} top {:.0} (+{:.0}) intensity {:.2} anvil {:.0} m rain {:.0} mm/h", c.id, lat, lon, w.distance(f) / 1000.0, (w - f).x.atan2(-(w - f).y).to_degrees().rem_euclid(360.0), c.radius, c.base, c.top, c.overshoot, c.intensity, c.anvil_len, c.rain_mmh);
+        }
+    }
+    if wxs.waves.active() {
+        let _ = writeln!(s, "mountain waves: λ {:.1} km, max displacement {:.0} m, wind {:?}", wxs.waves.wavelength / 1000.0, wxs.waves.max_eta, wxs.waves.spec.wind);
     }
     let _ = std::fs::write(format!("{shot}.weather.txt"), s);
 }

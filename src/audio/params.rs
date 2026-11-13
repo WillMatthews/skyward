@@ -416,6 +416,10 @@ pub enum Event {
     Boom(f32),
     /// Thunder clap at a distance (km).
     Thunder(f32),
+    /// Thunder from a real flash arriving now (wx/): distance to the nearest
+    /// part of the channel (km), how long it rolls on (s, the spread of the
+    /// channel's distances), energy, pan (-1 left .. 1 right), cloud-to-ground.
+    ThunderRoll { km: f32, rumble: f32, energy: f32, pan: f32, ground: bool },
     UiClick,
     /// Gun fire this frame (weapons/): `rounds` from gun type `gun`
     /// (0 = 20 mm Hispano, 1 = .303 Browning, 2 = M61A1, 3 = .50) firing at

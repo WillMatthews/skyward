@@ -236,15 +236,15 @@ impl Default for Assists {
 /// Weather & Time.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WxPrefs {
-    /// Turbulence intensity 0..1 (0.5 = as reported). // owned by WX: consumer pending.
-    pub turbulence: f32,
+    /// Turbulence: realistic / reduced / off (wx/turbulence.rs).
+    pub turbulence: crate::wx::turbulence::Mode,
     /// Highest time acceleration the W key cycles to (1, 2, 4, 8, 16).
     pub max_warp: u32,
 }
 
 impl Default for WxPrefs {
     fn default() -> Self {
-        WxPrefs { turbulence: 0.5, max_warp: 8 }
+        WxPrefs { turbulence: crate::wx::turbulence::Mode::Realistic, max_warp: 8 }
     }
 }
 
@@ -536,6 +536,21 @@ impl Default for SimPrefs {
     }
 }
 
+/// The turbulence setting from a file: a mode name, or the early v2
+/// draft's 0..1 strength (0.5 = as reported).
+fn turbulence_mode(v: Option<&Value>) -> crate::wx::turbulence::Mode {
+    use crate::wx::turbulence::Mode;
+    match v {
+        Some(Value::String(t)) => Mode::parse(t).unwrap_or_default(),
+        Some(Value::Number(n)) => match n.as_f64().unwrap_or(0.5) {
+            x if x >= 0.35 => Mode::Realistic,
+            x if x > 0.02 => Mode::Reduced,
+            _ => Mode::Off,
+        },
+        _ => Mode::default(),
+    }
+}
+
 /// Small typed reads from a JSON object (missing / wrong type: the default).
 #[derive(Clone, Copy)]
 struct J<'a>(&'a Value);
@@ -731,7 +746,7 @@ impl Settings {
                 "autobrake": match r.autobrake { Autobrake::Off => "off", Autobrake::Low => "low", Autobrake::Medium => "medium", Autobrake::Max => "max" },
             },
             "assists": { "taxi_ribbon": a.taxi_ribbon, "landing_guidance": a.landing_guidance, "stall_warning": a.stall_warning, "overspeed_warning": a.overspeed_warning },
-            "weather": { "turbulence": self.wx.turbulence, "max_warp": self.wx.max_warp },
+            "weather": { "turbulence": self.wx.turbulence.name(), "max_warp": self.wx.max_warp },
             "traffic": { "road": t.road, "parked_density": t.parked_density },
             "camera": {
                 "cockpit_fov": cam.cockpit_fov, "chase_fov": cam.chase_fov, "head_motion": cam.head_motion, "chase_distance": cam.chase_distance, "chase_lag": cam.chase_lag,
@@ -809,7 +824,7 @@ impl Settings {
             overspeed_warning: a.b("overspeed_warning", da.overspeed_warning),
         };
         let w = j.o("weather");
-        let wx = WxPrefs { turbulence: w.f("turbulence", d.wx.turbulence).clamp(0.0, 1.0), max_warp: (w.f("max_warp", d.wx.max_warp as f32) as u32).clamp(1, 16) };
+        let wx = WxPrefs { turbulence: turbulence_mode(w.get("turbulence")), max_warp: (w.f("max_warp", d.wx.max_warp as f32) as u32).clamp(1, 16) };
         let t = j.o("traffic");
         let dt = &d.traffic;
         let traffic = TrafficPrefs {
@@ -905,6 +920,7 @@ mod tests {
         s.sound.master = 0.4;
         s.conditions.live = false;
         s.conditions.metar = "EGLL 121150Z 24010KT 9999 FEW030 15/08 Q1015".into();
+        s.wx.turbulence = crate::wx::turbulence::Mode::Reduced;
         let back = Settings::from_json(&s.to_json());
         assert_eq!(back, s);
         assert_eq!(back.recents, vec!["EGLL", "EGLC"]);
@@ -927,7 +943,7 @@ mod tests {
         s.realism = Realism { random_failures: true, autobrake: Autobrake::Max, ..Realism::preset(RealismPreset::Hard) };
         s.realism.auto_trim = true;
         s.assists = Assists { taxi_ribbon: true, landing_guidance: true, stall_warning: false, overspeed_warning: false };
-        s.wx = WxPrefs { turbulence: 0.8, max_warp: 16 };
+        s.wx = WxPrefs { turbulence: crate::wx::turbulence::Mode::Off, max_warp: 16 };
         s.traffic = TrafficPrefs { road: 3, parked_density: 0.5 };
         s.live_traffic = crate::adsb::Settings { enabled: false, radius_nm: 100.0, max_aircraft: 50, ground: false, tags: false };
         s.camera = CameraPrefs { cockpit_fov: 85.0, chase_fov: 50.0, head_motion: false, chase_distance: 1.5, chase_lag: 0.2, default_view: DefaultView::Cockpit };
@@ -952,6 +968,21 @@ mod tests {
         let mut s = Settings::default();
         s.traffic.road = 1;
         assert_eq!(Settings::from_str(&s.to_json().to_string()).traffic.road, 1);
+    }
+
+    /// Turbulence: a mode name round-trips; the early draft's 0..1 number migrates.
+    #[test]
+    fn turbulence_setting_migrates() {
+        use crate::wx::turbulence::Mode;
+        let mut s = Settings::default();
+        assert_eq!(s.wx.turbulence, Mode::Realistic);
+        s.wx.turbulence = Mode::Off;
+        assert_eq!(Settings::from_json(&s.to_json()).wx.turbulence, Mode::Off);
+        for (v, m) in [(0.5, Mode::Realistic), (0.2, Mode::Reduced), (0.0, Mode::Off)] {
+            let mut j = Settings::default().to_json();
+            j["weather"]["turbulence"] = json!(v);
+            assert_eq!(Settings::from_json(&j).wx.turbulence, m);
+        }
     }
 
     /// A settings file from before the redesign (v1) loads with its values

@@ -99,6 +99,14 @@ painted over or composited.
   cloud shadows on the ground.
 - **Weather and seasons.** Rain, snow, fog and wet ground; leaf fall, autumn colours and crop
   calendars.
+- **Thunderstorms.** Cumulonimbus towers with anvils, overshooting tops and dark bases, driven by
+  the METAR (TS, CB, TCU, +TSRA, VCTS, GR) and the forecast's CAPE; rain shafts and virga under
+  them, visible from far away; lightning that lights the cloud from inside, branching
+  cloud-to-ground bolts, a flash over the whole scene and thunder arriving distance / c later.
+  Lenticular clouds stack over mountain waves.
+- **On the glass.** Rain drops on the windscreen that refract the view and run with the airflow,
+  wipers on the airliners (off / slow / fast / auto), misting, frost creeping in from the frame,
+  and rime ice on the leading edges as airframe icing builds.
 - **Night.** Moon and stars, skyglow, street lights, lit windows, moving traffic, airport lighting,
   PAPIs and landing lights.
 - **Effects.** Transonic vapour cones, afterburner shock diamonds, heat haze, Schmidt–Appleman
@@ -127,8 +135,16 @@ painted over or composited.
   **follow-the-greens** centreline lights and the route on the moving map, and an auto-flight
   bot that pushes back and taxis the taxiway network to the holding point and back to a stand.
 - **Live weather and wind.** The nearest METAR plus Open-Meteo drive clouds, visibility,
-  precipitation, the wind gradient, gusts, turbulence and drifting thermals. Real local time and
-  date, re-fetched along long flights.
+  precipitation, the wind gradient and winds aloft up to the jet, gusts and drifting thermals.
+  Real local time and date, re-fetched along long flights.
+- **Turbulence that feels real.** The Dryden model of MIL-F-8785C as a frozen 3D field (low,
+  medium and high-altitude intensities and scale lengths; light to extreme) with rotational gusts
+  across the span; convective bumps under cumulus, severe turbulence and drafts in thunderstorms
+  and their gust fronts, clear-air turbulence in the jet's wind shear, mountain waves and rotors in
+  the lee of ridges, and wake vortices behind multiplayer players and live ADS-B traffic (and your own, after a steep 360). Cockpit head motion and
+  seat-of-the-pants thumps; Realistic / Reduced / Off in Settings › Weather & Time.
+- **Weather radar.** The airliners' ND shows the storms' returns (green / yellow / red / magenta),
+  with tilt, gain and the radar shadow behind heavy rain.
 
 ### Systems, navigation and ATC
 
@@ -178,8 +194,10 @@ painted over or composited.
 - **Watch mode.** An AI pilot flies the real flight model through the controls: take-off,
   sightseeing tour, approach and landing, wind-aware, doing its own radio calls. The glider bot
   thermals under cumulus. Add the cinematic camera and leave it running.
-- **Menus.** Aircraft cards, a world-map airport picker with fuzzy search, runway diagrams with
-  live crosswind, and conditions from live to any METAR.
+- **Menus.** Aircraft cards, a world-map airport picker with fuzzy search that zooms smoothly from
+  the whole globe down to a single stand (day / night map styles, runways to scale, full airport
+  diagrams with stands, holding points and helipads; click a runway end, stand or helipad to start
+  there), live crosswind, and conditions from live to any METAR.
 - **Settings.** Fourteen categories with search across all of them, Apply / Revert, realism presets,
   assists, camera and units options, and colour-blind and high-contrast palettes. Every screen works
   with a keyboard or a game controller, at interface scales from 80 to 200 %.
@@ -357,7 +375,7 @@ Every key can be rebound in **Settings › Controls**. Press **H** or **F1** in 
 | **M** | Moving map | **F3** / **F4** | Radios & flight plan / ATC comms |
 | **Space** (armed, in the air) | Fire | **F5 / F7 / F8** | Weapon · lock · flares |
 | **Esc** | Pause menu | **O** / **F2** | Systems & failures |
-| **Caps Lock** | Parking brake | **Left Alt** | Ground menu: pushback, chocks, autobrake, taxi guidance |
+| **Right Alt** | Parking brake (on the ground) | **Left Alt** | Ground menu: pushback, chocks, autobrake, taxi guidance |
 
 <details>
 <summary><b>Full keyboard reference</b></summary>
@@ -373,7 +391,7 @@ Every key can be rebound in **Settings › Controls**. Press **H** or **F1** in 
 | / and \ (or ') | spoilers / speed brake out / in one step |
 | T | thrust reverse on / off (ground only; throttle then sets reverse power) |
 | B or Space (hold) | brakes (single-lever types split them with the rudder) |
-| Caps Lock | parking brake set / release |
+| Right Alt | parking brake set / release (on the ground; in the air it is weapon release on armed types) |
 | Left Alt | **ground menu** (the comms panel's Ground page; 1–9 pick): push back straight / tail left / tail right (stop during the push; set the parking brake when told and the tug disconnects), parking brake, chocks + ground power, autobrake OFF → LO → MED → MAX (Embraer: RTO too; pedal braking or thrust disarms it), DC-3 tail-wheel lock, taxi guidance (route to the departure holding point — or after a flight a free stand — on the moving map, follow-the-greens lights, next turn and speed). Also on F4 › Ground crew & taxi |
 | (unbound) | toe brakes left / right, nose-wheel tiller left / right, and each ground-menu action as its own key: bind them in Settings › Controls › Ground. Without a tiller the rudder keys work it below ~30 kt; with B or Space the rudder splits the brakes on light types |
 | [ / ] | trim nose down / up |
@@ -385,7 +403,7 @@ Every key can be rebound in **Settings › Controls**. Press **H** or **F1** in 
 | F5 / F7–F10 | **split throttles**: F7/F8 left engines −/+, F9/F10 right engines −/+, F5 brings the levers back together |
 | F4 | **ATC comms menu**: the requests for the unit on COM 1 (1–9 pick, 0 = tune a station, Esc closes), read-back / assist / subtitle / COM 2 options |
 | Space (in the air) | **weapons** (Spitfire, F-16): fire the selected weapon — guns (held), a missile in SRM / MRM (press); still the wheel brakes on the ground |
-| Right Alt | Spitfire: cannon only (the second button); F-16: weapon release (pickle) |
+| Right Alt | Spitfire: cannon only (the second button); F-16: weapon release (pickle) — in the air (on the ground it is the parking brake) |
 | F5 / F7 / F8 / F9 | armed single-engine types: master mode GUN → SRM → MRM (Spitfire: cannon + MG / cannon / MG), radar lock / AIM-9 uncage, flares + chaff, gun harmonisation range |
 | F10 twice | eject (F-16 ACES II) / bail out (Spitfire) |
 | ; | navigation display: ROSE ILS → ROSE VOR → ROSE NAV → ARC → PLAN |
@@ -400,6 +418,8 @@ Every key can be rebound in **Settings › Controls**. Press **H** or **F1** in 
 | M, `,` / `.` | moving map: corner / large / off, range out / in |
 | U | instruments: full / minimal / off |
 | I | weather panel: expand / collapse |
+| Caps Lock | windscreen wipers: off → slow → fast → auto (airliners) |
+| Num / | weather radar tilt: auto → +2° → 0° → −1.5° → −3° → −5° (airliners; weapon release on armed types; gain: bind *Weather radar gain* in Settings › Controls) |
 | N | mute sound |
 | X | time warp 1 / 2 / 4 / 8× |
 | P | pause |
@@ -530,7 +550,8 @@ the real flight model through the controls and autopilot. Nothing is scripted or
 | `--bot` / `--watch` | hand the aircraft to the auto-flight bot / + cinematic camera (+ glider relaunch) |
 | `--live` / `--no-live` | follow the real weather and time (default on) / don't |
 | `--metar "RAW"` | fixed weather from a METAR, e.g. `"EGLC 121450Z 18015G25KT 9999 SCT040 15/08 Q1015"` |
-| `--weather W` | cloud preset `clear` `few` `scattered` `broken` `overcast` |
+| `--weather W` | cloud preset `clear` `few` `scattered` `broken` `overcast` (Conditions also has *Storms & hazards*: thunderstorm, squall line, mountain wave, icing, gusty crosswind METARs) |
+| `SKYWARD_FLASH=cg\|ic` | force a lightning flash (cloud-to-ground / in-cloud) at the start: storm screenshots and thunder renders |
 | `--time HH.MM`, `--date MM-DD` | local clock time (turns live time off), date (season, sun) |
 | `--route LAM,BIG,EGLL/27R[/rnav]` | flight plan: navaids / airports / `lat:lon`, the last item an approach |
 | `--fail pitot,vacuum,fire2@30` | systems failures by id, optionally armed `@S` seconds in |
@@ -558,6 +579,7 @@ on this page, the golden tests and soak tests.
 | `--audio-script "2:atc=clearance,40:atc=taxi"` | scripted cues, including ATC requests (see `src/audio/render.rs`) |
 | `--eye x,y,z --look x,y,z`, `--eye-ll lat,lon,h --look-ll lat,lon,h` | fixed camera (local frame / by geography) |
 | `--menu-screen S` | capture a menu: `main` `aircraft` `airport` `conditions` `settings` `pause` `loading` `credits` `missions` `multiplayer` |
+| `--map-view LAT,LON,ZOOM`, `--map-style day\|night` | departure map centre / zoom (1.2 world – 19 stands) and cartography, for captures |
 | `--no-hud`, `--stats` | hide the HUD, print the final state |
 | `--realtime [--fps HZ]`, `--then-reset` | stream + render in real time; frame-time / streaming report |
 | `--soak [--shot-every S]` | fly the bot for `--seconds` of sim time; minute log, events, PNGs |
@@ -836,6 +858,7 @@ Settings › Video switches to mailbox / immediate for the lowest latency.
 | `src/airport/`, `src/airports.rs` | airport detail (markings, stands, signs, lights, vehicles, Overpass, parked fleet); OurAirports database |
 | `src/gfx.rs`, `src/gfx_aircraft.rs`, `src/shaders/` | wgpu renderer; textured aircraft renderer; WGSL shaders |
 | `src/atmosphere.rs`, `src/clouds.rs`, `src/weather.rs` | sun, sky / aerial-perspective LUTs; volumetric clouds + thermals; METAR / Open-Meteo |
+| `src/wx/` | Dryden turbulence field, thunderstorms + lightning + thunder, mountain waves / rotors / lenticulars, wake vortices, weather radar, windscreen rain / wipers / frost |
 | `src/vfx/` | particles, trails, vapour, shock diamonds, heat haze, rotor wash; condensation physics |
 | `src/flight.rs`, `src/jsbsim.rs` | fixed-wing flight dynamics + aircraft definitions; JSBSim aerodynamics evaluator |
 | `src/rotor/` | helicopter rotor / engine / Fenestron model, FPV quad, their bots, VEMD / OSD |

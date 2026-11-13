@@ -264,6 +264,10 @@ pub enum Key {
     Countermeasures,
     SightMode,
     Eject,
+    /// Windscreen wipers off / slow / fast / auto; weather radar tilt / gain (wx/).
+    Wipers,
+    RadarTilt,
+    RadarGain,
 }
 
 impl Key {
@@ -531,6 +535,8 @@ pub struct Sim {
     pub view_unit: Option<u32>,
     /// Eject pressed once: seconds left to press it again.
     eject_armed: f32,
+    /// Windscreen, wipers, head shake, weather radar (wx/cockpit.rs).
+    pub wxc: crate::wx::cockpit::WxCockpit,
 }
 
 /// Cinematic camera state.
@@ -663,6 +669,7 @@ impl Sim {
             combat: None,
             view_unit: None,
             eject_armed: 0.0,
+            wxc: Default::default(),
         };
         s.nav = crate::nav::NavState::new(&s.defs[sel]);
         s.atc = crate::atc::Atc::new(&s.defs[sel]);
@@ -848,7 +855,7 @@ impl Sim {
         };
         let custom = self.custom_start.as_ref().and_then(|c| crate::startpos::spawn(&def, world, c));
         // A stand start waits for the airport's layout (stands) to be built.
-        let stand_start = self.custom_start.as_ref().is_some_and(|c| matches!(c.spec, crate::startpos::Spec::Stand(_)));
+        let stand_start = self.custom_start.as_ref().is_some_and(|c| matches!(c.spec, crate::startpos::Spec::Stand { .. }));
         if stand_start && custom.is_none() {
             self.needs_respawn = true;
         }
@@ -1234,7 +1241,8 @@ impl Sim {
         self.eject_armed = (self.eject_armed - dt).max(0.0);
         for k in std::mem::take(&mut input.pressed) {
             match k {
-                Key::WeaponRelease => trig.release = true,
+                // (Right Alt is also the parking brake: weapons only in the air.)
+                Key::WeaponRelease if airborne => trig.release = true,
                 // Space: the selected weapon — a missile in SRM / MRM (the guns are held, below).
                 Key::GunTrigger if self.combat.as_ref().and_then(|c| c.local_unit()).is_some_and(|u| u.master != crate::weapons::Master::Gun) => trig.release = true,
                 Key::WeaponSelect => trig.select = true,
@@ -1378,6 +1386,18 @@ impl Sim {
                     }
                 }
                 Key::MasterAck => self.ac.sys.acknowledge(),
+                Key::Wipers => {
+                    let m = self.wxc.cycle_wipers();
+                    self.say(format!("Wipers {m}"), 2.0);
+                }
+                Key::RadarTilt => {
+                    let t = self.wxc.cycle_tilt();
+                    self.say(t, 2.0);
+                }
+                Key::RadarGain => {
+                    let g = self.wxc.cycle_gain();
+                    self.say(g, 2.0);
+                }
                 Key::LandingLights => {
                     let on = !self.landing_lights_on();
                     self.landing_lights = Some(on);
@@ -1580,6 +1600,9 @@ impl Sim {
         }
         // Air traffic control: the frequency, ATIS, the controllers (atc/).
         crate::atc::step(self, world, dt);
+        // The windscreen, wipers, head shake and weather radar (wx/).
+        let nd_range = crate::ui::glass::ND_RANGES_NM[self.map_zoom.min(crate::ui::glass::ND_RANGES_NM.len() - 1)] * 1852.0;
+        self.wxc.update(world, &self.ac, &self.defs[self.sel], nd_range, dt * self.warp as f32, self.paused);
         // The bot's runway: NAV 1 on its ILS (it couples to it on final, bot.rs).
         if let Some(end) = self.bot.as_ref().and_then(|b| b.focus_runway()) {
             if let Some(rw) = world.runways.iter().find(|r| end.same_runway(r) && !r.airport.is_empty()) {
@@ -2171,7 +2194,7 @@ impl Sim {
             acl.n_sprites = 0;
             acl.n_spots = 0;
         }
-        let mut fv = FrameView { eye, view, fov_y: fov, time: self.time, sun_dir: self.sun_dir(), exposure: 1.0, clock, acl, aircraft: None, vfx: None, others: Vec::new() };
+        let mut fv = FrameView { eye, view, fov_y: fov, time: self.time, sun_dir: self.sun_dir(), exposure: 1.0, clock, acl, aircraft: None, vfx: None, others: Vec::new(), wx: None };
         let mut dynm = MeshData::default();
         // The fight: missiles, parachutes, holes; the other aircraft (weapons/).
         let mut others = Vec::new();
@@ -2220,7 +2243,7 @@ impl Sim {
                 }
             }
         }
-        self.last_view = Some(FrameView { aircraft: None, vfx: None, others: Vec::new(), ..fv });
+        self.last_view = Some(FrameView { aircraft: None, vfx: None, others: Vec::new(), wx: None, ..fv });
         (fv, dynm)
     }
 
@@ -2301,6 +2324,8 @@ impl Sim {
             let k = if paved { 0.0012 } else { 0.0035 };
             d.vib = [k * (gs / 25.0).min(2.0) * (self.size / 10.0).clamp(0.6, 2.5), if paved { 11.0 } else { 7.0 }, 0.0, 0.0];
         }
+        // Airframe ice (systems/): rime on the leading edges, the aircraft shader (wx/).
+        d.vib[2] = ac.sys.fx.ice.clamp(0.0, 1.0).max(self.wxc.glass.ice);
         let lost = ac.dmg.lost;
         let inv = body.inverse();
         for p in Part::ALL {

@@ -57,7 +57,7 @@ pub struct AcDynamics {
     pub up: [f32; 4],
     /// Tip deflection left / right (m, + up), bend-twist (rad per m of tip deflection), unused.
     pub flex: [f32; 4],
-    /// Vibration: amplitude (m), frequency (Hz), unused ×2.
+    /// Vibration: amplitude (m), frequency (Hz); airframe ice 0..1 (wx/), unused.
     pub vib: [f32; 4],
     /// Per part: 1 = bends with the wing (still attached), 0 = rigid.
     pub part_flex: [[f32; 4]; 4],
@@ -227,7 +227,7 @@ impl AircraftRenderer {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None },
                     count: None,
                 },
