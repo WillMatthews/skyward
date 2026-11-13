@@ -287,7 +287,13 @@ fn vs_traffic(@builtin(vertex_index) vi: u32, t: TIn) -> SOut {
     let light = (vi / 6u) % 2u;     // 0 head, 1 tail
     let side = (vi / 12u) % 2u;     // direction of travel
     let car = vi / 24u;
-    let cars = t.info.z * g.misc2.x;
+    var cars = t.info.z * g.misc2.x;
+    // Inside the simulated area (misc2.w = its radius, traffic/) the vehicles
+    // carry their own lights: the streaks fade in beyond it.
+    if (g.misc2.w > 0.0) {
+        let mid = tile_pos(vec3<f32>((t.ab.x + t.ab.z) * 0.5, 0.0, (t.ab.y + t.ab.w) * 0.5));
+        cars *= smoothstep(g.misc2.w * 0.8, g.misc2.w, length(mid.xz));
+    }
     if (f32(car) + 0.5 > cars * (0.7 + 0.6 * fract(t.info.y * 13.7 + f32(side) * 0.37))) {
         return culled();
     }
@@ -377,6 +383,49 @@ fn fs_map(in: MOut) -> @location(0) vec4<f32> {
     // Cosine law on the ground, widened by the lamp's batwing optics, cut off ~2.8 h.
     var e = h / (s2 * sqrt(s2)) * (1.0 + 1.2 * r2 / s2);
     e *= 1.0 - smoothstep(1.4 * h, 2.95 * h, sqrt(r2));
+    return vec4<f32>(in.rgb * e, 0.0);
+}
+
+// Headlight pools of the simulated vehicles (traffic/): dipped beams on the
+// road ahead of each vehicle, a soft wedge from ~3 to ~45 m.
+struct VMOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) q: vec2<f32>,                       // metres ahead, to the side
+    @location(1) @interpolate(flat) rgb: vec3<f32>,
+};
+
+@vertex
+fn vs_map_vehicle(@builtin(vertex_index) vi: u32, t: VLIn) -> VMOut {
+    var o: VMOut;
+    let on = g.city.x;
+    let kind = t.info & 255u;
+    if (on <= 0.0) {
+        o.clip = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+        return o;
+    }
+    let f = normalize(t.dir);
+    let side = vec2<f32>(f.y, -f.x);
+    let cr = corner(vi);
+    // Local quad: 0..48 m ahead, ±12 m.
+    let q = vec2<f32>((cr.x * 0.5 + 0.5) * 48.0 - 1.0, cr.y * 12.0);
+    let p = t.pos.xz + f * q.x + side * q.y;
+    let m = (p - g.lmap.xy) * g.lmap.z * 2.0;
+    o.clip = vec4<f32>(m.x, -m.y, 0.0, 1.0);
+    o.q = q;
+    // Two dipped beams (~one for a motorbike), warm white.
+    let pair = select(1.0, 0.5, kind == 10u);
+    o.rgb = vec3<f32>(1.0, 0.94, 0.84) * on * pair * LUX;
+    return o;
+}
+
+@fragment
+fn fs_map_vehicle(in: VMOut) -> @location(0) vec4<f32> {
+    let x = in.q.x;
+    // Illuminance (lux) on the road: rises past the bonnet, peaks ~10 m
+    // ahead, the beam spreads and fades with distance (cut-off ~45 m).
+    let along = smoothstep(1.0, 7.0, x) * (1.0 - smoothstep(18.0, 46.0, x)) * (24.0 / (1.0 + 0.0018 * x * x));
+    let w = 1.4 + 0.2 * x;
+    let e = along * exp(-in.q.y * in.q.y / (w * w));
     return vec4<f32>(in.rgb * e, 0.0);
 }
 
@@ -521,4 +570,81 @@ fn fs_beams(in: BOut) -> @location(0) vec4<f32> {
         acc += s * LUX;
     }
     return vec4<f32>(min(acc * g.pre.x, vec3<f32>(6.0e4)), 0.0);
+}
+
+// ---------------------------------------------------------------- road traffic
+
+// Simulated vehicles (traffic/): head / tail lights from the vehicle
+// instances (eye-relative, traffic::VehInst), two of each (one on a
+// motorbike); brake lights brighten the tails.
+struct VLIn {
+    @location(5) pos: vec3<f32>,
+    @location(6) dir: vec2<f32>,
+    @location(7) grade: f32,
+    @location(8) col: u32,
+    @location(9) info: u32,
+};
+
+@vertex
+fn vs_vehicle_lights(@builtin(vertex_index) vi: u32, t: VLIn) -> SOut {
+    let corner_i = vi % 6u;
+    let lamp = vi / 6u;          // 0, 1 head (left, right), 2, 3 tail
+    let kind = t.info & 255u;
+    let braking = ((t.info >> 8u) & 1u) != 0u;
+    let on = g.city.x;
+    let tail = lamp >= 2u;
+    if ((!tail && on <= 0.0) || (tail && on <= 0.0 && !braking)) {
+        return culled();
+    }
+    // Half length, headlamp height / half spacing, tail lamp height / half spacing (== traffic/vehicle.rs).
+    var hl = array<f32, 11>(2.02, 2.37, 2.42, 2.32, 2.29, 2.7, 6.0, 5.6, 4.4, 8.25, 1.05);
+    var hh = array<f32, 11>(0.68, 0.66, 0.68, 0.82, 0.72, 0.85, 0.75, 0.75, 0.9, 0.9, 0.95);
+    var hx = array<f32, 11>(0.62, 0.64, 0.64, 0.66, 0.6, 0.72, 1.0, 1.0, 0.95, 0.95, 0.0);
+    var th = array<f32, 11>(0.85, 0.86, 0.9, 1.0, 0.9, 0.95, 1.0, 1.0, 0.8, 0.8, 0.85);
+    var tx = array<f32, 11>(0.66, 0.68, 0.7, 0.72, 0.7, 0.88, 1.05, 1.05, 1.05, 1.05, 0.0);
+    let k = min(kind, 10u);
+    let fwd = normalize(vec3<f32>(t.dir.x, t.grade, t.dir.y));
+    let left = normalize(vec3<f32>(t.dir.y, 0.0, -t.dir.x));
+    let dist = length(t.pos);
+    // Far away (or a motorbike) a pair reads as one light: draw one, twice as bright.
+    let merge = dist > 400.0 || hx[k] == 0.0;
+    let side = select(-1.0, 1.0, (lamp & 1u) == 0u);
+    if (merge && (lamp & 1u) == 1u) {
+        return culled();
+    }
+    var off: f32;
+    var p: vec3<f32>;
+    if (!tail) {
+        off = select(hx[k] * side, 0.0, merge);
+        p = t.pos + fwd * (hl[k] + 0.05) + left * off + vec3<f32>(0.0, hh[k], 0.0);
+    } else {
+        off = select(tx[k] * side, 0.0, merge);
+        p = t.pos - fwd * (hl[k] + 0.05) + left * off + vec3<f32>(0.0, th[k], 0.0);
+    }
+    let pair = select(1.0, 2.0, merge && hx[k] != 0.0);
+    let v = p + vec3<f32>(0.0, g.pattern.w, 0.0);
+    let tv = -v / max(length(v), 1e-3);
+    var l: LIn;
+    l.pos = p;
+    var col: vec3<f32>;
+    var cd: f32;
+    if (!tail) {
+        // Dipped beams: bright toward the road ahead, a glow from the side.
+        // Dipped beams: bright below the cut-off toward the road ahead, a few
+        // hundred cd toward eyes ahead at road level, a glow from the side / above.
+        col = vec3<f32>(1.0, 0.94, 0.84);
+        let fh = max(dot(normalize(vec3<f32>(tv.x, 0.0, tv.z) + vec3<f32>(0.0, 1e-4, 0.0)), normalize(vec3<f32>(fwd.x, 0.0, fwd.z))), 0.0);
+        let up = max(tv.y, 0.0);
+        cd = (150.0 + 900.0 * pow(fh, 10.0) * (1.0 - smoothstep(0.0, 0.15, up)) + 300.0 * pow(fh, 2.0) * (1.0 - smoothstep(0.1, 0.6, up))) * on;
+    } else {
+        col = vec3<f32>(1.0, 0.035, 0.015);
+        let b = max(-dot(tv, fwd), 0.0);
+        cd = (14.0 + 50.0 * pow(b, 3.0)) * on + select(0.0, 30.0 + 120.0 * pow(b, 2.0), braking);
+    }
+    l.cd = cd * pair;
+    l.col = pack4x8unorm(vec4<f32>(col, 0.0));
+    l.dir = 0u;
+    l.a = 0u;
+    l.b = 0u;
+    return sprite(l, corner_i, false);
 }

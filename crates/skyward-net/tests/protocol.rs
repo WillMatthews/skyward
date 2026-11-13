@@ -79,7 +79,8 @@ fn all_packets() -> Vec<Packet> {
         game_port: 47820,
         conditions: "Real time · live weather".into(),
     };
-    let world = WorldSync { time: TimeSync::Fixed { hours: 14.5, day: 200 }, utc: 1.7e9, metar: "EGLC 121150Z 25015KT 9999 SCT045 22/10 Q1015".into(), live_weather: false };
+    let world =
+        WorldSync { time: TimeSync::Fixed { hours: 14.5, day: 200 }, utc: 1.7e9, metar: "EGLC 121150Z 25015KT 9999 SCT045 22/10 Q1015".into(), live_weather: false, combat: false };
     let msgs = vec![
         Msg::State(sample_state()),
         Msg::Snapshot { time: 10.0, entries: vec![(3, sample_state()), (9, sample_state())] },

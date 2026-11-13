@@ -6,7 +6,7 @@
 //! predictions (nav/).
 
 use super::menus::{Btn, button, chip_btn, segmented};
-use super::{UiState, f_digits_b, f_display, f_inst, f_inst_b, f_semi, f_ui, pal, sp};
+use super::{UiState, f_digits_b, f_inst, f_inst_b, f_semi, f_ui, pal, sp};
 use crate::nav::db::{self, freq_label};
 use crate::nav::fms::{ApprKind, Wpt, WptKind};
 use crate::nav::geo::{self, NM};
@@ -58,7 +58,7 @@ pub fn panel(ctx: &egui::Context, st: &mut UiState, sim: &mut Sim, world: &World
                     st.radio.tab = t;
                 }
                 ui.add_space(sp::M);
-                egui::ScrollArea::vertical().auto_shrink([false, false]).max_height(h - 170.0).show(ui, |ui| match st.radio.tab {
+                super::scroll::vertical(ui, "radio_body", h - 170.0, |ui| match st.radio.tab {
                     0 => radios_tab(ui, sim),
                     _ => plan_tab(ui, st, sim, world),
                 });
@@ -67,31 +67,17 @@ pub fn panel(ctx: &egui::Context, st: &mut UiState, sim: &mut Sim, world: &World
 }
 
 fn header(ui: &mut Ui, st: &mut UiState, sim: &Sim) {
-    ui.horizontal(|ui| {
-        ui.vertical(|ui| {
-            ui.label(egui::RichText::new("Radios & flight plan").font(f_display(22.0)).color(pal::TEXT));
-            let sub = if !sim.nav.equipped {
-                format!("{} · no navigation radios", sim.def().name)
-            } else if !sim.nav.radios.powered {
-                format!("{} · avionics unpowered", sim.def().name)
-            } else {
-                format!("{} · {}", sim.def().name, db::status())
-            };
-            ui.label(egui::RichText::new(sub).font(f_ui(12.5)).color(if sim.nav.radios.powered { pal::TEXT3 } else { pal::AMBER }));
-        });
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-            let (r, _) = ui.allocate_exact_size(Vec2::new(32.0, 32.0), Sense::hover());
-            let resp = button(ui, r, "radio_close", "", Btn::Ghost, true);
-            let c = r.center();
-            let k = r.height() * 0.18;
-            let s = Stroke::new(1.6, if resp.hovered() { pal::TEXT } else { pal::TEXT2 });
-            ui.painter().line_segment([c + Vec2::new(-k, -k), c + Vec2::new(k, k)], s);
-            ui.painter().line_segment([c + Vec2::new(k, -k), c + Vec2::new(-k, k)], s);
-            if resp.clicked() {
-                st.radio.open = false;
-            }
-        });
-    });
+    let sub = if !sim.nav.equipped {
+        format!("{} · no navigation radios", sim.def().name)
+    } else if !sim.nav.radios.powered {
+        format!("{} · avionics unpowered", sim.def().name)
+    } else {
+        format!("{} · {}", sim.def().name, db::status())
+    };
+    let key = super::chrome::key_of(st, crate::sim::Key::RadioPanel);
+    if super::chrome::panel_header(ui, "Radios & flight plan", &sub, if sim.nav.radios.powered { pal::TEXT3 } else { pal::AMBER }, key.as_deref(), "radio", |_| {}) {
+        st.radio.open = false;
+    }
 }
 
 fn section(ui: &mut Ui, title: &str) {

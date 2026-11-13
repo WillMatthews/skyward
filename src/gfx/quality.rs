@@ -1,6 +1,6 @@
 //! Video settings: the quality presets (Low → Ultra, Custom) and every knob
 //! they drive, display options (window mode, present mode, frame cap, HDR,
-//! FOV), their JSON form inside `settings.json` (backwards-compatible: files
+//! their JSON form inside `settings.json` (backwards-compatible: files
 //! from before this existed migrate from the old `detail` / `vsync` keys),
 //! adapter auto-detection and the GPU cost hints the Video tab shows.
 //!
@@ -518,17 +518,12 @@ pub struct VideoSettings {
     /// Brightness (black-level lift, −0.5..+0.5) and display gamma (1.8..2.6).
     pub brightness: f32,
     pub gamma: f32,
-    /// Vertical field of view (degrees): chase / external cameras, and the cockpit.
-    pub fov_external: f32,
-    pub fov_cockpit: f32,
     /// Performance overlay (Ctrl+F3).
     pub perf_overlay: bool,
     /// The adapter auto-detect has picked a preset (first run).
     pub detected: bool,
 }
 
-pub const FOV_EXTERNAL: f32 = 60.0;
-pub const FOV_COCKPIT: f32 = 72.0;
 pub const GAMMA: f32 = 2.2;
 
 impl Default for VideoSettings {
@@ -548,8 +543,6 @@ impl Default for VideoSettings {
             exposure_ev: 0.0,
             brightness: 0.0,
             gamma: GAMMA,
-            fov_external: FOV_EXTERNAL,
-            fov_cockpit: FOV_COCKPIT,
             perf_overlay: false,
             detected: false,
         }
@@ -591,8 +584,6 @@ impl VideoSettings {
             "exposure_ev": self.exposure_ev,
             "brightness": self.brightness,
             "gamma": self.gamma,
-            "fov_external": self.fov_external,
-            "fov_cockpit": self.fov_cockpit,
             "perf_overlay": self.perf_overlay,
             "detected": self.detected,
         })
@@ -637,8 +628,6 @@ impl VideoSettings {
             exposure_ev: f("exposure_ev", 0.0).clamp(-2.0, 2.0),
             brightness: f("brightness", 0.0).clamp(-0.5, 0.5),
             gamma: f("gamma", GAMMA).clamp(1.8, 2.6),
-            fov_external: f("fov_external", FOV_EXTERNAL).clamp(30.0, 100.0),
-            fov_cockpit: f("fov_cockpit", FOV_COCKPIT).clamp(40.0, 110.0),
             perf_overlay: v.get("perf_overlay").and_then(|x| x.as_bool()).unwrap_or(false),
             detected: v.get("detected").and_then(|x| x.as_bool()).unwrap_or(true),
         }
@@ -887,7 +876,6 @@ mod tests {
             hdr: true,
             paper_white: 250.0,
             exposure_ev: 0.5,
-            fov_cockpit: 80.0,
             perf_overlay: true,
             detected: true,
             ..VideoSettings::default()

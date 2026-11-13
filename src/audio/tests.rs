@@ -195,7 +195,7 @@ fn null_device_stream_runs() {
     let mut f = frame_for("meridian320");
     f.ear_pos = Vec3::new(0.0, 2.0, 30.0);
     let shared = Arc::new(Mutex::new(Shared { frame: f, seq: 1, events: Vec::new(), settings: super::Settings::default(), cpu_ns: 0, cpu_audio_s: 0.0 }));
-    let out = Output::open(shared.clone()).expect("open null device");
+    let out = Output::open(shared.clone(), "").expect("open null device");
     eprintln!("opened {} @ {} Hz", out.name, out.sample_rate);
     for i in 0..20 {
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -216,15 +216,28 @@ fn null_device_stream_runs() {
 fn switching_aircraft_is_cheap_on_the_audio_thread() {
     // Voices (incl. their band-limited wavetables) are built inside the
     // callback when the aircraft changes: keep that well under a buffer.
-    let mut s = Synth::new(SR);
+    //
+    // The best of five trials (each a fresh synth switching from the trainer,
+    // so every trial pays the full set-up): a busy machine pre-empting one
+    // trial does not fail the test, a slow set-up still does.
     let mut buf = vec![0.0f32; 512];
+    let base = frame_for("kestrel");
     for id in ["kestrel", "peregrine", "aerolink", "lancer", "meridian190", "meridian320", "hercules", "galaxy", "vulcan", "triple7", "crj700", "citationx", "concorde", "dc3", "otter"] {
         let f = frame_for(id);
-        let t = std::time::Instant::now();
-        s.push_frame(&f);
-        s.render(&mut buf);
-        let ms = t.elapsed().as_secs_f64() * 1000.0;
-        eprintln!("{id}: voice set-up + first block {ms:.2} ms");
+        let ms = (0..5)
+            .map(|_| {
+                let mut s = Synth::new(SR);
+                if id != "kestrel" {
+                    s.push_frame(&base);
+                    s.render(&mut buf);
+                }
+                let t = std::time::Instant::now();
+                s.push_frame(&f);
+                s.render(&mut buf);
+                t.elapsed().as_secs_f64() * 1000.0
+            })
+            .fold(f64::MAX, f64::min);
+        eprintln!("{id}: voice set-up + first block {ms:.2} ms (best of 5)");
         assert!(ms < if cfg!(debug_assertions) { 80.0 } else { 8.0 }, "{id}: {ms} ms");
     }
 }

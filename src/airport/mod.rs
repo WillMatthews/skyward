@@ -499,6 +499,11 @@ impl AirportScene {
         self.sites.get(ident).and_then(|s| s.layout.clone())
     }
 
+    /// Every airport layout built so far (live-traffic taxiway snapping, `adsb/`).
+    pub fn layouts(&self) -> Vec<Arc<Layout>> {
+        self.sites.values().filter_map(|s| s.layout.clone()).collect()
+    }
+
     /// Stands of the airports in range (startpos / debugging): (airport, name, stop point, heading) in the current frame.
     pub fn stands(&self, proj: &Proj) -> Vec<(String, String, Vec2, f32)> {
         let mut out = Vec::new();
@@ -510,6 +515,19 @@ impl AirportScene {
         }
         out
     }
+}
+
+/// Hide the parked aircraft standing within 25 m of `at` (world points: stands
+/// taken by live traffic, `adsb/`). `eye`: the frame's eye (instances are eye-relative).
+pub fn hide_parked(f: &mut Frame, at: &[Vec2], eye: Vec3) {
+    if at.is_empty() {
+        return;
+    }
+    f.parked.retain(|p| {
+        let w = p.xf.w_axis;
+        let xz = Vec2::new(w.x + eye.x, w.z + eye.z);
+        !at.iter().any(|h| h.distance(xz) < 25.0)
+    });
 }
 
 /// One instance this frame (eye-relative placement, body → world).

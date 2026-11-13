@@ -1,4 +1,4 @@
-12000	1764360
+12000	1791840
 zero	0	4110
 one	4590	2820
 two	7890	2820
@@ -203,3 +203,6 @@ ready	1715460	5340
 climb straight ahead	1721280	12540
 request ifr clearance	1734300	17880
 backtrack runway	1752660	11220
+looking out	1764360	7620
+extend downwind	1772460	12840
+number	1785780	5580

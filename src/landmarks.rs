@@ -41,6 +41,8 @@ pub struct Placed {
     /// Tile-frame point where the caller samples the ground height.
     pub anchor: Vec2,
     pub max_h: f32,
+    /// Road deck height above y = 0 inside `suppress` (bridges).
+    pub deck: Option<f32>,
 }
 
 /// Which OSM buildings a landmark replaces (local frame).
@@ -72,6 +74,9 @@ pub struct Landmark {
     pub suppress: Suppress,
     /// Static geometry, collision and lights in the local frame.
     pub build: fn(&mut Kit),
+    /// Road deck height (m above the anchor) where roads cross it (a
+    /// bridge), else 0: road traffic drives on it (traffic/net.rs).
+    pub deck: f32,
     /// Moving parts at time t (s), appended to `out` through `xf` (local →
     /// output frame).
     pub animate: Option<fn(out: &mut MeshData, xf: Mat4, t: f32)>,
@@ -126,6 +131,7 @@ impl Landmark {
             lights,
             anchor,
             max_h,
+            deck: (self.deck > 0.0).then_some(self.deck),
         }
     }
 }

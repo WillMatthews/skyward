@@ -60,6 +60,11 @@ others; per-item sources, authors and licences are listed in:
     facts from public charts. Airport radio frequencies (ATIS, delivery,
     ground, tower, approach) come from OurAirports' airport-frequencies.csv
     (public domain). No licence-restricted navigation data is used.
+  * Live traffic (src/adsb/): aircraft positions from the adsb.lol API,
+    made available under the Open Database License (ODbL) 1.0
+    (https://opendatacommons.org/licenses/odbl/1-0/) — © adsb.lol
+    contributors. tests/adsb/*.json are anonymised extracts of it (synthetic
+    addresses, no registrations, re-numbered flights), under the same licence.
 
 Because some bundled content is GPL version 2 only, the combined work is
 distributed under the terms of GPL version 2.

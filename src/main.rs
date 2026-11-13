@@ -7,9 +7,11 @@
 //!                     [--menu-screen main|aircraft|airport|conditions|settings|pause|loading|credits] [--hud full|minimal|off] [--map corner|large|off]
 //!                     [--realtime [--warp N]]   (stream + render in real time, straight & level, report timings)
 //!                     [--gear up|down] [--flaps N] [--spoilers F] [--reverse] [--fail BITS] [--ap] [--fps HZ]   (setup / test knobs)
+//! Settings:   --menu-screen settings [--settings-category video|display|camera|flight|assists|weather|traffic|sound|controls|multiplayer|accessibility|interface|data|about] [--settings-search TEXT] [--settings-from pause] [--palette deuteranopia|protanopia|tritanopia] [--high-contrast]; SKYWARD_CONFIG_DIR=dir for the settings file
 //! Systems:    --fail pitot,vacuum,fire2@30,... (names, optional @seconds to arm) [--cold-dark] [--panel failures|armed|systems]
 //! Missions:   skyward --mission river|v1|decompression|... [--mission-bot]   (airline emergencies; --menu-screen missions|briefing|debrief)
 //! Auto flight: skyward [--bot | --watch] ...        (hand the aircraft to the AI pilot; --watch adds the cinematic camera)
+//! Dogfight:  skyward --aircraft spitfire|f16 --dogfight [1v1|2v2] [--opponent ID] [--difficulty rookie|average|veteran|ace] [--dogfight-ai] [--shot-when guns|hit|lock|missile|flares|smoke|eject|chute|kill] [--view-bandit] [--eject-at S]
 //! Soak test:  skyward --shot out.png --bot --soak --seconds 1800 [--warp 8] [--shot-every 300] [--weather scattered]
 //! Weather:    live METAR + real local time by default; --no-live, --metar "EGLC 121450Z 22012KT 3000 RA BKN008 09/08 Q1002", --time HH.MM, --date MM-DD, --weather clear|few|scattered|broken|overcast
 //! Controllers: --controllers [SECONDS] lists devices and prints their inputs (SKYWARD_FAKE_INPUT=xbox,x52,pedals,tca adds virtual ones)
@@ -17,8 +19,11 @@
 //! Display:    --vsync on|off (default on: FIFO present, smoothed frame step); SKYWARD_FRAME_LOG=file logs per-frame timing
 //! Graphics:   --preset low|medium|high|ultra  --aa taa|msaa4|fxaa|off  --render-scale 0.5..2 (override Settings › Video);
 //!             headless GPU benchmark: SKYWARD_BENCH_FRAMES=N (per-pass medians, timestamp queries); Ctrl+F3 = performance overlay
+//! Traffic:    --traffic off|low|medium|high (road traffic density; SKYWARD_NO_TRAFFIC=1 forces it off)
 //! Multiplayer: skyward --connect host[:port] --name CALLSIGN [--password PW]   (server: cargo run -p skyward-server -- --help)
+//! Live traffic: real aircraft from adsb.lol (default on; off with --no-live / --no-adsb; headless only with --adsb); --adsb-fixture rec.json replays a recording
 
+mod adsb;
 mod airport;
 mod airports;
 mod atmosphere;
@@ -54,8 +59,10 @@ mod systems;
 mod terrain;
 mod landmarks;
 mod tiles;
+mod traffic;
 mod vfx;
 mod water;
+mod weapons;
 mod ui;
 mod weather;
 mod world;
@@ -113,6 +120,8 @@ struct Args {
     realtime: bool,
     warp: u32,
     radius: Option<f32>,
+    /// Road traffic density (Settings, `--traffic off|low|medium|high`).
+    traffic: Option<traffic::Level>,
     map_zoom: Option<usize>,
     map_mode: Option<ui::flight::MapMode>,
     hud_mode: Option<ui::settings::HudMode>,
@@ -134,6 +143,12 @@ struct Args {
     radio_panel: Option<usize>,
     /// Headless shots: open the ATC comms menu.
     comms_panel: bool,
+    /// Headless settings captures: category, search text, opened from the pause menu, palette.
+    settings_cat: Option<ui::settings_schema::Cat>,
+    settings_search: Option<String>,
+    settings_from_pause: bool,
+    palette: Option<ui::settings::Palette>,
+    high_contrast: bool,
     /// Keys to press after the spawn (`--press ap,ap_appr`; input/ ids).
     press: Vec<Key>,
     /// Flight plan (`--route BIG,LAM,EGLL/27R`, nav/).
@@ -175,6 +190,17 @@ struct Args {
     /// Airline-emergency mission to fly (missions/), and fly it with the scripted pilot.
     mission: Option<String>,
     mission_bot: bool,
+    /// Live traffic (adsb/): replay a recording; force on / off for this session.
+    adsb_fixture: Option<String>,
+    adsb: Option<bool>,
+    /// Dogfight quick start (weapons/): format, opponent, difficulty, AI-flown.
+    dogfight: Option<weapons::setup::Config>,
+    /// Headless: fast-forward until this happens in the fight (guns, hit, lock, missile, flares, smoke, eject, kill), then shoot.
+    shot_when: Option<String>,
+    /// Headless: eject / bail out at this many seconds.
+    eject_at: Option<f32>,
+    /// Chase camera on the (first) opponent.
+    view_bandit: bool,
 }
 
 fn parse_vec3(s: &str) -> Option<Vec3> {
@@ -242,6 +268,7 @@ fn parse_args_from(argv: Vec<String>) -> Args {
         realtime: false,
         warp: 1,
         radius: None,
+        traffic: None,
         map_zoom: None,
         map_mode: None,
         hud_mode: None,
@@ -260,6 +287,11 @@ fn parse_args_from(argv: Vec<String>) -> Args {
         panel: None,
         radio_panel: None,
         comms_panel: false,
+        settings_cat: None,
+        settings_search: None,
+        settings_from_pause: false,
+        palette: None,
+        high_contrast: false,
         press: Vec::new(),
         route: None,
         frame_dt: None,
@@ -288,6 +320,12 @@ fn parse_args_from(argv: Vec<String>) -> Args {
         mp_chat: String::new(),
         mission: None,
         mission_bot: false,
+        adsb_fixture: None,
+        adsb: None,
+        dogfight: None,
+        shot_when: None,
+        eject_at: None,
+        view_bandit: false,
     };
     let mut i = 0;
     let next = |i: &mut usize| -> String {
@@ -316,6 +354,27 @@ fn parse_args_from(argv: Vec<String>) -> Args {
             "--start" => a.start = Start::parse(&next(&mut i)).unwrap_or(Start::Runway),
             "--start-at" => a.start_at = startpos::Spec::decode(&next(&mut i)),
             "--shot" => a.shot = Some(next(&mut i)),
+            "--dogfight" => {
+                let mut cfg = a.dogfight.take().unwrap_or_default();
+                cfg.opponent = String::new();
+                if let Some(f) = argv.get(i + 1).and_then(|v| weapons::setup::Format::parse(v)) {
+                    cfg.format = f;
+                    i += 1;
+                }
+                a.dogfight = Some(cfg);
+            }
+            "--opponent" => {
+                let v = flight::resolve_id(&next(&mut i));
+                a.dogfight.get_or_insert_with(Default::default).opponent = v;
+            }
+            "--difficulty" => {
+                let v = next(&mut i);
+                a.dogfight.get_or_insert_with(Default::default).difficulty = weapons::ai::Difficulty::parse(&v).unwrap_or(weapons::ai::Difficulty::Average);
+            }
+            "--dogfight-ai" => a.dogfight.get_or_insert_with(Default::default).autopilot = true,
+            "--shot-when" => a.shot_when = Some(next(&mut i)),
+            "--eject-at" => a.eject_at = next(&mut i).parse().ok(),
+            "--view-bandit" => a.view_bandit = true,
             "--width" => a.width = next(&mut i).parse().unwrap_or(1920),
             "--height" => a.height = next(&mut i).parse().unwrap_or(1080),
             "--cam" => a.cam = CamMode::parse(&next(&mut i)).unwrap_or(CamMode::Chase),
@@ -364,6 +423,11 @@ fn parse_args_from(argv: Vec<String>) -> Args {
             "--look-ll" => a.look_ll = parse_geo(&next(&mut i)),
             "--menu" => a.menu = true,
             "--menu-screen" => a.menu_screen = Screen::parse(&next(&mut i)),
+            "--settings-category" => a.settings_cat = ui::settings_schema::Cat::parse(&next(&mut i)),
+            "--settings-search" => a.settings_search = Some(next(&mut i)),
+            "--settings-from" => a.settings_from_pause = next(&mut i) == "pause",
+            "--palette" => a.palette = ui::settings::Palette::parse(&next(&mut i)),
+            "--high-contrast" => a.high_contrast = true,
             "--no-menu" => a.no_menu = true,
             "--stats" => a.stats = true,
             "--realtime" => a.realtime = true,
@@ -431,10 +495,14 @@ fn parse_args_from(argv: Vec<String>) -> Args {
                 a.live_given = true;
             }
             "--metar" => a.metar = Some(next(&mut i)),
+            "--adsb-fixture" => a.adsb_fixture = Some(next(&mut i)),
+            "--adsb" => a.adsb = Some(true),
+            "--no-adsb" => a.adsb = Some(false),
             "--map-zoom" => a.map_zoom = next(&mut i).parse().ok(),
             "--radius-km" => a.radius = next(&mut i).parse::<f32>().ok().map(|k| k * 1000.0),
+            "--traffic" => a.traffic = traffic::Level::parse(&next(&mut i)),
             "-h" | "--help" => {
-                println!("{}", include_str!("main.rs").lines().take(18).collect::<Vec<_>>().join("\n"));
+                println!("{}", include_str!("main.rs").lines().take(20).collect::<Vec<_>>().join("\n"));
                 std::process::exit(0);
             }
             other => eprintln!("ignoring unknown argument {other}"),
@@ -562,6 +630,7 @@ impl Session {
         if let Some(r) = args.radius {
             world.radius = r;
         }
+        world.traffic.set_level(args.traffic.unwrap_or_else(traffic::Level::default_for_platform));
         if let Some(db) = db {
             world.set_airport_db(db);
         }
@@ -642,6 +711,16 @@ impl Session {
                         sim.enable_bot(w);
                         if args.watch {
                             sim.cam = CamMode::Cinematic;
+                        }
+                    }
+                    if let Some(cfg) = args.dogfight.clone() {
+                        let mut cfg = cfg;
+                        if cfg.opponent.is_empty() {
+                            cfg.opponent = sim.def().id.to_string();
+                        }
+                        sim.start_dogfight(w, cfg);
+                        if args.view_bandit {
+                            sim.view_unit = sim.combat.as_ref().and_then(|c| c.units.iter().find(|u| u.team != 0).map(|u| u.id));
                         }
                     }
                     if let Some((msg, _)) = &sim.note {
@@ -907,6 +986,28 @@ fn loading_info(msg: &str) -> (String, String, Option<f32>) {
     (title, rest.join(" · "), frac)
 }
 
+/// What the traffic simulation needs of this frame: time, local hours and
+/// the view (level of detail, culling, lights after dusk).
+fn traffic_frame(fv: &FrameView, time: f64, w: u32, h: u32, level: traffic::Level) -> traffic::Frame {
+    let fwd = -fv.view.inverse().z_axis.truncate().normalize_or(Vec3::NEG_Z);
+    let aspect = w as f32 / h.max(1) as f32;
+    let half_diag = ((fv.fov_y * 0.5).tan() * (1.0 + aspect * aspect).sqrt()).atan();
+    // Detailed meshes out to ~160 m at 1440p / 60°, scaled with the pixel density.
+    let px_per_m = h as f32 * 0.5 / (fv.fov_y * 0.5).tan();
+    let lod0 = (160.0 * px_per_m / 1250.0).clamp(70.0, 320.0);
+    // Head / tail lights out to the simulated radius from dusk.
+    let lights = fv.sun_dir.normalize_or(Vec3::Y).y < 0.08;
+    let view = traffic::View {
+        eye: fv.eye,
+        fwd,
+        cos_half: (half_diag + 0.2).min(std::f32::consts::PI).cos(),
+        lod0_dist: lod0,
+        draw_dist: level.draw_dist(),
+        light_dist: if lights { level.radius() } else { 0.0 },
+    };
+    traffic::Frame { time, hours: fv.clock.local_hours, view }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_frame(
     gpu: &Gpu,
@@ -942,10 +1043,18 @@ fn render_frame(
         Some(s) if flying => {
             let sim = s.sim.as_mut().unwrap();
             sim.qnh_hpa = s.world.wx.qnh_hpa;
-            // Settings › Video: quality knobs (live) and the fields of view.
-            let video = &ui.st.settings.video;
-            renderer.set_video(video);
-            sim.fov_deg = (video.fov_external, video.fov_cockpit);
+            // Settings › Video: quality knobs (live).
+            renderer.set_video(&ui.st.settings.video);
+            // The player's settings the simulation reads (ui/settings.rs).
+            sim.prefs = ui.st.settings.sim_prefs();
+            if !sim.prefs_init {
+                sim.prefs_init = true;
+                let player = sim.bot.is_none() && sim.mission.is_none();
+                if player && sim.prefs.cockpit_first && sim.cam == CamMode::Chase {
+                    sim.cam = CamMode::Cockpit;
+                }
+                sim.failures.random.on |= player && sim.prefs.random_failures;
+            }
             let (mut fv, mut dynm) = sim.frame(w as f32 / h as f32);
             // Multiplayer spectator (net/): our aircraft is hidden, the camera follows another.
             let mut view_override = view_override;
@@ -975,25 +1084,50 @@ fn render_frame(
                 if let Some(af) = fv.aircraft.as_mut() {
                     af.shift(d);
                 }
+                for af in &mut fv.others {
+                    af.shift(d);
+                }
                 fv = FrameView { eye, view: glam::camera::rh::view::look_at_mat4(eye, look, Vec3::Y), ..fv };
             }
             // Other players' aircraft (net/): real models, lights, afterburners — eye-relative.
+            let (mut frames, mut lights) = (Vec::new(), Vec::new());
             if ui.st.mp.connected() {
-                let (frames, lights, flames) = ui.st.mp.render_traffic(fv.eye);
+                let (f, l, flames) = ui.st.mp.render_traffic(fv.eye);
                 dynm.append(&flames, glam::Mat4::IDENTITY);
-                renderer.set_traffic(frames, lights);
+                (frames, lights) = (f, l);
                 ui.st.mp.cam = Some((fv.eye, fv.view, fv.fov_y));
             } else {
                 ui.st.mp.cam = None;
             }
+            // Live real-world traffic (adsb/): after the players (they take precedence).
+            {
+                let lt_settings = ui.st.settings.live_traffic.clone();
+                ui.st.adsb.update(sim, &s.world, ui.st.dt, &lt_settings);
+                let mut flames = scene::MeshData::default();
+                let slots = 96usize.saturating_sub(frames.len());
+                let t = sim.time % 3600.0;
+                frames.extend(ui.st.adsb.render(fv.eye, t, slots, &mut lights, &mut flames));
+                dynm.append(&flames, glam::Mat4::IDENTITY);
+                ui.st.adsb.cam = Some((fv.eye, fv.view, fv.fov_y));
+            }
+            renderer.set_traffic(frames, lights);
             // Browser: the scene renders within a pixel budget (upscaled by the AA / tonemap pass).
             #[cfg(target_arch = "wasm32")]
             renderer.set_scale_cap(platform::web::scene_size(w, h).0 as f32 / w.max(1) as f32);
             {
                 // Airport instances (parked aircraft, vehicles, windsocks in the real wind).
                 let wd = &s.world;
-                let af = wd.airport_detail.frame(&wd.proj, fv.eye, sim.time, &|p| flight::Environment::wind(wd, p), &|xz| flight::Environment::ground_height(wd, xz));
+                let mut af = wd.airport_detail.frame(&wd.proj, fv.eye, sim.time, &|p| flight::Environment::wind(wd, p), &|xz| flight::Environment::ground_height(wd, xz));
+                // Stands taken by live aircraft (adsb/): their procedural occupants are hidden.
+                airport::hide_parked(&mut af, &ui.st.adsb.hidden, fv.eye);
                 renderer.set_airport_frame(af);
+            }
+            {
+                // Road traffic (traffic/): this frame's vehicles.
+                let wd = &mut s.world;
+                renderer.set_traffic_level(wd.traffic.level());
+                let snap = wd.traffic.frame(traffic_frame(&fv, sim.time as f64, w, h, wd.traffic.level()));
+                renderer.road_traffic.prepare(device, queue, snap, sim.time as f64, fv.eye);
             }
             renderer.render(device, queue, &mut enc, target, w, h, &fv, &dynm);
         }
@@ -1029,6 +1163,7 @@ fn render_frame(
                     ui::flight::draw(&ctx, st, sim, world, ppp_now, fps);
                 }
                 ui::mp::draw(&ctx, st, sim);
+                adsb::ui::tags(&ctx, &st.adsb, sim.ac.pos, st.settings.alt);
             }
             if let (Some(msg), Screen::Flying) = (loading, st.screen) {
                 let (t, d, f) = loading_info(msg);
@@ -1068,7 +1203,11 @@ fn render_frame(
     });
     let mut full = full;
     let t_tess = Instant::now();
-    let prims = ui.ctx.tessellate(std::mem::take(&mut full.shapes), full.pixels_per_point);
+    let mut prims = ui.ctx.tessellate(std::mem::take(&mut full.shapes), full.pixels_per_point);
+    // Accessibility palettes (ui/palette.rs): colour-blind variants, high contrast.
+    let pal_mode = ui::palette::Mode { palette: ui.st.settings.palette, high_contrast: ui.st.settings.high_contrast };
+    ui::palette::apply(&mut prims, pal_mode);
+    ui.st.canvas.palette = pal_mode;
     let t_canvas = Instant::now();
     for (id, deltas) in &full.textures_delta.set {
         for delta in deltas.iter() {
@@ -1221,7 +1360,7 @@ fn plan_from_args(args: &Args, db: Option<&airports::Db>) -> ui::Plan {
             _ => startpos::Spec::Runway(String::new()),
         },
     };
-    ui::Plan { aircraft: args.aircraft, airport, spec, watch: args.watch }
+    ui::Plan { aircraft: args.aircraft, airport, spec, watch: args.watch, dogfight: args.dogfight.clone() }
 }
 
 /// Arguments for flying a plan with the chosen conditions.
@@ -1237,6 +1376,7 @@ fn args_for_plan(base: &Args, st: &UiState) -> (Args, Option<startpos::CustomSta
     a.start = plan.spec.as_start();
     a.bot = plan.watch;
     a.watch = plan.watch;
+    a.dogfight = plan.dogfight.clone();
     a.heading = None;
     let c = &st.settings.conditions;
     a.live = c.live;
@@ -1252,6 +1392,7 @@ fn args_for_plan(base: &Args, st: &UiState) -> (Args, Option<startpos::CustomSta
         a.weather = clouds::Weather::ALL.into_iter().find(|w| w.name() == c.preset);
     }
     a.radius = Some(ui::settings::detail_radius(st.settings.detail));
+    a.traffic = Some(traffic::Level::from_u8(st.settings.traffic.road));
     // A runway start with no end chosen yet: let the sim pick (into wind, long enough).
     let custom = match &plan.spec {
         startpos::Spec::Runway(e) | startpos::Spec::Final(e, _) if e.is_empty() => None,
@@ -1320,6 +1461,25 @@ fn apply_video_args(args: &Args, v: &mut gfx::quality::VideoSettings) {
     }
 }
 
+/// Live traffic for this session: a replayed recording (`--adsb-fixture`),
+/// or forced on / off (`--adsb`, `--no-adsb`; `--no-live` turns it off;
+/// headless captures leave it off unless asked).
+fn setup_adsb(args: &Args, ui: &mut Ui, headless: bool) -> Result<(), String> {
+    if let Some(path) = &args.adsb_fixture {
+        let text = std::fs::read_to_string(path).map_err(|e| format!("--adsb-fixture {path}: {e}"))?;
+        let frames = adsb::feed::parse_recording(&text).map_err(|e| format!("--adsb-fixture {path}: {e}"))?;
+        eprintln!("live traffic: replaying {} recorded frames ({} aircraft)", frames.len(), frames[0].reports.len());
+        ui.st.adsb.replay(frames);
+        return Ok(());
+    }
+    ui.st.adsb.force = match args.adsb {
+        Some(on) => Some(on),
+        None if headless || (args.live_given && !args.live) => Some(false),
+        None => None,
+    };
+    Ok(())
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn headless(args: Args) -> Result<(), String> {
     let mut args = args;
@@ -1356,11 +1516,13 @@ fn headless(args: Args) -> Result<(), String> {
     let mut ui = Ui::new(&gpu.device, format, settings);
     // Layout checks at a larger interface scale: SKYWARD_UI_SCALE=1.3.
     if let Some(v) = std::env::var("SKYWARD_UI_SCALE").ok().and_then(|v| v.parse::<f32>().ok()) {
-        ui.st.settings.ui_scale = v.clamp(0.7, 1.6);
+        ui.st.settings.ui_scale = v.clamp(ui::settings::UI_SCALE_MIN, ui::settings::UI_SCALE_MAX);
     }
     ui.hide_hud = args.no_hud;
     // (Captures neither read nor write the player's multiplayer favourites / recents.)
     ui.st.mp.prefs = net::prefs::Prefs { read_only: true, ..net::prefs::Prefs::from_json(&serde_json::Value::Null) };
+    // Live traffic (adsb/): off in captures (reproducible) unless asked for, or a recording replayed.
+    setup_adsb(&args, &mut ui, true)?;
     ui.st.db = db.clone();
     ui.st.plan = plan_from_args(&args, db.as_deref());
     if let Some(m) = args.hud_mode {
@@ -1412,9 +1574,27 @@ fn headless(args: Args) -> Result<(), String> {
         detected: Some(gfx::quality::detect(&gpu.adapter.get_info(), false)),
         ..Default::default()
     };
+    // (Captures neither enumerate audio devices nor walk the cache.)
+    ui.st.settings_ui.headless = true;
+    ui.st.gpu_name = gpu.adapter_name();
+    if let Some(p) = args.palette {
+        ui.st.settings.palette = p;
+    }
+    ui.st.settings.high_contrast |= args.high_contrast;
+    if let Some(c) = args.settings_cat {
+        ui.st.settings_ui.open_at(c, args.settings_search.as_deref().unwrap_or(""));
+    } else if let Some(q) = &args.settings_search {
+        ui.st.settings_ui.query = q.clone();
+    }
+    if args.settings_from_pause {
+        ui.st.back_to = Screen::Pause;
+    }
     if let Ok(t) = std::env::var("SKYWARD_SETTINGS_TAB") {
         let mut it = t.split(':');
-        ui.st.settings_tab = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+        // (Old tab numbers: 0 Display → Video, 1 Units → Display & HUD, 2 Sound, 3 Controls.)
+        use ui::settings_schema::Cat;
+        let cat = [Cat::Video, Cat::Display, Cat::Sound, Cat::Controls].get(it.next().and_then(|x| x.parse::<usize>().ok()).unwrap_or(0)).copied().unwrap_or(Cat::Video);
+        ui.st.settings_ui.open_at(cat, "");
         ui.st.controls_page = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
         ui.st.controls_axis = it.next().and_then(input::AxisAction::from_id).map(|a| (a, 0));
     }
@@ -1440,6 +1620,11 @@ fn headless(args: Args) -> Result<(), String> {
     }
     // Load the start area + spawn.
     let mut s = Session::new(&args, db.clone(), custom);
+    // Captures simulate the traffic in this thread (reproducible); the
+    // real-time / soak runs keep the worker thread (timings).
+    if !args.realtime && !args.soak {
+        s.world.traffic.set_inline();
+    }
     let t0 = Instant::now();
     let mut last_msg = String::new();
     while s.sim.is_none() {
@@ -1473,6 +1658,18 @@ fn headless(args: Args) -> Result<(), String> {
         sync_gpu(&mut s, &mut renderer, &mut ui, &gpu, None);
     }
     weather::save_report(&path, &s.world);
+    // Live traffic asked for in a capture (`--adsb`): wait for the first answer (≤ 15 s).
+    if args.adsb == Some(true) && args.adsb_fixture.is_none() {
+        let tw = Instant::now();
+        let lt_settings = ui.st.settings.live_traffic.clone();
+        while tw.elapsed() < Duration::from_secs(15) && ui.st.adsb.fetched == 0 {
+            if let Some(sim) = s.sim.as_ref() {
+                ui.st.adsb.update(sim, &s.world, 0.05, &lt_settings);
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        eprintln!("{} after {:.1} s", ui.st.adsb.status, tw.elapsed().as_secs_f32());
+    }
     let (w, h) = (args.width, args.height);
     let tex = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("shot"),
@@ -1600,12 +1797,25 @@ fn headless(args: Args) -> Result<(), String> {
             for c in cues.due(i as f32 / 60.0, sim, &s.world) {
                 audio::render::apply(&c, sim, &mut input, &s.world);
             }
+            if let Some(t) = args.eject_at {
+                let now = i as f32 / 60.0;
+                if (now - t).abs() < 0.5 / 60.0 || (now - t - 0.2).abs() < 0.5 / 60.0 {
+                    input.pressed.push(Key::Eject);
+                }
+            }
             sim.update(&s.world, &mut input, if steps == 0 { 0.0 } else { 1.0 / 60.0 });
             if let (Some(t), None) = (args.throttle, &sim.bot) {
                 sim.ctl.throttle = t;
             }
             if mp {
                 ui.st.mp.fly(sim, &mut s.world, false, 1.0 / 60.0);
+            }
+            if let Some(w) = &args.shot_when {
+                if sim.combat_moment(w) {
+                    eprintln!("shot-when {w}: at {:.1} s", i as f32 / 60.0);
+                    s.follow();
+                    break;
+                }
             }
             if i % if mp { 10 } else { 30 } == 0 {
                 s.follow();
@@ -1755,12 +1965,19 @@ fn headless(args: Args) -> Result<(), String> {
             }
         }
     }
+    // Traffic: refill and settle from the resident tiles, so the picture
+    // doesn't depend on the order the tiles streamed in.
+    s.world.traffic.reset();
     // Two frames: the first lets egui load fonts + map textures.
     let t0 = Instant::now();
     let note_s = loading_text(&ui.st, "Loading scenery\n37 / 52 tiles");
     let note = (ui.st.screen == Screen::Loading).then_some(note_s.as_str());
     for _ in 0..3 {
         render_frame(&gpu, &mut renderer, &mut ui, Some(&mut s), &view, w, h, raw(), 1.0, 0.0, note, ov);
+    }
+    if s.world.traffic.level() != traffic::Level::Off {
+        let t = s.world.traffic.stats();
+        eprintln!("traffic: {} vehicles ({} drawn, {} active lanes), {:.2} ms", t.vehicles, t.drawn, t.active_lanes, t.sim_ms);
     }
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
     let t1 = Instant::now();
@@ -1843,6 +2060,15 @@ fn headless(args: Args) -> Result<(), String> {
     );
     let px = gfx::read_texture(&gpu, &tex, w, h);
     image::save_buffer(&path, &px, w, h, image::ColorType::Rgba8).map_err(|e| e.to_string())?;
+    if ui.st.adsb.settings.enabled {
+        let lt = &ui.st.adsb;
+        eprintln!("live traffic: {} aircraft shown, update {:.3} ms, render {:.3} ms ({})", lt.shown(), lt.cpu_ms, lt.render_ms, lt.status);
+        if std::env::var_os("SKYWARD_ADSB_DEBUG").is_some() {
+            for line in lt.debug_lines(&s.world.proj) {
+                eprintln!("  {line}");
+            }
+        }
+    }
     eprintln!("wrote {path}");
     ui.st.mp.leave();
     Ok(())
@@ -2132,6 +2358,10 @@ fn realtime_flight(
                 s.world.downloaded_bytes() as f64 / 1e6,
                 sim.ac.crashed.as_ref().map(|c| format!(" CRASHED {c}")).unwrap_or_default(),
             );
+            if s.world.traffic.level() != traffic::Level::Off {
+                let t = s.world.traffic.stats();
+                eprintln!("  traffic: {} vehicles, {} drawn, main thread {:.3} + {:.3} ms (sim / upload), sim worker {:.2} ms", t.vehicles, t.drawn, s.world.traffic.main_ms, renderer.road_traffic.prepare_ms, t.sim_ms);
+            }
             frames = 0;
             sum_ms = 0.0;
             max_ms = 0.0;
@@ -2586,6 +2816,8 @@ struct Running {
     limiter: gfx::perf::Limiter,
     dynres: gfx::perf::DynRes,
     display_hz: Option<f32>,
+    /// The window has the keyboard focus (Settings › Sound › Mute in background).
+    focused: bool,
     /// Browser diagnostics: the longest frame since the last report.
     #[cfg(target_arch = "wasm32")]
     web_max_ms: f32,
@@ -2652,6 +2884,13 @@ fn ui_action(r: &mut Running, k: Key, flying: bool) -> bool {
         Key::NameTags if st.mp.connected() => {
             st.mp.tags = !st.mp.tags;
             st.toasts.push(ui::toast::Kind::Info, if st.mp.tags { "Name tags on" } else { "Name tags off" }, "", 1.4);
+        }
+        // Live-traffic callsign tags (adsb/) when not in a multiplayer session.
+        Key::NameTags if st.adsb.settings.enabled => {
+            let t = &mut st.settings.live_traffic.tags;
+            *t = !*t;
+            st.settings_dirty = true;
+            st.toasts.push(ui::toast::Kind::Info, if *t { "Traffic tags on" } else { "Traffic tags off" }, "", 1.4);
         }
         Key::QuickChat if st.mp.connected() => st.mp.wheel = if st.mp.wheel.is_some() { None } else { Some(net::Wheel::default()) },
         Key::Chat | Key::PlayerList | Key::NameTags | Key::QuickChat => {}
@@ -2878,6 +3117,9 @@ impl App {
         ui.st.input.add_fakes_from_env();
         eprintln!("{}", ui.st.input.status);
         ui.st.db = db.clone();
+        if let Err(e) = setup_adsb(&self.args, &mut ui, false) {
+            eprintln!("{e}");
+        }
         if let Some(m) = self.args.hud_mode {
             ui.st.settings.hud = m;
         }
@@ -2919,7 +3161,16 @@ impl App {
             None => (args2, custom),
         };
         ui.st.screen = if self.args.no_menu || self.args.mission.is_some() { Screen::Loading } else { Screen::Main };
-        let audio = audio::Audio::new(ui.st.settings.sound.muted);
+        // Settings that live elsewhere or act once at start-up (ui/settings.rs).
+        ui.st.settings.player_name = ui.st.mp.prefs.name.clone();
+        ui.st.mp.tags = ui.st.settings.mp.name_tags;
+        ui.st.gpu_name = gpu.adapter_name();
+        ui.st.settings_ui.launch = Some(ui.st.settings.clone());
+        platform::set_offline(ui.st.settings.data.offline);
+        #[cfg(not(target_arch = "wasm32"))]
+        ui::settings_ui::prune_cache(ui.st.settings.data.cache_limit_mb);
+        let mut audio = audio::Audio::new(ui.st.settings.sound.muted);
+        audio.set_device(&ui.st.settings.audio_device);
         ui.audio_status = audio.status().to_string();
         ui.st.audio_status = ui.audio_status.clone();
         let session = Session::new(&args2, db, custom);
@@ -2950,6 +3201,7 @@ impl App {
             limiter: Default::default(),
             dynres,
             display_hz,
+            focused: true,
             #[cfg(target_arch = "wasm32")]
             web_max_ms: 0.0,
             #[cfg(target_arch = "wasm32")]
@@ -2972,7 +3224,11 @@ impl ApplicationHandler for App {
         let typing = r.ui.ctx.egui_wants_keyboard_input();
         match &event {
             WindowEvent::CloseRequested => {
-                r.ui.st.settings.save();
+                // (Changes not applied on the settings screen are not kept.)
+                match r.ui.st.settings_ui.base.as_ref().filter(|b| **b != r.ui.st.settings) {
+                    Some(b) => b.save(),
+                    None => r.ui.st.settings.save(),
+                }
                 el.exit();
             }
             WindowEvent::Resized(s) => {
@@ -3077,6 +3333,7 @@ impl ApplicationHandler for App {
                     MouseScrollDelta::PixelDelta(p) => p.y as f32 / 40.0,
                 };
             }
+            WindowEvent::Focused(f) => r.focused = *f,
             WindowEvent::RedrawRequested => self.frame(),
             _ => {}
         }
@@ -3203,6 +3460,9 @@ impl App {
             s.custom = custom.clone();
             let w = &mut s.world;
             w.radius = args2.radius.unwrap_or(w.radius);
+            if let Some(l) = args2.traffic {
+                w.traffic.set_level(l);
+            }
             if args2.live {
                 w.set_live(true);
             } else {
@@ -3221,6 +3481,9 @@ impl App {
                 sim.tenders = None;
                 sim.custom_start = custom;
                 sim.select(&s.world, args2.aircraft, args2.start, args2.watch);
+                if let Some(cfg) = args2.dogfight.clone() {
+                    sim.start_dogfight(&s.world, cfg);
+                }
                 if !args2.live {
                     sim.hours = args2.hours.unwrap_or(sim.hours);
                     sim.day_of_year = args2.day_of_year.unwrap_or(sim.day_of_year);
@@ -3348,7 +3611,10 @@ impl App {
                 r.input.pressed.retain(|k| *k != Key::Screenshot);
                 let before = s.sim.as_ref().map(|x| x.ac.pos);
                 if screen == Screen::Flying && s.catch_up.is_none() {
-                    s.sim.as_mut().unwrap().update(&s.world, &mut r.input, dt);
+                    let sim = s.sim.as_mut().unwrap();
+                    // Damage / crash assists (missions override them in the sim).
+                    sim.assists = damage::Assists { structural: r.ui.st.settings.structural_damage, crashes: r.ui.st.settings.crashes };
+                    sim.update(&s.world, &mut r.input, dt);
                 } else {
                     r.input.pressed.clear();
                     r.input.orbit_delta = glam::Vec2::ZERO;
@@ -3459,7 +3725,13 @@ impl App {
             r.audio.click();
             r.ui.audio_clicks = 0;
         }
-        r.audio.set_settings(r.ui.st.settings.sound);
+        {
+            let s = &r.ui.st.settings;
+            let mut snd = s.sound;
+            snd.muted |= s.mute_in_background && !r.focused;
+            r.audio.set_settings(snd);
+            r.audio.set_device(&s.audio_device);
+        }
         {
             // Other players' engines; the spectator camera is the listener.
             let mp = &r.ui.st.mp;
@@ -3468,7 +3740,13 @@ impl App {
                 let inv = view.inverse();
                 audio::Listener { pos: eye, fwd: -inv.z_axis.truncate(), up: inv.y_axis.truncate() }
             });
-            r.audio.set_traffic(mp.sounds(ear), listener);
+            // Live traffic (adsb/) fills the slots the players leave.
+            let mut sounds = mp.sounds(ear);
+            let lt = &r.ui.st.adsb;
+            if let Some(cam) = lt.cam.filter(|_| lt.settings.enabled) {
+                lt.sounds(cam.0, &mut sounds);
+            }
+            r.audio.set_traffic(sounds, listener);
         }
         if let Some(s) = r.session.as_ref() {
             r.audio.update(s.sim.as_ref(), &s.world, dt, r.ui.st.screen != Screen::Flying);
@@ -3595,6 +3873,7 @@ impl App {
                         r.ui.st.plan.airport = l.airport;
                         r.ui.st.plan.spec = startpos::Spec::decode(&l.start).unwrap_or(startpos::Spec::Runway(String::new()));
                         r.ui.st.plan.watch = l.watch;
+                        r.ui.st.plan.dogfight = None;
                     }
                     self.start_flight();
                 }
@@ -3619,8 +3898,16 @@ impl App {
                 sess.world.radius = ui::settings::detail_radius(s.detail);
             }
         }
+        if s.traffic.road != r.applied.traffic.road {
+            if let Some(sess) = r.session.as_mut() {
+                sess.world.traffic.set_level(traffic::Level::from_u8(s.traffic.road));
+            }
+        }
+        platform::set_offline(s.data.offline);
+        r.ui.st.mp.default_port = s.mp.default_port;
         r.applied = s;
-        if r.ui.st.settings_dirty && r.saved_at.elapsed() > Duration::from_secs(1) {
+        // (Unapplied changes on the settings screen wait for Apply.)
+        if r.ui.st.settings_dirty && r.saved_at.elapsed() > Duration::from_secs(1) && !r.ui.st.settings_ui.pending(&r.ui.st.settings) {
             r.ui.st.settings.save();
             r.ui.st.settings_dirty = false;
             r.saved_at = Instant::now();

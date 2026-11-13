@@ -3218,6 +3218,11 @@ pub struct Aircraft {
     cg_aft: f32,
     /// Floats / hull on the water: sea state and the last contact (src/water.rs).
     pub water: crate::water::WaterState,
+    /// Damage / crash assists (settings; the sim sets them each step).
+    pub assists: crate::damage::Assists,
+    /// A crash the crash assists may let the flight survive: decided at the
+    /// start of the next step (which knows the aircraft and the terrain).
+    pending_crash: Option<String>,
 }
 
 /// Kinematic state captured when the aircraft crashed.
@@ -3280,6 +3285,8 @@ impl Aircraft {
             rotor: Default::default(),
             cg_aft: 0.0,
             water: Default::default(),
+            assists: Default::default(),
+            pending_crash: None,
         };
         a.settle_engines(def, 0.0, 0.0, &isa(0.0));
         a
@@ -3587,6 +3594,17 @@ impl Aircraft {
     }
 
     fn crash(&mut self, reason: String) {
+        // Crash assists: decide next step whether the flight goes on.
+        if self.crashed.is_none() && self.assists.crashes != crate::damage::Realism::Realistic && !reason.starts_with("Simulation fault") {
+            if self.pending_crash.is_none() {
+                self.pending_crash = Some(reason);
+            }
+            return;
+        }
+        self.crash_now(reason);
+    }
+
+    fn crash_now(&mut self, reason: String) {
         if self.crashed.is_none() {
             self.impact = Some(Impact { pos: self.pos, vel: self.vel, rot: self.rot, omega: self.omega, on_ground: self.on_ground });
             // After a structural failure in the air, that is the cause.
@@ -3611,10 +3629,72 @@ impl Aircraft {
         self.ias = 0.0;
     }
 
+    /// Crash assists (`assists.crashes`): Forgiving — anything short of a
+    /// high-energy impact bounces / scrapes on; Off — nothing ends the
+    /// flight: minor contacts bounce, the rest resets the aircraft to a safe
+    /// state (level, 300 m above the ground, repaired). Returns false when the
+    /// crash stands (the aircraft is now crashed).
+    fn survive_crash(&mut self, def: &AircraftDef, env: &dyn Environment, reason: String) -> bool {
+        use crate::damage::{Realism, Severity};
+        let mode = self.assists.crashes;
+        let structural = self.dmg.failure.is_some();
+        // Judged by the impact energy (a hard landing that "broke up" the
+        // airframe in Realistic is just a hard landing here).
+        let kind = if reason.starts_with("Hard landing") { "hard landing" } else { reason.as_str() };
+        let sev = crate::damage::classify(def, kind, self.vel, structural);
+        let xz = Vec2::new(self.pos.x, self.pos.z);
+        let water = env.is_water(xz) && !def.on_water() && (reason.contains("water") || reason.contains("Ditch"));
+        let note = |a: &mut Self, msg: String| a.dmg.events.push(crate::damage::DamageEvent { part: None, msg, caution: true });
+        match mode {
+            Realism::Realistic => {}
+            Realism::Forgiving if sev == Severity::Destroyed || water => {}
+            Realism::Off if sev == Severity::Destroyed || water || structural => {
+                // Reset: level flight 300 m up at a safe speed, airframe repaired.
+                let ground = finite_or(env.ground_height(xz), 0.0).max(finite_or(env.obstacle_top(xz).unwrap_or(f32::MIN), f32::MIN));
+                let speed = self.vel.length().max(1.3 * def.vref_kt.max(def.vs1_kt) * KT).min(def.vno_kt.max(60.0) * KT);
+                let (assists, sys, heading) = (self.assists, self.sys.clone(), self.heading());
+                *self = Aircraft::airborne(def, Vec3::new(self.pos.x, ground + 300.0, self.pos.z), heading, speed);
+                self.assists = assists;
+                self.sys = sys;
+                self.dmg.mode = assists.structural;
+                note(self, format!("{reason} — reset (crashes off)"));
+                return true;
+            }
+            _ => {
+                // Bounce / scrape: wings level, nose no lower than level, on the
+                // gear (or over the obstacle), the sink and some speed gone.
+                let ground = finite_or(env.ground_height(xz), 0.0);
+                let top = env.obstacle_top(xz).filter(|t| t.is_finite() && *t > ground + 1.0);
+                let rest = def.gear.iter().map(|g| -g.pos.y).fold(0.5f32, f32::max) + 0.05;
+                let (heading, pitch) = (self.heading(), self.pitch().clamp(0.0, deg(10.0)));
+                self.rot = attitude(heading, pitch, 0.0);
+                self.omega = Vec3::ZERO;
+                self.dmg.side_f = 0.0;
+                let h = Vec3::new(self.vel.x, 0.0, self.vel.z);
+                self.vel = h * if top.is_some() { 0.6 } else { 0.85 };
+                self.pos.y = match top {
+                    Some(t) => t + rest + 2.0,
+                    None => ground + rest,
+                };
+                self.on_ground = top.is_none();
+                note(self, format!("{reason} — {} (crash assists)", if top.is_some() { "scraped over" } else { "bounced" }));
+                return true;
+            }
+        }
+        self.crash_now(reason);
+        false
+    }
+
     /// Advance the simulation by `dt` seconds (designed for 1/120 s).
     pub fn step(&mut self, def: &AircraftDef, ctl: &Controls, env: &dyn Environment, dt: f32) {
         if self.crashed.is_some() || !dt.is_finite() || dt <= 0.0 {
             return;
+        }
+        self.dmg.mode = self.assists.structural;
+        if let Some(reason) = self.pending_crash.take() {
+            if !self.survive_crash(def, env, reason) {
+                return;
+            }
         }
         if let Some(rd) = def.rotor.clone() {
             // Rotorcraft: own forces / drive train (src/rotor), shared contact and integration.
@@ -3802,7 +3882,9 @@ impl Aircraft {
                 } else if water_only {
                     "float struts collapsed"
                 } else {
-                    for p in [crate::damage::Part::GearL, crate::damage::Part::GearR, crate::damage::Part::GearNose] {
+                    // (With crash assists the gear survives a survivable landing.)
+                    let realistic = self.assists.crashes == crate::damage::Realism::Realistic;
+                    for p in [crate::damage::Part::GearL, crate::damage::Part::GearR, crate::damage::Part::GearNose].into_iter().filter(|_| realistic) {
                         if def.gear.iter().any(|g| crate::damage::gear_part(def, g) == Some(p)) {
                             self.dmg.separate(sd, def, p, "hard landing");
                         }
@@ -3886,7 +3968,8 @@ impl Aircraft {
         self.dmg.update(sd, def, &loads);
         // A ground loop / hard sideways skid folds the main gear.
         if self.on_ground && !water_only && self.dmg.side_f.abs() > sd.gear_side_g && loads.ground_speed > 8.0 && self.dmg.lost & crate::damage::GEAR_BITS == 0 && def.category != Category::Glider {
-            for p in [crate::damage::Part::GearL, crate::damage::Part::GearR] {
+            let realistic = self.assists.crashes == crate::damage::Realism::Realistic;
+            for p in [crate::damage::Part::GearL, crate::damage::Part::GearR].into_iter().filter(|_| realistic) {
                 if def.gear.iter().any(|g| crate::damage::gear_part(def, g) == Some(p)) {
                     self.dmg.separate(sd, def, p, "side load");
                 }
@@ -4124,6 +4207,22 @@ impl Aircraft {
             // Pitch-attitude protection: +30° / -15°.
             q_cmd = q_cmd.min(0.5 * (deg(30.0) - theta)).max(0.5 * (deg(-15.0) - theta));
         }
+        // Load-factor protection: the alpha that would give the limit g is
+        // approached at the same rate as the AoA limit, so the short-period
+        // lag can't carry nz past nz_max / nz_min (F-16 +9 / −3 g, airliner
+        // normal law +2.5 / −1 g).
+        let n_alpha = (def.cl_alpha * 0.5 * atm.density * vb.length_squared() * def.wing_area / (def.mass * GRAVITY)).max(1.0);
+        // (The airliner law's slower inner loop settles a little past a
+        // negative target: aim 10 % short so −1 g is not exceeded.)
+        let q_hi = q_path + 2.5 * (if jet { 1.0 } else { 0.97 } * nz_max - nz) / n_alpha;
+        let q_lo = q_path + 2.5 * (if jet { 0.97 } else { 0.9 } * nz_min - nz) / n_alpha;
+        if q_cmd > q_hi || q_cmd < q_lo || nz > nz_max || nz < nz_min {
+            // Protection active: unwind the integrators (their wind-up from
+            // the entry held Concorde at −1.17 g for seconds).
+            self.nz_int *= 0.95;
+            self.q_int *= 0.95;
+        }
+        q_cmd = q_cmd.clamp(q_lo.min(q_hi), q_hi.max(q_lo));
         // AoA protection.
         q_cmd = q_cmd.min(q_path + 2.5 * (a_max - self.alpha));
         q_cmd = q_cmd.max(q_path + 2.5 * (a_min - self.alpha));

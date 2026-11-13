@@ -52,6 +52,12 @@ fn daily(h: f32, pts: &[(f32, f32)]) -> f32 {
     pts[0].1
 }
 
+/// Road traffic over the day relative to the rush hours (0..1): quiet in
+/// the small hours, peaks around 8:00 and 18:00 (also drives traffic/).
+pub fn traffic_level(h: f32) -> f32 {
+    daily(h, &[(0.0, 0.3), (3.0, 0.12), (6.0, 0.5), (8.0, 1.0), (10.0, 0.75), (16.5, 0.85), (18.0, 1.0), (20.0, 0.7), (22.5, 0.5)])
+}
+
 impl NightState {
     pub fn new(clock: &SkyClock, sun: Vec3, cover: f32) -> NightState {
         let (moon_dir, dist) = atmosphere::moon_direction(clock);
@@ -62,7 +68,7 @@ impl NightState {
         let street = smooth(0.03 + 0.05 * cover, -0.015, sun.y);
         let office = daily(h, &[(0.0, 0.10), (5.5, 0.08), (7.5, 0.55), (9.0, 0.8), (17.0, 0.8), (18.5, 0.55), (20.0, 0.32), (22.0, 0.18)]);
         let homes = daily(h, &[(0.0, 0.13), (1.5, 0.06), (4.5, 0.04), (6.5, 0.22), (8.5, 0.1), (16.0, 0.16), (18.5, 0.36), (21.0, 0.4), (23.0, 0.24)]);
-        let traffic = daily(h, &[(0.0, 0.3), (3.0, 0.12), (6.0, 0.5), (8.0, 1.0), (10.0, 0.75), (16.5, 0.85), (18.0, 1.0), (20.0, 0.7), (22.5, 0.5)]);
+        let traffic = traffic_level(h);
         NightState { moon_dir, moon_e, moon_frac, moon_alpha, star_rot: atmosphere::star_rotation(clock), street, office, homes, traffic, hours: h }
     }
 }

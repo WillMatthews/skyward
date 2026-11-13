@@ -326,6 +326,8 @@ pub fn draw(ui: &mut Ui, st: &mut UiState) {
                 yy += 24.0;
             }
             if let Some(d) = &e.details {
+                kv(&p, yy, "COMBAT", if d.world.combat { "On — weapons fire and do damage" } else { "Off" });
+                yy += 24.0;
                 if !d.world.metar.is_empty() {
                     kv(&p, yy, "METAR", "");
                     let g = p.layout(d.world.metar.clone(), f_mono(11.5), pal::TEXT2, dwid - 104.0);

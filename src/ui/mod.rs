@@ -10,22 +10,28 @@
 
 pub mod browser;
 pub mod canvas;
+pub mod chrome;
 pub mod comms;
 pub mod controls;
 pub mod failures;
 pub mod flight;
 pub mod gauges;
+pub mod geffects;
 pub mod glass;
 pub mod hudsym;
+pub mod weapons;
 pub mod map;
 pub mod mapdata;
 pub mod menus;
 pub mod mp;
 pub mod missions;
 pub mod overview;
+pub mod palette;
 pub mod radio;
 pub mod scroll;
 pub mod settings;
+pub mod settings_schema;
+pub mod settings_ui;
 pub mod settings_video;
 pub mod toast;
 
@@ -50,7 +56,8 @@ pub mod pal {
     pub const HAIRLINE_HI: Color32 = Color32::from_rgba_premultiplied(48, 52, 60, 60);
     pub const TEXT: Color32 = Color32::from_rgb(236, 240, 245);
     pub const TEXT2: Color32 = Color32::from_rgb(164, 174, 188);
-    pub const TEXT3: Color32 = Color32::from_rgb(112, 122, 138);
+    /// (≥ 4.5 : 1 on PANEL_SOLID and RAISED: WCAG AA for the hint text.)
+    pub const TEXT3: Color32 = Color32::from_rgb(130, 140, 156);
     pub const ACCENT: Color32 = Color32::from_rgb(92, 178, 255);
     pub const ACCENT_DEEP: Color32 = Color32::from_rgb(38, 110, 196);
     pub const ACCENT_BG: Color32 = Color32::from_rgba_premultiplied(14, 28, 40, 46);
@@ -218,7 +225,7 @@ pub fn install_style(ctx: &egui::Context) {
 pub fn zoom_for(height_px: f32, native_ppp: f32, user_scale: f32) -> f32 {
     // egui's points-per-pixel = zoom × native; aim for ~1080 points of height.
     let native = native_ppp.max(0.5);
-    ((height_px / native / 1080.0).clamp(0.72, 3.0) * user_scale.clamp(0.6, 2.0)).max(0.5)
+    ((height_px / native / 1080.0).clamp(0.72, 3.0) * user_scale.clamp(settings::UI_SCALE_MIN, settings::UI_SCALE_MAX)).max(0.5)
 }
 
 // ---------------------------------------------------------------- painting helpers
@@ -493,15 +500,24 @@ pub struct Plan {
     pub airport: String,
     pub spec: crate::startpos::Spec,
     pub watch: bool,
+    /// A dogfight quick start (weapons/).
+    pub dogfight: Option<crate::weapons::setup::Config>,
 }
 
 pub struct UiState {
     pub screen: Screen,
+    /// The main menu's dogfight choices.
+    pub dogfight: crate::weapons::setup::Config,
     /// Where Back / Done returns to from settings and credits.
     pub back_to: Screen,
     pub settings: settings::Settings,
     pub settings_dirty: bool,
-    pub settings_tab: usize,
+    /// The settings screen: category, search, Apply / Revert base, focus (ui/settings_ui.rs).
+    pub settings_ui: settings_ui::SetUi,
+    /// Graphics adapter name (Settings › About).
+    pub gpu_name: String,
+    /// G-effects state (ui/geffects.rs).
+    pub g_stress: geffects::GStress,
     pub plan: Plan,
     pub defs: Vec<crate::flight::AircraftDef>,
     pub picker: menus::Picker,
@@ -536,6 +552,8 @@ pub struct UiState {
     pub aircraft_group: Option<menus::Group>,
     /// Multiplayer session (net/) and the server browser's model.
     pub mp: crate::net::Mp,
+    /// Live real-world traffic (ADS-B, `adsb/`).
+    pub adsb: crate::adsb::LiveTraffic,
     pub browser: crate::net::browse::Browser,
     /// Missions: selection, records, the active one, the last result.
     pub missions: missions::MissionUi,
@@ -552,8 +570,11 @@ impl UiState {
             back_to: Screen::Main,
             settings,
             settings_dirty: false,
-            settings_tab: 0,
-            plan: Plan { aircraft: 0, airport: "EGLC".into(), spec: crate::startpos::Spec::Runway(String::new()), watch: false },
+            settings_ui: Default::default(),
+            gpu_name: String::new(),
+            g_stress: Default::default(),
+            plan: Plan { aircraft: 0, airport: "EGLC".into(), spec: crate::startpos::Spec::Runway(String::new()), watch: false, dogfight: None },
+            dogfight: Default::default(),
             defs: crate::flight::catalogue(),
             picker: menus::Picker::default(),
             toasts: toast::Toasts::default(),
@@ -578,6 +599,7 @@ impl UiState {
             controls_axis: None,
             aircraft_group: None,
             mp: crate::net::Mp::new(),
+            adsb: crate::adsb::LiveTraffic::new(),
             browser: Default::default(),
             missions: Default::default(),
             dt: 1.0 / 60.0,

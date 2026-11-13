@@ -239,5 +239,7 @@ pub fn draw(p: &egui::Painter, cam: &Cam, field: Rect, sim: &Sim, k: f32, col: C
     if ac.stall_warning() && (sim.time * 4.0).fract() < 0.6 {
         text(p, Pos2::new(field.center().x, field.center().y + 50.0 * k), Align2::CENTER_CENTER, "AOA", 16.0 * k, pal::RED);
     }
+    // Weapons symbology (gun funnel / LCOS, seeker, ASE, launch zone).
+    super::weapons::hud(p, cam, field, sim, k, col);
     let _ = (up, f_inst);
 }

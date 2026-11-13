@@ -89,6 +89,9 @@ struct Motion {
     // Spread of the eye distances in the 3×3 neighbourhood (slopes, edges).
     range: f32,
     object: bool,
+    // Something moving whose motion isn't known (velocity w < 0: missiles,
+    // tracers, flames): use mostly this frame there.
+    reactive: bool,
 };
 
 fn motion_at(uv: vec2<f32>) -> Motion {
@@ -113,10 +116,13 @@ fn motion_at(uv: vec2<f32>) -> Motion {
     m.dist = best;
     m.range = far - best;
     m.object = false;
-    // An aircraft (velocity pass) in front: its own motion, if it is what
-    // the scene shows there (not hidden behind something nearer).
+    m.reactive = false;
+    // An aircraft / vehicle (velocity pass) in front: its own motion, if it
+    // is what the scene shows there (not hidden behind something nearer).
     let v = in_load(vel_tex, bp);
-    if (v.z > 0.0 && abs(v.z - best) < 0.03 * v.z + 0.6) {
+    let seen = v.z > 0.0 && abs(v.z - best) < 0.03 * v.z + 0.6;
+    m.reactive = seen && v.w < 0.0;
+    if (seen && v.w >= 0.0) {
         m.mv = v.xy;
         m.prev_dist = v.w;
         m.object = true;
@@ -259,7 +265,7 @@ fn fs_taa(in: FsOut) -> TaaOut {
     // Still pixels (a parked camera, the cockpit) keep sub-pixel detail the
     // current frame missed (thin lines, wires): a loose box; moving ones a
     // tight box bounded by the neighbourhood's extremes.
-    let still = 1.0 - smoothstep(0.05, 1.5, mpx);
+    let still = select(1.0 - smoothstep(0.05, 1.5, mpx), 0.0, mot.reactive);
     let gamma = mix(1.0, 3.0, still);
     var bmin = mean - sd * gamma;
     var bmax = mean + sd * gamma;
@@ -285,6 +291,9 @@ fn fs_taa(in: FsOut) -> TaaOut {
     a = a * mix(0.35, 1.0, wmax);
     if (disoccluded) {
         a = max(a, 0.5);
+    }
+    if (mot.reactive) {
+        a = max(a, 0.7);
     }
     a = clamp(a, 0.02, 1.0);
     // Luminance-weighted (anti-flicker) blend.

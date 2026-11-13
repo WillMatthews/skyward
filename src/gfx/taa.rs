@@ -17,6 +17,24 @@ use glam::{Mat4, Vec2, Vec3, Vec4, vec2};
 pub const VEL: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const HDR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
+/// The reactive mask: eye-relative dynamic-mesh vertices → (0, 0, distance, −1).
+const REACTIVE: &str = r#"
+struct VelU { view_proj: mat4x4<f32>, view_proj_now: mat4x4<f32>, view_proj_prev: mat4x4<f32>, eye_dt: vec4<f32> };
+@group(0) @binding(0) var<uniform> vu: VelU;
+struct O { @builtin(position) clip: vec4<f32>, @location(0) rel: vec3<f32> };
+@vertex
+fn vs_r(@location(0) p: vec3<f32>) -> O {
+    var o: O;
+    o.clip = vu.view_proj * vec4<f32>(p, 1.0);
+    o.rel = p;
+    return o;
+}
+@fragment
+fn fs_r(in: O) -> @location(0) vec4<f32> {
+    return vec4<f32>(0.0, 0.0, length(in.rel), -1.0);
+}
+"#;
+
 /// Element `i` (1-based) of the Halton sequence in `base`.
 pub fn halton(mut i: u32, base: u32) -> f32 {
     let mut f = 1.0;
@@ -84,6 +102,8 @@ pub struct VelU {
     pub view_proj: [[f32; 4]; 4],
     pub view_proj_now: [[f32; 4]; 4],
     pub view_proj_prev: [[f32; 4]; 4],
+    /// This eye − last frame's eye (m), w = the frame interval (s).
+    pub eye_dt: [f32; 4],
 }
 
 #[repr(C)]
@@ -143,6 +163,8 @@ fn tex(device: &wgpu::Device, label: &str, w: u32, h: u32, format: wgpu::Texture
 /// The AA / camera-effects passes and their targets.
 pub struct Post {
     bgl: wgpu::BindGroupLayout,
+    /// Velocity pass: the dynamic mesh as "reactive" (no motion known).
+    reactive: wgpu::RenderPipeline,
     taa: wgpu::RenderPipeline,
     fxaa: wgpu::RenderPipeline,
     mblur: wgpu::RenderPipeline,
@@ -248,7 +270,44 @@ impl Post {
             layout: &vbgl,
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: vel_ubuf.as_entire_binding() }],
         });
+        let reactive = {
+            let m = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("reactive"), source: wgpu::ShaderSource::Wgsl(REACTIVE.into()) });
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("reactive"), bind_group_layouts: &[Some(&vbgl)], immediate_size: 0 });
+            const ATTR: [wgpu::VertexAttribute; 1] = [wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 0, shader_location: 0 }];
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("reactive"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &m,
+                    entry_point: Some("vs_r"),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<crate::scene::Vert>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &ATTR,
+                    })],
+                },
+                primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: crate::gfx::DEPTH,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &m,
+                    entry_point: Some("fs_r"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState { format: VEL, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
         Post {
+            reactive,
             taa: pipe("fs_taa"),
             fxaa: pipe("fs_fxaa"),
             mblur: pipe("fs_mblur"),
@@ -308,10 +367,12 @@ impl Post {
         vp_j: Mat4,
         vp: Mat4,
         prev_vp: Mat4,
+        eye_dt: Vec4,
+        reactive: Option<(&wgpu::Buffer, &wgpu::Buffer, u32)>,
         draw: impl FnOnce(&mut wgpu::RenderPass<'_>, &wgpu::BindGroup),
     ) {
         self.ensure_vel(device, w, h);
-        let u = VelU { view_proj: vp_j.to_cols_array_2d(), view_proj_now: vp.to_cols_array_2d(), view_proj_prev: prev_vp.to_cols_array_2d() };
+        let u = VelU { view_proj: vp_j.to_cols_array_2d(), view_proj_now: vp.to_cols_array_2d(), view_proj_prev: prev_vp.to_cols_array_2d(), eye_dt: eye_dt.to_array() };
         queue.write_buffer(&self.vel_ubuf, 0, bytemuck::bytes_of(&u));
         let (v, d) = self.vel.as_ref().unwrap();
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -332,6 +393,15 @@ impl Post {
             multiview_mask: None,
         });
         draw(&mut pass, &self.vel_bg);
+        // Moving things without their own motion (missiles, tracers, flames,
+        // the London Eye: the dynamic mesh): reactive — TAA trusts this frame there.
+        if let Some((vb, ib, n)) = reactive {
+            pass.set_pipeline(&self.reactive);
+            pass.set_bind_group(0, &self.vel_bg, &[]);
+            pass.set_vertex_buffer(0, vb.slice(..));
+            pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..n, 0, 0..1);
+        }
     }
 
     /// The view of an input (ours must exist: produced earlier this frame).

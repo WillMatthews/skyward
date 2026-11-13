@@ -198,8 +198,11 @@ struct Globals {
     misc2: [f32; 4],
     /// Aircraft spot / point lights (see lights::gpu::pack_spots).
     alights: [[f32; 4]; 3 * crate::lights::place::AC_SPOTS],
-    /// x pre-exposure (radiances written to the HDR targets are x this), y its inverse.
+    /// x pre-exposure (radiances written to the HDR targets is x this), y its inverse,
+    /// z mirror plane height, w alpha-dither frame (0 = MSAA).
     pre: [f32; 4],
+    /// Quality (gfx/quality.rs): x soft shadows (1 = PCF), yzw unused.
+    gq: [f32; 4],
 }
 
 #[repr(C)]
@@ -336,6 +339,8 @@ pub struct FrameView {
     pub aircraft: Option<crate::gfx_aircraft::AircraftFrame>,
     /// Particles, trails, vapour and heat haze (vfx/).
     pub vfx: Option<std::sync::Arc<crate::vfx::VfxFrame>>,
+    /// Other aircraft (the fight's AI / remote aircraft, weapons/), eye-relative like `aircraft`.
+    pub others: Vec<crate::gfx_aircraft::AircraftFrame>,
 }
 
 /// Trees are drawn up to this distance (m) from the eye; detailed within TREE_LOD0.
@@ -585,6 +590,12 @@ pub struct Renderer {
     pub airport: crate::airport::gfx::AirportRenderer,
     /// This frame's airport instances (set before `render`).
     airport_frame: Option<crate::airport::Frame>,
+    /// Road traffic (traffic/gpu.rs): prepared before `render`.
+    pub road_traffic: crate::traffic::gpu::TrafficRenderer,
+    /// Traffic setting: simulated radius (m, 0 = off) and density share
+    /// (the far light streaks follow it).
+    traffic_radius: f32,
+    traffic_density: f32,
     /// Other aircraft this frame (multiplayer, net/): models and light sprites, eye-relative.
     traffic: Vec<crate::gfx_aircraft::AircraftFrame>,
     traffic_lights: Vec<crate::lights::LightInst>,
@@ -620,6 +631,8 @@ pub struct Renderer {
     /// The same for TAA / motion blur / velocities: kept when only the render
     /// targets are re-created (dynamic resolution), dropped on camera cuts.
     cam_prev: Option<(Mat4, Vec3)>,
+    /// Last frame's time (s): road-traffic motion over the frame interval.
+    prev_time: Option<f32>,
     /// Current floating-origin frame and pattern space (set_frame).
     proj: Proj,
     pattern: [f32; 4],
@@ -1071,6 +1084,9 @@ impl Renderer {
             aircraft: crate::gfx_aircraft::AircraftRenderer::new(device, queue, &globals_bgl, &shadow_bgl, IMMEDIATE_SIZE),
             airport: crate::airport::gfx::AirportRenderer::new(device, queue, &globals_bgl, &shadow_bgl),
             airport_frame: None,
+            road_traffic: crate::traffic::gpu::TrafficRenderer::new(device, &globals_bgl, &shadow_bgl),
+            traffic_radius: crate::traffic::Level::default().radius(),
+            traffic_density: crate::traffic::Level::default().density(),
             traffic: Vec::new(),
             traffic_lights: Vec::new(),
             globals_bgl,
@@ -1127,6 +1143,7 @@ impl Renderer {
             prof: perf::GpuProfiler::new(device, queue),
             prev_vp: None,
             cam_prev: None,
+            prev_time: None,
             proj: Proj::new(0.0, 0.0),
             pattern: [1.0, 0.0, 0.0, 0.0],
             anchor: (0.0, 0.0),
@@ -1144,6 +1161,13 @@ impl Renderer {
     /// Airport instances for the next `render` (airport/: parked aircraft, vehicles, windsocks).
     pub fn set_airport_frame(&mut self, f: crate::airport::Frame) {
         self.airport_frame = Some(f);
+    }
+
+    /// The road traffic setting (far light streaks, the simulated radius).
+    pub fn set_traffic_level(&mut self, l: crate::traffic::Level) {
+        self.traffic_radius = l.radius();
+        self.traffic_density = l.density();
+        self.lights.streaks = l != crate::traffic::Level::Off;
     }
 
     /// Other aircraft for the next `render` (multiplayer traffic: real models,
@@ -1627,7 +1651,9 @@ impl Renderer {
             self.dynamic.set(device, queue, &all);
         }
         self.aircraft.prepare(device, queue, fv.aircraft.as_ref());
-        let traffic = std::mem::take(&mut self.traffic);
+        let mut traffic = std::mem::take(&mut self.traffic);
+        // (Plus the fight's other aircraft, weapons/.)
+        traffic.extend(fv.others.iter().cloned());
         self.aircraft.prepare_traffic(device, queue, &traffic);
         if self.traffic_lights.is_empty() {
             self.lights.set_aircraft(queue, &fv.acl.sprites[..fv.acl.n_sprites]);
@@ -1801,10 +1827,11 @@ impl Renderer {
             city: [street, night.office, night.homes, night.hours],
             lmap: [lmap_c.x - fv.eye.x, lmap_c.y - fv.eye.z, 1.0 / crate::lights::gpu::MAP_SIZE, if street > 0.0 { 1.0 } else { 0.0 }],
             misc: [airport_level, beacon, wx.fog_ext, wx.fog_top],
-            misc2: [night.traffic, n_spots as f32, night.moon_alpha, if q.soft_shadows { 1.0 } else { 0.0 }],
+            misc2: [night.traffic * self.traffic_density, n_spots as f32, night.moon_alpha, self.traffic_radius],
             alights: spots,
             // w: 1 = no MSAA — alpha-tested / translucent surfaces dither (TAA resolves it).
             pre: [pre, 1.0 / pre, plane_h, if msaa() > 1 { 0.0 } else { 1.0 + (self.post.frame % 64) as f32 }],
+            gq: [if q.soft_shadows { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
         };
         let px_per_m = height as f32 * 0.5 / (fv.fov_y * 0.5).tan();
         let aou = AoU {
@@ -2022,6 +2049,7 @@ impl Renderer {
                 pass.draw_indexed(0..n, 0, 0..1);
             }
             self.airport.draw_shadow(&mut pass, i);
+            self.road_traffic.draw_shadow(&mut pass, i);
             self.aircraft.draw_shadow(&mut pass);
             pass.set_pipeline(&self.shadow_tree);
             for t in &tiles {
@@ -2034,7 +2062,7 @@ impl Renderer {
         }
 
         if street > 0.0 {
-            self.lights.draw_map(encoder, &tile_draws, world_xf);
+            self.lights.draw_map(encoder, &tile_draws, world_xf, self.road_traffic.lights().map(|(b, n, _)| (b, n)));
         }
         if let Some(p) = prof {
             p.mark(encoder, 2);
@@ -2224,6 +2252,7 @@ impl Renderer {
                 pass.draw_indexed(0..n, 0, 0..1);
             }
             self.airport.draw_main(&mut pass);
+            self.road_traffic.draw_main(&mut pass);
             self.aircraft.draw_main(&mut pass);
             pass.set_pipeline(&self.tree_main);
             for tile in &tiles {
@@ -2235,6 +2264,11 @@ impl Renderer {
             }
             // Lights, traffic and stars (additive, depth-tested).
             self.lights.draw_sprites(&mut pass, &tile_draws, world_xf, false, street > 0.0 || night_k > 0.0);
+            if let (Some((buf, n, repeat)), true) = (self.road_traffic.lights(), street > 0.0) {
+                for _ in 0..repeat {
+                    self.lights.draw_vehicle_lights(&mut pass, buf, n);
+                }
+            }
         }
         if let Some(p) = self.prof.as_ref() {
             p.mark(encoder, 4);
@@ -2242,8 +2276,15 @@ impl Renderer {
         // Object motion for TAA / motion blur: the aircraft's velocity pass.
         if taa_on || q.motion_blur > 0 {
             let prev = self.cam_prev.map(|(m, _)| m).unwrap_or(vp_rot);
-            let ac = &self.aircraft;
-            self.post.velocity_pass(device, queue, encoder, width, height, vp_rot_j, vp_rot, prev, |pass, bg| ac.draw_velocity(pass, bg));
+            let (ac, rt) = (&self.aircraft, &self.road_traffic);
+            let (eye_dt, dt) = match (self.cam_prev, self.prev_time) {
+                (Some((_, e)), Some(t0)) => (fv.eye - e, (fv.time - t0).clamp(0.0, 0.25)),
+                _ => (Vec3::ZERO, 0.0),
+            };
+            self.post.velocity_pass(device, queue, encoder, width, height, vp_rot_j, vp_rot, prev, eye_dt.extend(dt), dynamic, |pass, bg| {
+                ac.draw_velocity(pass, bg);
+                rt.draw_velocity(pass, bg);
+            });
         }
         // SSAO from this frame's distances, used (reprojected) next frame.
         for (view, pipe, bg) in [(&t.ao_raw, &self.ao_pipe, &t.ao_bg), (&t.ao, &self.ao_blur_pipe, &t.ao_blur_bg)].into_iter().filter(|_| ao_on) {
@@ -2510,6 +2551,7 @@ impl Renderer {
         xfs.flush(queue);
         self.prev_vp = Some((vp_rot, fv.eye));
         self.cam_prev = Some((vp_rot, fv.eye));
+        self.prev_time = Some(fv.time);
         self.stats = stats;
     }
 }

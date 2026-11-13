@@ -8,6 +8,7 @@ struct VelU {
     view_proj: mat4x4<f32>,      // this frame, jittered (rasterisation; matches the main pass)
     view_proj_now: mat4x4<f32>,  // this frame, unjittered
     view_proj_prev: mat4x4<f32>, // last frame's, unjittered, relative to last frame's eye
+    eye_dt: vec4<f32>,           // this eye − last frame's eye (m), w = frame interval (s)
 };
 struct AcInst {
     model: mat4x4<f32>,

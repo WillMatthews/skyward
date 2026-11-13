@@ -156,6 +156,17 @@ impl Director {
         (d + p.distance(self.fin.thr)) / NM
     }
 
+    /// Push the rest of the pattern (downwind / base points) `d` m further
+    /// out along the approach: spacing behind traffic already on final
+    /// (`traffic.rs`). The closing heading and intercept altitude stay.
+    pub fn extend(&mut self, d: f32) {
+        let out = -self.fin.dir * d;
+        let from = self.wp.min(self.plan.wps.len());
+        for w in &mut self.plan.wps[from..] {
+            *w += out;
+        }
+    }
+
     /// Advance with the aircraft's position, heading (deg true), TAS and the wind.
     pub fn update(&mut self, pos: Vec2, hdg: f32, tas: f32, wind: Vec2) -> Option<Call> {
         if self.intercept_given {

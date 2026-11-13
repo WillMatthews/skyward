@@ -30,11 +30,12 @@ struct Globals {
     city: vec4<f32>,      // x street lights on, y office windows lit, z home windows lit, w local hours
     lmap: vec4<f32>,      // ground light map: eye-relative centre x, z, 1 / size, enabled
     misc: vec4<f32>,      // x airport lights level, y beacons on, z ground fog extinction (/km), w fog top (m)
-    misc2: vec4<f32>,     // x traffic density, y aircraft lights count, z moon phase angle, w soft shadows (1 = PCF)
+    misc2: vec4<f32>,     // x traffic density, y aircraft lights count, z moon phase angle, w simulated traffic radius (m, 0 = none)
     alights: array<vec4<f32>, 12>, // aircraft lights: [pos, range], [dir, cos outer], [rgb cd, cos inner]
     pre: vec4<f32>,       // x pre-exposure: every radiance written to the HDR targets is x this
                           // (sun_e, sky.x and the SH ambient already include it), y 1 / x,
                           // z mirror plane height, w = 0 with MSAA, else 1 + frame index (alpha dither)
+    gq: vec4<f32>,        // quality (gfx/quality.rs): x soft shadows (1 = PCF)
 };
 
 // Absolute radiance (scene units) → what the HDR targets hold.
@@ -329,7 +330,7 @@ fn cascade_sample(idx: i32, wpos: vec3<f32>, n: vec3<f32>) -> f32 {
         return 1.0;
     }
     let ts = 1.0 / g.shadow_info.x;
-    if (g.misc2.w < 0.5) {
+    if (g.gq.x < 0.5) {
         // Hard shadows (low quality): one bilinear comparison (2x2 PCF).
         return textureSampleCompareLevel(shadow_map, shadow_samp, uv, idx, p.z - 0.00002);
     }

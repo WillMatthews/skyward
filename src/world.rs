@@ -188,6 +188,8 @@ pub struct World {
     base_check_tiles: usize,
     /// Airport detail (airport/): layouts, bakes, stands, vehicles.
     pub airport_detail: crate::airport::AirportScene,
+    /// Road traffic over the resident tiles' lane graphs (traffic/).
+    pub traffic: crate::traffic::Traffic,
 }
 
 fn rect_dist(r: (Vec2, Vec2), p: Vec2) -> f32 {
@@ -246,6 +248,7 @@ impl World {
             base_check: None,
             base_check_tiles: 0,
             airport_detail: crate::airport::AirportScene::new(),
+            traffic: crate::traffic::Traffic::new(proj),
         }
     }
 
@@ -414,6 +417,7 @@ impl World {
         self.field_off = (self.field_off.0 - dx, self.field_off.1 - dz);
         self.proj = new;
         self.rebases += 1;
+        self.traffic.rebase(new);
         for (id, t) in self.tiles.iter_mut() {
             t.xf = Proj::tile_frame(*id).map_to(&new);
             t.rect = id.rect(&new);
@@ -552,6 +556,9 @@ impl World {
         if let Some(a) = &b.aero {
             self.airport_detail.add_tile(b.id, a.clone(), b.grid.clone(), self.airport_db.as_ref());
         }
+        if let Some(r) = &b.roads {
+            self.traffic.add_tile(r.clone());
+        }
         let trees = b.trees.len();
         let water = b.collision.water_levels(&b.grid);
         self.tiles.insert(b.id, Loaded { rect, xf, far: b.id.is_far(), collision: b.collision, grid: b.grid.clone(), buildings: b.building_count, trees });
@@ -643,6 +650,7 @@ impl World {
             self.uploads.retain(|u| u.id != id);
             self.evicted.push(id);
             self.airport_detail.remove_tile(id);
+            self.traffic.remove_tile(id);
         }
         let now = Instant::now();
         let busy = self.pool.in_flight();
@@ -890,6 +898,7 @@ impl World {
                 self.uploads.retain(|u| u.id != id);
                 self.evicted.push(id);
                 self.airport_detail.remove_tile(id);
+                self.traffic.remove_tile(id);
             }
         }
         self.airport_db = Some(db);
@@ -1072,6 +1081,7 @@ mod tests {
             runways: vec![RunwayPiece { a: rw.0, b: rw.1, name: "09/27".into() }],
             airports: vec![],
             aero: Default::default(),
+            roads: vec![],
         };
         (scene::build_tile(id, &tp, f), tower, pond, rw)
     }
