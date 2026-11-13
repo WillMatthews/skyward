@@ -20,6 +20,29 @@ enum Anim {
     Scale { center: Vec3, s: [Expr; 3] },
 }
 
+/// Texture-coordinate animation (FG `textranslate` / `texrotate`), already in
+/// Skyward's UV space (v down: v = 1 − t).
+#[derive(Clone, Debug)]
+enum UvAnim {
+    Translate { axis: Vec2, v: Expr },
+    /// Rotation about `center` by `v` degrees (counter-clockwise in UV space).
+    Rotate { center: Vec2, v: Expr },
+}
+
+impl UvAnim {
+    fn to_json(&self) -> Value {
+        match self {
+            UvAnim::Translate { axis, v } => json!({"t": "tr", "a": [axis.x, axis.y], "v": v.to_json()}),
+            UvAnim::Rotate { center, v } => json!({"t": "rot", "c": [center.x, center.y], "v": v.to_json()}),
+        }
+    }
+    fn expr(&self) -> &Expr {
+        match self {
+            UvAnim::Translate { v, .. } | UvAnim::Rotate { v, .. } => v,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 struct Flags {
     translucent: bool,
@@ -28,6 +51,10 @@ struct Flags {
     /// Emission colour × expression (material animations).
     emit: Option<(Vec3, Expr)>,
     texture: Option<PathBuf>,
+    /// Texture animations, innermost first.
+    uv: Vec<UvAnim>,
+    /// Glass display shown on this geometry (index into the config's `displays`).
+    display: Option<usize>,
 }
 
 #[derive(Default)]
@@ -62,10 +89,16 @@ struct Builder<'a> {
     interior_models: Vec<Regex>,
     interior_objects: Vec<Regex>,
     light_models: Vec<Regex>,
+    /// (object-name regex, display kind, optional model-path regex) — glass display screens.
+    displays: Vec<(Regex, String, Option<Regex>)>,
     tex_override: HashMap<String, String>,
     range_m: f32,
+    /// Eye distance used for `range` LOD picks inside the cockpit.
+    interior_range_m: f32,
     log: Vec<String>,
     anim_counts: HashMap<String, usize>,
+    /// Model files being loaded (outermost first), for path-qualified display rules.
+    model_stack: Vec<String>,
 }
 
 fn regexes(cfg: &Value, key: &str) -> Vec<Regex> {
@@ -127,30 +160,33 @@ impl<'a> Builder<'a> {
         let ac = ac3d::parse(&text).map_err(|e| format!("{}: {e}", path.display()))?;
         let mats = std::rc::Rc::new(ac.materials);
         let dir = path.parent().unwrap().to_path_buf();
-        let interior = self.interior_models.iter().any(|r| r.is_match(&self.rel(path)));
-        self.add_ac_object(&ac.root, &mats, &dir, parent, interior);
+        let rel = self.rel(path);
+        let interior = self.interior_models.iter().any(|r| r.is_match(&rel));
+        let rel = format!("{} {rel}", self.model_stack.join(" "));
+        self.add_ac_object(&ac.root, &mats, &dir, parent, interior, &rel);
         Ok(())
     }
 
-    fn add_ac_object(&mut self, o: &AcObject, mats: &std::rc::Rc<Vec<AcMaterial>>, dir: &Path, parent: usize, interior: bool) {
+    fn add_ac_object(&mut self, o: &AcObject, mats: &std::rc::Rc<Vec<AcMaterial>>, dir: &Path, parent: usize, interior: bool, rel: &str) {
         if self.exclude_objects.iter().any(|r| r.is_match(&o.name)) {
             return;
         }
         let texture = o.texture.as_ref().and_then(|t| self.texture_path(t, dir));
         let interior = interior || self.interior_objects.iter().any(|r| r.is_match(&o.name));
         let geom = (!o.tris.is_empty()).then(|| Geom { obj_tris: o.tris.clone(), materials: mats.clone(), texture, crease: o.crease });
+        let display = if o.tris.is_empty() { None } else { self.displays.iter().position(|(r, _, p)| r.is_match(&o.name) && p.as_ref().is_none_or(|p| p.is_match(rel))) };
         let id = self.add(
             Node {
                 name: o.name.clone(),
                 geom,
                 lines: o.lines.clone(),
-                flags: Flags { interior, ..Default::default() },
+                flags: Flags { interior, display, ..Default::default() },
                 ..Default::default()
             },
             Some(parent),
         );
         for k in &o.kids {
-            self.add_ac_object(k, mats, dir, id, interior);
+            self.add_ac_object(k, mats, dir, id, interior, rel);
         }
     }
 
@@ -175,6 +211,13 @@ impl<'a> Builder<'a> {
 
     /// Load a model XML (or .ac) under `parent`; returns its group node.
     fn load_model(&mut self, path: &Path, name: &str, parent: usize, depth: usize) -> Result<usize, String> {
+        self.load_model_with(path, name, parent, depth, None)
+    }
+
+    /// Load a model, applying a parent's `<overlay>` (FG: the overlay is
+    /// copied over the submodel's property tree before it is built, so
+    /// `<params>` aliases pick up the instance's properties).
+    fn load_model_with(&mut self, path: &Path, name: &str, parent: usize, depth: usize, overlay: Option<&Elem>) -> Result<usize, String> {
         if depth > 16 {
             return Err("model nesting too deep".into());
         }
@@ -183,7 +226,18 @@ impl<'a> Builder<'a> {
             self.load_ac(path, g)?;
             return Ok(g);
         }
-        let x = xml::load(&self.ctx, path)?;
+        self.model_stack.push(self.rel(path));
+        let r = self.load_model_xml(path, name, parent, depth, overlay);
+        self.model_stack.pop();
+        r
+    }
+
+    fn load_model_xml(&mut self, path: &Path, name: &str, parent: usize, depth: usize, overlay: Option<&Elem>) -> Result<usize, String> {
+        let mut x = xml::load(&self.ctx, path)?;
+        if let Some(o) = overlay {
+            xml::overlay(&mut x, o);
+            xml::resolve_aliases(&mut x);
+        }
         let dir = path.parent().unwrap().to_path_buf();
         let g = self.group(name, offsets_matrix(x.child("offsets")), Some(parent));
         if self.interior_models.iter().any(|r| r.is_match(&self.rel(path))) {
@@ -234,7 +288,7 @@ impl<'a> Builder<'a> {
                 }
             }
             let wrap = self.group(&mname, local, Some(attach));
-            if let Err(e) = self.load_model(&sub, "", wrap, depth + 1) {
+            if let Err(e) = self.load_model_with(&sub, "", wrap, depth + 1, m.child("overlay")) {
                 self.log.push(e);
             }
         }
@@ -390,8 +444,10 @@ impl<'a> Builder<'a> {
             "range" => {
                 let lo = a.f("min-m").unwrap_or(0.0);
                 let hi = a.f("max-m").unwrap_or(f32::INFINITY);
-                // Keep the level of detail seen at a close chase distance.
-                let vis = lo <= self.range_m && self.range_m < hi;
+                // Keep the level of detail seen at a close chase distance —
+                // inside the cockpit, the one seen from the pilot's seat.
+                let d = if self.is_interior(g) || targets.iter().all(|&t| self.is_interior(t)) { self.interior_range_m } else { self.range_m };
+                let vis = lo <= d && d < hi;
                 Some(Anim::Select(Expr::C(if vis { 1.0 } else { 0.0 })))
             }
             "scale" => {
@@ -429,7 +485,26 @@ impl<'a> Builder<'a> {
                 }
                 None
             }
-            "billboard" | "noshadow" | "pick" | "touch" | "textranslate" | "texrotate" | "texmultiple" | "dist-scale" | "flash"
+            "textranslate" | "texrotate" | "texmultiple" => {
+                // texmultiple: several transforms (in order) in one texture matrix.
+                let list: Vec<(String, &Elem)> = if ty == "texmultiple" {
+                    a.children("transform").map(|t| (t.text_of("subtype").or_else(|| t.text_of("type")).unwrap_or("").to_string(), t)).collect()
+                } else {
+                    vec![(ty.clone(), a)]
+                };
+                for (sub, e) in list {
+                    if let Some(uv) = self.tex_anim(&sub, e) {
+                        if uv.expr().is_const().is_some_and(|v| v == 0.0) {
+                            continue;
+                        }
+                        for &t in &targets {
+                            self.nodes[t].flags.uv.push(uv.clone());
+                        }
+                    }
+                }
+                None
+            }
+            "billboard" | "noshadow" | "pick" | "touch" | "dist-scale" | "flash"
             | "locked-track" | "timed" | "trigger" | "interaction" | "shader" | "tooltip" => None,
             _ => None,
         };
@@ -456,11 +531,81 @@ impl<'a> Builder<'a> {
         }
     }
 
+    /// Is node `i` (or an ancestor) cockpit / cabin geometry?
+    fn is_interior(&self, mut i: usize) -> bool {
+        loop {
+            if self.nodes[i].flags.interior {
+                return true;
+            }
+            match self.nodes[i].parent {
+                Some(p) => i = p,
+                None => return false,
+            }
+        }
+    }
+
+    /// FG `textranslate` / `texrotate` → a UV animation in Skyward's UV space.
+    /// Value: table, or bias → step / scroll → factor / offset → clip
+    /// (simgear `SGTexTransformAnimation`).
+    fn tex_anim(&self, ty: &str, a: &Elem) -> Option<UvAnim> {
+        let input = self.pm.input(a).unwrap_or(Expr::C(0.0));
+        let v = if let Some(t) = a.child("interpolation") {
+            crate::expr::interp_expr(input, crate::expr::table_of(t))
+        } else {
+            let mut v = input;
+            if let Some(b) = a.f("bias").filter(|b| *b != 0.0) {
+                v = op("add", vec![v, Expr::C(b)]);
+            }
+            let step = a.f("step").unwrap_or(0.0);
+            if step > 0.0 {
+                v = op("step", vec![v, Expr::C(step), Expr::C(a.f("scroll").unwrap_or(0.0))]);
+            }
+            if let Some(f) = a.f("factor") {
+                v = op("mul", vec![v, Expr::C(f)]);
+            }
+            if let Some(o) = a.f("offset") {
+                v = op("add", vec![v, Expr::C(o)]);
+            }
+            if a.child("min").is_some() || a.child("max").is_some() {
+                v = op("clamp", vec![v, Expr::C(a.f("min").unwrap_or(-1e30)), Expr::C(a.f("max").unwrap_or(1e30))]);
+            }
+            v
+        };
+        let ax = a.child("axis");
+        let axf = |k: &str| ax.and_then(|e| e.f(k)).unwrap_or(0.0);
+        if ty == "textranslate" {
+            let axis = Vec2::new(axf("x"), axf("y"));
+            if axis == Vec2::ZERO {
+                return None;
+            }
+            // FG t is up; Skyward v = 1 − t is down.
+            Some(UvAnim::Translate { axis: Vec2::new(axis.x, -axis.y), v })
+        } else {
+            let c = a.child("center");
+            let cx = c.and_then(|e| e.f("x")).unwrap_or(0.5);
+            let cy = c.and_then(|e| e.f("y")).unwrap_or(0.5);
+            let z = axf("z");
+            if z == 0.0 {
+                return None;
+            }
+            // Right-handed about FG +z (counter-clockwise in s,t); flipping t
+            // reverses the sense in Skyward's (u, v).
+            let k = -z.signum();
+            Some(UvAnim::Rotate { center: Vec2::new(cx, 1.0 - cy), v: op("mul", vec![v, Expr::C(k)]) })
+        }
+    }
+
     fn material_anim(&mut self, a: &Elem, targets: &[usize], dir: &Path) {
         // Emission driven by a condition / factor property (light lenses, panel lighting).
         if let Some(em) = a.child("emission") {
-            let col = Vec3::new(em.f("red").unwrap_or(0.0), em.f("green").unwrap_or(0.0), em.f("blue").unwrap_or(0.0));
+            let mut col = Vec3::new(em.f("red").unwrap_or(0.0), em.f("green").unwrap_or(0.0), em.f("blue").unwrap_or(0.0));
             let mut k = em.text_of("factor-prop").map(|p| self.pm.prop(p)).unwrap_or(Expr::C(1.0));
+            // Colour driven by properties (e.g. a panel-light dimmer computed by
+            // Nasal): a warm instrument backlight scaled by the panel lighting.
+            if em.child("red-prop").is_some() || em.child("green-prop").is_some() || em.child("blue-prop").is_some() {
+                col = Vec3::new(1.0, 0.8, 0.55);
+                k = Expr::Ch("panel_light".into());
+            }
             if let Some(f) = em.f("factor") {
                 k = op("mul", vec![k, Expr::C(f)]);
             }
@@ -542,6 +687,12 @@ struct V {
     uv: Vec2,
 }
 
+#[derive(Default, Clone)]
+struct ChunkExtra {
+    uv: Vec<UvAnim>,
+    display: Option<usize>,
+}
+
 #[derive(Default)]
 struct ChunkBuild {
     verts: Vec<V>,
@@ -562,8 +713,8 @@ struct MatKey {
 struct Exporter {
     out_nodes: Vec<OutNode>,
     mats: Vec<MatKey>,
-    /// (out node, material, interior, emit) → geometry
-    chunks: Vec<((usize, usize, bool, Option<(Vec3, Expr)>), ChunkBuild)>,
+    /// (out node, material, interior, emit) → geometry (+ texture animations, display)
+    chunks: Vec<((usize, usize, bool, Option<(Vec3, Expr)>), ChunkBuild, ChunkExtra)>,
     chunk_index: HashMap<String, usize>,
     lights: Vec<(String, Vec3, usize)>,
 }
@@ -614,6 +765,15 @@ impl Exporter {
         }
         if n.flags.texture.is_some() {
             flags.texture = n.flags.texture.clone();
+        }
+        if !n.flags.uv.is_empty() {
+            // Innermost (the node's own) first, then the ancestors'.
+            let mut uv = n.flags.uv.clone();
+            uv.extend(flags.uv.drain(..));
+            flags.uv = uv;
+        }
+        if n.flags.display.is_some() {
+            flags.display = n.flags.display;
         }
         let mut acc = acc * n.local;
         let mut cur = out_parent;
@@ -670,11 +830,11 @@ impl Exporter {
                         self.mats.len() - 1
                     }
                 };
-                let ck = format!("{cur}/{mi}/{}/{:?}", flags.interior, flags.emit.as_ref().map(|(c, e)| (c.to_array(), format!("{e:?}"))));
+                let ck = format!("{cur}/{mi}/{}/{:?}/{:?}/{:?}", flags.interior, flags.emit.as_ref().map(|(c, e)| (c.to_array(), format!("{e:?}"))), flags.uv, flags.display);
                 let ci = match self.chunk_index.get(&ck) {
                     Some(&i) => i,
                     None => {
-                        self.chunks.push(((cur, mi, flags.interior, flags.emit.clone()), ChunkBuild::default()));
+                        self.chunks.push(((cur, mi, flags.interior, flags.emit.clone()), ChunkBuild::default(), ChunkExtra { uv: flags.uv.clone(), display: flags.display }));
                         self.chunk_index.insert(ck, self.chunks.len() - 1);
                         self.chunks.len() - 1
                     }
@@ -784,10 +944,28 @@ pub fn run(cfg: &Value, src: &Path, out: &Path) -> Result<(), String> {
         interior_models: regexes(cfg, "interior_models"),
         interior_objects: regexes(cfg, "interior_objects"),
         light_models: regexes(cfg, "light_models"),
+        displays: cfg
+            .get("displays")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|d| {
+                        let d = d.as_array()?;
+                        Some((
+                            Regex::new(d.first()?.as_str()?).expect("bad display regex"),
+                            d.get(1)?.as_str()?.to_string(),
+                            d.get(2).and_then(|p| p.as_str()).map(|p| Regex::new(p).expect("bad display path regex")),
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
         tex_override,
         range_m: cfg.get("range_m").and_then(|v| v.as_f64()).unwrap_or(15.0) as f32,
+        interior_range_m: cfg.get("interior_range_m").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32,
         log: Vec::new(),
         anim_counts: HashMap::new(),
+        model_stack: Vec::new(),
     };
 
     // ---- FDM: CG / VRP → body frame
@@ -832,7 +1010,7 @@ pub fn run(cfg: &Value, src: &Path, out: &Path) -> Result<(), String> {
     // Prune animation nodes without geometry below them.
     let n_out = ex.out_nodes.len();
     let mut used = vec![false; n_out];
-    for ((node, ..), _) in &ex.chunks {
+    for ((node, ..), ..) in &ex.chunks {
         let mut i = *node as i32;
         while i >= 0 && !used[i as usize] {
             used[i as usize] = true;
@@ -876,7 +1054,7 @@ pub fn run(cfg: &Value, src: &Path, out: &Path) -> Result<(), String> {
     let jpeg_q = cfg.get("jpeg_quality").and_then(|v| v.as_u64()).unwrap_or(85) as u8;
     // Which textures are used only by interior chunks.
     let mut tex_interior: HashMap<PathBuf, bool> = HashMap::new();
-    for ((_, mi, interior, _), _) in &ex.chunks {
+    for ((_, mi, interior, _), ..) in &ex.chunks {
         if let Some(t) = &ex.mats[*mi].tex {
             let e = tex_interior.entry(t.clone()).or_insert(true);
             *e &= *interior;
@@ -934,7 +1112,9 @@ pub fn run(cfg: &Value, src: &Path, out: &Path) -> Result<(), String> {
     let mut radius = 0.0f32;
     let mut tri_ext = 0usize;
     let mut tri_int = 0usize;
-    for ((node, mi, interior, emit), cb) in &ex.chunks {
+    let mut n_uv = 0usize;
+    let mut n_display = 0usize;
+    for ((node, mi, interior, emit), cb, extra) in &ex.chunks {
         let (verts, idx) = weld(cb);
         let node = remap[*node];
         for v in &verts {
@@ -950,6 +1130,15 @@ pub fn run(cfg: &Value, src: &Path, out: &Path) -> Result<(), String> {
         if let Some((_, e)) = emit {
             e.channels(&mut channels);
         }
+        for u in &extra.uv {
+            u.expr().channels(&mut channels);
+        }
+        n_uv += (!extra.uv.is_empty()) as usize;
+        let display = extra.display.map(|d| {
+            n_display += 1;
+            let (lo, hi, aspect) = display_mapping(&verts, &idx);
+            json!({"kind": b.displays[d].1, "uv": [lo.x, lo.y, hi.x, hi.y], "aspect": aspect})
+        });
         if *interior {
             tri_int += idx.len() / 3;
         } else {
@@ -960,6 +1149,8 @@ pub fn run(cfg: &Value, src: &Path, out: &Path) -> Result<(), String> {
             "vertex_count": verts.len(),
             "interior": interior,
             "emit": emit.as_ref().map(|(c, e)| json!({"col": [c.x, c.y, c.z], "v": e.to_json()})),
+            "uv": if extra.uv.is_empty() { Value::Null } else { Value::Array(extra.uv.iter().map(|u| u.to_json()).collect()) },
+            "display": display,
         }));
         nv += verts.len() as u32;
         ni += idx.len() as u32;
@@ -973,7 +1164,7 @@ pub fn run(cfg: &Value, src: &Path, out: &Path) -> Result<(), String> {
             world[i] = if p >= 0 { world[p as usize] * pre } else { pre };
         }
         let mut off = 0usize;
-        for (k, ((node, _, interior, _), _)) in ex.chunks.iter().enumerate() {
+        for (k, ((node, _, interior, _), ..)) in ex.chunks.iter().enumerate() {
             let cnt = chunks_json[k]["vertex_count"].as_u64().unwrap() as usize;
             if !interior {
                 let m = world[remap[*node] as usize];
@@ -1017,7 +1208,7 @@ pub fn run(cfg: &Value, src: &Path, out: &Path) -> Result<(), String> {
     };
     channels.sort();
     let header = json!({
-        "format": 1,
+        "format": 2,
         "id": cfg["id"],
         "name": cfg["name"],
         "eye": eye.map(|e| vec![e.x, e.y, e.z]),
@@ -1041,7 +1232,7 @@ pub fn run(cfg: &Value, src: &Path, out: &Path) -> Result<(), String> {
     enc.write_all(&payload).unwrap();
     let z = enc.finish().unwrap();
     let mut file = b"SKAC".to_vec();
-    file.extend_from_slice(&1u32.to_le_bytes());
+    file.extend_from_slice(&2u32.to_le_bytes());
     file.extend_from_slice(&z);
     std::fs::write(out.join("model.skac"), &file).map_err(|e| e.to_string())?;
     std::fs::write(out.join("fdm.json"), serde_json::to_string_pretty(&fdm_report).unwrap()).map_err(|e| e.to_string())?;
@@ -1052,13 +1243,14 @@ pub fn run(cfg: &Value, src: &Path, out: &Path) -> Result<(), String> {
     rep += &format!("triangles: exterior {tri_ext}, interior {tri_int}; vertices {nv}; model.skac {:.1} MB; radius {radius:.1} m\n", file.len() as f64 / 1e6);
     rep += &format!("eye: {:?}\nlights: {}\n", eye, lights_json.len());
     rep += &format!("channels used: {}\n", channels.join(" "));
+    rep += &format!("texture-animated chunks: {n_uv}; display screens: {n_display}\n");
     let mut ac: Vec<_> = b.anim_counts.iter().collect();
     ac.sort();
     rep += &format!("animation types: {ac:?}\n");
     rep += "unmapped properties (count):\n";
     let mut um: Vec<_> = b.pm.unmapped.borrow().iter().map(|(k, v)| (*v, k.clone())).collect();
     um.sort_by(|a, b| b.cmp(a));
-    for (c, k) in um.iter().take(60) {
+    for (c, k) in um.iter().take(400) {
         rep += &format!("  {c:4} {k}\n");
     }
     rep += "log:\n";
@@ -1068,6 +1260,37 @@ pub fn run(cfg: &Value, src: &Path, out: &Path) -> Result<(), String> {
     std::fs::write(out.join("import-report.txt"), &rep).map_err(|e| e.to_string())?;
     print!("{rep}");
     Ok(())
+}
+
+/// A display screen's texture window (UV bounding box) and its physical
+/// aspect (width / height of that window on the model, from the UV → position
+/// Jacobian of each triangle, area-weighted).
+fn display_mapping(verts: &[V], idx: &[u32]) -> (Vec2, Vec2, f32) {
+    let (mut lo, mut hi) = (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN));
+    for v in verts {
+        lo = lo.min(v.uv);
+        hi = hi.max(v.uv);
+    }
+    let (mut wu, mut wv, mut wsum) = (0.0f32, 0.0f32, 0.0f32);
+    for t in idx.chunks_exact(3) {
+        let (a, b, c) = (verts[t[0] as usize], verts[t[1] as usize], verts[t[2] as usize]);
+        let (e1, e2) = (b.p - a.p, c.p - a.p);
+        let (d1, d2) = (b.uv - a.uv, c.uv - a.uv);
+        let det = d1.x * d2.y - d2.x * d1.y;
+        let area = e1.cross(e2).length();
+        if det.abs() < 1e-9 || area < 1e-9 {
+            continue;
+        }
+        // dP/du, dP/dv.
+        let pu = (e1 * d2.y - e2 * d1.y) / det;
+        let pv = (e2 * d1.x - e1 * d2.x) / det;
+        wu += pu.length() * area;
+        wv += pv.length() * area;
+        wsum += area;
+    }
+    let span = (hi - lo).max(Vec2::splat(1e-6));
+    let aspect = if wsum > 0.0 && wv > 0.0 { (wu / wsum * span.x) / (wv / wsum * span.y) } else { span.x / span.y };
+    (lo, hi, aspect)
 }
 
 fn bytemuck_f32(v: &[f32]) -> &[u8] {

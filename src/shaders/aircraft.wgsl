@@ -7,7 +7,9 @@ struct AcInst {
     model: mat4x4<f32>,   // node → eye-relative world
     color: vec4<f32>,     // material diffuse (linear) + opacity
     emis: vec4<f32>,      // emission (scene radiance units), w = interior flag
-    params: vec4<f32>,    // x = f0 (specular), y = roughness, z = alpha mode (0 opaque, 1 cut-out, 2 translucent), w = textured
+    params: vec4<f32>,    // x = f0 (specular), y = roughness, z = mode (0 opaque, 1 cut-out, 2 translucent, 3 glass display), w = textured (display: luminance)
+    uvm: vec4<f32>,       // UV transform 2x2 (column-major): drum counters, attitude balls, display windows
+    uvo: vec4<f32>,       // UV offset (xy)
 };
 
 @group(1) @binding(0) var<storage, read> ac_inst: array<AcInst>;
@@ -41,7 +43,8 @@ fn vs_aircraft(v: AcIn, @builtin(instance_index) ii: u32) -> AcOut {
     o.clip = g.view_proj * vec4<f32>(p, 1.0);
     o.wpos = p + vec3<f32>(0.0, g.pattern.w, 0.0);
     o.nrm = (pm * vec4<f32>(ac_flex_normal(v.part, (m * vec4<f32>(v.nrm, 0.0)).xyz, normalize(m[0].xyz)), 0.0)).xyz;
-    o.uv = v.uv;
+    let t = ac_inst[ii];
+    o.uv = vec2<f32>(t.uvm.x * v.uv.x + t.uvm.z * v.uv.y, t.uvm.y * v.uv.x + t.uvm.w * v.uv.y) + t.uvo.xy;
     o.inst = ii;
     return o;
 }
@@ -68,6 +71,20 @@ fn fs_aircraft(in: AcOut) -> FOut {
         alpha *= tex.a;
     }
     let mode = inst.params.z;
+    if (mode > 2.5) {
+        // Glass display: the rendered screen (sRGB view → linear) as emission
+        // behind smooth cover glass, which still reflects the sky and the sun.
+        var s = default_surf(vec3<f32>(0.012), ngeo);
+        s.f0 = vec3<f32>(inst.params.x);
+        s.rough = spec_aa(inst.params.y, dndx, dndy);
+        s.moving = 1.0;
+        s.emit = tex.rgb * inst.params.w;
+        let col = light(s, rel, V, dist, px, ngeo);
+        var o: FOut;
+        o.col = vec4<f32>(apply_fog_px(col, px, dist), 1.0);
+        o.dist = dist;
+        return o;
+    }
     if (mode > 0.5 && mode < 1.5 && alpha < 0.45) {
         discard;
     }
@@ -78,7 +95,8 @@ fn fs_aircraft(in: AcOut) -> FOut {
     s.f0 = vec3<f32>(inst.params.x);
     s.rough = spec_aa(inst.params.y, dndx, dndy);
     s.moving = 1.0;
-    s.emit = inst.emis.rgb;
+    // Cockpit backlighting lights the painted markings, not the black panel.
+    s.emit = select(inst.emis.rgb, inst.emis.rgb * albedo, inst.emis.w > 0.5);
     s.alpha = select(1.0, alpha, mode > 0.5);
     if (mode > 1.5) {
         // Glass: mostly reflection, little body colour.

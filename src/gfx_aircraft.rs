@@ -22,6 +22,8 @@ pub struct ChunkDraw {
     pub model: Mat4,
     /// Animated emission factor (× the chunk's emission colour).
     pub emit: f32,
+    /// Texture-coordinate transform (`aircraft_asset::Pose::uv`).
+    pub uv: [f32; 6],
 }
 
 /// The aircraft for one frame.
@@ -33,6 +35,18 @@ pub struct AircraftFrame {
     pub parts: Option<Arc<crate::models::PartMap>>,
     /// Wing bending, vibration and the loose parts' transforms this frame.
     pub dynamics: Option<Box<AcDynamics>>,
+    /// Glass cockpit display textures (`cockpit::displays`), when rendered.
+    pub displays: Option<Arc<DisplaySet>>,
+}
+
+/// The glass displays' textures for the screens of the current model.
+pub struct DisplaySet {
+    /// Changes whenever the views are recreated (bind groups are rebuilt).
+    pub generation: u64,
+    /// (display kind, view sampled as sRGB with a full mip chain).
+    pub views: Vec<(String, wgpu::TextureView)>,
+    /// Screen luminance (scene radiance units): bright by day, dimmed at night.
+    pub brightness: f32,
 }
 
 /// Per-frame structural animation (eye-relative), shader `AcDyn`.
@@ -87,6 +101,10 @@ struct Inst {
     color: [f32; 4],
     emis: [f32; 4],
     params: [f32; 4],
+    /// UV transform: 2×2 (column-major) …
+    uvm: [f32; 4],
+    /// … + offset (xy), z unused, w = display luminance.
+    uvo: [f32; 4],
 }
 
 struct GpuModel {
@@ -124,7 +142,18 @@ pub struct AircraftRenderer {
     model: Option<GpuModel>,
     asset: Option<Arc<AircraftAsset>>,
     prepared: Prepared,
+    /// Display sampler (clamped, trilinear, anisotropic).
+    disp_sampler: wgpu::Sampler,
+    /// (generation, per display kind: bind group).
+    disp_bgs: Option<(u64, Vec<(String, wgpu::BindGroup)>)>,
+    /// Per prepared draw: the display bind group to use (index into `disp_bgs`).
+    disp_of: Vec<Option<usize>>,
 }
+
+/// Scene radiance of fully lit cockpit backlighting / annunciators (× the
+/// model's emission colour × the painted albedo): ~15 cd/m² on white
+/// markings — readable at night, invisible by day.
+pub const INTERIOR_EMIT: f32 = 0.0003;
 
 fn vertex_layout() -> wgpu::VertexBufferLayout<'static> {
     const ATTRS: [wgpu::VertexAttribute; 3] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2];
@@ -282,6 +311,16 @@ impl AircraftRenderer {
             anisotropy_clamp: 8,
             ..Default::default()
         });
+        let disp_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("cockpit display"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            anisotropy_clamp: 8,
+            ..Default::default()
+        });
         let white = upload_texture(device, queue, 1, 1, &[255, 255, 255, 255]);
         let white_bg = tex_bg(device, &tex_bgl, &white, &sampler);
         let inst_cap = 256;
@@ -307,6 +346,9 @@ impl AircraftRenderer {
             model: None,
             asset: None,
             prepared: Prepared::default(),
+            disp_sampler,
+            disp_bgs: None,
+            disp_of: Vec::new(),
         }
     }
 
@@ -315,6 +357,15 @@ impl AircraftRenderer {
         self.prepared.opaque.clear();
         self.prepared.shadow.clear();
         let Some(f) = frame else { return };
+        // Display textures → bind groups (rebuilt when the views change).
+        match &f.displays {
+            Some(ds) if self.disp_bgs.as_ref().map(|d| d.0) != Some(ds.generation) => {
+                let bgs = ds.views.iter().map(|(k, v)| (k.clone(), tex_bg(device, &self.tex_bgl, v, &self.disp_sampler))).collect();
+                self.disp_bgs = Some((ds.generation, bgs));
+            }
+            _ => {}
+        }
+        let disp_lum = f.displays.as_ref().map(|d| d.brightness);
         let key = Arc::as_ptr(&f.asset) as usize;
         if self.model.as_ref().map(|m| (m.key, m.has_parts)) != Some((key, f.parts.is_some())) {
             let a = &f.asset;
@@ -370,6 +421,7 @@ impl AircraftRenderer {
         let dynamics = f.dynamics.as_deref().copied().unwrap_or_default();
         queue.write_buffer(&self.dyn_buf, 0, bytemuck::bytes_of(&dynamics));
         let mut insts = Vec::with_capacity(f.draws.len());
+        self.disp_of.clear();
         // Opaque first, then cut-outs, then glass (alpha-to-coverage needs no sorting,
         // but drawing glass last lets the depth test skip what it hides).
         let mut order: Vec<(u8, usize)> = f
@@ -395,24 +447,44 @@ impl AircraftRenderer {
             } else {
                 Vec4::new(lin(m.col.x), lin(m.col.y), lin(m.col.z), m.col.w)
             };
-            let mut emis = m.emis * 0.02;
+            // AC3D material emission: modellers use it as "self-lit" (lenses, dials),
+            // far too strong as a radiance inside a dark cockpit.
+            let mut emis = m.emis * if c.interior { INTERIOR_EMIT } else { 0.02 };
             if let Some((ec, _)) = &c.emit {
-                let k = if c.interior { 0.02 } else { 3.0 };
-                emis += *ec * d.emit * k;
+                // Interior: instrument backlighting / annunciators, a few tens of
+                // cd/m² (1 radiance unit ≈ 30 000 cd/m²); exterior: light lenses.
+                let (k, e) = if c.interior || c.backlight { (INTERIOR_EMIT, d.emit.min(1.0)) } else { (3.0, d.emit) };
+                emis += *ec * e * k;
             }
             // Shininess (0..128) → roughness; specular level → f0.
             let rough = (2.0 / (m.shininess.max(0.0) + 2.0)).sqrt().clamp(0.12, 0.9);
             let spec = (m.spec.x + m.spec.y + m.spec.z) / 3.0;
             let f0 = if mode == 2 { 0.06 } else { 0.03 + 0.05 * spec.clamp(0.0, 1.0) };
+            let mut uv = d.uv;
+            // A glass display: its texture window → the whole display texture.
+            let disp = c.display.as_ref().and_then(|ds| {
+                let i = self.disp_bgs.as_ref()?.1.iter().position(|(k, _)| *k == ds.kind)?;
+                let (w, h) = ((ds.uv[2] - ds.uv[0]).max(1e-4), (ds.uv[3] - ds.uv[1]).max(1e-4));
+                uv = [uv[0] / w, uv[1] / h, uv[2] / w, uv[3] / h, (uv[4] - ds.uv[0]) / w, (uv[5] - ds.uv[1]) / h];
+                Some(i)
+            });
+            self.disp_of.push(disp);
+            let (mode, params) = match (disp, disp_lum) {
+                // Mode 3: emissive screen behind smooth cover glass.
+                (Some(_), Some(lum)) => (3, [0.04, 0.12, 3.0, lum]),
+                _ => (mode, [f0, rough, mode as f32, if textured { 1.0 } else { 0.0 }]),
+            };
             insts.push(Inst {
                 model: d.model.to_cols_array_2d(),
                 color: col.to_array(),
-                emis: [emis.x, emis.y, emis.z, if c.interior { 1.0 } else { 0.0 }],
-                params: [f0, rough, mode as f32, if textured { 1.0 } else { 0.0 }],
+                emis: [emis.x, emis.y, emis.z, if c.interior || c.backlight { 1.0 } else { 0.0 }],
+                params,
+                uvm: [uv[0], uv[1], uv[2], uv[3]],
+                uvo: [uv[4], uv[5], 0.0, 0.0],
             });
             let ii = (insts.len() - 1) as u32;
             self.prepared.opaque.push((d.chunk, ii));
-            if mode != 2 && !c.interior {
+            if mode != 2 && mode != 3 && !c.interior {
                 self.prepared.shadow.push((d.chunk, ii));
             }
         }
@@ -440,7 +512,8 @@ impl AircraftRenderer {
                 });
                 cur_pipe = p;
             }
-            let bg = m.tex.and_then(|t| gm.tex_bgs.get(t)).unwrap_or(&self.white_bg);
+            let disp = self.disp_of.get(ii as usize).copied().flatten().and_then(|k| self.disp_bgs.as_ref().map(|d| &d.1[k].1));
+            let bg = disp.or_else(|| m.tex.and_then(|t| gm.tex_bgs.get(t))).unwrap_or(&self.white_bg);
             pass.set_bind_group(2, bg, &[]);
             let (first, count) = gm.ranges[ci as usize];
             pass.draw_indexed(first..first + count, c.base_vertex as i32, ii..ii + 1);

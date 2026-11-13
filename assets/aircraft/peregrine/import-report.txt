@@ -1,29 +1,21 @@
-"peregrine": 59 nodes (58 animated out of 59), 60 materials, 27 textures (3.6 MB), 86 chunks
-triangles: exterior 10642, interior 19803; vertices 39409; model.skac 0.5 MB; radius 6.2 m
+"peregrine": 84 nodes (83 animated out of 84), 119 materials, 58 textures (4.8 MB), 164 chunks
+triangles: exterior 10642, interior 28068; vertices 49121; model.skac 0.6 MB; radius 6.2 m
 eye: Some(Vec3(0.0, 0.7, -1.1499999))
 lights: 0
-channels used: aileron_l ctl_aileron ctl_elevator ctl_gear elevator eng0_rpm flaps gear0_comp_m gear0_roll_ms gear1_comp_m gear1_roll_ms gear_pos heading_deg rudder steer_deg
+channels used: aileron_l alt_ft alt_set_inhg brakes ctl_aileron ctl_elevator ctl_flaps ctl_gear ctl_trim elevator eng0_map_inhg eng0_oilt_f eng0_rpm flaps gear0_comp_m gear0_roll_ms gear1_comp_m gear1_roll_ms gear_pos hdg_bug_deg heading_deg ias_kt panel_light pitch_deg roll_deg rudder slip steer_deg tank1_gal turn_rate vs_fpm
+texture-animated chunks: 1; display screens: 0
 animation types: [("blend", 3), ("material", 28), ("noshadow", 11), ("pick", 15), ("range", 15), ("rotate", 47), ("scale", 1), ("select", 18), ("slider", 2), ("spin", 7), ("texmultiple", 1), ("translate", 5)]
 unmapped properties (count):
-    23 controls/lighting/panel-norm
      3 sim/model/variant
-     2 engines/engine/propstrike
-     2 engines/engine/oil-temperature-degf
-     2 controls/lighting/instruments-norm
      2 controls/engines/engine/starter
      2 controls/engines/engine/cowl-flaps-norm
      1 sim/model/MPmodel
      1 sim/model/AImodel
-     1 instrumentation/altimeter/setting-inhg
-     1 engines/engine/boost-gauge-inhg
      1 controls/lighting/gunsight
      1 controls/engines/engine/primer-pressed
      1 controls/engines/engine/booster
      1 controls/doors/door/position-norm
      1 controls/doors/canopy/position-norm
-     1 consumables/fuel/tank[1]/level-gal_us
-     1 consumables/fuel/tank/selected
-     1 autopilot/settings/heading-bug-deg
 log:
-  n/src/spitfire/Models/Instruments/oxy-reg/oxigen-regulator.ac: EOF before kid
-  n/src/spitfire/Models/Instruments/ignition-gb/ignition-gb.ac: EOF before kid
+  /tmp/claude-1000/-home-wam-coding-fs98/3e4de0cc-4325-43bc-b315-3c83f2fdd195/scratchpad/n/src/spitfire/Models/Instruments/oxy-reg/oxigen-regulator.ac: EOF before kid
+  /tmp/claude-1000/-home-wam-coding-fs98/3e4de0cc-4325-43bc-b315-3c83f2fdd195/scratchpad/n/src/spitfire/Models/Instruments/ignition-gb/ignition-gb.ac: EOF before kid

@@ -1,14 +1,15 @@
-"meridian190": 86 nodes (85 animated out of 87), 67 materials, 39 textures (5.7 MB), 135 chunks
-triangles: exterior 73640, interior 71819; vertices 167640; model.skac 2.3 MB; radius 21.9 m
+"meridian190": 127 nodes (126 animated out of 128), 77 materials, 48 textures (5.9 MB), 178 chunks
+triangles: exterior 73820, interior 73253; vertices 169386; model.skac 2.4 MB; radius 21.9 m
 eye: Some(Vec3(0.53, 1.4499156, 11.752853))
 lights: 5
-channels used: aileron_l aileron_r beacon_sw brakes ctl_aileron ctl_elevator ctl_flaps ctl_gear ctl_rudder ctl_spoilers eng0_n1 eng0_reverser eng1_n1 eng1_reverser flaps gear0_comp_norm gear0_roll_ms gear1_comp_norm gear1_roll_ms gear2_comp_norm gear2_roll_ms gear_pos landing_light nav rudder strobe_sw taxi_light throttle time
-animation types: [("", 14), ("alpha-test", 4), ("billboard", 4), ("dist-scale", 4), ("knob", 134), ("material", 35), ("noshadow", 1), ("pbr", 12), ("pick", 215), ("rotate", 119), ("select", 86), ("spin", 6), ("texmultiple", 2), ("textranslate", 2), ("translate", 43)]
+channels used: aileron_l aileron_r ap_athr ap_on beacon_sw brakes ctl_aileron ctl_elevator ctl_flaps ctl_gear ctl_rudder ctl_spoilers eng0_n1 eng0_reverser eng1_n1 eng1_reverser flaps g_load gear0_comp_norm gear0_roll_ms gear1_comp_norm gear1_roll_ms gear2_comp_norm gear2_roll_ms gear_pos gs_kt heading_deg landing_light nav panel_light rudder strobe_sw taxi_light throttle time
+texture-animated chunks: 3; display screens: 6
+animation types: [("", 14), ("alpha-test", 4), ("billboard", 4), ("dist-scale", 4), ("knob", 140), ("material", 41), ("noshadow", 1), ("pbr", 12), ("pick", 220), ("rotate", 119), ("select", 91), ("spin", 6), ("texmultiple", 2), ("textranslate", 2), ("touch", 5), ("translate", 43)]
 unmapped properties (count):
-    62 systems/electrical/outputs/pushbutton-lights
     11 sim/model/door-positions/l2-stairs/position-norm
     10 sim/model/door-positions/l1-stairs/position-norm
      6 surface-positions/left-wiper-pos-norm
+     6 services/chocks
      6 it-autoflight/output/lat
      6 it-autoflight/input/vert
      6 fdm/jsbsim/aero/coefficient/CLalpha
@@ -16,16 +17,9 @@ unmapped properties (count):
      4 sim/rendering/shaders/skydome
      4 sim/rendering/default-compositor
      4 it-autoflight/output/vert
-     4 it-autoflight/output/fd2
-     4 it-autoflight/output/fd1
+     4 controls/switches/hud-flip-pos[1]
+     4 controls/switches/hud-flip-pos
      4 controls/flight/nav-src/side
-     3 velocities/groundspeed-kt
-     3 services/chocks
-     3 controls/switches/hud-flip-pos[1]
-     3 controls/switches/hud-flip-pos
-     2 systems/electrical/outputs/nav-lights-norm
-     2 systems/electrical/outputs/master-warn-caution[1]
-     2 systems/electrical/outputs/master-warn-caution
      2 sim/model/lights/strobe/state
      2 sim/model/door-positions/r2/position-norm
      2 sim/model/door-positions/r1/position-norm
@@ -37,13 +31,10 @@ unmapped properties (count):
      2 sim/model/door-positions/eng2-control/position-norm
      2 sim/model/door-positions/eng1-control/position-norm
      2 sim/model/door-positions/cockpit-door/position-norm
-     2 it-autoflight/output/athr
+     2 sim/current-view/y-offset-m
+     2 sim/current-view/x-offset-m
      2 it-autoflight/output/appr-armed
-     2 it-autoflight/output/ap2
-     2 it-autoflight/output/ap1
      2 it-autoflight/input/bank-limit-sw
-     2 instrumentation/eicas/master/warning
-     2 instrumentation/eicas/master/caution
      2 fdm/jsbsim/fcs/yaw-damper-enable
      2 fbw/spoilers/law
      2 fbw/rudder/law
@@ -65,12 +56,68 @@ unmapped properties (count):
      2 controls/pneumatic/engine-bleed[1]
      2 controls/pneumatic/engine-bleed
      2 controls/pneumatic/apu-bleed
+     2 controls/lighting/taxi-lights[1]
+     2 controls/lighting/logo-lights
+     2 controls/hydraulic/ptu
+     2 controls/hydraulic/ehp[3]
+     2 controls/hydraulic/ehp[2]
+     2 controls/hydraulic/ehp[1]
+     2 controls/hydraulic/ehp
+     2 controls/fuel/tank[2]/boost-pump
+     2 controls/fuel/tank[1]/boost-pump[1]
+     2 controls/fuel/tank[1]/boost-pump
+     2 controls/fuel/tank/boost-pump
+     2 controls/fuel/crossfeed
+     2 controls/flight/vnav-enabled
+     2 controls/flight/rudder-trim
+     2 controls/electric/tru-switch[2]
+     2 controls/electric/tru-switch[1]
+     2 controls/electric/tru-switch
+     2 controls/electric/external-power-connected
+     2 controls/electric/external-power
+     2 controls/electric/engine[1]/generator
+     2 controls/electric/engine/generator
+     2 controls/electric/bus-tie-dc
+     2 controls/electric/bus-tie-ac
+     2 controls/electric/battery-switch[1]
+     2 controls/electric/battery-switch
+     2 controls/electric/apu-generator
+     2 controls/apu/starter
+     2 controls/anti-ice/wing-heat
+     2 controls/anti-ice/pitot-heat
+     2 controls/anti-ice/engine[1]/inlet-heat
+     2 controls/anti-ice/engine/inlet-heat
+     2 autopilot/autobrake/step
+     1 surface-positions/mfs9-pos-norm
+     1 surface-positions/mfs6-pos-norm
+     1 surface-positions/mfs5-pos-norm
+     1 surface-positions/mfs2-pos-norm
+     1 surface-positions/hstab-pos-norm
+     1 surface-positions/elevator-rh-pos-norm
+     1 surface-positions/elevator-lh-pos-norm
+     1 sim/model/chock-offsets/main
+     1 sim/model/chock-offsets/front
+     1 instrumentation/printer/printing
+     1 instrumentation/printer/lights/TEST
+     1 instrumentation/printer/lights/PPR_ADV
+     1 instrumentation/printer/lights/OFF
+     1 instrumentation/printer/lights/LOW_PPR
+     1 instrumentation/printer/lights/FAULT
+     1 instrumentation/printer/lights/ALRT_RST
+     1 instrumentation/clipboard/gui-illum
+     1 instrumentation/IESS/brightness
+     1 fdm/jsbsim/fcs/steer-pos-deg
+     1 controls/lighting/standby-clock
+     1 controls/lighting/pfd[1]
+     1 controls/lighting/pfd
+     1 controls/lighting/mfd[1]
+     1 controls/lighting/mfd
+     1 controls/lighting/logo
+     1 controls/lighting/eicas
+     1 controls/lighting/cabin
+     1 controls/engines/engine[1]/fire-bottle-discharge
+     1 controls/engines/engine/fire-bottle-discharge
+     1 controls/electric/ram-air-turbine
 log:
-  skip external/missing submodel Aircraft/E-jet-family/Models/Primus-Epic/stby-ai.xml
-  skip external/missing submodel Aircraft/E-jet-family/Models/Primus-Epic/PFD0.xml
-  skip external/missing submodel Aircraft/E-jet-family/Models/Primus-Epic/PFD1.xml
-  skip external/missing submodel Aircraft/E-jet-family/Models/Primus-Epic/MFD_R.xml
-  skip external/missing submodel Aircraft/E-jet-family/Models/Primus-Epic/MFD_L.xml
-  skip external/missing submodel Aircraft/E-jet-family/Models/Primus-Epic/EICAS.xml
   skip external/missing submodel Aircraft/E-jet-family/Models/Instruments/MCDU/mcdu-e-jets.xml
   skip external/missing submodel Aircraft/E-jet-family/Models/Instruments/MCDU/mcdu-e-jets.xml

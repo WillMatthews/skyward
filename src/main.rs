@@ -22,6 +22,7 @@ mod audio;
 mod autopilot;
 mod bot;
 mod clouds;
+mod cockpit;
 mod damage;
 mod debris;
 mod flight;
@@ -671,6 +672,8 @@ struct Ui {
     ctx: egui::Context,
     renderer: egui_wgpu::Renderer,
     canvases: ui::canvas::Canvases,
+    /// Glass cockpit displays (offscreen, mapped onto the 3D cockpit screens).
+    cockpit: cockpit::displays::Displays,
     st: UiState,
     hide_hud: bool,
     /// Aircraft thumbnails (kept alive here; ids in `st.thumbs`).
@@ -690,6 +693,7 @@ impl Ui {
             ctx,
             renderer: egui_wgpu::Renderer::new(device, format, egui_wgpu::RendererOptions::default()),
             canvases: ui::canvas::Canvases::default(),
+            cockpit: Default::default(),
             st: UiState::new(settings),
             hide_hud: false,
             thumbs: Vec::new(),
@@ -757,7 +761,15 @@ fn render_frame(
     match session.as_deref_mut() {
         Some(s) if flying => {
             let sim = s.sim.as_mut().unwrap();
+            sim.qnh_hpa = s.world.wx.qnh_hpa;
             let (mut fv, mut dynm) = sim.frame(w as f32 / h as f32);
+            // Live glass cockpit screens (only drawn with the cockpit interior).
+            // (SKYWARD_NO_DISPLAYS=1 leaves the screens dark, for A/B timing.)
+            if let Some(af) = fv.aircraft.as_mut().filter(|af| af.draws.iter().any(|d| af.asset.chunks[d.chunk as usize].display.is_some())) {
+                if std::env::var_os("SKYWARD_NO_DISPLAYS").is_none() {
+                    ui.cockpit.update(device, queue, &mut enc, sim, &s.world, &ui.st.map_tiles, af);
+                }
+            }
             if let Some((eye, look)) = view_override {
                 // The aircraft mesh is relative to the sim's eye: re-express it.
                 let d = fv.eye - eye;

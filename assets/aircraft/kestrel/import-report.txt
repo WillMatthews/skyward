@@ -1,8 +1,9 @@
-"kestrel": 112 nodes (111 animated out of 118), 125 materials, 40 textures (5.3 MB), 188 chunks
-triangles: exterior 45812, interior 76378; vertices 107387; model.skac 1.9 MB; radius 6.1 m
+"kestrel": 142 nodes (141 animated out of 150), 126 materials, 40 textures (5.3 MB), 221 chunks
+triangles: exterior 45848, interior 76402; vertices 107440; model.skac 1.9 MB; radius 6.1 m
 eye: Some(Vec3(0.21, 0.46040267, -0.21776593))
 lights: 38
-channels used: aileron_l aileron_r alt_ft beacon beacon_sw brakes ctl_aileron ctl_rudder ctl_trim elevator eng0_rpm eng3_n2 eng4_n2 eng5_n2 eng6_n2 flaps gear0_comp_norm gear0_roll_ms gear1_comp_norm gear1_roll_ms gear2_comp_norm gear2_roll_ms heading_deg landing_light nav pitch_deg roll_deg rudder slip strobe strobe_sw taxi_light turn_rate
+channels used: aileron_l aileron_r alt_ft alt_set_inhg amps beacon beacon_sw brakes clock_s compass_deg ctl_aileron ctl_rudder ctl_trim elevator eng0_egt_norm eng0_oilp_psi eng0_oilt_f eng0_rpm eng3_n2 eng4_n2 eng5_n2 eng6_n2 flaps gear0_comp_norm gear0_roll_ms gear1_comp_norm gear1_roll_ms gear2_comp_norm gear2_roll_ms gs_kt hdg_bug_deg heading_deg hobbs_tenths ias_kt landing_light nav oat_c panel_light pitch_deg roll_deg rudder slip strobe strobe_sw suction_inhg tank0_gal tank1_gal taxi_light time turn_rate vs_fpm
+texture-animated chunks: 6; display screens: 0
 animation types: [("", 17), ("alpha-test", 1), ("billboard", 1), ("blend", 1), ("dist-scale", 1), ("flash", 2), ("knob", 50), ("material", 260), ("noshadow", 3), ("pick", 134), ("range", 2), ("rotate", 158), ("scale", 1), ("select", 320), ("slider", 11), ("spin", 12), ("texrotate", 1), ("textranslate", 75), ("translate", 113)]
 unmapped properties (count):
     79 instrumentation/garmin196/status
@@ -12,6 +13,7 @@ unmapped properties (count):
     17 autopilot/kap140/panel/state
     15 instrumentation/garmin196/popup_status
     13 autopilot/kap140/panel/digit-mode
+    13 autopilot/kap140/panel/digit
     12 environment/aircraft-effects/glass-angle
     11 sim/model/c172p/lighting/trans
     11 instrumentation/adf/display-mode
@@ -19,52 +21,272 @@ unmapped properties (count):
      9 sim/model/c172p/lighting/gear-select
      8 instrumentation/garmin196/panel-wpt-id
      8 instrumentation/garmin196/lite
-     8 autopilot/kap140/panel/digit
      7 sim/multiplay/generic/int[18]
      7 sim/current-view/internal
+     7 instrumentation/dme/miles-display
      7 autopilot/kap140/sensors/pitch-up
      7 autopilot/kap140/sensors/pitch-down
      7 autopilot/kap140/panel/hdg-timer
-     6 systems/electrical/outputs/audio-panel
      6 sim/multiplay/generic/bool[1]
      6 nasal/tutorial/loaded
      6 instrumentation/garmin196/menu_map/no_ligne_selected
+     6 instrumentation/comm[1]/frequencies/standby-mhz
+     6 instrumentation/comm[1]/frequencies/selected-mhz
+     6 instrumentation/comm/frequencies/standby-mhz
+     6 instrumentation/comm/frequencies/selected-mhz
      6 instrumentation/adf/enroute-timer/alarm-flash
      6 autopilot/kap140/panel/nav-timer
      6 autopilot/kap140/panel/alt-alert
      5 instrumentation/transponder/inputs/knob-mode
+     5 instrumentation/nav[1]/frequencies/standby-mhz
+     5 instrumentation/nav[1]/frequencies/selected-mhz
+     5 instrumentation/nav/frequencies/standby-mhz
+     5 instrumentation/nav/frequencies/selected-mhz
+     5 instrumentation/dme/min-kts-display
+     5 instrumentation/adf/right-display
+     5 instrumentation/adf/frequencies/selected-khz
      5 autopilot/kap140/settings/lateral-mode
      5 autopilot/kap140/settings/lateral-arm
      5 autopilot/kap140/panel/gs-timer
      5 autopilot/kap140/panel/alt-alert-arm
      4 sim/multiplay/generic/int[3]
      4 sim/model/c172p/lighting/ap
-     4 instrumentation/gps/indicated-altitude-ft
      4 instrumentation/garmin196/menu_setup/no_ligne_selected
-     4 instrumentation/dme/miles-display
-     4 consumables/fuel/tank[3]/selected
-     4 consumables/fuel/tank[2]/selected
-     4 consumables/fuel/tank[1]/selected
-     4 consumables/fuel/tank/selected
      4 autopilot/kap140/panel/ap-timer
      4 
-     3 velocities/groundspeed-kt
      3 sim/multiplay/generic/int[8]
      3 sim/multiplay/generic/int[7]
      3 sim/multiplay/generic/int[6]
      3 sim/multiplay/generic/int[19]
      3 sim/multiplay/generic/float[1]
      3 sim/multiplay/generic/float
-     3 sim/model/material/instruments/integral-factor
-     3 sim/model/lightmap/panel/factor
      3 sim/model/c172p/securing/cowl-plugs-visible
-     3 sim/model/c172p/local-time-seconds
      3 sim/model/c172p/lighting/dme
      3 sim/model/c172p/lighting/comm1
      3 sim/model/c172p/lighting/comm0
      3 sim/model/c172p/lighting/adf
      3 sim/model/c172p/garmin196-visible
-     3 instrumentation/kma20/operable
+     3 instrumentation/garmin196/position-wpt-bearing
+     3 instrumentation/dme/switch-min-kts
+     3 instrumentation/adf/adf-btn
+     3 autopilot/kap140/settings/vertical-mode
+     3 autopilot/kap140/panel/baro-mode
+     3 autopilot/kap140/bad-condition
+     2 sim/multiplay/generic/float[4]
+     2 sim/multiplay/generic/float[3]
+     2 sim/multiplay/generic/float[2]
+     2 sim/multiplay/generic/float[19]
+     2 sim/model/hide-yoke
+     2 sim/model/c172p/lighting/nav-lights/right-damaged
+     2 sim/model/c172p/lighting/nav-lights/left-damaged
+     2 sim/model/c172p/lighting/courtesy
+     2 sim/model/c172p/digitalclock-visible
+     2 sim/model/c172p/cockpit/yoke-aileron-abs
+     2 sim/model/c172p/cockpit/parking-lever
+     2 sim/model/c172p/cockpit/flaps-lever
+     2 payload/weight[4]/weight-lb
+     2 instrumentation/transponder/inputs/digit[3]
+     2 instrumentation/transponder/inputs/digit[2]
+     2 instrumentation/transponder/inputs/digit[1]
+     2 instrumentation/transponder/inputs/digit
+     2 instrumentation/nav[1]/gs-in-range
+     2 instrumentation/nav/gs-in-range
+     2 instrumentation/low-voltage-led
+     2 instrumentation/kma20/sens
+     2 instrumentation/garmin196/panel-neddle-to-flag
+     2 instrumentation/dme/left-dot
+     2 instrumentation/adf/set-mode
+     2 instrumentation/adf/rotation-deg
+     2 instrumentation/adf/bfo-btn
+     2 fdm/jsbsim/fcs/steer-pos-deg
+     2 environment/aircraft-effects/cabin-air-set
+     2 controls/switches/starter
+     2 controls/lighting/factor-led
+     2 consumables/fuel/contamination_allowed
+     2 autopilot/kap140/panel/digit-timer
+     1 systems/static-selected-source-norm
+     1 sim/multiplay/generic/float[18]
+     1 sim/model/show-dip-stick
+     1 sim/model/open-sfuel-cap
+     1 sim/model/open-pfuel-cap
+     1 sim/model/hide-yoke-alpha
+     1 sim/model/door-positions/baggageDoor/position-norm
+     1 sim/model/c172p/securing/tiedownT-addable
+     1 sim/model/c172p/securing/tiedownR-addable
+     1 sim/model/c172p/securing/tiedownL-addable
+     1 sim/model/c172p/securing/pitot-cover-visible
+     1 sim/model/c172p/securing/cowl-plugs-addable
+     1 sim/model/c172p/ruddertrim-visible
+     1 sim/model/c172p/lighting/gear-advisory
+     1 sim/model/c172p/lighting/dme-power
+     1 sim/model/c172p/lighting/comm1-power
+     1 sim/model/c172p/lighting/comm0-power
+     1 sim/model/c172p/fairing3
+     1 sim/model/c172p/fairing2
+     1 sim/model/c172p/fairing1
+     1 sim/model/c172p/cockpit/yoke-elevator-norm
+     1 sim/model/c172p/cockpit/yoke-elevator
+     1 sim/model/c172p/cockpit/view-deviation-card
+     1 sim/model/c172p/cockpit/primer-lever-animation
+     1 sim/model/c172p/cockpit/carb-heat-animation
+     1 instrumentation/transponder/inputs/ident-btn
+     1 instrumentation/nav[1]/volume
+     1 instrumentation/nav[1]/to-flag
+     1 instrumentation/nav[1]/in-range
+     1 instrumentation/nav[1]/ident-audible
+     1 instrumentation/nav[1]/frq-swap-btn
+     1 instrumentation/nav[1]/from-flag
+     1 instrumentation/nav[1]/frequencies/dial-mhz
+     1 instrumentation/nav[1]/frequencies/dial-khz
+     1 instrumentation/nav[1]/filtered-gsNAV1-deflection
+     1 instrumentation/nav[1]/filtered-cdiNAV1-deflection
+     1 instrumentation/nav/volume
+     1 instrumentation/nav/to-flag
+     1 instrumentation/nav/in-range
+     1 instrumentation/nav/ident-audible
+     1 instrumentation/nav/frq-swap-btn
+     1 instrumentation/nav/from-flag
+     1 instrumentation/nav/frequencies/dial-mhz
+     1 instrumentation/nav/frequencies/dial-khz
+     1 instrumentation/nav/filtered-gsNAV0-deflection
+     1 instrumentation/nav/filtered-cdiNAV0-deflection
+     1 instrumentation/marker-beacon/outer
+     1 instrumentation/marker-beacon/middle
+     1 instrumentation/marker-beacon/inner
+     1 instrumentation/kma20/nav2
+     1 instrumentation/kma20/nav1
+     1 instrumentation/kma20/mkr
+     1 instrumentation/kma20/knob
+     1 instrumentation/kma20/dme
+     1 instrumentation/kma20/com2
+     1 instrumentation/kma20/com1
+     1 instrumentation/kma20/auto
+     1 instrumentation/kma20/adf
+     1 instrumentation/heading-indicator/caged-flag
+     1 instrumentation/heading-indicator/align-deg
+     1 instrumentation/garmin196/vnav/visible
+     1 instrumentation/garmin196/vnav/deviation
+     1 instrumentation/garmin196/turn-rate
+     1 instrumentation/garmin196/symbols/params/wpt
+     1 instrumentation/garmin196/symbols/params/vor
+     1 instrumentation/garmin196/symbols/params/twn
+     1 instrumentation/garmin196/symbols/params/ndb
+     1 instrumentation/garmin196/symbols/params/fix
+     1 instrumentation/garmin196/symbols/params/airport
+     1 instrumentation/garmin196/speed-display
+     1 instrumentation/garmin196/params/vnav-indicator
+     1 instrumentation/garmin196/panel-wpt-bearing
+     1 instrumentation/garmin196/panel-neddle-deflexion
+     1 instrumentation/garmin196/panel-neddle-course
+     1 instrumentation/garmin196/nrst_display/no_ligne_selected
+     1 instrumentation/garmin196/nrst_display/max_ligne_selected
+     1 instrumentation/garmin196/menu_routes/waypoint-jump
+     1 instrumentation/garmin196/menu_routes/search/no_ligne_selected
+     1 instrumentation/garmin196/menu_routes/no_ligne_selected
+     1 instrumentation/garmin196/menu_routes/no_ligne_detail
+     1 instrumentation/garmin196/menu_routes/fpl-loaded
+     1 instrumentation/garmin196/menu_points/no_ligne_selected
+     1 instrumentation/garmin196/menu_flights/no_ligne_selected
+     1 instrumentation/garmin196/menu_aircraft/no_ligne_selected
+     1 instrumentation/garmin196/light
+     1 instrumentation/garmin196/dto_display/no_ligne_selected
+     1 instrumentation/garmin196/dto_display/max_ligne_selected
+     1 instrumentation/garmin196/antenne-deg
+     1 instrumentation/dme/switch-position
+     1 instrumentation/dme/in-range
+     1 instrumentation/comm[1]/volume-selected
+     1 instrumentation/comm[1]/volume-knobmode
+     1 instrumentation/comm[1]/frq-swap-btn
+     1 instrumentation/comm[1]/frequencies/dial-mhz
+     1 instrumentation/comm[1]/frequencies/dial-khz
+     1 instrumentation/comm[1]/channel-mode-selector
+     1 instrumentation/comm[1]/channel-button
+     1 instrumentation/comm/volume-selected
+     1 instrumentation/comm/volume-knobmode
+     1 instrumentation/comm/frq-swap-btn
+     1 instrumentation/comm/frequencies/dial-mhz
+     1 instrumentation/comm/frequencies/dial-khz
+     1 instrumentation/comm/channel-mode-selector
+     1 instrumentation/comm/channel-button
+     1 instrumentation/clock/lc2/power
+     1 instrumentation/clock/lc2/mode-string
+     1 instrumentation/clock/lc2/digit[3]
+     1 instrumentation/clock/lc2/digit[2]
+     1 instrumentation/clock/lc2/digit[1]
+     1 instrumentation/clock/lc2/digit
+     1 instrumentation/adf/volume-norm
+     1 instrumentation/adf/set-btn
+     1 instrumentation/adf/model
+     1 instrumentation/adf/indicated-bearing-deg
+     1 instrumentation/adf/frq-btn
+     1 instrumentation/adf/frequencies/dial-100-khz
+     1 instrumentation/adf/frequencies/dial-1-khz
+     1 instrumentation/adf/flt-btn
+     1 fdm/jsbsim/fuel/tank
+     1 fdm/jsbsim/external_reactions/towbar/attached
+     1 environment/rain-norm
+     1 environment/aircraft-effects/cabin-heat-set
+     1 engines/active-engine/winter-kit-installed
+     1 controls/visors/right/visor-position-deg
+     1 controls/visors/right/rod-position-deg
+     1 controls/visors/left/visor-position-deg
+     1 controls/visors/left/rod-position-deg
+     1 controls/switches/master-bat
+     1 controls/switches/master-avionics
+     1 controls/switches/master-alt
+     1 controls/switches/magnetos
+     1 controls/switches/dome-white
+     1 controls/switches/dome-red
+     1 controls/lighting/radio-norm
+     1 controls/lighting/gearled
+     1 controls/gear/gear-down-command
+     1 controls/flight/rudder-trim
+     1 controls/engines/current-engine/throttle
+     1 controls/engines/current-engine/mixture
+     1 controls/climate-control/overhead-vent-front-right
+     1 controls/climate-control/overhead-vent-front-left
+     1 controls/circuit-breakers/turn-coordinator
+     1 controls/circuit-breakers/strobe
+     1 controls/circuit-breakers/radio5
+     1 controls/circuit-breakers/radio4
+     1 controls/circuit-breakers/radio3
+     1 controls/circuit-breakers/radio2
+     1 controls/circuit-breakers/radio1
+     1 controls/circuit-breakers/pitot-heat
+     1 controls/circuit-breakers/navlt
+     1 controls/circuit-breakers/master
+     1 controls/circuit-breakers/landing
+     1 controls/circuit-breakers/intlt
+     1 controls/circuit-breakers/instr
+     1 controls/circuit-breakers/hydraulic-pump
+     1 controls/circuit-breakers/gear-select
+     1 controls/circuit-breakers/gear-advisory
+     1 controls/circuit-breakers/flaps
+     1 controls/circuit-breakers/bcnlt
+     1 controls/circuit-breakers/autopilot
+     1 controls/anti-ice/pitot-heat
+     1 autopilot/kap140/settings/vertical-arm
+     1 autopilot/kap140/settings/from-hdg
+     1 autopilot/kap140/settings/cws
+     1 autopilot/kap140/sensors/pitch-trim
+     1 autopilot/kap140/roll-axis-fail
+     1 autopilot/kap140/powered
+     1 autopilot/kap140/pitch-axis-fail
+     1 autopilot/kap140/panel/knob-outer-pos
+     1 autopilot/kap140/panel/knob-inner-pos
+     1 autopilot/kap140/panel/button-up
+     1 autopilot/kap140/panel/button-rev
+     1 autopilot/kap140/panel/button-nav
+     1 autopilot/kap140/panel/button-hdg
+     1 autopilot/kap140/panel/button-down
+     1 autopilot/kap140/panel/button-baro
+     1 autopilot/kap140/panel/button-arm
+     1 autopilot/kap140/panel/button-apr
+     1 autopilot/kap140/panel/button-ap
+     1 autopilot/kap140/panel/button-alt
+     1 autopilot/internal/target-climb-rate
+     1 autopilot/internal/target-altitude
+     1 Interior/Panel/Instruments/garmin196/move
 log:
   skip external/missing submodel Aircraft/Instruments-3d/garmin196/garmin196_dto_display.xml
   skip external/missing submodel Aircraft/Instruments-3d/garmin196/garmin196_nrst_display.xml

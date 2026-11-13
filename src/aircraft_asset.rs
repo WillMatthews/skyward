@@ -3,6 +3,9 @@
 //!
 //! File: `"SKAC"`, u32 version, then zlib( u32 json length, JSON header,
 //! vertices (pos f32×3, octahedral normal i16×2, uv f32×2 = 24 bytes), u32 indices ).
+//! Version 2 adds per-chunk texture animations (`uv`: FlightGear
+//! `textranslate` / `texrotate`, drum counters, attitude balls) and glass
+//! display screens (`display`); version-1 files still load.
 //!
 //! The header holds a node tree in the body frame (+Z nose, +Y up, +X left,
 //! CG origin). Each node has a static `pre` transform (relative to its
@@ -22,7 +25,8 @@
 //! (percent) / `prop{i}_rpm` / `eng{i}_reverser`, `afterburner`, cockpit
 //! controls `ctl_*`, lights `nav` / `beacon` / `strobe` / `landing_light`,
 //! instruments `ias_kt` / `alt_ft` / `pitch_deg` / `roll_deg` /
-//! `heading_deg` / `vs_fpm` / `turn_rate` / `slip`, and `time`.
+//! `heading_deg` / `vs_fpm` / `turn_rate` / `slip`, and `time`; the cockpit
+//! instrument channels are listed in `src/cockpit/channels.rs`.
 
 use glam::{Mat4, Quat, Vec3, Vec4};
 use serde_json::Value;
@@ -62,9 +66,21 @@ pub enum Op {
     Mod,
     Pow,
     Sqrt,
+    /// FlightGear step / scroll quantisation (drum counters): (x, step, scroll).
+    Step,
 }
 
 impl RExpr {
+    /// Channel indices this expression reads.
+    pub fn channel_ids(&self, out: &mut Vec<u16>) {
+        match self {
+            RExpr::Ch(i) => out.push(*i),
+            RExpr::Op(_, a) => a.iter().for_each(|e| e.channel_ids(out)),
+            RExpr::Interp(x, _) => x.channel_ids(out),
+            RExpr::C(_) => {}
+        }
+    }
+
     pub fn eval(&self, ch: &[f32]) -> f32 {
         match self {
             RExpr::C(v) => *v,
@@ -104,10 +120,28 @@ impl RExpr {
                     }
                     Op::Pow => g(0).powf(g(1)),
                     Op::Sqrt => g(0).max(0.0).sqrt(),
+                    Op::Step => step_scroll(g(0), g(1), g(2)),
                 }
             }
         }
     }
+}
+
+/// FlightGear `SGStepExpression`: quantise `v` to `step`; with `scroll` > 0
+/// the value rolls into the next step over the last `scroll` units of each
+/// step (a drum counter's carry).
+pub fn step_scroll(v: f32, step: f32, scroll: f32) -> f32 {
+    if step <= 0.0 {
+        return v;
+    }
+    let mut m = (v / step).floor() * step;
+    if scroll > 0.0 {
+        let rem = step - v.abs() % step;
+        if rem < scroll {
+            m += (scroll - rem) / scroll * step;
+        }
+    }
+    m
 }
 
 fn interp(t: &[(f32, f32)], x: f32) -> f32 {
@@ -168,6 +202,25 @@ pub struct Texture {
     pub rgba: Vec<u8>,
 }
 
+/// Texture-coordinate animation of a chunk (UV space, v down).
+#[derive(Clone, Debug)]
+pub enum UvAnim {
+    Translate { axis: glam::Vec2, v: RExpr },
+    /// Counter-clockwise (in u, v) rotation about `center` by `v` degrees.
+    Rotate { center: glam::Vec2, v: RExpr },
+}
+
+/// A glass display shown on a chunk.
+#[derive(Clone, Debug)]
+pub struct DisplayScreen {
+    /// What it shows: `pfd`, `nd`, `ewd`, `sd`, `isis`, `mcdu`.
+    pub kind: String,
+    /// The screen's window in the chunk's UVs: (u0, v0, u1, v1).
+    pub uv: [f32; 4],
+    /// Physical width / height of that window.
+    pub aspect: f32,
+}
+
 #[derive(Clone, Debug)]
 pub struct Chunk {
     pub node: usize,
@@ -179,6 +232,13 @@ pub struct Chunk {
     pub interior: bool,
     /// Animated emission: colour × expression.
     pub emit: Option<(Vec3, RExpr)>,
+    /// Texture animations, innermost first.
+    pub uv: Vec<UvAnim>,
+    /// Glass display screen.
+    pub display: Option<DisplayScreen>,
+    /// The emission is cockpit backlighting (driven by the panel lighting),
+    /// even on geometry not flagged interior.
+    pub backlight: bool,
 }
 
 #[repr(C)]
@@ -270,6 +330,7 @@ fn expr(v: &Value, chans: &[String]) -> RExpr {
         "mod" => Op::Mod,
         "pow" => Op::Pow,
         "sqrt" => Op::Sqrt,
+        "step" => Op::Step,
         _ => return RExpr::C(0.0),
     };
     RExpr::Op(op, a)
@@ -297,6 +358,10 @@ impl AircraftAsset {
     pub fn parse(raw: &[u8], dir: &str) -> Result<AircraftAsset, String> {
         if raw.len() < 8 || &raw[0..4] != b"SKAC" {
             return Err("not a SKAC file".into());
+        }
+        let version = u32::from_le_bytes(raw[4..8].try_into().unwrap());
+        if !(1..=FORMAT).contains(&version) {
+            return Err(format!("SKAC version {version} not supported (this build reads 1..={FORMAT}; re-import or update)"));
         }
         let mut z = flate2::read::ZlibDecoder::new(&raw[8..]);
         let mut data = Vec::new();
@@ -357,6 +422,35 @@ impl AircraftAsset {
                 count: c["count"].as_u64().unwrap_or(0) as u32,
                 interior: c["interior"].as_bool().unwrap_or(false),
                 emit: c.get("emit").filter(|e| !e.is_null()).map(|e| (vec3(&e["col"]), expr(&e["v"], &chans))),
+                uv: c["uv"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|u| {
+                                let p = |k: &str| {
+                                    let a = u[k].as_array();
+                                    let f = |i: usize| a.and_then(|a| a.get(i)).and_then(|x| x.as_f64()).unwrap_or(0.0) as f32;
+                                    glam::Vec2::new(f(0), f(1))
+                                };
+                                match u["t"].as_str()? {
+                                    "tr" => Some(UvAnim::Translate { axis: p("a"), v: expr(&u["v"], &chans) }),
+                                    "rot" => Some(UvAnim::Rotate { center: p("c"), v: expr(&u["v"], &chans) }),
+                                    _ => None,
+                                }
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                display: c.get("display").filter(|d| d.is_object()).map(|d| {
+                    let w = d["uv"].as_array();
+                    let f = |i: usize, def: f32| w.and_then(|a| a.get(i)).and_then(|x| x.as_f64()).map(|x| x as f32).unwrap_or(def);
+                    DisplayScreen {
+                        kind: d["kind"].as_str().unwrap_or("pfd").to_string(),
+                        uv: [f(0, 0.0), f(1, 0.0), f(2, 1.0), f(3, 1.0)],
+                        aspect: (d["aspect"].as_f64().unwrap_or(1.0) as f32).clamp(0.2, 5.0),
+                    }
+                }),
+                backlight: false,
             })
             .collect();
         let nv = h["vertex_count"].as_u64().unwrap_or(0) as usize;
@@ -406,12 +500,22 @@ impl AircraftAsset {
             lights,
             channels: chans,
         };
+        if let Some(pl) = asset.channel("panel_light") {
+            for c in &mut asset.chunks {
+                if let Some((_, e)) = &c.emit {
+                    let mut ids = Vec::new();
+                    e.channel_ids(&mut ids);
+                    c.backlight = ids.contains(&(pl as u16));
+                }
+            }
+        }
         asset.textures = textures.iter().map(|f| load_texture(dir, f)).collect();
         Ok(asset)
     }
 
     /// Index of a channel, if the model uses it.
     pub fn channel(&self, name: &str) -> Option<usize> {
+        // (Also used while parsing, before the textures are loaded.)
         self.channels.iter().position(|c| c == name)
     }
 }
@@ -440,12 +544,46 @@ pub struct AnimState {
     spin_deg: Vec<f32>,
 }
 
+/// Newest `.skac` format version this build reads.
+pub const FORMAT: u32 = 2;
+
+/// Identity UV transform (see [`Pose::uv`]).
+pub const UV_IDENTITY: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+
 /// Evaluated pose: node transforms in the body frame, visibility, chunk emission.
 #[derive(Default, Clone)]
 pub struct Pose {
     pub world: Vec<Mat4>,
     pub visible: Vec<bool>,
     pub emit: Vec<f32>,
+    /// Per chunk UV transform `[a, b, c, d, tx, ty]`:
+    /// u' = a·u + c·v + tx, v' = b·u + d·v + ty (column-major 2×2 + offset).
+    pub uv: Vec<[f32; 6]>,
+}
+
+/// Compose a chunk's texture animations into one affine UV transform.
+pub fn uv_transform(anims: &[UvAnim], ch: &[f32]) -> [f32; 6] {
+    // m = [[a c tx] [b d ty]] acting on (u, v, 1).
+    let (mut a, mut b, mut c, mut d, mut tx, mut ty) = (1.0f32, 0.0f32, 0.0f32, 1.0f32, 0.0f32, 0.0f32);
+    for an in anims {
+        match an {
+            UvAnim::Translate { axis, v } => {
+                let k = v.eval(ch);
+                tx += axis.x * k;
+                ty += axis.y * k;
+            }
+            UvAnim::Rotate { center, v } => {
+                let (s, co) = v.eval(ch).to_radians().sin_cos();
+                // p' = R (p − c) + c applied after the current transform.
+                let (na, nb) = (co * a - s * b, s * a + co * b);
+                let (nc, nd) = (co * c - s * d, s * c + co * d);
+                let (px, py) = (tx - center.x, ty - center.y);
+                let (ntx, nty) = (co * px - s * py + center.x, s * px + co * py + center.y);
+                (a, b, c, d, tx, ty) = (na, nb, nc, nd, ntx, nty);
+            }
+        }
+    }
+    [a, b, c, d, tx, ty]
 }
 
 impl AircraftAsset {
@@ -482,6 +620,96 @@ impl AircraftAsset {
         }
         out.emit.clear();
         out.emit.extend(self.chunks.iter().map(|c| c.emit.as_ref().map(|(_, e)| e.eval(ch).clamp(0.0, 4.0)).unwrap_or(0.0)));
+        out.uv.clear();
+        out.uv.extend(self.chunks.iter().map(|c| if c.uv.is_empty() { UV_IDENTITY } else { uv_transform(&c.uv, ch) }));
+    }
+
+    /// The distinct glass displays (kind, aspect), in first-seen order.
+    pub fn displays(&self) -> Vec<(String, f32)> {
+        let mut out: Vec<(String, f32)> = Vec::new();
+        for d in self.chunks.iter().filter_map(|c| c.display.as_ref()) {
+            if !out.iter().any(|(k, _)| *k == d.kind) {
+                out.push((d.kind.clone(), d.aspect));
+            }
+        }
+        out
+    }
+
+    /// Live cockpit instruments: animated cockpit parts (needles, cards,
+    /// drums, flags, annunciators, backlit faces) driven by anything but the
+    /// pilot's own controls, plus glass display screens.
+    pub fn live_instruments(&self) -> InstrumentCount {
+        let pilot = |c: &str| c.starts_with("ctl_") || matches!(c, "throttle" | "brakes" | "time" | "steer_norm" | "steer_deg");
+        let live_expr = |e: &RExpr| {
+            let mut ids = Vec::new();
+            e.channel_ids(&mut ids);
+            ids.iter().any(|&i| self.channels.get(i as usize).is_some_and(|n| !pilot(n)))
+        };
+        // Nodes with interior geometry below them.
+        let mut interior = vec![false; self.nodes.len()];
+        for c in self.chunks.iter().filter(|c| c.interior) {
+            let mut i = c.node as i32;
+            while i >= 0 && !interior[i as usize] {
+                interior[i as usize] = true;
+                i = self.nodes[i as usize].parent;
+            }
+        }
+        let mut n = InstrumentCount::default();
+        for (k, node) in self.nodes.iter().enumerate() {
+            if !interior[k] {
+                continue;
+            }
+            let live = match &node.anim {
+                Some(Anim::Rotate { deg, .. }) => live_expr(deg),
+                Some(Anim::Translate { m, .. }) => live_expr(m),
+                Some(Anim::Select(c)) => live_expr(c),
+                Some(Anim::Scale { s, .. }) => s.iter().any(live_expr),
+                _ => false,
+            };
+            if live {
+                match node.anim {
+                    Some(Anim::Select(_)) => n.flags += 1,
+                    _ => n.needles += 1,
+                }
+            }
+        }
+        for c in self.chunks.iter().filter(|c| c.interior) {
+            if c.uv.iter().any(|u| match u {
+                UvAnim::Translate { v, .. } | UvAnim::Rotate { v, .. } => live_expr(v),
+            }) {
+                n.drums += 1;
+            }
+            if c.emit.as_ref().is_some_and(|(_, e)| live_expr(e)) {
+                n.lit += 1;
+            }
+            if c.display.is_some() {
+                n.displays += 1;
+            }
+        }
+        n
+    }
+}
+
+/// Live cockpit instrument parts by kind (see [`AircraftAsset::live_instruments`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct InstrumentCount {
+    /// Needles, pointers, cards, balls (rotate / translate / scale).
+    pub needles: usize,
+    /// Flags and annunciator / indicator selects.
+    pub flags: usize,
+    /// Texture-animated drums, tapes, attitude balls.
+    pub drums: usize,
+    /// Backlit / annunciator emission driven by the systems.
+    pub lit: usize,
+    /// Glass display screens.
+    pub displays: usize,
+}
+
+impl InstrumentCount {
+    /// Live instruments: needles, flags, drums and displays (backlit parts
+    /// are counted separately in `lit`).
+    pub fn total(&self) -> usize {
+        self.needles + self.flags + self.drums + self.displays
     }
 }
 

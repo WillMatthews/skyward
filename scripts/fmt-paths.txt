@@ -6,3 +6,7 @@ src/input/sim_glue.rs
 src/ui/controls.rs
 src/platform/mod.rs
 src/tiles_web.rs
+src/cockpit/mod.rs
+src/cockpit/channels.rs
+src/cockpit/displays.rs
+src/cockpit/tests.rs

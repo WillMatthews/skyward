@@ -8,6 +8,8 @@ struct AcInst {
     color: vec4<f32>,
     emis: vec4<f32>,
     params: vec4<f32>,
+    uvm: vec4<f32>,
+    uvo: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> su: ShadowU;
 @group(1) @binding(0) var<storage, read> ac_inst: array<AcInst>;

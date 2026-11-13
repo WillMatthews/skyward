@@ -1,52 +1,36 @@
-"lancer": 199 nodes (198 animated out of 225), 205 materials, 68 textures (5.0 MB), 334 chunks
-triangles: exterior 20815, interior 96546; vertices 103346; model.skac 1.7 MB; radius 13.1 m
+"lancer": 219 nodes (218 animated out of 248), 206 materials, 68 textures (5.0 MB), 370 chunks
+triangles: exterior 20815, interior 96556; vertices 103366; model.skac 1.7 MB; radius 13.1 m
 eye: Some(Vec3(0.0, 1.0714585, 4.1639924))
 lights: 7
-channels used: brakes ctl_aileron ctl_elevator ctl_gear ctl_rudder ctl_trim elevator eng0_n1 eng0_n2 eng0_running flaps gear0_comp_norm gear1_comp_norm gear2_comp_norm gear_pos heading_deg ias_kt landing_light pitch_deg roll_deg rudder slip spoilers turn_rate
+channels used: alpha_deg brakes clock_s ctl_aileron ctl_elevator ctl_gear ctl_rudder ctl_trim elevator eng0_egt_c eng0_n1 eng0_n2 eng0_nozzle eng0_oilp_psi eng0_running flaps fuel_lbs gear0_comp_norm gear1_comp_norm gear2_comp_norm gear_pos hdg_bug_deg heading_deg ias_kt landing_light master_caution panel_light pitch_deg roll_deg rudder slip spoilers time turn_rate vs_fpm
+texture-animated chunks: 6; display screens: 2
 animation types: [("knob", 178), ("material", 102), ("noshadow", 8), ("pick", 112), ("range", 2), ("rotate", 159), ("scale", 4), ("select", 209), ("spin", 5), ("textranslate", 14), ("translate", 82)]
 unmapped properties (count):
    119 controls/test/test-panel/mal-ind-lts
     75 sim/variant-id
     65 sim/multiplay/generic/float
-    29 controls/lighting/lighting-panel/mal-ind-lts-brightness
-    18 fdm/jsbsim/elec/bus/batt-2
-    17 controls/lighting/lighting-panel/pri-inst-pnl
-    13 fdm/jsbsim/elec/bus/emergency-ac-2
     12 sim/rendering/shaders/skydome
-    12 controls/lighting/lighting-panel/flood-inst-pnl
-    11 fdm/jsbsim/elec/bus/batt-1
-    10 fdm/jsbsim/elec/bus/emergency-dc-1
-    10 f16/avionics/power-ufc-warm
     10 controls/MFD[2]/button-pressed
     10 controls/MFD[1]/button-pressed
     10 controls/MFD/button-pressed
      7 sim/model/f16/controls/navigation/instrument-mode-panel/mode/rotary-switch-knob
      7 sim/current-view/name
-     6 fdm/jsbsim/elec/bus/emergency-ac-1
      5 sim/multiplay/generic/short[5]
-     4 systems/static/serviceable
      4 sim/multiplay/generic/int[9]
      4 sim/current-view/internal
-     4 instrumentation/heading-indicator/heading-bug-deg
-     4 fdm/jsbsim/fcs/fly-by-wire/pitch/alpha-indicated
-     4 f16/avionics/mfd-l-brt
      4 f16/avionics/hud-basic
+     4 f16/avionics/hsi-dist
      3 sim/rendering/rembrandt/enabled
      3 instrumentation/marker-beacon/outer
      3 instrumentation/marker-beacon/middle
      3 instrumentation/marker-beacon/inner
-     3 instrumentation/clock/indicated-sec
-     3 instrumentation/attitude-indicator[2]/indicated-roll-deg
      3 fdm/jsbsim/elec/sources/epu-cmd
-     3 fdm/jsbsim/elec/bus/ess-ac
      3 f16/fcs/le-flaps-switch
      3 f16/fail/servo-tail-switch
      3 f16/fail/servo-flaperon-switch
      3 f16/ews/ew-rwr-switch
      3 f16/ews/ew-mode-knob
      3 f16/ejected
-     3 f16/avionics/power-mfd
-     3 controls/lighting/lighting-panel/console-primary
      3 controls/lighting/ar-nws
      2 sim/variant-engine
      2 sim/multiplay/generic/int[10]
@@ -57,16 +41,210 @@ unmapped properties (count):
      2 sim/multiplay/generic/bool[42]
      2 sim/multiplay/generic/bool[41]
      2 sim/multiplay/generic/bool[36]
-     2 sim/failure-manager/controls/flight/elevator/serviceable
-     2 sim/failure-manager/controls/flight/aileron/serviceable
      2 instrumentation/tfs/aft-not-engaged
      2 instrumentation/nav/radials/selected-deg-knob
-     2 instrumentation/nav/radials/selected-deg
      2 instrumentation/nav/in-range
      2 instrumentation/nav/gs-needle-deflection
-     2 fdm/jsbsim/systems/hydraulics/sysb-psi
+     2 fdm/jsbsim/elec/switches/master-fuel-cmd
+     2 fdm/jsbsim/elec/sources/epu-gen-volt
+     2 f16/fcs/trim-ap-disc-switch
+     2 f16/fcs/stby-mode
+     2 f16/fcs/bit-fail
+     2 f16/fcs/adv-mode
+     2 f16/fail/servo-rudder-switch
+     2 f16/ews/ew-mws-switch
+     2 f16/ews/ew-jmr-switch
+     2 f16/ews/ew-jett-switch
+     2 f16/avionics/hsi-show-bearing
+     2 f16/avionics/caution/stores-config
+     2 f16/avionics/caution/sec
+     2 f16/avionics/caution/seat-not-armed
+     2 f16/avionics/caution/probe-heat
+     2 f16/avionics/caution/oxy-low
+     2 f16/avionics/caution/overheat
+     2 f16/avionics/caution/le-flaps
+     2 f16/avionics/caution/hook
+     2 f16/avionics/caution/fwd-fuel-low
+     2 f16/avionics/caution/equip-hot
+     2 f16/avionics/caution/engine-fault
+     2 f16/avionics/caution/elec-sys
+     2 f16/avionics/caution/cabin-press
+     2 f16/avionics/caution/avionics
+     2 f16/avionics/caution/aft-fuel-low
+     2 f16/avionics/caution/adc
+     2 controls/test/test-panel/fire-ovht-test
+     2 controls/test/avtr-test
+     2 controls/lighting/ext-lighting-panel/wing-tail
+     2 controls/lighting/ext-lighting-panel/pos-lights-flash
+     2 controls/lighting/ext-lighting-panel/master
+     2 controls/lighting/ext-lighting-panel/fuselage
+     2 controls/lighting/ext-lighting-panel/form-knob
+     2 controls/lighting/ext-lighting-panel/ar-knob
+     2 controls/lighting/ext-lighting-panel/anti-collision
+     2 controls/fuel/qty-selector
+     2 controls/flight/rudder-trim
+     2 controls/flight/alt-flaps
+     2 controls/flight/aileron-trim
+     2 controls/armament/ecm-enabled
+     2 controls/MFD[1]/mode
+     1 tmp/nill
+     1 systems/refuel/switch
+     1 surface-positions/speedbrake-pos-anim-lag
+     1 sound/rwr-launch
+     1 sim/systems/wingflexer/z-m-tip
+     1 sim/systems/wingflexer/z-m-outer
+     1 sim/systems/wingflexer/z-m-middle
+     1 sim/systems/wingflexer/z-m-inner
+     1 sim/multiplay/generic/float[7]
+     1 sim/multiplay/generic/float[6]
+     1 sim/multiplay/generic/float[5]
+     1 sim/multiplay/generic/float[4]
+     1 sim/multiplay/generic/float[2]
+     1 sim/multiplay/generic/float[22]
+     1 sim/multiplay/generic/bool[48]
+     1 sim/multiplay/generic/bool[40]
+     1 sim/multiplay/generic/bool[39]
+     1 sim/model/f16/link16
+     1 sim/model/f16/instrumentation/nav-development-stage
+     1 sim/model/f16/instrumentation/airspeed-indicator/safe-speed-limit-bug
+     1 sim/failure-manager/controls/gear2/failure-level
+     1 sim/failure-manager/controls/gear1/failure-level
+     1 sim/failure-manager/controls/gear0/failure-level
+     1 sim/current-view/pitch-offset-deg
+     1 sim/current-view/heading-offset-deg
+     1 sim/current-view/field-of-view-scale
+     1 rotors/main/blade[2]/position-deg
+     1 rotors/main/blade[1]/position-deg
+     1 rotors/main/blade/position-deg
+     1 payload/armament/station/id-7-set
+     1 payload/armament/station/id-6-set
+     1 payload/armament/station/id-5-set
+     1 payload/armament/station/id-3-set
+     1 payload/armament/station/id-2-set
+     1 payload/armament/station/id-1-set
+     1 payload/armament/MAW-semiactive
+     1 payload/armament/MAW-active
+     1 nop
+     1 instrumentation/tacan/volume
+     1 instrumentation/radar/radar-enable
+     1 instrumentation/radar/iff
+     1 instrumentation/nav/heading-needle-deflection
+     1 instrumentation/comm[1]/volume
+     1 instrumentation/comm/volume
+     1 instrumentation/comm/frequencies/current-mhz-digit-5
+     1 instrumentation/comm/frequencies/current-mhz-digit-4
+     1 instrumentation/comm/frequencies/current-mhz-digit-3
+     1 instrumentation/comm/frequencies/current-mhz-digit-2
+     1 instrumentation/comm/frequencies/current-mhz-digit-1
+     1 gear/tailhook/position-norm
+     1 fdm/jsbsim/systems/hook/tailhook-cmd-norm
+     1 fdm/jsbsim/systems/buffeting/outputz
+     1 fdm/jsbsim/systems/buffeting/outputy
+     1 fdm/jsbsim/fcs/fly-by-wire/tef/tef-pos-norm
+     1 fdm/jsbsim/fcs/fly-by-wire/enable-standby-gains
+     1 fdm/jsbsim/fcs/fly-by-wire/enable-cat-III
+     1 fdm/jsbsim/fcs/fly-by-wire/digital-backup
+     1 fdm/jsbsim/fcs/fbw-override
+     1 fdm/jsbsim/fcs/canopy-pos-norm
+     1 fdm/jsbsim/elec/switches/main-pwr
+     1 fdm/jsbsim/elec/switches/flcs-pwr-test
+     1 fdm/jsbsim/elec/switches/epu-cover
+     1 fdm/jsbsim/elec/switches/epu
+     1 fdm/jsbsim/elec/sources/epu-require-hydrazine
+     1 fdm/jsbsim/atmosphere/density-altitude
+     1 false
+     1 f16/fuel/hand-fwd-lag
+     1 f16/fuel/hand-aft-lag
+     1 f16/fcs/switch-roll-block20
+     1 f16/fcs/switch-roll-block15
+     1 f16/fcs/switch-pitch-block20
+     1 f16/fcs/switch-pitch-block15
+     1 f16/fcs/digital-backup
+     1 f16/fcs/bit-run
+     1 f16/fcs/bit
+     1 f16/fcs/autopilot-on
+     1 f16/fcs/adv-mode-sel
+     1 f16/ews/rwr-volume
+     1 f16/ews/rwr-unk
+     1 f16/ews/rwr-separate
+     1 f16/ews/rwr-pri
+     1 f16/ews/rwr-int
+     1 f16/ews/msl-vol-knob
+     1 f16/ews/ew-disp-switch
+     1 f16/engine/max-power
+     1 f16/engine/jfs-start-switch
+     1 f16/engine/jfs-full-speed
+     1 f16/engine/feed
+     1 f16/engine/eec-switch
+     1 f16/engine/eec-cover
+     1 f16/engine/cutoff-release-lever
+     1 f16/engine/ab-reset
+     1 f16/cockpit/pressure-ft
+     1 f16/cockpit/oxygen-liters-output
+     1 f16/cockpit/kneeboard-right-visible
+     1 f16/cockpit/kneeboard-left-visible
+     1 f16/cockpit/hydrazine-minutes
+     1 f16/cockpit/fuel-flow-digit-5
+     1 f16/cockpit/fuel-flow-digit-4
+     1 f16/cockpit/fuel-flow-digit-3
+     1 f16/cockpit/alt-gear-handle
+     1 f16/avionics/rtn-seq
+     1 f16/avionics/probe-heat-switch
+     1 f16/avionics/intercom-volume
+     1 f16/avionics/ils-volume
+     1 f16/avionics/hud-drift
+     1 f16/avionics/hud-depr-ret
+     1 f16/avionics/hsi-to
+     1 f16/avionics/hsi-from
+     1 f16/avionics/hsi-cdi-invalid
+     1 f16/avionics/hsi-cdi
+     1 f16/avionics/hsi-bearing-rel
+     1 f16/avionics/gnd-jett
+     1 f16/avionics/ded-up-down
+     1 f16/avionics/cockpit_blinker3hz/state
+     1 f16/avionics/cmds-fl-switch
+     1 f16/avionics/cmds-ch-switch
+     1 f16/avionics/cmds-02-switch
+     1 f16/avionics/cmds-01-switch
+     1 f16/avionics/caution/flcs
+     1 f16/avionics/caution/elec-reset-btn
+     1 controls/test/test-panel/pbg-test
+     1 controls/test/test-panel/oxy-test
+     1 controls/test/test-panel/mal-ind-lts-btn
+     1 controls/test/test-panel/epu-test
+     1 controls/seat/vertical-adjust
+     1 controls/seat/ejection-safety-lever
+     1 controls/icp/key[9]
+     1 controls/icp/key[8]
+     1 controls/icp/key[7]
+     1 controls/icp/key[6]
+     1 controls/icp/key[5]
+     1 controls/icp/key[4]
+     1 controls/icp/key[3]
+     1 controls/icp/key[2]
+     1 controls/icp/key[1]
+     1 controls/icp/key[11]
+     1 controls/icp/key[10]
+     1 controls/icp/key
+     1 controls/icp/button-list
+     1 controls/icp/button-iff
+     1 controls/icp/button-com2
+     1 controls/icp/button-com1
+     1 controls/icp/button-a-g
+     1 controls/icp/button-a-a
+     1 controls/gear/gear-horn-cutout
+     1 controls/fuel/tank-inerting
+     1 controls/fuel/external-transfer
+     1 controls/engines/engine/throttle-movement
+     1 controls/engines/engine/augmentation
+     1 controls/armament/master-arm-switch
+     1 controls/armament/master-arm-cover-open
+     1 controls/armament/laser-arm-dmd
+     1 controls/armament/alt-rel-button
+     1 canopy/position-norm
+     1 canopy/not-serviceable
 log:
   missing model file /Aircraft/Instruments-3d/altimeter/altimeter.ac (from Models/Cockpit/Instruments/altimeter.xml)
-  n/src/f16/Models/Cockpit/Main/panels_mlu_right-console.ac: EOF before kid
+  /tmp/claude-1000/-home-wam-coding-fs98/3e4de0cc-4325-43bc-b315-3c83f2fdd195/scratchpad/n/src/f16/Models/Cockpit/Main/panels_mlu_right-console.ac: EOF before kid
   skip external/missing submodel Models/Airport/Pushback/Military.xml
   skip external/missing submodel Aircraft/Generic/marker.xml

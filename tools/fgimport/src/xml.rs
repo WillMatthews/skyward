@@ -127,7 +127,27 @@ fn expand_includes(ctx: &Ctx, e: &mut Elem, dir: &Path, depth: usize) {
     }
 }
 
-fn resolve_aliases(root: &mut Elem) {
+/// FG `<overlay>`: merge `o` over `e` (children matched by name and
+/// occurrence; leaves replace the text, new nodes are appended).
+pub fn overlay(e: &mut Elem, o: &Elem) {
+    let mut seen: std::collections::HashMap<&str, usize> = Default::default();
+    for k in &o.kids {
+        let n = seen.entry(k.name.as_str()).or_default();
+        let nth = *n;
+        *n += 1;
+        match e.kids.iter_mut().filter(|c| c.name == k.name).nth(nth) {
+            Some(t) if !k.kids.is_empty() => overlay(t, k),
+            Some(t) => {
+                t.text = k.text.clone();
+                // An overlaid value replaces an alias.
+                t.attrs.retain(|(a, _)| a != "alias");
+            }
+            None => e.kids.push(k.clone()),
+        }
+    }
+}
+
+pub fn resolve_aliases(root: &mut Elem) {
     let snapshot = root.clone();
     fn walk(e: &mut Elem, snap: &Elem) {
         if let Some(a) = e.attr("alias") {

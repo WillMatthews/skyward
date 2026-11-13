@@ -39,6 +39,10 @@ pub struct AircraftModel {
     state: AnimState,
     pose: Pose,
     chan: Vec<f32>,
+    /// Per channel: the cockpit-instrument source, if it is one.
+    chan_src: Vec<Option<crate::cockpit::channels::Chan>>,
+    /// Live instrument state (lags, fuel, clocks).
+    pub instruments: crate::cockpit::channels::Instruments,
     last_time: Option<f32>,
     /// Structural parts of every vertex (wing flex, debris), see [`classify`].
     pub parts: Option<Arc<PartMap>>,
@@ -81,11 +85,38 @@ pub fn build(id: &str, def_eye: Vec3) -> AircraftModel {
             let radius = a.radius.max(1.0);
             let n = a.channels.len();
             let bounds = exterior_bounds(&a);
-            AircraftModel { asset: Some(a), eye, radius, bounds, nose_gear: None, state: AnimState::default(), pose: Pose::default(), chan: vec![0.0; n], last_time: None, parts: None }
+            let chan_src = a.channels.iter().map(|c| crate::cockpit::channels::resolve(c)).collect();
+            AircraftModel {
+                asset: Some(a),
+                eye,
+                radius,
+                bounds,
+                nose_gear: None,
+                state: AnimState::default(),
+                pose: Pose::default(),
+                chan: vec![0.0; n],
+                chan_src,
+                instruments: Default::default(),
+                last_time: None,
+                parts: None,
+            }
         }
         Err(e) => {
             eprintln!("aircraft model {id}: {e}");
-            AircraftModel { asset: None, eye: def_eye, radius: 8.0, bounds: (Vec3::splat(-4.0), Vec3::splat(4.0)), nose_gear: None, state: AnimState::default(), pose: Pose::default(), chan: Vec::new(), last_time: None, parts: None }
+            AircraftModel {
+                asset: None,
+                eye: def_eye,
+                radius: 8.0,
+                bounds: (Vec3::splat(-4.0), Vec3::splat(4.0)),
+                nose_gear: None,
+                state: AnimState::default(),
+                pose: Pose::default(),
+                chan: Vec::new(),
+                chan_src: Vec::new(),
+                instruments: Default::default(),
+                last_time: None,
+                parts: None,
+            }
         }
     }
 }
@@ -101,6 +132,14 @@ pub struct ModelInputs<'a> {
     pub beacon: bool,
     pub strobe: bool,
     pub landing: bool,
+    /// Autopilot targets (bugs, flight director), if the aircraft has one.
+    pub ap: Option<&'a crate::autopilot::Autopilot>,
+    /// Altimeter setting (the airfield QNH), hPa.
+    pub qnh_hpa: f32,
+    /// Local clock time, hours.
+    pub hours: f32,
+    /// Ambient daylight 0 (night) .. 1 (day): panel lighting / display brightness.
+    pub daylight: f32,
 }
 
 /// Value of one animation channel (FlightGear semantics, see `aircraft_asset.rs`).
@@ -195,8 +234,16 @@ impl AircraftModel {
             None => 0.0,
         };
         self.last_time = Some(inp.time);
+        self.instruments.step(inp, dt);
         for (k, name) in a.channels.iter().enumerate() {
-            self.chan[k] = channel_value(name, inp);
+            self.chan[k] = match self.chan_src.get(k).copied().flatten() {
+                Some(c) => self.instruments.value(c, inp),
+                None => channel_value(name, inp),
+            };
+        }
+        if std::env::var_os("SKYWARD_CHAN_DUMP").is_some() {
+            let s: Vec<String> = a.channels.iter().zip(&self.chan).map(|(n, v)| format!("{n}={v:.2}")).collect();
+            eprintln!("chan t={:.2}: {}", inp.time, s.join(" "));
         }
         a.pose(&self.chan, &mut self.state, dt, &mut self.pose);
     }
@@ -213,9 +260,9 @@ impl AircraftModel {
             .iter()
             .enumerate()
             .filter(|(_, c)| (interior || !c.interior) && self.pose.visible[c.node])
-            .map(|(i, c)| ChunkDraw { chunk: i as u32, model: body * self.pose.world[c.node], emit: self.pose.emit[i] })
+            .map(|(i, c)| ChunkDraw { chunk: i as u32, model: body * self.pose.world[c.node], emit: self.pose.emit[i], uv: self.pose.uv.get(i).copied().unwrap_or(crate::aircraft_asset::UV_IDENTITY) })
             .collect();
-        Some(AircraftFrame { asset: a.clone(), draws, parts: self.parts.clone(), dynamics: None })
+        Some(AircraftFrame { asset: a.clone(), draws, parts: self.parts.clone(), dynamics: None, displays: None })
     }
 
     /// Light positions (body frame, current pose) by kind.

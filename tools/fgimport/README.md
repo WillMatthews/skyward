@@ -2,7 +2,7 @@
 
 Offline tool (not part of the game build). It turns a FlightGear aircraft
 (AC3D models + model XML + textures, and the JSBSim FDM) into
-`assets/aircraft/<id>/`: `model.skac` (zlib: JSON header with node tree,
+`assets/aircraft/<id>/`: `model.skac` (format 2; zlib: JSON header with node tree,
 animations, materials, chunks + vertex / index blobs), `t*.jpg|png`
 textures, `fdm.xml` (the JSBSim sections the flight model reads, includes
 resolved, with the loaded CG as `<skyward_cg>`), `fdm.json` (mass / CG /
@@ -21,6 +21,9 @@ python3 -I $S/fetch.py spitfire svn:spitfireIX spitfireIX Models/SpitfireIX.xml 
 python3 -I $S/fetch.py f16 svn:f16 f16 Models/F-16.xml f16b52.xml
 python3 -I $S/fetch.py atr72 svn:ATR-72-500 ATR-72-500 Models/ATR-72-500.xml ATR-72-500.xml
 python3 -I $S/fetch.py e190 gh:YV3399/E-jet-family-YV@master E-jet-family Models/E190.xml FDM/E190.xml
+SKIP="Liveries/,AI-,Nasal/,Sounds/,gui/,MCDU" python3 -I $S/fetch.py e190 gh:YV3399/E-jet-family-YV@master E-jet-family \
+    Models/Primus-Epic/PFD0.xml Models/Primus-Epic/PFD1.xml Models/Primus-Epic/MFD_L.xml Models/Primus-Epic/MFD_R.xml \
+    Models/Primus-Epic/EICAS.xml Models/Primus-Epic/stby-ai.xml   # the E190 display units
 python3 -I $S/fetch.py a320 svn:A320-family A320-family Models/A320-200-CFM.xml FDE/A320-200-CFM.xml
 # extra inputs: ATR Models/paintkit.xcf, A320 Models/Liveries/CFM/2k/CFM56-white.png
 python3 -I $S/texconv.py $FG_SRC                       # SGI .rgb / DDS → PNG
@@ -47,14 +50,20 @@ In the game: `SKAC_DUMP=<id> cargo test --release geometry_dump -- --ignored
 | `exclude_models`, `exclude_objects`, `interior_models`, `interior_objects`, `light_models` | regexes on submodel paths / object names |
 | `textures` | texture overrides (basename → path in the source tree), e.g. the neutral liveries |
 | `max_tex`, `interior_max_tex`, `jpeg_quality`, `range_m` | texture limits; LOD distance for `range` animations |
+| `interior_range_m` | LOD distance for `range` animations inside the cockpit (default 1 m: instrument LODs seen from the seat) |
+| `displays` | `[object-regex, kind, (model-path-regex)]` glass screens: the object's UV window shows Skyward's `pfd` / `nd` / `ewd` / `sd` / `isis` / `mcdu` display (src/cockpit/displays.rs) |
 
 Supported FG animations: rotate / knob, translate / slider, spin, select,
-scale, range (static LOD pick), material (emission → animated emissive,
-static texture swap), named animation groups, `alpha-test` / `blend` /
+scale, range (static LOD pick), textranslate / texrotate / texmultiple
+(per-chunk UV transforms incl. step / scroll drum counters), material
+(emission → animated emissive, `*-prop` colours → panel backlight, static
+texture swap), named animation groups, `<model><overlay>` params, `alpha-test` / `blend` /
 transparent effects (glass), light-cone / procedural lights (hidden; their
 positions become light markers). Expressions: factor / offset / min / max,
 interpolation tables, SGExpression subset, `<condition>` trees. Static inputs
-are folded at import; FlightGear's rotation sense is right-handed about the
+are folded at import. Instrument properties map onto the cockpit channels
+of `src/cockpit/channels.rs` (rules in `src/expr.rs`; powered buses,
+`serviceable` etc. fold to constants). FlightGear's rotation sense is right-handed about the
 axis (verified by `aircraft_asset::sign_tests`).
 
 Model frame (FG): x aft, y right, z up. Body frame (Skyward): +Z nose,

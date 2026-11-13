@@ -1,25 +1,20 @@
-"aerolink": 91 nodes (90 animated out of 93), 91 materials, 58 textures (1.4 MB), 202 chunks
-triangles: exterior 15646, interior 39619; vertices 79855; model.skac 0.8 MB; radius 16.0 m
+"aerolink": 123 nodes (122 animated out of 125), 93 materials, 58 textures (1.4 MB), 254 chunks
+triangles: exterior 15646, interior 39649; vertices 79923; model.skac 0.8 MB; radius 16.0 m
 eye: Some(Vec3(0.6, 0.25, 9.25))
 lights: 9
-channels used: aileron_l aileron_r alt_ft beacon_sw brakes ctl_aileron ctl_elevator ctl_flaps ctl_gear ctl_rudder ctl_trim eng0_n2 eng1_n2 flaps gear0_comp_m gear0_roll_ms gear1_comp_norm gear1_roll_ms gear2_comp_norm gear2_roll_ms gear_pos heading_deg ias_kt landing_light nav roll_deg rudder slip steer_norm strobe_sw taxi_light throttle vs_fpm
+channels used: aileron_l aileron_r alt_ft alt_set_inhg ap_alt_ft ap_on beacon_sw brakes clock_hour clock_min clock_s ctl_aileron ctl_elevator ctl_flaps ctl_gear ctl_rudder ctl_trim eng0_ff_gph eng0_n2 eng0_tq_ftlb eng1_ff_gph eng1_n2 eng1_tq_ftlb fd_pitch_deg fd_roll_deg flaps gear0_comp_m gear0_roll_ms gear1_comp_norm gear1_roll_ms gear2_comp_norm gear2_roll_ms gear_pos gs_kt hdg_bug_deg hdg_bug_err_deg heading_deg ias_kt landing_light nav panel_light pitch_deg roll_deg rudder slip steer_norm strobe_sw taxi_light throttle vmo_kt vs_fpm
+texture-animated chunks: 20; display screens: 0
 animation types: [("material", 34), ("pick", 65), ("range", 1), ("rotate", 127), ("select", 70), ("spin", 5), ("texmultiple", 3), ("texrotate", 1), ("textranslate", 40), ("translate", 29)]
 unmapped properties (count):
-    11 controls/lighting/instruments-norm
-     6 instrumentation/nav-compass/nav-display[1]
-     6 instrumentation/nav-compass/nav-display
-     5 systems/electrical/outputs/efis
-     4 systems/electrical/outputs/panel-lights
      4 sim/model/livery/number-of-blades
      4 sim/model/livery/configuration
      4 instrumentation/nav/heading-needle-deflection
      4 autopilot/settings/vertical
-     3 instrumentation/nav/radials/selected-deg
-     3 engines/engine[1]/torque-ftlb
-     3 engines/engine/torque-ftlb
+     3 instrumentation/nav-compass[1]/nav-display[1]
+     3 instrumentation/nav-compass[1]/nav-display
+     3 instrumentation/nav-compass/nav-display[1]
+     3 instrumentation/nav-compass/nav-display
      3 autopilot/settings/lateral
-     3 autopilot/settings/flight-director
-     2 systems/electrical/outputs/cabin-lights
      2 sim/model/door-positions/overhead-bins/position-norm
      2 instrumentation/nav[1]/heading-deg
      2 instrumentation/nav/nav-loc
@@ -27,15 +22,10 @@ unmapped properties (count):
      2 instrumentation/nav/heading-deg
      2 instrumentation/nav/gs-needle-deflection
      2 instrumentation/nav/gs-in-range
-     2 instrumentation/clock/indicated-sec
-     2 instrumentation/clock/indicated-min
-     2 instrumentation/clock/indicated-hour
      2 instrumentation/airspeed-indicator/index[1]
      2 instrumentation/airspeed-indicator/index
-     2 instrumentation/airspeed-indicator/airspeed-limit-kt
      2 instrumentation/adf[1]/indicated-bearing-deg
      2 instrumentation/adf/indicated-bearing-deg
-     2 controls/lighting/panel-norm
      2 controls/hydraulic/x-feed
      2 controls/hydraulic/system[1]/electric-pump
      2 controls/hydraulic/system/electric-pump[1]
@@ -51,20 +41,22 @@ unmapped properties (count):
      2 controls/anti-ice/window-heat
      2 controls/anti-ice/engine[1]/inlet-heat
      2 controls/anti-ice/engine/inlet-heat
-     2 consumables/fuel/tank[1]/selected
-     2 consumables/fuel/tank/selected
-     2 autopilot/internal/vert-speed-fpm
-     2 autopilot/internal/flight-director-roll-deg
-     2 autopilot/internal/flight-director-pitch-deg
-     2 autopilot/internal/fdm-heading-bug-error-deg
-     1 systems/electrical/outputs/cockpit-lights
-     1 systems/electrical/outputs/autopilot
      1 sim/model/door-positions/pilot-armrests/position-norm
      1 sim/model/door-positions/pax-right/position-norm
      1 sim/model/door-positions/pax-left/position-norm
      1 sim/model/door-positions/copilot-armrests/position-norm
      1 sim/model/door-positions/cockpit/position-norm
      1 sim/model/door-positions/cargo/position-norm
+     1 controls/switches/seatbelt-sign
+     1 controls/switches/no-smoking-sign
+     1 controls/lighting/wing-lights
+     1 controls/lighting/logo-lights
+     1 controls/engines/start-switch
+     1 controls/engines/propeller-brake
+     1 controls/engines/engine[1]/condition
+     1 controls/engines/engine/condition
+     1 controls/electric/battery-switch
+     1 autopilot/settings/yaw-damper
 log:
   skip external/missing submodel Aircraft/Instruments-3d/VIR-32/ctl32-nav1.xml
   skip external/missing submodel Aircraft/Instruments-3d/VIR-32/ctl32-nav2.xml

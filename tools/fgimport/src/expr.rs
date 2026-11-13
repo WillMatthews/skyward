@@ -97,8 +97,25 @@ pub fn apply(op: &str, a: &[f32]) -> f32 {
         }
         "pow" => g(0).powf(g(1)),
         "sqrt" => g(0).max(0.0).sqrt(),
+        "step" => step_scroll(g(0), g(1), g(2)),
         _ => 0.0,
     }
+}
+
+/// FlightGear `SGStepExpression`: quantise to `step`, and with `scroll` > 0
+/// roll smoothly into the next step over its last `scroll` units (drum counters).
+pub fn step_scroll(v: f32, step: f32, scroll: f32) -> f32 {
+    if step <= 0.0 {
+        return v;
+    }
+    let mut m = (v / step).floor() * step;
+    if scroll > 0.0 {
+        let rem = step - v.abs() % step;
+        if rem < scroll {
+            m += (scroll - rem) / scroll * step;
+        }
+    }
+    m
 }
 
 /// Build an op node, folding constants.
@@ -204,6 +221,116 @@ const DEFAULT_RULES: &[(&str, &str, f32, f32)] = &[
     (r"^instrumentation/slip-skid-ball/indicated-slip-skid$", "slip", 1.0, 0.0),
     (r"^velocities/mach$", "mach", 1.0, 0.0),
     (r"^orientation/alpha-deg$", "alpha_deg", 1.0, 0.0),
+    // ---- cockpit instruments (src/cockpit/channels.rs) ----
+    // Things that are always so in Skyward: powered buses, serviceable
+    // instruments, selected tanks, display-unit brightness knobs.
+    (r"/serviceable$|/operable$|^instrumentation/[^/]+/power-btn$", "const", 0.0, 1.0),
+    (r"^consumables/fuel/tank(?:\[\d+\])?/selected$", "const", 0.0, 1.0),
+    (r"^controls/lighting/(?:DU/.*|.*brightness.*|data-entry-display|.*-brt|stby-compass)$", "const", 0.0, 1.0),
+    (r"^f16/avionics/(?:mfd-[lr]-(?:brt|con|gain)|hud-(?:brt|cont|sym)|power-.*|hmd-sym-int-knob)$", "const", 0.0, 1.0),
+    (r"^systems/electrical/(?:light|relay)/", "const", 0.0, 0.0),
+    (r"^fdm/jsbsim/elec/bus/light/", "const", 0.0, 0.0),
+    (r"^systems/electrical/sources/.*(?:powered|gen)", "const", 0.0, 1.0),
+    (r"^systems/electrical/(?:outputs/(?:panel-lights|cockpit-lights|instrument-lights?|main-panel-light|overhead-panel-light|pedestal-light|pushbutton-lights|dome-light|flood-lights?)(?:\[\d+\])?)$", "panel_light", 28.0, 0.0),
+    (r"^systems/electrical/bus/ac", "const", 0.0, 115.0),
+    (r"^systems/electrical/(?:outputs|bus)/", "const", 0.0, 28.0),
+    (r"^systems/electrical/(?:volts|.*-volts?)$", "const", 0.0, 28.0),
+    (r"^fdm/jsbsim/elec/(?:bus|sources/batt-bus)", "const", 0.0, 28.0),
+    (r"^systems/electrical/amps$", "amps", 1.0, 0.0),
+    (r"^fdm/jsbsim/systems/hydraulics/sys[ab]-psi$", "const", 0.0, 3000.0),
+    (r"^systems/vacuum(?:\[\d\])?/suction-inhg$", "suction_inhg", 1.0, 0.0),
+    // Panel / instrument lighting (night factor 0..1).
+    (r"^controls/lighting/(?:panel-norm|instruments?-norm|instrument-lights?|panel-lights?|main-panel(?:-norm)?|overhead-panel(?:-norm)?|fcu-panel-norm|pedestal|console.*|flood.*|dome.*|lighting-panel/.*|instruments-light)$", "panel_light", 1.0, 0.0),
+    (r"^sim/model/(?:material/instruments/.*factor.*|lightmap/(?:panel|flood|dome)/factor|instruments-light)$", "panel_light", 1.0, 0.0),
+    // Air data.
+    (r"^fdm/jsbsim/velocities/vias-kts$", "ias_kt", 1.0, 0.0),
+    (r"^instrumentation/airspeed-indicator(?:\[\d\])?/indicated-(?:corr-)?speed-kt$", "ias_kt", 1.0, 0.0),
+    (r"^instrumentation/airspeed-indicator(?:\[\d\])?/true-speed-kt$", "tas_kt", 1.0, 0.0),
+    (r"^instrumentation/airspeed-indicator(?:\[\d\])?/indicated-mach$", "mach", 1.0, 0.0),
+    (r"^velocities/(?:groundspeed-kt|ground-speed-kt)$", "gs_kt", 1.0, 0.0),
+    (r"^instrumentation/(?:altimeter|gps)(?:\[\d\])?/indicated-altitude-ft$", "alt_ft", 1.0, 0.0),
+    (r"^instrumentation/altimeter(?:\[\d\])?/indicated-altitude-m$", "alt_ft", 0.3048, 0.0),
+    (r"^instrumentation/altimeter(?:\[\d\])?/pressure-alt-ft$", "palt_ft", 1.0, 0.0),
+    (r"^instrumentation/altimeter(?:\[\d\])?/setting-inhg$", "alt_set_inhg", 1.0, 0.0),
+    (r"^instrumentation/altimeter(?:\[\d\])?/setting-hpa$", "alt_set_hpa", 1.0, 0.0),
+    (r"^instrumentation/vertical-speed-indicator(?:\[\d\])?/indicated-speed-fpm(?:-final)?$", "vs_fpm", 1.0, 0.0),
+    (r"^instrumentation/vertical-speed-indicator(?:\[\d\])?/indicated-speed-mps$", "vs_fpm", 0.00508, 0.0),
+    (r"^instrumentation/gps/indicated-vertical-speed$", "vs_fpm", 1.0, 0.0),
+    (r"^velocities/vertical-speed-fps$", "vs_fpm", 1.0 / 60.0, 0.0),
+    (r"^velocities/speed-down-fps$", "vs_fpm", -1.0 / 60.0, 0.0),
+    (r"^f16/avionics/vvi-indicated-speed-fps$", "vs_fpm", 1.0 / 60.0, 0.0),
+    (r"^autopilot/internal/vert-speed-fpm$", "vs_fpm", 1.0, 0.0),
+    (r"^instrumentation/(?:variometer|ilec-sc7|vario[^/]*|sc7|iv-ac|winter[^/]*)(?:\[\d\])?/(?:te-reading-mps|indicated-speed-mps|reading-mps)$", "vario_mps", 1.0, 0.0),
+    (r"^instrumentation/(?:variometer|vario[^/]*)(?:\[\d\])?/(?:te-reading-kts|indicated-speed-kts?)$", "vario_mps", 1.943_844, 0.0),
+    (r"^instrumentation/attitude-indicator(?:\[\d\])?/indicated-pitch-deg$", "pitch_deg", 1.0, 0.0),
+    (r"^instrumentation/attitude-indicator(?:\[\d\])?/indicated-roll-deg$", "roll_deg", 1.0, 0.0),
+    (r"^instrumentation/attitude-indicator(?:\[\d\])?/horizon-offset-deg$", "const", 0.0, 0.0),
+    (r"^instrumentation/heading-indicator(?:-fg|-dg)?(?:\[\d\])?/indicated-heading-deg$", "heading_deg", 1.0, 0.0),
+    (r"^instrumentation/(?:gps/indicated-track-magnetic-deg|ddrmi/heading|heading-indicator/heading-deg)$", "heading_deg", 1.0, 0.0),
+    (r"^instrumentation/magnetic-compass(?:\[\d\])?/indicated-heading-deg(?:-final)?$", "compass_deg", 1.0, 0.0),
+    (r"^instrumentation/magnetic-compass(?:\[\d\])?/pitch-deg$", "pitch_deg", 1.0, 0.0),
+    (r"^instrumentation/magnetic-compass(?:\[\d\])?/roll-deg$", "roll_deg", 1.0, 0.0),
+    (r"^(?:autopilot/settings|instrumentation/heading-indicator(?:-fg)?)/heading-bug-deg$", "hdg_bug_deg", 1.0, 0.0),
+    (r"^instrumentation/nav(?:\[\d\])?/radials/selected-deg$", "hdg_bug_deg", 1.0, 0.0),
+    (r"^instrumentation/turn-indicator(?:\[\d\])?/indicated-turn-rate$", "turn_rate", 1.0, 0.0),
+    (r"^instrumentation/slip-skid-ball(?:\[\d\])?/indicated-slip-skid$", "slip", 1.0, 0.0),
+    (r"^accelerations/(?:pilot-g(?:damped)?|n-z-cg-fps_sec|pilot/z-accel-g)$", "g_load", 1.0, 0.0),
+    (r"^instrumentation/g-meter(?:\[\d\])?/indicated-g$|^instrumentation/accelerometer/indicated-g$", "g_load", 1.0, 0.0),
+    (r"^(?:accelerations/pilot-gmax|instrumentation/g-meter(?:\[\d\])?/max-g)$", "g_max", 1.0, 0.0),
+    (r"^(?:accelerations/pilot-gmin|instrumentation/g-meter(?:\[\d\])?/min-g)$", "g_min", 1.0, 0.0),
+    (r"^fdm/jsbsim/(?:aero/alpha-deg(?:-fixed)?|fcs/fly-by-wire/pitch/alpha-indicated)$", "alpha_deg", 1.0, 0.0),
+    (r"^environment/temperature-degc$", "oat_c", 1.0, 0.0),
+    (r"^environment/temperature-degf$", "oat_f", 1.0, 0.0),
+    (r"^sim/alarms/stall-warning$|^instrumentation/stall-warning/stall$", "stall_warn", 1.0, 0.0),
+    // Clocks.
+    (r"^instrumentation/clock/indicated-sec$|^sim/time/local-day-seconds$|^sim/model/[^/]+/local-time-seconds$", "clock_s", 1.0, 0.0),
+    (r"^instrumentation/clock/indicated-min$", "clock_min", 1.0, 0.0),
+    (r"^instrumentation/clock/indicated-hour$", "clock_hour", 1.0, 0.0),
+    (r"^instrumentation/clock/(?:elapsed-sec|et/elapsed-sec)$", "time", 1.0, 0.0),
+    // Engines (index = engine).
+    (r"^engines/(?:engine(?:\[(\d)\])?|active-engine)/(?:egt-degf|indicated-egt-degf)$", "eng{1}_egt_f", 1.0, 0.0),
+    (r"^engines/engine(?:\[(\d)\])?/(?:egt-degc|egt_degc|itt-degc|itt_degc|tit-degc|ftit-degc)$", "eng{1}_egt_c", 1.0, 0.0),
+    (r"^engines/(?:engine(?:\[(\d)\])?|active-engine)/egt-norm$", "eng{1}_egt_norm", 1.0, 0.0),
+    (r"^engines/(?:engine(?:\[(\d)\])?|active-engine)/egt-bug-norm$", "const", 0.0, 0.72),
+    (r"^engines/(?:engine(?:\[(\d)\])?|active-engine)/(?:indicated-)?oil-pressure-psi$", "eng{1}_oilp_psi", 1.0, 0.0),
+    (r"^engines/(?:engine(?:\[(\d)\])?|active-engine)/(?:indicated-)?oil-(?:final-)?temperature-degf$|^engines/(?:engine(?:\[(\d)\])?|active-engine)/oil-temp-degf$", "eng{1}_oilt_f", 1.0, 0.0),
+    (r"^engines/engine(?:\[(\d)\])?/oil-temperature-degc$", "eng{1}_oilt_c", 1.0, 0.0),
+    (r"^engines/(?:engine(?:\[(\d)\])?|active-engine)/cht-degf$", "eng{1}_cht_f", 1.0, 0.0),
+    (r"^engines/engine(?:\[(\d)\])?/(?:mp-osi|mp-inhg|map-inhg)$", "eng{1}_map_inhg", 1.0, 0.0),
+    (r"^engines/engine(?:\[(\d)\])?/boost-gauge-inhg$", "eng{1}_map_inhg", 1.0, 0.0),
+    (r"^engines/engine(?:\[(\d)\])?/fuel-flow-gph$", "eng{1}_ff_gph", 1.0, 0.0),
+    (r"^engines/engine(?:\[(\d)\])?/fuel-flow[-_]pph$", "eng{1}_ff_pph", 1.0, 0.0),
+    (r"^engines/engine(?:\[(\d)\])?/torque-ftlb$", "eng{1}_tq_ftlb", 1.0, 0.0),
+    (r"^engines/engine(?:\[(\d)\])?/(?:torque-pct|torque-norm)$", "eng{1}_tq_pct", 1.0, 0.0),
+    (r"^engines/engine(?:\[(\d)\])?/nozzle-pos-norm(?:-lag)?$", "eng{1}_nozzle", 1.0, 0.0),
+    (r"^engines/engine(?:\[(\d)\])?/(?:propstrike|cranking|starter)$", "const", 0.0, 0.0),
+    // Fuel.
+    (r"^consumables/fuel/tank(?:\[(\d+)\])?/(?:indicated-)?level-gal_us$", "tank{1}_gal", 1.0, 0.0),
+    (r"^consumables/fuel/tank(?:\[(\d+)\])?/(?:indicated-)?level-lbs$", "tank{1}_lbs", 1.0, 0.0),
+    (r"^consumables/fuel/tank(?:\[(\d+)\])?/(?:indicated-)?level-kg$", "tank{1}_lbs", 0.453_592, 0.0),
+    (r"^consumables/fuel/tank(?:\[(\d+)\])?/level-norm$", "tank{1}_norm", 1.0, 0.0),
+    (r"^consumables/fuel/total-fuel-lbs-(\d+)$", "digit:fuel_lbs:{1}", 1.0, 0.0),
+    (r"^consumables/fuel/total-fuel-lbs$", "fuel_lbs", 1.0, 0.0),
+    (r"^consumables/fuel/total-fuel-kg$", "fuel_lbs", 0.453_592, 0.0),
+    (r"^consumables/fuel/total-fuel-gals?$", "fuel_gal", 1.0, 0.0),
+    // Autoflight.
+    (r"^autopilot/settings/target-altitude-ft$|^it-autoflight/input/alt$", "ap_alt_ft", 1.0, 0.0),
+    (r"^autopilot/settings/vertical-speed-fpm$|^it-autoflight/input/vs$", "ap_vs_fpm", 1.0, 0.0),
+    (r"^autopilot/settings/target-speed-kt$|^it-autoflight/input/(?:spd-)?kts$", "ap_ias_kt", 1.0, 0.0),
+    (r"^it-autoflight/input/hdg$", "hdg_bug_deg", 1.0, 0.0),
+    (r"^autopilot/settings/(?:engaged|flight-director)$|^it-autoflight/output/(?:ap[12]|fd[12])$", "ap_on", 1.0, 0.0),
+    (r"^it-autoflight/output/athr$", "ap_athr", 1.0, 0.0),
+    (r"^autopilot/internal/flight-director-pitch-deg$", "fd_pitch_deg", 1.0, 0.0),
+    (r"^autopilot/internal/flight-director-roll-deg$", "fd_roll_deg", 1.0, 0.0),
+    (r"^autopilot/internal/fdm-heading-bug-error-deg$", "hdg_bug_err_deg", 1.0, 0.0),
+    (r"^instrumentation/airspeed-indicator(?:\[\d\])?/(?:airspeed-limit-kt|vmo-kt)$", "vmo_kt", 1.0, 0.0),
+    (r"^instrumentation/clock/(?:local-hour|lc2/indicated-hour)$", "clock_hour", 1.0, 0.0),
+    (r"^instrumentation/clock/lc2/indicated-min$", "clock_min", 1.0, 0.0),
+    (r"^instrumentation/hobbs-meter/digits(\d)$", "digit10:hobbs_tenths:{1}", 1.0, 0.0),
+    (r"^systems/hydraulic/.*psi.*$", "const", 0.0, 3000.0),
+    // Warnings.
+    (r"^f16/avionics/caution/master$|^instrumentation/eicas/master/caution$|^instrumentation/annunciators/master-caution(?:/state)?$", "master_caution", 1.0, 0.0),
+    (r"^instrumentation/eicas/master/warning$|^instrumentation/annunciators/master-warning(?:/state)?$", "master_warning", 1.0, 0.0),
 ];
 
 impl PropMap {
@@ -227,9 +354,21 @@ impl PropMap {
         }
         for (re, ch, k, b) in &self.rules {
             if let Some(c) = re.captures(&name) {
-                let idx = c.get(1).map(|m| m.as_str()).unwrap_or("0");
+                let idx = c.iter().skip(1).flatten().next().map(|m| m.as_str()).unwrap_or("0");
                 if ch == "const" {
                     return Expr::C(*b);
+                }
+                let digit = ch.strip_prefix("digit:").map(|r| (r, false)).or_else(|| ch.strip_prefix("digit10:").map(|r| (r, true)));
+                if let Some((rest, pow10)) = digit {
+                    // digit:<channel>:{1} → the decimal digit of <channel> worth {1}
+                    // (digit10: worth 10^{1}).
+                    let mut it = rest.split(':');
+                    let chn = it.next().unwrap_or("").to_string();
+                    let n: f32 = it.next().unwrap_or("1").replace("{1}", idx).parse().unwrap_or(1.0);
+                    let place = if pow10 { 10f32.powf(n) } else { n };
+                    *self.used.borrow_mut().entry(chn.clone()).or_default() += 1;
+                    let v = op("floor", vec![op("div", vec![Expr::Ch(chn), Expr::C(place.max(1.0))])]);
+                    return op("mod", vec![v, Expr::C(10.0)]);
                 }
                 let chn = ch.replace("{1}", idx);
                 *self.used.borrow_mut().entry(chn.clone()).or_default() += 1;

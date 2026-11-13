@@ -59,7 +59,8 @@ item lands; keep entries one line.
 - [ ] **P1** Decide ATR 72 asset licence (FGAddon policy-only GPL notice)
 - [x] Structural loads, wing flex (modal), limit/ultimate damage, flutter, flap/gear overspeed, separations with asymmetric aero, survivable vs fatal crashes, rigid-body debris (L)
 - [ ] **P1** Structure follow-ups: body-body debris collisions; fuselage crush/deform; cracks along split seams; fuel model (mass/CG/fire size from actual fuel)
-- [ ] **P1** Full 3D cockpits with working instruments (render gauges into cockpit textures), head look (mouse/TrackIR-style)
+- [x] **P1** Full 3D cockpits with working instruments: FG instrument animations (needles, drums/`textranslate`, `texrotate`/`texmultiple` attitude balls, flags) bound to live sim values with real instrument lag (src/cockpit), glass PFD/ND/EWD/SD/ISIS/MCDU rendered offscreen onto the A320/E190/F-16 screens (mip-mapped, auto-dimmed), night backlighting, auto-dimmed displays; mouse head look (C)
+- [ ] **P2** Cockpit follow-ups: hide the 2D glass/gauge overlay in cockpit view by default; radio/transponder frequency drums (no nav radios yet); clickable knobs; F-16 combiner HUD as a collimated texture; ATR glass EFIS pages
 - [ ] **P1** Systems depth per type: electrics, fuel (burn + CG), hydraulics, engine start procedures, failures menu
 - [ ] **P1** Ground handling: taxiing with tillers, pushback, chocks, wheel friction by surface
 - [ ] **P2** v3 types: C-130, C-5, Avro Vulcan; helicopter; quadcopter

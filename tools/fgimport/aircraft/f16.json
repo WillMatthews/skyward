@@ -38,5 +38,15 @@
   -4.05,
   0,
   0.8
+ ],
+ "displays": [
+  [
+   "^MFDimage1$",
+   "nd"
+  ],
+  [
+   "^MFDimage2$",
+   "ewd"
+  ]
  ]
 }

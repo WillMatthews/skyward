@@ -348,6 +348,8 @@ pub struct Sim {
     real_time: f32,
     /// Ground height under the aircraft (terrain.rs), for heights above the ground.
     pub ground_y: f32,
+    /// Altimeter setting for the cockpit instruments (the app copies the weather's QNH), hPa.
+    pub qnh_hpa: f32,
     /// Physics state one fixed step back, for render interpolation.
     prev_pos: Vec3,
     prev_rot: Quat,
@@ -470,6 +472,7 @@ impl Sim {
             cine: Cine::default(),
             real_time: 0.0,
             ground_y: 0.0,
+            qnh_hpa: 1013.25,
             prev_pos: Vec3::ZERO,
             prev_rot: Quat::IDENTITY,
             rpos: Vec3::ZERO,
@@ -1416,7 +1419,10 @@ impl Sim {
                 }
             }
             CamMode::Cockpit => {
-                fov = 72f32.to_radians();
+                // SKYWARD_COCKPIT_FOV=<deg>: narrower view for instrument close-ups (captures).
+                static FOV: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
+                let f = *FOV.get_or_init(|| std::env::var("SKYWARD_COCKPIT_FOV").ok().and_then(|v| v.parse::<f32>().ok()).filter(|v| (5.0..=120.0).contains(v)));
+                fov = f.unwrap_or(72.0).to_radians();
                 let e = pos + self.rrot * self.model.eye;
                 // Head-look (input/sim_glue.rs).
                 let head = self.rrot * self.pilot.look_rot();
@@ -1496,7 +1502,21 @@ impl Sim {
         let st = (self.time / 1.2).fract();
         let strobe_flash = strobe && (st < 0.05 || (0.12..0.17).contains(&st));
         let landing = ac.gear_pos() > 0.5 && ac.pos.y - self.ground_y < 460.0 && running;
-        self.model.update(&ModelInputs { def, ac, ctl: &self.ctl, time: self.time, nav: true, beacon: running, strobe, landing });
+        let daylight = crate::cockpit::daylight(self.sun_dir().y);
+        self.model.update(&ModelInputs {
+            def,
+            ac,
+            ctl: &self.ctl,
+            time: self.time,
+            nav: true,
+            beacon: running,
+            strobe,
+            landing,
+            ap: Some(&self.ap),
+            qnh_hpa: self.qnh_hpa,
+            hours: self.hours,
+            daylight,
+        });
         let m = Mat4::from_rotation_translation(self.rrot, self.rpos - eye);
         let mut local = MeshData::default();
         // (Navigation / beacon / strobe lights: crate::lights, from the model's light positions.)

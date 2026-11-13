@@ -38,5 +38,31 @@
   0.55,
   1.15,
   13.55
+ ],
+ "displays": [
+  [
+   "^pfd[12]\\.screen$",
+   "pfd"
+  ],
+  [
+   "^ND(_R)?\\.screen$",
+   "nd"
+  ],
+  [
+   "^uecam\\.screen$",
+   "ewd"
+  ],
+  [
+   "^lecam\\.screen$",
+   "sd"
+  ],
+  [
+   "^iesi[._]screen$",
+   "isis"
+  ],
+  [
+   "^mcdu[12]\\.screen$",
+   "mcdu"
+  ]
  ]
 }

@@ -1,26 +1,22 @@
-"meridian320": 155 nodes (154 animated out of 289), 48 materials, 25 textures (5.8 MB), 195 chunks
-triangles: exterior 102832, interior 424983; vertices 714928; model.skac 9.1 MB; radius 22.3 m
+"meridian320": 160 nodes (159 animated out of 295), 49 materials, 25 textures (5.8 MB), 209 chunks
+triangles: exterior 102832, interior 425137; vertices 715206; model.skac 9.2 MB; radius 22.3 m
 eye: Some(Vec3(0.55, 1.15, 13.55))
 lights: 12
-channels used: eng0_reverser eng1_reverser eng3_n1 eng4_n1 gear0_comp_norm gear0_roll_ms gear1_comp_norm gear1_roll_ms gear2_comp_norm gear2_roll_ms gear_pos heading_deg
+channels used: alpha_deg eng0_reverser eng1_reverser eng3_n1 eng4_n1 gear0_comp_norm gear0_roll_ms gear1_comp_norm gear1_roll_ms gear2_comp_norm gear2_roll_ms gear_pos heading_deg panel_light
+texture-animated chunks: 0; display screens: 7
 animation types: [("", 2), ("dist-scale", 4), ("flash", 2), ("knob", 101), ("locked-track", 21), ("material", 41), ("noshadow", 4), ("pick", 494), ("rotate", 226), ("scale", 4), ("select", 432), ("spin", 8), ("translate", 399)]
 unmapped properties (count):
    205 controls/switches/annun-test
-    52 systems/electrical/bus/dc-ess
     19 sim/model/lights/dome-light
     16 sim/multiplay/generic/float[12]
     12 controls/radio/rmp[1]/on
     12 controls/radio/rmp/on
-    11 controls/lighting/main-panel-norm
     10 sim/multiplay/generic/int[12]
      8 systems/radio/rmp[1]/sel_chan
      8 systems/radio/rmp/sel_chan
      7 systems/audio/acp[2]/call_chan
      7 systems/audio/acp[1]/call_chan
      7 systems/audio/acp/call_chan
-     6 systems/electrical/bus/ac-ess-shed
-     5 systems/electrical/bus/ac-si-bus
-     4 systems/electrical/bus/ac-1
      4 sim/multiplay/generic/float[11]
      4 sim/model/door-positions/doorr4/position-norm
      4 sim/model/door-positions/doorr1/position-norm
@@ -43,28 +39,373 @@ unmapped properties (count):
      3 systems/fcs/spoiler-l3/final-deg
      3 systems/fcs/spoiler-l2/final-deg
      3 systems/fcs/spoiler-l1/final-deg
-     3 systems/electrical/bus/ac-ess
      3 sim/model/door-positions/windowRight/position-norm
      3 sim/model/door-positions/windowLeft/position-norm
      3 modes/ecam-du-xfr
-     3 fdm/jsbsim/aero/alpha-deg-fixed
      3 controls/tray/righttrayext
      3 controls/tray/lefttrayext
-     3 controls/lighting/stby-compass
-     3 controls/lighting/overhead-panel-norm
-     3 controls/lighting/fcu-panel-norm
      3 controls/cockpit/throttle-lever[1]
      3 controls/cockpit/throttle-lever
      2 systems/pressurization/outflowpos-norm
      2 systems/hydraulic/sources/rat/door-position
      2 systems/fire/cargo/disch-test
      2 systems/fire/cargo/disch
-     2 systems/electrical/bus/dc-hot-2
-     2 systems/electrical/bus/dc-hot-1
-     2 systems/electrical/bus/dc-bat
-     2 systems/electrical/bus/dc-2
      2 systems/audio/acp[2]/pa
      2 systems/audio/acp[1]/pa
+     2 systems/audio/acp/pa
+     2 sim/model/lights/nose-lights
+     2 sim/model/door-positions/cargobulk/position-norm
+     2 options/eng
+     2 modes/fo-du-xfr
+     2 modes/cpt-du-xfr
+     2 it-autoflight/output/vert
+     2 controls/switches/qnh-knb
+     2 controls/lighting/landing-light-pos-r
+     2 controls/lighting/landing-light-pos-l
+     2 controls/indicators/fcu-trk-fpa
+     2 controls/indicators/fcu-hdg-vs
+     2 controls/indicators/autoland
+     2 controls/fuel/switches/pump-right-2
+     2 controls/fuel/switches/pump-right-1
+     2 controls/fuel/switches/pump-left-2
+     2 controls/fuel/switches/pump-left-1
+     2 controls/fuel/switches/pump-center-2
+     2 controls/fuel/switches/pump-center-1
+     2 controls/fuel/switches/center-mode
+     2 controls/fire/apu-test-btn
+     2 controls/fctl/switches/sec3
+     2 controls/fctl/switches/sec2
+     2 controls/fctl/switches/sec1
+     2 controls/fctl/switches/fac2
+     2 controls/fctl/switches/fac1
+     2 controls/fctl/switches/elac2
+     2 controls/fctl/switches/elac1
+     2 controls/engines/engine[1]/fire-btn
+     2 controls/engines/engine/fire-btn
+     2 controls/electrical/switches/galley
+     2 controls/electrical/switches/bat-2
+     2 controls/electrical/switches/bat-1
+     2 controls/electrical/switches/apu
+     2 controls/cockpit/tiller-handle
+     2 controls/cockpit/rudder-pedal
+     2 controls/cockpit/reverse-lever[1]
+     2 controls/cockpit/reverse-lever
+     2 controls/cockpit/gear-lever
+     2 controls/cockpit/fo-visor-pos
+     2 controls/cockpit/engine-cutoff-rotate[1]
+     2 controls/cockpit/captain-visor-pos
+     2 controls/cockpit/acp1voice-translate
+     2 controls/cockpit/acp1vhf3-translate
+     2 controls/cockpit/acp1vhf2-translate
+     2 controls/cockpit/acp1vhf1-translate
+     2 controls/cockpit/acp1pa-translate
+     2 controls/cockpit/acp1mech-translate
+     2 controls/cockpit/acp1hf2-translate
+     2 controls/cockpit/acp1hf1-translate
+     2 controls/cockpit/acp1cabatt-translate
+     2 controls/audio/acp[2]/vor2-recive
+     2 controls/audio/acp[2]/vor1-recive
+     2 controls/audio/acp[2]/vhf3-recive
+     2 controls/audio/acp[2]/vhf2-recive
+     2 controls/audio/acp[2]/vhf1-recive
+     2 controls/audio/acp[2]/pa-recive
+     2 controls/audio/acp[2]/mls-recive
+     2 controls/audio/acp[2]/mkr-recive
+     2 controls/audio/acp[2]/int-recive
+     2 controls/audio/acp[2]/ils-recive
+     2 controls/audio/acp[2]/hf2-recive
+     2 controls/audio/acp[2]/hf1-recive
+     2 controls/audio/acp[2]/cab-recive
+     2 controls/audio/acp[2]/adf2-recive
+     2 controls/audio/acp[2]/adf1-recive
+     2 controls/audio/acp[1]/vor2-recive
+     2 controls/audio/acp[1]/vor1-recive
+     2 controls/audio/acp[1]/vhf3-recive
+     2 controls/audio/acp[1]/vhf2-recive
+     2 controls/audio/acp[1]/vhf1-recive
+     2 controls/audio/acp[1]/pa-recive
+     2 controls/audio/acp[1]/mls-recive
+     2 controls/audio/acp[1]/mkr-recive
+     2 controls/audio/acp[1]/int-recive
+     2 controls/audio/acp[1]/ils-recive
+     2 controls/audio/acp[1]/hf2-recive
+     2 controls/audio/acp[1]/hf1-recive
+     2 controls/audio/acp[1]/cab-recive
+     2 controls/audio/acp[1]/adf2-recive
+     2 controls/audio/acp[1]/adf1-recive
+     2 controls/audio/acp/vor2-recive
+     2 controls/audio/acp/vor1-recive
+     2 controls/audio/acp/vhf3-recive
+     2 controls/audio/acp/vhf2-recive
+     2 controls/audio/acp/vhf1-recive
+     2 controls/audio/acp/pa-recive
+     2 controls/audio/acp/mls-recive
+     2 controls/audio/acp/mkr-recive
+     2 controls/audio/acp/int-recive
+     2 controls/audio/acp/ils-recive
+     2 controls/audio/acp/hf2-recive
+     2 controls/audio/acp/hf1-recive
+     2 controls/audio/acp/cab-recive
+     2 controls/audio/acp/adf2-recive
+     2 controls/audio/acp/adf1-recive
+     2 ECAM/warnings/landing-gear-warning-light
+     1 systems/shake/shaking
+     1 systems/radio/rmp[1]/sel-light
+     1 systems/radio/rmp[1]/nav
+     1 systems/radio/rmp[1]/bfo-active
+     1 systems/radio/rmp[1]/am-active
+     1 systems/radio/rmp/sel-light
+     1 systems/radio/rmp/nav
+     1 systems/radio/rmp/bfo-active
+     1 systems/radio/rmp/am-active
+     1 systems/hydraulic/sources/rat/rat-speed-rpm
+     1 systems/hydraulic/sources/rat/arm-position
+     1 systems/hydraulic/lights/yellow-elec-fault
+     1 systems/hydraulic/lights/yellow-edp-fault
+     1 systems/hydraulic/lights/ptu-fault
+     1 systems/hydraulic/lights/green-edp-fault
+     1 systems/hydraulic/lights/blue-elec-fault
+     1 systems/fuel/valves/crossfeed-valve
+     1 systems/fuel/mode-fault
+     1 systems/fire/engine2/warning-active
+     1 systems/fire/engine2/disch2
+     1 systems/fire/engine2/disch1
+     1 systems/fire/engine1/warning-active
+     1 systems/fire/engine1/disch2
+     1 systems/fire/engine1/disch1
+     1 systems/fire/cargo/fwd/warning-active
+     1 systems/fire/cargo/aft/warning-active
+     1 systems/fire/apu/warning-active
+     1 systems/fire/apu/disch
+     1 systems/fctl/lights/sec3-fault
+     1 systems/fctl/lights/sec2-fault
+     1 systems/fctl/lights/sec1-fault
+     1 systems/fctl/lights/fac2-fault
+     1 systems/fctl/lights/fac1-fault
+     1 systems/fctl/lights/elac2-fault
+     1 systems/fctl/lights/elac1-fault
+     1 systems/fcs/stabilizer/cmd-deg
+     1 systems/failures/fuel/right-tank-pump-2
+     1 systems/failures/fuel/right-tank-pump-1
+     1 systems/failures/fuel/left-tank-pump-2
+     1 systems/failures/fuel/left-tank-pump-1
+     1 systems/failures/fuel/center-tank-pump-2
+     1 systems/failures/fuel/center-tank-pump-1
+     1 systems/fadec/control-2/n1-mode-sw
+     1 systems/fadec/control-1/n1-mode-sw
+     1 systems/elt/light-on
+     1 systems/audio/acp[2]/on_voice
+     1 systems/audio/acp[1]/on_voice
+     1 systems/audio/acp/on_voice
+     1 systems/atc/failed
+     1 sim/multiplay/generic/int[14]
+     1 sim/multiplay/generic/int[13]
+     1 sim/multiplay/generic/float[9]
+     1 sim/multiplay/generic/float[8]
+     1 sim/multiplay/generic/float[7]
+     1 sim/multiplay/generic/float[6]
+     1 sim/multiplay/generic/float[5]
+     1 sim/multiplay/generic/float[4]
+     1 sim/multiplay/generic/float[1]
+     1 sim/model/door-positions/cargofwd/position-norm
+     1 sim/model/door-positions/cargoaft/position-norm
+     1 sim/current-view/internal
+     1 options/hide-canvas-outside
+     1 it-autoflight/custom/vs-knb
+     1 it-autoflight/custom/spd-knb
+     1 it-autoflight/custom/hdg-knb
+     1 it-autoflight/custom/alt-knb
+     1 it-autoflight/config/altitude-dial-mode-pos
+     1 instrumentation/mk-viii/outputs/discretes/gpws-warning
+     1 instrumentation/mk-viii/outputs/discretes/gpws-alert
+     1 instrumentation/iesi/plus
+     1 instrumentation/iesi/minus
+     1 instrumentation/iesi/att-reset-cmd
+     1 instrumentation/efis[1]/mfd/pnl_mode-num-pos
+     1 instrumentation/efis[1]/inputs/range-nm-pos
+     1 instrumentation/efis[1]/input/rh-vor-adf-pos
+     1 instrumentation/efis[1]/input/lh-vor-adf-pos
+     1 instrumentation/efis/mfd/pnl_mode-num-pos
+     1 instrumentation/efis/inputs/range-nm-pos
+     1 instrumentation/efis/input/rh-vor-adf-pos
+     1 instrumentation/efis/input/lh-vor-adf-pos
+     1 instrumentation/ddrmi/vor-adf-2-pos
+     1 instrumentation/ddrmi/vor-adf-1-pos
+     1 instrumentation/ddrmi/needle-2
+     1 instrumentation/ddrmi/needle-1
+     1 instrumentation/ddrmi/flag-hdg
+     1 instrumentation/ddrmi/flag-2
+     1 instrumentation/ddrmi/flag-1
+     1 instrumentation/clock/utc-selector-pos
+     1 instrumentation/clock/set-knb-pos
+     1 instrumentation/clock/et/et-selector-pos
+     1 instrumentation/altimeter/inhg-right-pos
+     1 instrumentation/altimeter/inhg-left-pos
+     1 fdm/jsbsim/zero
+     1 fdm/jsbsim/fcs/right-wiper-pos-norm
+     1 fdm/jsbsim/fcs/left-wiper-pos-norm
+     1 controls/wxradar/tilt-knb
+     1 controls/wxradar/sys
+     1 controls/wxradar/pws
+     1 controls/wxradar/multiscan
+     1 controls/wxradar/mode
+     1 controls/wxradar/gcs
+     1 controls/wxradar/gain-knb
+     1 controls/ventilation/blowFail
+     1 controls/switches/wiperRspd-pos
+     1 controls/switches/wiperLspd-pos
+     1 controls/switches/wing-lights-pos
+     1 controls/switches/strobe-pos
+     1 controls/switches/seatbelt-sign-pos
+     1 controls/switches/rudder-trim-knob
+     1 controls/switches/qnh-knb-iesi
+     1 controls/switches/no-smoking-sign-pos
+     1 controls/switches/loudspeaker-r
+     1 controls/switches/loudspeaker-l
+     1 controls/switches/landing-lights-r-pos
+     1 controls/switches/landing-lights-l-pos
+     1 controls/switches/emer-lights-pos
+     1 controls/switches/beacon-pos
+     1 controls/switches/annun-test-pos
+     1 controls/radio/rmp[1]/nav-protect-pos
+     1 controls/radio/rmp/nav-protect-pos
+     1 controls/pneumatics/switches/x-bleed-pos
+     1 controls/pneumatics/switches/temp-cockpit-pos
+     1 controls/pneumatics/switches/temp-cabin-fwd-pos
+     1 controls/pneumatics/switches/temp-cabin-aft-pos
+     1 controls/pneumatics/switches/pack-flow-pos
+     1 controls/pneumatics/switches/cabin-fans
+     1 controls/oxygen/passenger-mask-reset
+     1 controls/oxygen/passenger-mask-deploy-man
+     1 controls/navigation/switching/audio-pos
+     1 controls/navigation/switching/att-hdg-pos
+     1 controls/navigation/switching/air-data-pos
+     1 controls/navigation/adirscp/lights/on-bat
+     1 controls/navigation/adirscp/lights/ir-3-off
+     1 controls/navigation/adirscp/lights/ir-3-fault
+     1 controls/navigation/adirscp/lights/ir-2-off
+     1 controls/navigation/adirscp/lights/ir-2-fault
+     1 controls/navigation/adirscp/lights/ir-1-off
+     1 controls/navigation/adirscp/lights/ir-1-fault
+     1 controls/navigation/adirscp/lights/adr-3-off
+     1 controls/navigation/adirscp/lights/adr-3-fault
+     1 controls/navigation/adirscp/lights/adr-2-off
+     1 controls/navigation/adirscp/lights/adr-2-fault
+     1 controls/navigation/adirscp/lights/adr-1-off
+     1 controls/navigation/adirscp/lights/adr-1-fault
+     1 controls/lighting/turnoff-light-switch-pos
+     1 controls/lighting/taxi-light-switch-pos
+     1 controls/lighting/stby-compass-switch-pos
+     1 controls/lighting/reading-light-right-knb
+     1 controls/lighting/reading-light-left-knb
+     1 controls/lighting/ped-flood-knb
+     1 controls/lighting/overhead-panel-norm-digital
+     1 controls/lighting/overhead-panel-knb
+     1 controls/lighting/nav-lights-switch-pos
+     1 controls/lighting/main-panel-knb
+     1 controls/lighting/main-flood-knb
+     1 controls/lighting/fcu-panel-knb
+     1 controls/lighting/fcu-digit-norm
+     1 controls/lighting/fcu-digit-knb
+     1 controls/indicators/wing-anti-ice-on
+     1 controls/indicators/wing-anti-ice-fault
+     1 controls/indicators/window-heat-on
+     1 controls/indicators/terr-on-nd-fo
+     1 controls/indicators/terr-on-nd-capt
+     1 controls/indicators/sidestick-prio-fo-fo
+     1 controls/indicators/sidestick-prio-fo-arrow
+     1 controls/indicators/sidestick-prio-capt-capt
+     1 controls/indicators/sidestick-prio-capt-arrow
+     1 controls/indicators/rcdr-ground-control
+     1 controls/indicators/ram-air-on
+     1 controls/indicators/pax-oxy
+     1 controls/indicators/pack2-off
+     1 controls/indicators/pack2-fault
+     1 controls/indicators/pack1-off
+     1 controls/indicators/pack1-fault
+     1 controls/indicators/mcdu-fo-ann-rdy
+     1 controls/indicators/mcdu-fo-ann-msg
+     1 controls/indicators/mcdu-fo-ann-ind
+     1 controls/indicators/mcdu-fo-ann-fm2
+     1 controls/indicators/mcdu-fo-ann-fm1
+     1 controls/indicators/mcdu-fo-ann-fm
+     1 controls/indicators/mcdu-fo-ann-fail
+     1 controls/indicators/mcdu-fo-ann-dash
+     1 controls/indicators/mcdu-capt-ann-rdy
+     1 controls/indicators/mcdu-capt-ann-msg
+     1 controls/indicators/mcdu-capt-ann-ind
+     1 controls/indicators/mcdu-capt-ann-fm2
+     1 controls/indicators/mcdu-capt-ann-fm1
+     1 controls/indicators/mcdu-capt-ann-fm
+     1 controls/indicators/mcdu-capt-ann-fail
+     1 controls/indicators/mcdu-capt-ann-dash
+     1 controls/indicators/master-warn
+     1 controls/indicators/master-caut
+     1 controls/indicators/hot-air-off
+     1 controls/indicators/hot-air-fault
+     1 controls/indicators/gpws-terr-off
+     1 controls/indicators/gpws-terr-fault
+     1 controls/indicators/gpws-sys-off
+     1 controls/indicators/gpws-sys-fault
+     1 controls/indicators/gpws-gs-off
+     1 controls/indicators/gpws-flaps-off
+     1 controls/indicators/gpws-flaps-3
+     1 controls/indicators/gen1-line-smoke
+     1 controls/indicators/gen1-line-off
+     1 controls/indicators/gear-right-unlocked
+     1 controls/indicators/gear-right-down
+     1 controls/indicators/gear-nose-unlocked
+     1 controls/indicators/gear-nose-down
+     1 controls/indicators/gear-left-unlocked
+     1 controls/indicators/gear-left-down
+     1 controls/indicators/fcu-vs-dash
+     1 controls/indicators/fcu-spd-mgt
+     1 controls/indicators/fcu-spd-dash
+     1 controls/indicators/fcu-spd
+     1 controls/indicators/fcu-mach
+     1 controls/indicators/fcu-lvlch
+     1 controls/indicators/fcu-loc
+     1 controls/indicators/fcu-lat-dash
+     1 controls/indicators/fcu-lat
+     1 controls/indicators/fcu-exped
+     1 controls/indicators/fcu-athr
+     1 controls/indicators/fcu-appr
+     1 controls/indicators/fcu-ap2
+     1 controls/indicators/fcu-ap1
+     1 controls/indicators/fcu-alt-mgt
+     1 controls/indicators/fcu-alt
+     1 controls/indicators/evac-on
+     1 controls/indicators/evac-evac
+     1 controls/indicators/engine-2-fire
+     1 controls/indicators/engine-2-fault
+     1 controls/indicators/engine-2-bleed-off
+     1 controls/indicators/engine-2-bleed-fault
+     1 controls/indicators/engine-2-anti-ice-on
+     1 controls/indicators/engine-2-anti-ice-fault
+     1 controls/indicators/engine-1-fire
+     1 controls/indicators/engine-1-fault
+     1 controls/indicators/engine-1-bleed-off
+     1 controls/indicators/engine-1-bleed-fault
+     1 controls/indicators/engine-1-anti-ice-on
+     1 controls/indicators/engine-1-anti-ice-fault
+     1 controls/indicators/emer-gen-fault
+     1 controls/indicators/emer-exit-off
+     1 controls/indicators/emer-call-on
+     1 controls/indicators/emer-call-call
+     1 controls/indicators/efis-fo-wpt
+     1 controls/indicators/efis-fo-vord
+     1 controls/indicators/efis-fo-ndb
+     1 controls/indicators/efis-fo-ls
+     1 controls/indicators/efis-fo-fd
+     1 controls/indicators/efis-fo-cstr
+     1 controls/indicators/efis-fo-arpt
+     1 controls/indicators/efis-capt-wpt
+     1 controls/indicators/efis-capt-vord
+     1 controls/indicators/efis-capt-ndb
+     1 controls/indicators/efis-capt-ls
+     1 controls/indicators/efis-capt-fd
+     1 controls/indicators/efis-capt-cstr
+     1 controls/indicators/efis-capt-arpt
 log:
   skip external/missing submodel Aircraft/Generic/marker.xml
   skip external/missing submodel Models/Airport/Vehicle/hoskosh-ti-1500.ac
