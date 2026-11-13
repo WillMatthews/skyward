@@ -67,7 +67,8 @@ item lands; keep entries one line.
 - [ ] **P2** Systems follow-ups: per-engine throttles (single lever today, so "THR LEVER 1 IDLE" means all), cockpit switch / fire-handle animations, F-16 HUD + ND ignore AHRS flags, engine-fire VFX (flames / smoke trail), captain vs F/O display units (red X shows on both PFDs), settings persistence of cold & dark / random failures, `--fail` in windowed mode
 - [ ] **P1** Ground handling: taxiing with tillers, pushback, chocks, wheel friction by surface
 - [x] **P2** v3 heavies: C-130H Hercules (FGAddon C130, calibrated to YASim + published), C-5M Super Galaxy (FGMEMBERS C-5, patched JSBSim), Avro Vulcan B.2 (FGUK, JSBSim + delta-wing aero, Olympus howl); neutral liveries, bot / audio / per-type runway minima (H)
-- [ ] **P1** Heavies follow-ups: C-130 bot floats ~850 m before touchdown at EGLC; C-130 / C-5 use the PW100 / CFM56 recordings (no T56 / CF6 set); C-130 ramp and C-5 kneeling / visor not driven; C-5 & Vulcan cockpits are basic FG models (no working gauges); Vulcan brake chute; fuel burn (all flown at one weight)
+- [x] **P2** Heavies polish: re-imported with live cockpits (C-130 82 / Vulcan 63 / C-5 23 live instruments), Vulcan repainted Dark Green / Dark Sea Grey camo (no white blotches), C-130 prop-disc alpha, wing-fog planform from the upper skin (no fog band under high wings), cargo ramp / visor / crew door open when parked, Hercules + Vulcan parked at air bases (HF)
+- [ ] **P1** Heavies follow-ups: C-130 bot floats ~850 m before touchdown at EGLC; C-130 / C-5 use the PW100 / CFM56 recordings (no T56 / CF6 set); C-5 cockpit is a crude FG shell with one 3D PFD (no glass mapping, no overhead / engine gauges); C-5 kneels only when parked in the fleet (flight model gear can't kneel); C-5 too big for stands (not in the parked fleet); doors open only after 8 s stopped at idle (no parking brake / door key); Vulcan brake chute; fuel burn (all flown at one weight); Vulcan paint reads glossy (AC material shininess)
 - [ ] **P2** v3 types: helicopter; quadcopter
 - [ ] **P2** Livery selector (house liveries; user-supplied)
 
@@ -134,5 +135,6 @@ item lands; keep entries one line.
 | A (v3) | Airport detail: markings, buildings, stands, jet bridges, parked aircraft, vehicles, signs, windsocks, airfield lights, airfield grading (`src/airport/`) | ✅ |
 | C (v3) | Live 3D cockpit instruments (steam gauges + glass displays) | ✅ |
 | H | v3 heavies: C-130H, C-5M, Vulcan B.2 | ✅ |
+| HF | Heavies polish: live cockpits, liveries, doors, air-base fleet | ✅ |
 | S | Aircraft systems + realistic failures (systems/, failures panel, ECAM / EICAS, aural) | ✅ |
 | next | ILS/FMS (F), rotorcraft (Q), ATC/ATIS (R) | ⏳ queued |

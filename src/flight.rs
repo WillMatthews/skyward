@@ -2806,7 +2806,7 @@ fn galaxy_base() -> AircraftDef {
         retractable_gear: true,
         has_spoilers: true,
         has_reverser: true,
-        eye: Vec3::new(0.75, 4.0, 24.0),
+        eye: Vec3::new(0.62, 4.15, 24.35),
         vr_kt: 145.0,
         vref_kt: 138.0,
         vle_kt: 250.0,

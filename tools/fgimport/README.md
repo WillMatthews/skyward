@@ -31,10 +31,11 @@ python3 -I $S/fetch.py c130 svn:C130 C130 Models/c130.xml Systems/FDM/c130-yasim
 # extra inputs: ATR Models/paintkit.xcf, A320 Models/Liveries/CFM/2k/CFM56-white.png
 python3 -I $S/texconv.py $FG_SRC                       # SGI .rgb / DDS → PNG
 python3 -I tools/fgimport/liveries/make_liveries.py $FG_SRC   # neutral A320 / ATR liveries
-python3 -I tools/fgimport/liveries/make_liveries.py $FG_SRC c130 c5 vulcan   # heavies: insignia painted out
+python3 -I tools/fgimport/liveries/make_liveries.py $FG_SRC c130 c5 vulcan   # heavies: insignia painted out, Vulcan camo, C-130 prop-disc alpha
 cargo run --release --manifest-path tools/fgimport/Cargo.toml -- \
     tools/fgimport/aircraft/c172p.json $FG_SRC/c172p assets/aircraft/kestrel   # etc.
-# The C-5 and Vulcan JSBSim aero get Skyward calibration patches after import:
+# The heavies (c130.json → hercules, c5.json → galaxy, vulcan.json → vulcan) import like the
+# others; the C-5 and Vulcan JSBSim aero get Skyward calibration patches after import:
 python3 -I tools/fgimport/patches/aero.py galaxy assets/aircraft/galaxy/fdm.xml
 python3 -I tools/fgimport/patches/aero.py vulcan assets/aircraft/vulcan/fdm.xml
 ```
@@ -48,13 +49,14 @@ In the game: `SKAC_DUMP=<id> cargo test --release geometry_dump -- --ignored
 | key | meaning |
 |---|---|
 | `id`, `name`, `fg_name` | Skyward id (output dir), display name, `Aircraft/<fg_name>/` prefix used in the FG files |
+| `fg_aliases` | other `Aircraft/<name>/` prefixes the files use for the same tree (e.g. the Vulcan's `vulcanb2`) |
 | `model` | entry model XML |
 | `fdm` | `{"jsbsim": "file.xml"}` (CG / VRP / contacts from the FDM) or `{"cg_model": [x,y,z]}` (YASim types: CG in model metres) |
 | `fuel_kg`, `pointmass_kg` | loaded condition for the CG / inertia |
 | `vrp_m` | JSBSim types: override the FDM's VRP (structural metres) when it does not match the visual model (C-5) |
 | `eye_view` / `eye_model` / `eye_body` | cockpit eye (FG view offsets / model frame / body frame) |
 | `props` | static property values (variants, damage flags …) |
-| `channels` | `[regex, channel, scale, offset]` property → Skyward channel rules (before the built-ins) |
+| `channels` | `[regex, channel, scale, offset]` property → Skyward channel rules (before the built-ins); `doors` (cargo ramp / visor / crew door, open 0..1 when parked), `doors_level` / `doors_kneeled` and `kneel` (C-5 stances) are driven by `src/models.rs` |
 | `exclude_models`, `exclude_objects`, `interior_models`, `interior_objects`, `light_models` | regexes on submodel paths / object names |
 | `textures` | texture overrides (basename → path in the source tree), e.g. the neutral liveries |
 | `max_tex`, `interior_max_tex`, `jpeg_quality`, `range_m` | texture limits; LOD distance for `range` animations |

@@ -8,7 +8,7 @@
 
 **Imported:** Exterior `Models/AvroVulcanB2.xml` (`vulcanb2.ac`, gear, airbrakes, lights), cockpit (`Models/cockpit.xml`), textures; JSBSim FDM `vulcanb2.xml`. Weapons (bombs, Blue Steel, Red Beard, WE177, Shrike, ECM pod), exhaust heat-haze / flame effects and light cones are not imported.
 
-**Livery:** The XM607 wrap-around camouflage with its roundels, fin flashes, serials and badges painted out (`make_liveries.py`, `vulcan()`, flat-colour fill). No national insignia or serials.
+**Livery:** Derived from the XM607 texture: roundels, fin flashes, serials and badges painted out, then repainted in the RAF strike scheme — Dark Green / Dark Sea Grey disruptive camouflage on the upper surfaces and sides (the source's light-grey patches), Light Aircraft Grey undersides (split by the model's face normals), a light weathering mottle (`make_liveries.py`, `vulcan()`). No national insignia or serials.
 
 **Flight model:** JSBSim at run time with Skyward delta-wing aerodynamics (`tools/fgimport/patches/aero.py`): the FDM is an Aeromatic first cut with a conventional transport lift curve (sharp stall at 13°), replaced by a low-slope delta lift curve rising to ~28° with no stall break, high-alpha drag rise (lost leading-edge suction), induced drag for AR 3.1, drag rise past M0.88 and airbrake coefficients. The flap lever drives the airbrakes (the Vulcan has no flaps). Skyward Olympus 301 turbojet model (4 × 89 kN), gear; flown at 60 t.
 
