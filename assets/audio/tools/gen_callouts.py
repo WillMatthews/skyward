@@ -33,6 +33,10 @@ PHRASES = [
     ("v1", "Vee one.", 1.15),
     ("overspeed", "Overspeed.", 1.15),
     ("engine_fail", "Engine failure.", 1.15),
+    ("engine_fire", "Engine fire.", 1.1),
+    ("warning", "Warning. Warning.", 1.15),
+    ("caution", "Caution.", 1.15),
+    ("smoke", "Smoke. Smoke.", 1.1),
 ]
 e = Engine()
 for fid, text, spd in PHRASES:

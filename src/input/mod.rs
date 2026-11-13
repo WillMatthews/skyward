@@ -149,6 +149,7 @@ pub const BUTTONS: &[(Key, &str, &str, &str)] = &[
     (Key::Gear, "gear", "Landing gear", "Engines & levers"),
     (Key::LandingLights, "landing_lights", "Landing lights", "Engines & levers"),
     (Key::EngineFail, "engine_fail", "Engine failure practice", "Engines & levers"),
+    (Key::MasterAck, "master_ack", "Master warning / caution reset", "Engines & levers"),
     (Key::ApToggle, "ap", "Autopilot on / off", "Autopilot"),
     (Key::ApHdgLeft, "ap_hdg_left", "Heading −5°", "Autopilot"),
     (Key::ApHdgRight, "ap_hdg_right", "Heading +5°", "Autopilot"),
@@ -175,6 +176,7 @@ pub const BUTTONS: &[(Key, &str, &str, &str)] = &[
     (Key::MapZoomIn, "map_in", "Map range in", "Interface"),
     (Key::Instruments, "instruments", "Instruments", "Interface"),
     (Key::WeatherPanel, "weather_panel", "Weather panel", "Interface"),
+    (Key::Failures, "failures", "Systems & failures", "Interface"),
     (Key::Mute, "mute", "Mute", "Interface"),
 ];
 

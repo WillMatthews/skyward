@@ -7,6 +7,7 @@
 //!                     [--menu-screen main|aircraft|airport|conditions|settings|pause|loading|credits] [--hud full|minimal|off] [--map corner|large|off]
 //!                     [--realtime [--warp N]]   (stream + render in real time, straight & level, report timings)
 //!                     [--gear up|down] [--flaps N] [--spoilers F] [--reverse] [--fail BITS] [--ap] [--fps HZ]   (setup / test knobs)
+//! Systems:    --fail pitot,vacuum,fire2@30,... (names, optional @seconds to arm) [--cold-dark] [--panel failures|armed|systems]
 //! Auto flight: skyward [--bot | --watch] ...        (hand the aircraft to the AI pilot; --watch adds the cinematic camera)
 //! Soak test:  skyward --shot out.png --bot --soak --seconds 1800 [--warp 8] [--shot-every 300] [--weather scattered]
 //! Weather:    live METAR + real local time by default; --no-live, --metar "EGLC 121450Z 22012KT 3000 RA BKN008 09/08 Q1002", --time HH.MM, --date MM-DD, --weather clear|few|scattered|broken|overcast
@@ -39,6 +40,7 @@ mod scene;
 mod input;
 mod sim;
 mod startpos;
+mod systems;
 mod terrain;
 mod landmarks;
 mod tiles;
@@ -110,6 +112,10 @@ struct Args {
     spoilers: Option<f32>,
     reverse: bool,
     fail: u8,
+    /// Systems failures by name (`--fail pitot,vacuum,fire2@30`), cold & dark start, panel to show.
+    fail_names: Vec<String>,
+    cold_dark: bool,
+    panel: Option<usize>,
     frame_dt: Option<f32>,
     ap: bool,
     no_hud: bool,
@@ -204,6 +210,9 @@ fn parse_args_from(argv: Vec<String>) -> Args {
         spoilers: None,
         reverse: false,
         fail: 0,
+        fail_names: Vec::new(),
+        cold_dark: false,
+        panel: None,
         frame_dt: None,
         ap: false,
         no_hud: false,
@@ -263,7 +272,21 @@ fn parse_args_from(argv: Vec<String>) -> Args {
             "--flaps" => a.flaps = next(&mut i).parse().ok(),
             "--spoilers" => a.spoilers = next(&mut i).parse().ok(),
             "--reverse" => a.reverse = true,
-            "--fail" => a.fail = next(&mut i).parse().unwrap_or(0),
+            "--fail" => {
+                let v = next(&mut i);
+                match v.parse() {
+                    Ok(bits) => a.fail = bits,
+                    Err(_) => a.fail_names.extend(v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty())),
+                }
+            }
+            "--cold-dark" => a.cold_dark = true,
+            "--panel" => {
+                a.panel = Some(match next(&mut i).as_str() {
+                    "armed" | "schedule" | "random" => 1,
+                    "systems" => 2,
+                    _ => 0,
+                })
+            }
             // Realtime test at a fixed display rate (e.g. 144): steps the sim by 1/fps per frame.
             "--fps" => a.frame_dt = next(&mut i).parse::<f32>().ok().filter(|f| *f > 1.0).map(|f| 1.0 / f),
             "--seconds" => a.seconds = next(&mut i).parse().unwrap_or(0.0),
@@ -1081,6 +1104,10 @@ fn headless(args: Args) -> Result<(), String> {
     // virtual controllers from SKYWARD_FAKE_INPUT (input/).
     ui.st.input.add_fakes_from_env();
     ui.st.input.update(&mut ui.st.settings.controls, 0.0);
+    if let Some(t) = args.panel {
+        ui.st.fail.open = true;
+        ui.st.fail.tab = t;
+    }
     if let Ok(t) = std::env::var("SKYWARD_SETTINGS_TAB") {
         let mut it = t.split(':');
         ui.st.settings_tab = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
@@ -1173,6 +1200,7 @@ fn headless(args: Args) -> Result<(), String> {
         if args.fail > 0 {
             sim.ctl.failed_engines = args.fail;
         }
+        apply_systems_args(&args, sim);
         if args.ap && !sim.ac.on_ground {
             sim.ap.engage_hold_current(&sim.ac);
         }
@@ -2000,6 +2028,7 @@ fn ui_action(r: &mut Running, k: Key, flying: bool) -> bool {
             st.toasts.push(ui::toast::Kind::Info, format!("Instruments: {n}"), "", 1.4);
         }
         Key::WeatherPanel => st.show_wx = !st.show_wx,
+        Key::Failures => st.fail.open = !st.fail.open,
         Key::MouseYoke => {
             if !st.settings.controls.mouse.yoke {
                 st.toasts.push(ui::toast::Kind::Info, "Mouse yoke is off", "Turn it on in Settings › Controls › Mouse & view", 3.0);
@@ -2624,6 +2653,10 @@ impl App {
                     r.ui.st.go(b);
                 }
                 Action::Resume => r.ui.st.go(Screen::Flying),
+                Action::Failures => {
+                    r.ui.st.fail.open = true;
+                    r.ui.st.go(Screen::Flying);
+                }
                 Action::Restart => {
                     r.input.pressed.push(Key::Reset);
                     r.ui.st.go(Screen::Flying);
@@ -2736,6 +2769,7 @@ fn audio_render(args: Args) -> Result<(), String> {
         if args.ap && !sim.ac.on_ground {
             sim.ap.engage_hold_current(&sim.ac);
         }
+        apply_systems_args(&args, sim);
         sim.warp = args.warp;
     }
     // Optional silent fast-forward to a bot phase (e.g. "Final").
@@ -2835,4 +2869,33 @@ fn main() {
     let el = EventLoop::new().expect("event loop");
     let mut app = App { args, run: None };
     el.run_app(&mut app).expect("run");
+}
+
+/// `--fail NAME[@SECONDS],...` and `--cold-dark` (systems/): fail now or arm.
+fn apply_systems_args(args: &Args, sim: &mut sim::Sim) {
+    let def = sim.def().clone();
+    if args.cold_dark {
+        sim.cold_dark = true;
+        sim.ac.sys = systems::Systems::new(&def, true);
+        sim.ctl.throttle = 0.0;
+    }
+    for spec in &args.fail_names {
+        let (name, at) = match spec.split_once('@') {
+            Some((n, t)) => (n, t.parse::<f32>().ok()),
+            None => (spec.as_str(), None),
+        };
+        let Some((kind, idx)) = systems::failures::Kind::parse(name) else {
+            eprintln!("--fail: unknown failure '{name}' (ids: {})", systems::failures::Kind::ALL.iter().map(|k| k.id()).collect::<Vec<_>>().join(", "));
+            continue;
+        };
+        let f = systems::failures::Failure::new(kind, idx);
+        if !kind.applies(&systems::defs::sys_def(&def), &def) {
+            eprintln!("--fail: '{name}' does not apply to the {}", def.name);
+            continue;
+        }
+        match at {
+            Some(t) => sim.failures.arm(f, systems::failures::Trigger::At(sim.time + t)),
+            None => systems::set_failure(&mut sim.ac, &def, f, true),
+        }
+    }
 }

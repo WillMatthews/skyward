@@ -146,6 +146,9 @@ pub struct Director {
     prev_crashed: bool,
     prev_ap: bool,
     prev_ap_warn: f32,
+    /// Systems alerts (systems/): last one-shot seen, last continuous chime.
+    prev_aural: u32,
+    last_loop: f64,
     g_slow: f32,
     shake: f32,
     last_thump: f64,
@@ -187,6 +190,8 @@ impl Default for Director {
             prev_crashed: false,
             prev_ap: false,
             prev_ap_warn: 0.0,
+            prev_aural: 0,
+            last_loop: -10.0,
             g_slow: 1.0,
             shake: 0.0,
             last_thump: -10.0,
@@ -388,9 +393,13 @@ impl Director {
             }
             // Wreckage: impacts, scrapes, separations, fires, explosions (debris.rs).
             events.extend(sim.audio_events.iter().copied());
+            // (With the systems running, their alerts own the chimes: below.)
+            let sys_alerts = ac.sys.init && ac.sys.sd.alerting != crate::systems::defs::Alerting::Annunciators;
             for i in 0..n {
                 let r = eng[i].running;
-                if !r && self.prev_running[i] && !crashed {
+                let practice = sim.ctl.failed_engines & (1 << i) != 0;
+                let commanded = ac.sys.init && (!ac.sys.sw.eng_master[i] || ac.sys.eng[i].dead);
+                if !r && self.prev_running[i] && !crashed && (practice || !(sys_alerts || commanded)) {
                     events.push(Event::MasterCaution);
                     if n > 1 {
                         self.say(Clip::EngineFailure, Prio::Warning);
@@ -411,6 +420,32 @@ impl Director {
             }
             self.prev_ap = sim.ap.engaged;
             self.prev_ap_warn = sim.ap_warn;
+            // Systems alerts: one-shot chimes / voice, continuous CRC or fire bell.
+            let sys = &ac.sys;
+            if sys.aural_seq != self.prev_aural {
+                self.prev_aural = sys.aural_seq;
+                match sys.aural {
+                    crate::systems::Aural::Chime => events.push(Event::MasterCaution),
+                    crate::systems::Aural::EngineFire => self.say(Clip::EngineFire, Prio::Warning),
+                    crate::systems::Aural::Warning => self.say(Clip::Warning, Prio::Warning),
+                    crate::systems::Aural::Caution => self.say(Clip::Caution, Prio::Warning),
+                    crate::systems::Aural::Smoke => self.say(Clip::Smoke, Prio::Warning),
+                    _ => {}
+                }
+            }
+            if !crashed && self.now - self.last_loop >= 1.0 {
+                match sys.aural_loop {
+                    crate::systems::Aural::Crc => {
+                        events.push(Event::Crc);
+                        self.last_loop = self.now;
+                    }
+                    crate::systems::Aural::Bell => {
+                        events.push(Event::FireBell);
+                        self.last_loop = self.now;
+                    }
+                    _ => {}
+                }
+            }
         }
         self.prev_on_ground = ac.on_ground;
         self.prev_vs = vs;

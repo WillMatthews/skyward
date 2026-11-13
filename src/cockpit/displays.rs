@@ -332,6 +332,11 @@ fn make_target(device: &wgpu::Device, mg: &MipGen, kind: &str, size: [u32; 2]) -
 /// Draw display `kind` filling `r` (texture pixels).
 pub fn draw(p: &egui::Painter, kind: &str, r: Rect, sim: &Sim, world: &World, tiles: &Tiles, route: &[(String, glam::Vec2)]) {
     p.rect_filled(r, 0.0, SCREEN_BG);
+    // No power on its bus: the screen is dark (systems/).
+    if !sim.ac.sys.display_on(kind) {
+        p.rect_filled(r, 0.0, Color32::BLACK);
+        return;
+    }
     // The 2D displays draw their own bezel (7 px): push it just outside the texture.
     let bare = |q: Rect| q.expand(7.0);
     let portrait = r.height() > r.width() * 1.15;
@@ -345,7 +350,7 @@ pub fn draw(p: &egui::Painter, kind: &str, r: Rect, sim: &Sim, world: &World, ti
     };
     match kind {
         "pfd" | "isis" => {
-            glass::pfd(p, bare(top), sim, world);
+            glass::pfd_unit(p, bare(top), sim, world, kind == "isis");
             if let Some(b) = bottom {
                 hsi(p, b, sim);
             }
@@ -376,7 +381,14 @@ fn hsi(p: &egui::Painter, r: Rect, sim: &Sim) {
     let u = r.width() / 100.0;
     let c = Pos2::new(r.center().x, r.min.y + r.height() * 0.62);
     let rad = (r.height() * 0.52).min(r.width() * 0.4);
-    let hdg = sim.ac.heading();
+    // Heading from the heading reference (systems/): red HDG flag when it has failed.
+    let ad = sim.ac.sys.air_data(&sim.ac);
+    if ad.has(crate::systems::flag::HDG) {
+        let rr = p.text(c, Align2::CENTER_CENTER, "HDG", fi(6.0 * u), pal::RED);
+        p.rect_stroke(rr.expand(1.0 * u), 0.0, Stroke::new(1.4, pal::RED), egui::StrokeKind::Outside);
+        return;
+    }
+    let hdg = ad.heading;
     p.circle_filled(c, rad, Color32::from_rgb(14, 17, 22));
     p.circle_stroke(c, rad, Stroke::new(1.6, pal::WHITE));
     for d in 0..72 {
@@ -429,15 +441,109 @@ fn status_strip(p: &egui::Painter, r: Rect, sim: &Sim, world: &World) {
     }
 }
 
+/// Which system page the SD shows: the one with a failure (ECAM auto paging), else ENGINE.
+fn sd_page(sim: &Sim) -> &'static str {
+    let sys = &sim.ac.sys;
+    if !sys.init {
+        return "ENGINE";
+    }
+    let alerts = crate::systems::alerts::alerts(sys, sim.def(), &sim.ac, &sim.ctl);
+    for a in &alerts {
+        let t = a.title.as_str();
+        if t.contains("HYD") {
+            return "HYD";
+        }
+        if t.starts_with("ELEC") || t.contains("GEN") || t.starts_with("IDG") {
+            return "ELEC";
+        }
+        if t.starts_with("FUEL") {
+            return "FUEL";
+        }
+    }
+    "ENGINE"
+}
+
+/// SD pages for hydraulics, electrics and fuel (systems/).
+fn sd_system_page(p: &egui::Painter, r: Rect, sim: &Sim, page: &str) {
+    let u = r.width() / 100.0;
+    let sys = &sim.ac.sys;
+    let sd = &sys.sd;
+    let col = |ok: bool| if ok { pal::GREEN } else { pal::AMBER };
+    match page {
+        "HYD" => {
+            let n = sd.hyd.len().max(1);
+            for (k, h) in sd.hyd.iter().enumerate() {
+                let x = r.min.x + r.width() * (k as f32 + 0.5) / n as f32;
+                let ok = sys.hyd[k] > 0.5;
+                p.text(Pos2::new(x, r.min.y + 20.0 * u), Align2::CENTER_CENTER, h.name, fi(7.0 * u), col(ok));
+                p.text(Pos2::new(x, r.min.y + 32.0 * u), Align2::CENTER_CENTER, format!("{:.0}", (sys.hyd_psi(k) / 50.0).round() * 50.0), fd(6.0 * u), col(ok));
+                p.line_segment([Pos2::new(x, r.min.y + 37.0 * u), Pos2::new(x, r.min.y + 58.0 * u)], Stroke::new(2.0, col(ok)));
+                let src = if !h.pumps.is_empty() {
+                    "ENG"
+                } else if h.rat {
+                    "ELEC / RAT"
+                } else {
+                    "ELEC"
+                };
+                p.text(Pos2::new(x, r.min.y + 63.0 * u), Align2::CENTER_CENTER, src, fi(3.6 * u), pal::WHITE);
+            }
+            if sd.ptu {
+                p.text(Pos2::new(r.center().x, r.min.y + 45.0 * u), Align2::CENTER_CENTER, "PTU", fi(3.8 * u), pal::WHITE);
+            }
+        }
+        "ELEC" => {
+            let soc = sys.soc;
+            p.text(Pos2::new(r.center().x, r.min.y + 18.0 * u), Align2::CENTER_CENTER, "BAT", fi(4.4 * u), pal::WHITE);
+            p.text(Pos2::new(r.center().x, r.min.y + 25.0 * u), Align2::CENTER_CENTER, format!("{:.1} V   {:+.0} A", sys.volts, sys.amps), fd(4.4 * u), col(soc > 0.3));
+            for i in 0..sys.n_eng {
+                let x = r.min.x + r.width() * (i as f32 + 0.5) / sys.n_eng.max(1) as f32;
+                let on = sys.gen_on[i];
+                p.text(Pos2::new(x, r.min.y + 42.0 * u), Align2::CENTER_CENTER, format!("GEN {}", i + 1), fi(4.4 * u), col(on));
+                p.text(Pos2::new(x, r.min.y + 49.0 * u), Align2::CENTER_CENTER, if on { "115 V 400 HZ" } else { "FAULT" }, fd(3.6 * u), col(on));
+            }
+            if sd.apu {
+                p.text(
+                    Pos2::new(r.center().x, r.min.y + 60.0 * u),
+                    Align2::CENTER_CENTER,
+                    format!("APU GEN  {}", if sys.apu > 0.95 { "AVAIL" } else { "OFF" }),
+                    fi(3.8 * u),
+                    col(sys.apu > 0.95),
+                );
+            }
+            if sys.rat_out {
+                p.text(Pos2::new(r.center().x, r.min.y + 67.0 * u), Align2::CENTER_CENTER, "EMER GEN (RAT)", fi(3.8 * u), pal::GREEN);
+            }
+        }
+        _ => {
+            let nt = sd.tanks.len().min(3).max(1);
+            for (k, t) in sd.tanks.iter().enumerate().take(3) {
+                let x = r.min.x + r.width() * (k as f32 + 0.5) / nt as f32;
+                p.text(Pos2::new(x, r.min.y + 24.0 * u), Align2::CENTER_CENTER, t.0, fi(4.4 * u), pal::WHITE);
+                let low = sys.tank[k] < 0.1 * sys.tank_cap[k];
+                p.text(Pos2::new(x, r.min.y + 32.0 * u), Align2::CENTER_CENTER, format!("{:.0}", (sys.tank[k] / 10.0).round() * 10.0), fd(5.6 * u), col(!low));
+            }
+            p.text(Pos2::new(r.center().x, r.min.y + 46.0 * u), Align2::CENTER_CENTER, format!("FOB {:.0} KG", sys.fuel_total()), fd(4.6 * u), pal::GREEN);
+            if sys.sw.crossfeed {
+                p.text(Pos2::new(r.center().x, r.min.y + 54.0 * u), Align2::CENTER_CENTER, "X FEED OPEN", fi(3.8 * u), pal::GREEN);
+            }
+        }
+    }
+}
+
 /// Airbus-style system display: fuel / engines secondary page and the status strip.
 fn system_display(p: &egui::Painter, r: Rect, sim: &Sim, world: &World) {
     let u = r.width() / 100.0;
     let ac = &sim.ac;
     let def = sim.def();
     let n = def.engine_count.clamp(1, 4);
-    p.text(Pos2::new(r.center().x, r.min.y + 5.0 * u), Align2::CENTER_CENTER, "ENGINE", fi(5.0 * u), pal::WHITE);
+    let page = sd_page(sim);
+    p.text(Pos2::new(r.center().x, r.min.y + 5.0 * u), Align2::CENTER_CENTER, page, fi(5.0 * u), pal::WHITE);
+    if page != "ENGINE" {
+        sd_system_page(p, r, sim, page);
+    }
     p.line_segment([Pos2::new(r.center().x - 9.0 * u, r.min.y + 8.0 * u), Pos2::new(r.center().x + 9.0 * u, r.min.y + 8.0 * u)], Stroke::new(1.2, pal::WHITE));
     let rows: [(&str, &str); 4] = [("F.USED", "KG"), ("OIL", "PSI"), ("N2", "%"), ("VIB N1", "")];
+    let rows = if page == "ENGINE" { &rows[..] } else { &rows[..0] };
     let col_x = |i: usize| r.min.x + r.width() * (0.22 + 0.56 * if n > 1 { i as f32 / (n - 1) as f32 } else { 0.5 });
     for (k, (l, unit)) in rows.iter().enumerate() {
         let y = r.min.y + (20.0 + 13.0 * k as f32) * u;
@@ -460,7 +566,7 @@ fn system_display(p: &egui::Painter, r: Rect, sim: &Sim, world: &World) {
     let items = [
         (format!("TAT {:+.0} °C", tat), format!("SAT {:+.0} °C", ac.oat())),
         (format!("{:02} H {:02}", sim.hours.rem_euclid(24.0) as u32, ((sim.hours.rem_euclid(1.0)) * 60.0) as u32), String::new()),
-        (format!("GW {:.0} KG", def.mass), format!("QNH {:.0}", world.wx.qnh_hpa)),
+        (format!("GW {:.0} KG", def.mass + ac.sys.fx.mass_delta), format!("QNH {:.0}", world.wx.qnh_hpa)),
     ];
     for (k, (a, b)) in items.iter().enumerate() {
         let x = r.min.x + r.width() * (0.17 + 0.33 * k as f32);

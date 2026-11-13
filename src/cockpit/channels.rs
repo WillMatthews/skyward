@@ -278,26 +278,34 @@ fn engine_targets(i: &ModelInputs, k: usize, rpm: f32) -> (f32, f32, f32) {
 }
 
 impl Instruments {
+    /// Fuel on board for the totaliser: the systems' tanks once they run.
+    fn fuel_now(&self, i: &ModelInputs) -> f32 {
+        let sys = &i.ac.sys;
+        if sys.init && !sys.sd.tanks.is_empty() { sys.fuel_total() } else { self.fuel_kg }
+    }
+
     /// Advance the instruments by `dt` seconds of sim time.
     pub fn step(&mut self, i: &ModelInputs, dt: f32) {
         let ac = i.ac;
         let def = i.def;
         let n_eng = ac.engine_count(def).clamp(1, MAX_ENG);
-        let heading = ac.heading().to_degrees().rem_euclid(360.0);
-        let alt_ft = ac.pos.y * FT;
-        let ias = ac.airspeed_kt().max(0.0);
-        let vs = ac.vertical_speed() / 0.00508;
+        // What the pitot-static system and the gyros indicate (systems/).
+        let ad = ac.sys.air_data(ac);
+        let heading = ad.heading.to_degrees().rem_euclid(360.0);
+        let alt_ft = ad.alt * FT;
+        let ias = (ad.ias / KT).max(0.0);
+        let vs = ad.vs / 0.00508;
         let energy_h = ac.pos.y + ac.tas() * ac.tas() / (2.0 * G);
         let ball = (ac.slip() * 4.0).clamp(-1.0, 1.0);
-        let turn = (ac.turn_rate().to_degrees() / 3.0).clamp(-2.0, 2.0);
+        let turn = (ad.turn.to_degrees() / 3.0).clamp(-2.0, 2.0);
         let piston = def.engine_kind == EngineKind::Piston;
         if !self.init {
             self.init = true;
             self.ias = ias;
             self.alt_ft = alt_ft;
             self.vs_fpm = vs;
-            self.pitch = ac.pitch().to_degrees();
-            self.roll = ac.roll().to_degrees();
+            self.pitch = ad.pitch.to_degrees();
+            self.roll = ad.roll.to_degrees();
             self.dg = heading;
             self.compass = (heading, 0.0);
             self.turn = turn;
@@ -338,8 +346,8 @@ impl Instruments {
         };
         self.energy_h = Some(energy_h);
         self.vario = lag(self.vario, te.clamp(-15.0, 15.0), 1.3, dt);
-        self.pitch = lag(self.pitch, ac.pitch().to_degrees(), 0.08, dt);
-        self.roll = wrap180(self.roll + lag(0.0, wrap180(ac.roll().to_degrees() - self.roll), 0.08, dt));
+        self.pitch = lag(self.pitch, ad.pitch.to_degrees(), 0.08, dt);
+        self.roll = wrap180(self.roll + lag(0.0, wrap180(ad.roll.to_degrees() - self.roll), 0.08, dt));
         self.dg += lag(0.0, wrap180(heading - self.dg), 0.12, dt);
         // Compass card (unwrapped angle, rate): lightly damped, swings and
         // overshoots after heading changes.
@@ -354,8 +362,9 @@ impl Instruments {
         if let Some(h) = i.ap.and_then(|a| a.hdg) {
             self.hdg_bug = h.to_degrees().rem_euclid(360.0);
         }
-        // Engine-driven vacuum pump.
-        let vac = if piston && ac.engine_running(0) { (4.2 + ac.engine_rpm_i(0) / 2700.0).min(5.3) } else { 0.0 };
+        // Engine-driven vacuum pump (failed: systems/).
+        let pump = !ac.sys.init || !ac.sys.sd.vacuum || ac.sys.vacuum_ok();
+        let vac = if piston && ac.engine_running(0) && pump { (4.2 + ac.engine_rpm_i(0) / 2700.0).min(5.3) } else { 0.0 };
         self.suction = lag(self.suction, vac, 1.5, dt);
         let mut burn = 0.0;
         for k in 0..n_eng {
@@ -417,14 +426,18 @@ impl Instruments {
             OatC => ac.oat(),
             OatF => ac.oat() * 1.8 + 32.0,
             StallWarn => b(ac.stall_warning()),
-            MasterWarning => b(ac.stall_warning() || ac.airspeed_kt() > def.vne_kt * 1.02),
-            MasterCaution => b(def.has_engine && (0..n_eng).any(|k| !ac.engine_running(k))),
+            MasterWarning => b(ac.stall_warning() || ac.airspeed_kt() > def.vne_kt * 1.02 || ac.sys.master_warn),
+            MasterCaution => b(def.has_engine && (0..n_eng).any(|k| !ac.engine_running(k)) || ac.sys.master_caut),
             VmoKt => def.vne_kt,
             ClockS => i.hours.rem_euclid(24.0) * 3600.0,
             ClockMin => i.hours.rem_euclid(24.0) * 60.0,
             ClockHour => i.hours.rem_euclid(24.0),
             Amps => {
-                if def.has_engine && ac.engine_running(0) {
+                let sys = &ac.sys;
+                if sys.init && (sys.power != crate::systems::Power::Normal || !sys.gen_on[0]) && sys.sd.gens_per_engine > 0 {
+                    // Discharging (or dead): the systems' battery current.
+                    sys.amps.clamp(-60.0, 60.0)
+                } else if def.has_engine && ac.engine_running(0) {
                     2.0 + 3.0 * (-i.time / 120.0).exp()
                 } else {
                     -6.0
@@ -432,8 +445,8 @@ impl Instruments {
             }
             SuctionInhg => self.suction,
             PanelLight => (1.0 - i.daylight).clamp(0.0, 1.0),
-            FuelLbs => self.fuel_kg * 2.204_62,
-            FuelGal => self.fuel_kg / fuel_density(def),
+            FuelLbs => self.fuel_now(i) * 2.204_62,
+            FuelGal => self.fuel_now(i) / fuel_density(def),
             HobbsTenths => self.hobbs_h * 10.0,
             ApOn => b(ap.is_some()),
             ApAthr => b(ap.is_some_and(|a| a.ias.is_some())),
@@ -464,6 +477,21 @@ impl Instruments {
                 if k >= self.tanks.max(1) {
                     return 0.0;
                 }
+                let sys = &ac.sys;
+                if let Some((kg, cap)) = sys_tank(i, k) {
+                    return match q {
+                        TankQ::Gal => kg / fuel_density(def),
+                        TankQ::Lbs => kg * 2.204_62,
+                        TankQ::Norm => {
+                            if cap > 0.0 {
+                                kg / cap
+                            } else {
+                                0.0
+                            }
+                        }
+                    };
+                }
+                let _ = sys;
                 let kg = self.fuel_kg / self.tanks.max(1) as f32;
                 match q {
                     TankQ::Gal => kg / fuel_density(def),
@@ -491,9 +519,9 @@ impl Instruments {
             EngQ::EgtC => self.egt_c[k],
             EngQ::EgtF => self.egt_c[k] * 1.8 + 32.0,
             EngQ::EgtNorm => ((self.egt_c[k] * 1.8 + 32.0 - 1_100.0) / 600.0).clamp(0.0, 1.0),
-            EngQ::OilPPsi => self.oil_p[k],
-            EngQ::OilTF => self.oil_t_c[k] * 1.8 + 32.0,
-            EngQ::OilTC => self.oil_t_c[k],
+            EngQ::OilPPsi => self.oil_p[k] * ac.sys.eng[k].oil_p_mul.clamp(0.0, 1.0),
+            EngQ::OilTF => (self.oil_t_c[k] + ac.sys.eng[k].oil_t_add) * 1.8 + 32.0,
+            EngQ::OilTC => self.oil_t_c[k] + ac.sys.eng[k].oil_t_add,
             EngQ::ChtF => self.cht_c[k] * 1.8 + 32.0,
             EngQ::MapInhg => {
                 // Static ambient pressure, plus the throttle's share of it when running.
@@ -513,6 +541,17 @@ impl Instruments {
             EngQ::Nozzle => self.nozzle[k],
         }
     }
+}
+
+/// Tank `k` from the systems' fuel model: (kg the gauge shows, capacity).
+/// Electric gauges read zero without power. None before the systems start.
+fn sys_tank(i: &ModelInputs, k: usize) -> Option<(f32, f32)> {
+    let sys = &i.ac.sys;
+    if !sys.init || k >= sys.sd.tanks.len().min(3) {
+        return None;
+    }
+    let kg = if sys.bus_ok() || !sys.sd.flaps_electric { sys.tank[k] } else { 0.0 };
+    Some((kg, sys.tank_cap[k]))
 }
 
 /// kg per US gallon of the aircraft's fuel (avgas / Jet A).

@@ -40,6 +40,10 @@ fn wav_bytes(c: Clip) -> &'static [u8] {
         Clip::V1 => clip!("v1"),
         Clip::Overspeed => clip!("overspeed"),
         Clip::EngineFailure => clip!("engine_fail"),
+        Clip::EngineFire => clip!("engine_fire"),
+        Clip::Warning => clip!("warning"),
+        Clip::Caution => clip!("caution"),
+        Clip::Smoke => clip!("smoke"),
     }
 }
 

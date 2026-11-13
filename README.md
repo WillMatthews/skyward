@@ -54,6 +54,25 @@ anywhere on Earth, for as long as you like. wgpu (Vulkan), winit, egui.
   lift, lost tail stability). Survivable accidents (gear-up, gear collapse)
   slide to a stop in one piece; fatal ones break up into rigid-body debris
   that tumbles, slides, burns and sinks.
+* **Systems and failures** — per type, data-driven: electrics (battery,
+  alternator / generators, APU, RAT / EPU, buses, ammeter), fuel (tanks,
+  selector / crossfeed, burn per engine feeding mass and lateral CG back into
+  the flight model, leaks, starvation), hydraulics (engine / electric / RAT
+  pumps, PTU; gear, flaps, spoilers, brakes, nose-wheel steering and powered
+  controls depend on them), vacuum and pitot-static systems behind the
+  instruments, engine starts (magnetos / primer / starter; APU bleed,
+  starter-generator, JFS) from cold and dark or ready to go, oil,
+  carburettor icing, fire detection and extinguishers, anti-ice and airframe
+  icing. Failures that behave like the real ones — engine fire, flameout,
+  partial power, prop overspeed, carb ice, fuel leak / pump, generator
+  (the battery runs down, then the avionics die), vacuum (gyros topple),
+  pitot / static blockage (the ASI becomes an altimeter), AHRS / display
+  failures (red flags, red X), gear that won't extend (alternate extension),
+  flap asymmetry / jam, hydraulic loss, control jams, brakes, tyre burst,
+  electrical smoke, bird strike — with master warning / caution, ECAM / EICAS
+  messages whose procedure lines tick off as you fly them, and the aural
+  alerts (CRC, fire bell, voice). Fail anything now or armed for a time,
+  altitude, speed or random window, or random failures by MTBF (**O**).
 * **Effects** — fireballs, burning fuel with wind-blown smoke columns, dust,
   spray, sparks, tyre and engine smoke; contrails by the Schmidt–Appleman
   criterion (persisting in ice-supersaturated air), vortex and wing-surface
@@ -192,6 +211,8 @@ the city (fast jets: 3,000 m), glider thermal release.
 | Z | autopilot on (holds heading, altitude, speed) / off; a mouse AP panel appears |
 | Ins / Del, Home / End, 9 / 0 | autopilot heading ∓5°, altitude ±100 ft, speed ∓5 kt |
 | K | engine-failure practice (fails engine 1, then 2, then restores) |
+| O / F2 | **systems & failures** panel: fail / arm / random failures, repair; systems (battery, generators, fuel, engine start, APU, hydraulics, anti-ice, alternate gear, fire handles) |
+| ` | master warning / caution reset (silences the chime) |
 | J | **auto flight**: the bot flies; any stick / throttle / lever input takes back |
 | C | camera: chase → cockpit → tower → fly-by → cinematic |
 | Right-drag, wheel | orbit / zoom chase camera; in the cockpit: look around |
@@ -293,6 +314,8 @@ Headless (no window) — renders offscreen and writes a PNG:
 | `--warp N` | time warp 1–64 for the flight before the shot / the soak |
 | `--throttle T`, `--heading DEG`, `--ap` | throttle, initial heading, engage the autopilot |
 | `--gear up\|down`, `--flaps N`, `--spoilers F`, `--reverse`, `--fail BITS` | aircraft setup |
+| `--fail pitot,vacuum,fire2@30` | systems failures by id (`fire` `flameout` `partial` `overspeed` `carbice` `leak` `pump` `gen` `vacuum` `pitot` `static` `ai` `dg` `pfd` `gear` `flapasym` `flapjam` `hyd` `jam` `brakes` `tyre` `smoke` `bird` `icing`; a digit = engine / tank / system, `jam-rudder`, `tyre-right`; `@S` arms it S seconds in) |
+| `--cold-dark`, `--panel failures\|armed\|systems` | start cold and dark; show the systems & failures panel |
 | `--eye x,y,z --look x,y,z` | fixed camera |
 | `--menu-screen S` | capture a menu: `main` `aircraft` `airport` `conditions` `settings` `pause` `loading` `credits` |
 | `--menu`, `--no-hud`, `--stats` | show the aircraft menu, hide the HUD, print the final state |
@@ -394,6 +417,7 @@ A shift costs well under 0.1 ms.
 | `src/clouds.rs` | volumetric cloud field + renderer, thermals |
 | `src/weather.rs` | METAR / Open-Meteo, weather → clouds / wind / precipitation, seasons |
 | `src/flight.rs` | flight dynamics + aircraft definitions (unit-tested) |
+| `src/systems/` | aircraft systems per type (`defs.rs`), failures + schedule (`failures.rs`), warnings / ECAM / EICAS (`alerts.rs`), session glue; `src/ui/failures.rs` the panel |
 | `src/damage.rs` | structural data per type, loads, wing bending mode, damage / failures, aero of lost surfaces |
 | `src/debris.rs` | wreckage: rigid-body debris (terrain, buildings, water), crash break-up, fires, sound / effect events |
 | `src/vfx/`, `src/shaders/vfx*.wgsl` | particles, trails, vapour, shock diamonds, heat haze; condensation physics (`atmo.rs`) |

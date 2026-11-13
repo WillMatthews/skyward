@@ -79,6 +79,7 @@ pub fn draw(ctx: &egui::Context, st: &mut UiState, sim: &mut Sim, world: &World,
     let mode = st.settings.hud;
     let route: Vec<(String, glam::Vec2)> = sim.bot.as_ref().map(|b| b.route()).unwrap_or_default();
     let mut bottom = screen.max.y;
+    cockpit_hazards(&p, screen, sim);
     // ---- instruments
     if mode != HudMode::Off {
         let compact = mode == HudMode::Minimal;
@@ -160,6 +161,43 @@ pub fn draw(ctx: &egui::Context, st: &mut UiState, sim: &mut Sim, world: &World,
     warnings(&p, screen, sim);
     if sim.show_help {
         help(ctx, sim);
+    }
+    // ---- systems & failures panel (O / F2)
+    super::failures::panel(ctx, st, sim);
+}
+
+/// Smoke in the cockpit (electrical / engine fire) and a cracked windscreen (systems/).
+fn cockpit_hazards(p: &egui::Painter, screen: Rect, sim: &Sim) {
+    let sys = &sim.ac.sys;
+    let smoke = sys.cockpit_smoke();
+    if smoke > 0.01 && sim.ac.crashed.is_none() {
+        let inside = if sim.cam == CamMode::Cockpit { 1.0 } else { 0.35 };
+        let a = (smoke * 0.72 * inside).clamp(0.0, 0.75);
+        // Layered grey haze, denser at the top (smoke rises).
+        let top = Color32::from_rgba_unmultiplied(150, 150, 146, (a * 255.0) as u8);
+        let bot = Color32::from_rgba_unmultiplied(110, 110, 108, (a * 150.0) as u8);
+        super::gradient_rect(p, screen, top, bot);
+    }
+    if sys.windscreen_cracked && sim.cam == CamMode::Cockpit {
+        let c = Pos2::new(screen.center().x + screen.width() * 0.12, screen.min.y + screen.height() * 0.3);
+        let st = Stroke::new(1.2, Color32::from_white_alpha(150));
+        let mut seed = 7u32;
+        let mut rnd = || {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            (seed >> 8) as f32 / (1u32 << 24) as f32
+        };
+        for k in 0..9 {
+            let mut a = k as f32 / 9.0 * std::f32::consts::TAU + rnd() * 0.4;
+            let mut q = c;
+            for _ in 0..6 {
+                let len = 18.0 + rnd() * 46.0;
+                a += (rnd() - 0.5) * 0.6;
+                let nq = q + Vec2::new(a.cos(), a.sin()) * len;
+                p.line_segment([q, nq], st);
+                q = nq;
+            }
+        }
+        p.circle_stroke(c, 7.0, Stroke::new(1.5, Color32::from_white_alpha(170)));
     }
 }
 
@@ -266,9 +304,23 @@ fn annunciators(p: &egui::Painter, screen: Rect, sim: &Sim, y: f32) -> f32 {
     }
     let trim = sim.ctl.trim;
     items.push((format!("TRIM {:+.0}", trim * 100.0), pal::TEXT, trim.abs() > 0.02));
-    let failed = def.has_engine && (0..def.engine_count).any(|i| !ac.engine_running(i));
+    // Engine-failure practice (K); real failures come from the systems below.
+    let failed = def.has_engine && (0..def.engine_count).any(|i| !ac.engine_running(i) && (sim.ctl.failed_engines & (1 << i) != 0 || !ac.sys.init));
     if failed {
         items.push(("ENG FAIL".into(), pal::RED, blink));
+    }
+    // Master warning / caution, then the warning and caution messages (systems/alerts.rs).
+    if ac.crashed.is_none() && ac.sys.init {
+        if ac.sys.master_warn {
+            items.insert(0, ("MASTER WARN".into(), if blink { pal::RED } else { Color32::from_rgb(150, 40, 40) }, true));
+        }
+        if ac.sys.master_caut {
+            items.insert(0, ("MASTER CAUT".into(), pal::AMBER, true));
+        }
+        for (t, lvl) in crate::systems::alerts::annunciator_labels(&ac.sys, def, ac, &sim.ctl).into_iter().take(4) {
+            let warning = lvl == crate::systems::alerts::Level::Warning;
+            items.push((t, if warning { pal::RED } else { pal::AMBER }, true));
+        }
     }
     if ac.stall_warning() {
         items.push(("STALL".into(), pal::RED, blink));
@@ -289,6 +341,8 @@ fn annunciators(p: &egui::Painter, screen: Rect, sim: &Sim, y: f32) -> f32 {
     if def.retractable_gear {
         let g = ac.gear_pos();
         let col = if g > 0.995 { pal::GREEN } else if g > 0.005 { pal::RED } else { Color32::from_gray(60) };
+        // The indicator lights need power (systems/).
+        let col = if ac.sys.init && ac.sys.power == crate::systems::Power::Off { Color32::from_gray(60) } else { col };
         for k in 0..3 {
             let c = Pos2::new(x + 12.0 + k as f32 * 15.0, r.center().y);
             p.circle_filled(c, 5.0, col);
@@ -611,6 +665,8 @@ fn warnings(p: &egui::Painter, screen: Rect, sim: &Sim) {
         p.text(Pos2::new(r.center().x, r.max.y - 18.0), Align2::CENTER_CENTER, "R  Restart      Esc  Menu", f_inst(12.0), pal::TEXT3);
     } else if sim.ac.stall_warning() && blink {
         chip(p, Pos2::new(screen.center().x, y), Align2::CENTER_CENTER, "STALL", f_inst_b(28.0), Color32::WHITE, Color32::from_rgb(200, 30, 30));
+    } else if let Some(fire) = crate::systems::alerts::alerts(&sim.ac.sys, def, &sim.ac, &sim.ctl).into_iter().find(|a| a.fire || a.smoke).filter(|_| blink) {
+        chip(p, Pos2::new(screen.center().x, y), Align2::CENTER_CENTER, &fire.title, f_inst_b(24.0), Color32::WHITE, Color32::from_rgb(200, 30, 30));
     } else if def.retractable_gear && sim.ac.gear_pos() < 0.99 && !sim.ac.on_ground && sim.ac.pos.y - sim.ground_y < 150.0 && sim.ac.vertical_speed() < -1.0 && sim.ac.airspeed() < def.vref_kt * 1.3 * KT && blink {
         chip(p, Pos2::new(screen.center().x, y), Align2::CENTER_CENTER, "GEAR NOT DOWN", f_inst_b(22.0), Color32::WHITE, Color32::from_rgb(200, 30, 30));
     }

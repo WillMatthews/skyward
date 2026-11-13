@@ -10,3 +10,10 @@ src/cockpit/mod.rs
 src/cockpit/channels.rs
 src/cockpit/displays.rs
 src/cockpit/tests.rs
+src/systems/mod.rs
+src/systems/alerts.rs
+src/systems/defs.rs
+src/systems/failures.rs
+src/systems/session.rs
+src/systems/tests.rs
+src/ui/failures.rs

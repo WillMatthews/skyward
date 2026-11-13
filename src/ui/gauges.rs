@@ -185,7 +185,8 @@ fn asi(p: &egui::Painter, c: Pos2, r: f32, sim: &Sim, unit: u8, ink: Color32) {
     if sim.ac.mach() > 0.45 {
         label(p, c + Vec2::new(0.0, r * 0.46), &format!("M {:.2}", sim.ac.mach()), r * 0.12, pal::AMBER);
     }
-    let ias = to_u(sim.ac.airspeed_kt());
+    // Indicated (pitot-static system, systems/).
+    let ias = to_u(sim.ac.sys.air_data(&sim.ac).ias_kt());
     if let Some(t) = sim.ap.ias.filter(|_| sim.ap.engaged) {
         let a = ang(to_u(t * 1.943_844));
         p.add(Shape::convex_polygon(vec![polar(c, r * 1.0, a - 0.05), polar(c, r * 1.0, a + 0.05), polar(c, r * 0.88, a)], pal::CYAN, Stroke::NONE));
@@ -197,8 +198,10 @@ fn asi(p: &egui::Painter, c: Pos2, r: f32, sim: &Sim, unit: u8, ink: Color32) {
 /// Attitude indicator.
 fn attitude(p: &egui::Painter, c: Pos2, r: f32, sim: &Sim, vintage: bool) {
     case(p, c, r);
-    let pitch = sim.ac.pitch().to_degrees();
-    let roll = sim.ac.roll();
+    // Vacuum gyro (spins down / tumbles: systems/).
+    let ad = sim.ac.sys.air_data(&sim.ac);
+    let pitch = ad.pitch.to_degrees();
+    let roll = ad.roll;
     let k = r / 32.0; // points per degree
     let up = Vec2::new(-roll.sin(), -roll.cos());
     let along = Vec2::new(roll.cos(), -roll.sin());
@@ -316,7 +319,8 @@ fn attitude(p: &egui::Painter, c: Pos2, r: f32, sim: &Sim, vintage: bool) {
 /// Altimeter (three pointers, pressure window). `metres` for gliders.
 fn altimeter(p: &egui::Painter, c: Pos2, r: f32, sim: &Sim, qnh_hpa: f32, metres: bool, ink: Color32) {
     case(p, c, r);
-    let alt = if metres { sim.ac.pos.y } else { sim.ac.pos.y * 3.280_84 };
+    let alt_m = sim.ac.sys.air_data(&sim.ac).alt;
+    let alt = if metres { alt_m } else { alt_m * 3.280_84 };
     let full = if metres { 1000.0 } else { 1000.0 };
     let a = |v: f32| v / 10.0 * TAU;
     ticks(p, c, r * 0.97, |v| v / 50.0 * TAU, 0.0, 49.0, 1.0, r * 0.07, 1.1, ink);
@@ -346,8 +350,8 @@ fn altimeter(p: &egui::Painter, c: Pos2, r: f32, sim: &Sim, qnh_hpa: f32, metres
 fn vsi(p: &egui::Painter, c: Pos2, r: f32, sim: &Sim, glider: Option<&Polar>, ink: Color32) {
     case(p, c, r);
     let (max, val) = match glider {
-        Some(_) => (5.0, sim.ac.vertical_speed()),
-        None => (2.0, sim.ac.vertical_speed() * 3.280_84 * 60.0 / 1000.0),
+        Some(_) => (5.0, sim.ac.sys.air_data(&sim.ac).vs),
+        None => (2.0, sim.ac.sys.air_data(&sim.ac).vs * 3.280_84 * 60.0 / 1000.0),
     };
     let span = 170f32.to_radians();
     let ang = |v: f32| -PI / 2.0 + (v.clamp(-max, max) / max) * span;
@@ -398,7 +402,8 @@ fn vsi(p: &egui::Painter, c: Pos2, r: f32, sim: &Sim, glider: Option<&Polar>, in
 /// Turn coordinator: banking aircraft for the turn rate (standard-rate marks) and a slip ball.
 fn turn_coordinator(p: &egui::Painter, c: Pos2, r: f32, sim: &Sim, ink: Color32) {
     case(p, c, r);
-    let rate = sim.ac.turn_rate().to_degrees(); // deg/s, + right
+    let ad = sim.ac.sys.air_data(&sim.ac);
+    let rate = ad.turn.to_degrees(); // deg/s, + right (electric gyro: systems/)
     let std = 3.0;
     let bank = (rate / std * 20f32.to_radians()).clamp(-0.6, 0.6);
     for s in [-1.0f32, 1.0] {
@@ -426,13 +431,19 @@ fn turn_coordinator(p: &egui::Painter, c: Pos2, r: f32, sim: &Sim, ink: Color32)
     p.line_segment([Pos2::new(tube.center().x + r * 0.11, tube.min.y), Pos2::new(tube.center().x + r * 0.11, tube.max.y)], Stroke::new(1.5, Color32::BLACK));
     let slip = (-sim.ac.slip() * 3.0).clamp(-1.0, 1.0);
     p.circle_filled(Pos2::new(tube.center().x + slip * r * 0.38, tube.center().y), r * 0.085, Color32::BLACK);
+    if ad.has(crate::systems::flag::TURN) {
+        // Power-off flag.
+        let f = Rect::from_center_size(c + Vec2::new(-r * 0.42, r * 0.18), Vec2::new(r * 0.32, r * 0.16));
+        p.rect_filled(f, 1.0, ARC_RED);
+        label_b(p, f.center(), "OFF", r * 0.11, Color32::WHITE);
+    }
     glass(p, c, r);
 }
 
 /// Heading indicator (directional gyro), with the AP heading bug.
 fn heading(p: &egui::Painter, c: Pos2, r: f32, sim: &Sim, ink: Color32) {
     case(p, c, r);
-    let hdg = sim.ac.heading();
+    let hdg = sim.ac.sys.air_data(&sim.ac).heading;
     for i in 0..72 {
         let deg = i as f32 * 5.0;
         let a = deg.to_radians() - hdg;

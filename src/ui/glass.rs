@@ -99,30 +99,91 @@ fn flight_director(sim: &Sim) -> Option<(f32, f32)> {
 
 /// Primary flight display in `r`.
 pub fn pfd(p: &egui::Painter, r: Rect, sim: &Sim, world: &World) {
+    pfd_unit(p, r, sim, world, false);
+}
+
+/// A dark (unpowered) screen.
+fn dark(p: &egui::Painter, s: Rect) {
+    p.rect_filled(s, 6, Color32::from_rgb(2, 3, 4));
+}
+
+/// The big red X of a display unit with no valid data.
+pub fn red_x(p: &egui::Painter, s: Rect) {
+    let st = Stroke::new((s.width() * 0.012).max(2.0), pal::RED);
+    let q = s.shrink(s.width() * 0.04);
+    p.line_segment([q.left_top(), q.right_bottom()], st);
+    p.line_segment([q.right_top(), q.left_bottom()], st);
+}
+
+/// A red failure flag ("ATT", "SPD", "ALT", "V/S", "HDG") centred in `r`.
+fn flag_box(p: &egui::Painter, c: Pos2, s: &str, u: f32) {
+    let rr = p.text(c, Align2::CENTER_CENTER, s, fib(3.6 * u), pal::RED);
+    p.rect_stroke(rr.expand2(Vec2::new(0.8 * u, 0.3 * u)), 0, Stroke::new(1.2, pal::RED), egui::StrokeKind::Outside);
+}
+
+/// PFD, or the standby instrument (`standby`: its own sensors, no red X / AHRS flags).
+pub fn pfd_unit(p: &egui::Painter, r: Rect, sim: &Sim, world: &World, standby: bool) {
+    use crate::systems::flag;
     let s = housing(p, r);
+    let sys = &sim.ac.sys;
+    if !sys.display_on(if standby { "isis" } else { "pfd" }) {
+        dark(p, s);
+        return;
+    }
+    if !standby && sys.pfd_red_x() {
+        red_x(p, s);
+        return;
+    }
     let p = &p.with_clip_rect(s);
     let u = s.width() / 100.0; // layout unit
-    let ac = &sim.ac;
     let def = sim.def();
-    let ias = ac.airspeed() / KT;
-    let alt_ft = ac.pos.y * FT;
+    // What the air-data / attitude sources indicate (systems/).
+    let mut ad = sys.air_data(&sim.ac);
+    if standby {
+        ad.flags &= !(flag::ATT | flag::HDG);
+        ad.pitch = sim.ac.pitch();
+        ad.roll = sim.ac.roll();
+        ad.heading = sim.ac.heading();
+    }
+    let ias = ad.ias / KT;
+    let alt_ft = ad.alt * FT;
     // --- FMA (top band)
     let fma = Rect::from_min_size(s.min, Vec2::new(s.width(), 9.0 * u));
     fma_band(p, fma, sim, u);
     // --- attitude
     let att = Rect::from_center_size(Pos2::new(s.min.x + 48.0 * u, s.min.y + 47.0 * u), Vec2::new(52.0 * u, 52.0 * u));
-    attitude(p, att, sim, u);
+    if ad.has(flag::ATT) {
+        flag_box(p, att.center(), "ATT", u);
+    } else {
+        attitude(p, att, sim, u, ad.pitch, ad.roll);
+    }
     // --- speed tape
     let st = Rect::from_min_max(Pos2::new(s.min.x + 3.0 * u, att.min.y - 2.0 * u), Pos2::new(s.min.x + 17.0 * u, att.max.y + 2.0 * u));
-    speed_tape(p, st, sim, ias, u);
+    if ad.has(flag::SPD) {
+        flag_box(p, st.center(), "SPD", u);
+    } else {
+        speed_tape(p, st, sim, ias, u);
+    }
     // --- altitude tape + VS
     let at = Rect::from_min_max(Pos2::new(s.min.x + 77.0 * u, att.min.y - 2.0 * u), Pos2::new(s.min.x + 90.0 * u, att.max.y + 2.0 * u));
     let vs = Rect::from_min_max(Pos2::new(s.min.x + 91.0 * u, att.min.y + 2.0 * u), Pos2::new(s.max.x - 1.0 * u, att.max.y - 2.0 * u));
-    vs_scale(p, vs, ac.vertical_speed() * FT * 60.0, u);
-    alt_tape(p, at, sim, alt_ft, u, world.wx.qnh_hpa);
+    if ad.has(flag::VS) {
+        flag_box(p, vs.center(), "V/S", u * 0.8);
+    } else {
+        vs_scale(p, vs, ad.vs * FT * 60.0, u);
+    }
+    if ad.has(flag::ALT) {
+        flag_box(p, at.center(), "ALT", u);
+    } else {
+        alt_tape(p, at, sim, alt_ft, u, world.wx.qnh_hpa);
+    }
     // --- heading tape
     let ht = Rect::from_min_max(Pos2::new(att.min.x, s.max.y - 13.0 * u), Pos2::new(att.max.x, s.max.y - 4.0 * u));
-    heading_tape(p, ht, sim, u);
+    if ad.has(flag::HDG) {
+        flag_box(p, ht.center(), "HDG", u);
+    } else {
+        heading_tape(p, ht, sim, u, ad.heading);
+    }
     let _ = def;
 }
 
@@ -181,10 +242,9 @@ fn fma_band(p: &egui::Painter, r: Rect, sim: &Sim, u: f32) {
     }
 }
 
-fn attitude(p: &egui::Painter, r: Rect, sim: &Sim, u: f32) {
+fn attitude(p: &egui::Painter, r: Rect, sim: &Sim, u: f32, pitch: f32, roll: f32) {
     let ac = &sim.ac;
-    let pitch = ac.pitch().to_degrees();
-    let roll = ac.roll();
+    let pitch = pitch.to_degrees();
     let ppd = r.height() / 32.0; // points per degree
     let c = r.center();
     let up = Vec2::new(-roll.sin(), -roll.cos());
@@ -452,10 +512,10 @@ fn vs_scale(p: &egui::Painter, r: Rect, fpm: f32, u: f32) {
     }
 }
 
-fn heading_tape(p: &egui::Painter, r: Rect, sim: &Sim, u: f32) {
+fn heading_tape(p: &egui::Painter, r: Rect, sim: &Sim, u: f32, heading: f32) {
     p.rect_filled(r, 0, TAPE_BG);
     let pc = p.with_clip_rect(r);
-    let hdg = sim.ac.heading().to_degrees().rem_euclid(360.0);
+    let hdg = heading.to_degrees().rem_euclid(360.0);
     let ppd = r.width() / 50.0;
     let c = r.center();
     let x = |d: f32| c.x + wrap_deg(d - hdg) * ppd;
@@ -498,6 +558,10 @@ pub const ND_RANGES_NM: [f32; 6] = [2.5, 5.0, 10.0, 20.0, 40.0, 80.0];
 #[allow(clippy::too_many_arguments)]
 pub fn nd(p: &egui::Painter, cv: &mut canvas::Frame, ppp: f32, r: Rect, sim: &Sim, world: &World, tiles: &Tiles, route: &[(String, glam::Vec2)]) {
     let s = housing(p, r);
+    if !sim.ac.sys.display_on("nd") {
+        dark(p, s);
+        return;
+    }
     let pc = p.with_clip_rect(s);
     let u = s.width() / 100.0;
     let ac = &sim.ac;
@@ -603,8 +667,21 @@ pub fn nd(p: &egui::Painter, cv: &mut canvas::Frame, ppp: f32, r: Rect, sim: &Si
 
 // ---------------------------------------------------------------- engine / warning display
 
+/// "-THR LEVER 1 ....... IDLE" (an ECAM action line, dotted to the value).
+fn ecam_line(action: &str, value: &str) -> String {
+    if value.is_empty() {
+        return format!("-{action}");
+    }
+    let n = 30usize.saturating_sub(action.chars().count() + value.chars().count() + 2).max(2);
+    format!("-{action} {} {value}", ".".repeat(n))
+}
+
 pub fn ewd(p: &egui::Painter, r: Rect, sim: &Sim) {
     let s = housing(p, r);
+    if !sim.ac.sys.display_on("ewd") {
+        dark(p, s);
+        return;
+    }
     let p = &p.with_clip_rect(s);
     let u = s.width() / 100.0;
     let def = sim.def();
@@ -714,8 +791,27 @@ pub fn ewd(p: &egui::Painter, r: Rect, sim: &Sim) {
     if ac.stall_warning() {
         memo.push(("STALL".into(), pal::RED));
     }
+    // ECAM / EICAS: warnings (red), cautions (amber) with the procedure
+    // lines still to do (cyan), advisories (systems/alerts.rs).
+    let alerts = crate::systems::alerts::alerts(&ac.sys, def, ac, &sim.ctl);
+    for a in &alerts {
+        use crate::systems::alerts::Level;
+        let col = match a.level {
+            Level::Warning => pal::RED,
+            Level::Caution => AMBER,
+            Level::Advisory => GREEN,
+        };
+        memo.push((a.title.clone(), col));
+        if a.level != Level::Advisory {
+            for l in a.lines.iter().filter(|l| !l.done).take(4) {
+                memo.push((ecam_line(&l.action, &l.value), CYAN));
+            }
+        }
+    }
     for i in 0..def.engine_count {
-        if !ac.engine_running(i) && def.has_engine {
+        let tag = format!("ENG {}", i + 1);
+        let listed = alerts.iter().any(|a| a.title.starts_with(&tag) || (def.engine_count == 1 && a.title.starts_with("ENG")));
+        if !ac.engine_running(i) && def.has_engine && !listed && (sim.ctl.failed_engines & (1 << i) != 0 || !ac.sys.init) {
             memo.push((format!("ENG {} FAIL", i + 1), AMBER));
         }
     }

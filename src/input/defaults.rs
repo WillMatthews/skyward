@@ -29,6 +29,7 @@ pub fn keyboard() -> Vec<(Key, Vec<K>)> {
         (Key::Gear, vec![K::KeyG]),
         (Key::LandingLights, vec![K::KeyL]),
         (Key::EngineFail, vec![K::KeyK]),
+        (Key::MasterAck, vec![K::Backquote]),
         (Key::ApToggle, vec![K::KeyZ]),
         (Key::ApHdgLeft, vec![K::Insert]),
         (Key::ApHdgRight, vec![K::Delete]),
@@ -55,6 +56,7 @@ pub fn keyboard() -> Vec<(Key, Vec<K>)> {
         (Key::MapZoomIn, vec![K::Period]),
         (Key::Instruments, vec![K::KeyU]),
         (Key::WeatherPanel, vec![K::KeyI]),
+        (Key::Failures, vec![K::KeyO, K::F2]),
         (Key::Mute, vec![K::KeyN]),
     ]
 }
