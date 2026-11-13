@@ -73,11 +73,18 @@ pub struct PartMap {
     pub planform: Vec<(f32, f32, f32, f32)>,
 }
 
+/// Assets loaded for flying, once per process (decoding the textures takes a moment).
+static CACHE: std::sync::Mutex<Vec<(String, Arc<AircraftAsset>)>> = std::sync::Mutex::new(Vec::new());
+
+/// The asset of an aircraft already loaded for flying, if any (e.g. for the
+/// parked fleet: no second decode of its textures).
+pub fn cached_asset(id: &str) -> Option<Arc<AircraftAsset>> {
+    CACHE.lock().unwrap().iter().find(|(k, _)| k == id).map(|(_, a)| a.clone())
+}
+
 /// Load the model for an aircraft id (see the table above).
 pub fn build(id: &str, def_eye: Vec3) -> AircraftModel {
-    // Loaded once per process (decoding the textures takes a moment).
-    static CACHE: std::sync::Mutex<Vec<(String, Arc<AircraftAsset>)>> = std::sync::Mutex::new(Vec::new());
-    let cached = CACHE.lock().unwrap().iter().find(|(k, _)| k == id).map(|(_, a)| a.clone());
+    let cached = cached_asset(id);
     let loaded = match cached {
         Some(a) => Ok(a),
         // The FPV quad is procedural (src/rotor/quad_model.rs).

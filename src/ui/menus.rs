@@ -239,8 +239,17 @@ pub fn main_menu(ui: &mut Ui, st: &mut UiState) {
     if button(ui, Rect::from_min_size(Pos2::new(tx, card.max.y - 46.0), Vec2::new(card.max.x - tx - 16.0, 36.0)), "flynow", "Fly", Btn::Primary, true).clicked() {
         st.actions.push(Action::Fly);
     }
-    p.text(Pos2::new(x, screen.max.y - 28.0), Align2::LEFT_BOTTOM, format!("{} · {} · {}", crate::hud::ATTRIBUTION, airports::CREDIT, "Weather: NOAA aviationweather.gov, Open-Meteo"), f_ui(11.0), pal::TEXT3);
+    p.text(Pos2::new(x, screen.max.y - 28.0), Align2::LEFT_BOTTOM, format!("{} · {} · {}", crate::hud::ATTRIBUTION, airports::CREDIT, WEATHER_CREDIT_SHORT), f_ui(11.0), pal::TEXT3);
 }
+
+/// Weather sources (the browser reads METARs through VATSIM's CORS-enabled
+/// mirror: aviationweather.gov sends no CORS headers).
+const WEATHER_CREDIT: &str = if crate::platform::WEB {
+    "METARs: national weather services via VATSIM's METAR service (metar.vatsim.net) · forecasts: Open-Meteo (CC BY 4.0)"
+} else {
+    "METARs: aviationweather.gov (NOAA) · forecasts: Open-Meteo (CC BY 4.0)"
+};
+const WEATHER_CREDIT_SHORT: &str = if crate::platform::WEB { "Weather: METARs via VATSIM, Open-Meteo" } else { "Weather: NOAA aviationweather.gov, Open-Meteo" };
 
 pub fn credits(ui: &mut Ui, st: &mut UiState) {
     let screen = ui.ctx().content_rect();
@@ -254,7 +263,7 @@ pub fn credits(ui: &mut Ui, st: &mut UiState) {
         ("Airports & runways", "OurAirports — public domain (ourairports.com/data)"),
         ("Navaids", "VOR / DME / NDB: OurAirports — public domain · ILS: synthetic, derived from the runway data (a few London ILS from public charts)"),
         ("ATC", "Frequencies: OurAirports — public domain · voices: Kokoro-82M (Apache-2.0), generated for Skyward"),
-        ("Weather", "METARs: aviationweather.gov (NOAA) · forecasts: Open-Meteo (CC BY 4.0)"),
+        ("Weather", WEATHER_CREDIT),
         ("Elevation", "Terrain Tiles on AWS (Mapzen / Tilezen: SRTM, GMTED2010, 3DEP, ETOPO1, EU-DEM and more)"),
         ("Aircraft & sounds", "FlightGear aircraft and recordings — GPL v2 / v2+ (per-aircraft credits in the source)"),
         ("Fonts", "Inter (Rasmus Andersson), JetBrains Mono, B612 (Airbus / Intactile / ENAC) — SIL Open Font License 1.1"),
