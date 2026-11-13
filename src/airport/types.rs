@@ -30,7 +30,7 @@ impl Type {
     }
 }
 
-pub const TYPES: [Type; 11] = [
+pub const TYPES: [Type; 15] = [
     Type { id: "meridian320", role: Role::Jet, span: 34.1, nose: 16.37, tail: -21.24, door: Some((10.6, 1.98, 3.4)) },
     Type { id: "meridian190", role: Role::Jet, span: 28.2, nose: 15.03, tail: -20.80, door: Some((11.2, 1.50, 2.3)) },
     Type { id: "aerolink", role: Role::Turboprop, span: 27.0, nose: 11.83, tail: -15.33, door: None },
@@ -46,6 +46,11 @@ pub const TYPES: [Type; 11] = [
     Type { id: "triple7", role: Role::Jet, span: 64.8, nose: 35.49, tail: -38.88, door: Some((28.2, 3.05, 5.3)) },
     Type { id: "crj700", role: Role::Jet, span: 23.3, nose: 15.59, tail: -16.88, door: Some((12.0, 1.35, 2.0)) },
     Type { id: "citationx", role: Role::Light, span: 19.6, nose: 9.70, tail: -12.24, door: None },
+    // Track H2b: flying-club / GA fields (see `layout::pick_type`).
+    Type { id: "cub", role: Role::Light, span: 10.71, nose: 1.94, tail: -4.99, door: None },
+    Type { id: "extra500", role: Role::Light, span: 11.63, nose: 3.71, tail: -6.41, door: None },
+    Type { id: "zlin", role: Role::Light, span: 8.64, nose: 1.98, tail: -4.55, door: None },
+    Type { id: "dc3", role: Role::Warbird, span: 29.33, nose: 5.97, tail: -13.71, door: None },
 ];
 
 pub const A320: u16 = 0;
@@ -59,6 +64,10 @@ pub const VULCAN: u16 = 7;
 pub const TRIPLE7: u16 = 8;
 pub const CRJ700: u16 = 9;
 pub const CITATIONX: u16 = 10;
+pub const CUB: u16 = 11;
+pub const EXTRA500: u16 = 12;
+pub const ZLIN: u16 = 13;
+pub const DC3: u16 = 14;
 
 pub fn get(i: u16) -> &'static Type {
     &TYPES[(i as usize).min(TYPES.len() - 1)]

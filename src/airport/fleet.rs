@@ -193,7 +193,12 @@ fn sample(w: u32, h: u32, rgba: &[u8], uv: [f32; 2]) -> [f32; 4] {
 
 pub fn build(ty: u16) -> Result<Model, String> {
     let t = types::get(ty);
-    let a = AircraftAsset::load(t.id)?;
+    // (Reuse the flown aircraft's asset if it is loaded: in the browser its
+    // textures were decoded once, in a worker.)
+    let a = match crate::models::cached_asset(t.id) {
+        Some(a) => a,
+        None => Arc::new(AircraftAsset::load(t.id)?),
+    };
     // Rest pose: gear down, cargo doors / ramps open (a C-5 kneels to
     // load), everything else neutral.
     let mut ch = vec![0.0f32; a.channels.len()];

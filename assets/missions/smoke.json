@@ -1,0 +1,36 @@
+{
+  "id": "smoke",
+  "title": "Smoke in the Cockpit",
+  "tagline": "Smoke from behind the panels at FL220 over the Channel.",
+  "aircraft": "meridian190",
+  "difficulty": 4,
+  "minutes": 12,
+  "history": "Inspired by in-flight fires that spread behind cockpit and cabin linings — a 1998 accident over the sea above all — after which the industry's guidance became: get the aircraft on the ground, as fast as possible.",
+  "situation": "Thirty miles south-west of Lydd at FL220, heading out over the Channel with 96 aboard. There's an acrid smell, then smoke from behind the overhead panel. Nobody can say where the fire is. You have about 16 minutes.",
+  "failures": ["Electrical smoke / fire behind the panels — it will not stay isolated", "The fire becomes uncontrollable in about 16 minutes"],
+  "tips": ["Turn back now: Lydd (runway 03/21, 1,505 m) is behind you", "Emergency descent: thrust idle, speed brakes, high speed", "Don't fly a long pattern — a short, steep, stable approach", "Declare MAYDAY (F4)"],
+  "target": { "airport": "EGMD", "runway": "21", "course_deg": 212.7, "length_m": 1505, "width_m": 32, "elev_ft": 13, "lat": 50.961601, "lon": 0.944669 },
+  "start": { "x_nm": 30, "y_nm": 0, "alt_ft": 22000, "hdg_rel": 0, "kias": 270, "flaps": 0, "gear_down": false },
+  "fuel_frac": 0.4,
+  "time": "09:30",
+  "date": "10-12",
+  "metar": "EGMD 120930Z 23014KT 9999 SCT025 15/09 Q1009",
+  "pax": 96,
+  "time_limit_s": 960,
+  "limit_text": "The fire burned through the cockpit before you could land.",
+  "clock_label": "Fire out of control in",
+  "par_s": 620,
+  "events": [
+    { "id": "smoke", "when": { "t": 8 }, "do": [ { "fail": "smoke" },
+      { "note": "Captain: Do you smell that? … Smoke. It's coming from the overhead." }, { "checkpoint": "Smoke" } ] },
+    { "id": "purser", "when": { "after": "smoke", "delay": 20 }, "do": [ { "pa": "purser" } ] },
+    { "id": "cabin", "when": { "after": "purser", "delay": 25 }, "do": [ { "note": "Purser: There's smoke in the forward cabin now, and the ceiling is hot to touch." }, { "pa": "divert" } ] },
+    { "id": "keep", "when": { "after": "smoke", "delay": 90 }, "do": [ { "fail": "smoke" }, { "note": "F/O: It's back — and thicker. Isolating didn't hold it." } ] },
+    { "id": "brace", "when": { "after": "smoke", "agl_below_ft": 300, "dist_below_nm": 3 }, "do": [ { "pa": "remain_seated" } ] }
+  ],
+  "objectives": [
+    { "id": "mayday", "text": "Declare MAYDAY", "kind": "player", "act": "mayday", "after": "smoke", "within_s": 120, "points": 40 },
+    { "id": "brakes", "text": "Start down: speed brakes within 90 s", "kind": "player", "act": "speedbrakes", "after": "smoke", "within_s": 90, "points": 30 },
+    { "id": "land", "text": "Land and stop before the fire takes hold", "kind": "land", "after": "smoke", "required": true, "points": 30 }
+  ]
+}

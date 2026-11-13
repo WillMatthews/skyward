@@ -1,0 +1,173 @@
+{
+ "id": "extra500",
+ "name": "Extra EA-500",
+ "fg_name": "extra500",
+ "model": "Models/extra500.xml",
+ "fdm": {
+  "jsbsim": "extra500.xml"
+ },
+ "eye_view": [
+  -0.34,
+  0.13,
+  -0.1
+ ],
+ "props": {
+  "controls/electric/battery-switch": 1,
+  "sim/multiplay/generic/bool[2]": 0,
+  "sim/rendering/hdr/hdr-enabled": 0,
+  "sim/rendering/shaders/skydome": 0,
+  "sim/rendering/rembrandt/enabled": 0,
+  "sim/rendering/shaders/lights": 0,
+  "extra500/instrumentation/EIP/state": 1,
+  "extra500/instrumentation/DIP/state": 1,
+  "extra500/instrumentation/Keypad/state": 1,
+  "extra500/instrumentation/Audiopanel/state": 1,
+  "extra500/instrumentation/FuelFlow/state": 1,
+  "extra500/instrumentation/Autopilot/state": 1,
+  "extra500/instrumentation/dmeInd/state": 1,
+  "extra500/instrumentation/IFD-LH/Backlight/state": 1,
+  "extra500/instrumentation/IFD-LH/Backlight/mode": 0,
+  "extra500/instrumentation/IFD-RH/Backlight/state": 1,
+  "extra500/instrumentation/IFD-RH/Backlight/mode": 0,
+  "extra500/instrumentation/Keypad/Backlight/state": 1,
+  "extra500/instrumentation/Keypad/Backlight/mode": 0
+ },
+ "channels": [
+  [
+   "^fdm/jsbsim/aircraft/engine/TRQ-perc$",
+   "eng0_tq_pct",
+   1.0,
+   0.0
+  ],
+  [
+   "^fdm/jsbsim/aircraft/engine/N1-par$",
+   "eng0_n1",
+   1.0,
+   0.0
+  ],
+  [
+   "^fdm/jsbsim/aircraft/engine/n2$",
+   "eng0_n2",
+   1.0,
+   0.0
+  ],
+  [
+   "^fdm/jsbsim/aircraft/engine/TOT-degC$",
+   "eng0_egt_c",
+   1.0,
+   0.0
+  ],
+  [
+   "^fdm/jsbsim/aircraft/engine/OT-degC$",
+   "eng0_oilt_c",
+   1.0,
+   0.0
+  ],
+  [
+   "^fdm/jsbsim/aircraft/engine/OP-psi$",
+   "eng0_oilp_psi",
+   1.0,
+   0.0
+  ],
+  [
+   "^fdm/jsbsim/aircraft/engine/FF-l_h$",
+   "eng0_ff_pph",
+   1.76,
+   0.0
+  ],
+  [
+   "^fdm/jsbsim/aircraft/engine/IAT-degC$",
+   "oat_c",
+   1.0,
+   0.0
+  ],
+  [
+   "^extra500/instrumentation/StbyALT/indicated-altitude-ft$",
+   "alt_ft",
+   1.0,
+   0.0
+  ],
+  [
+   "^extra500/instrumentation/StbyASI/indicated-airspeed-kt$",
+   "ias_kt",
+   1.0,
+   0.0
+  ],
+  [
+   "^extra500/instrumentation/StbyHSI/indicated-pitch-deg$",
+   "pitch_deg",
+   1.0,
+   0.0
+  ],
+  [
+   "^extra500/instrumentation/StbyHSI/indicated-roll-deg$",
+   "roll_deg",
+   1.0,
+   0.0
+  ],
+  [
+   "^extra500/instrumentation/FuelQuantity/tank\\[(\\d)\\]/level-norm$",
+   "tank{1}_norm",
+   1.0,
+   0.0
+  ],
+  [
+   "^fdm/jsbsim/fcs/aileron-cmd-tot-nc$",
+   "ctl_aileron",
+   1.0,
+   0.0
+  ],
+  [
+   "^surface-positions/(?:LH|RH)-flap-pos-norm$",
+   "flaps",
+   1.0,
+   0.0
+  ],
+  [
+   "^instrumentation/altimeter-backup/setting-hpa$",
+   "alt_set_hpa",
+   1.0,
+   0.0
+  ]
+ ],
+ "exclude_models": [
+  "Effects/",
+  "registration",
+  "shadow",
+  "jack",
+  "externalpower",
+  "people",
+  "suitcase",
+  "\\.ice\\.",
+  "Generic/marker",
+  "ice\\.xml"
+ ],
+ "interior_models": [
+  "interior",
+  "panels/",
+  "instruments/",
+  "Instrument"
+ ],
+ "light_models": [
+  "procedural_light",
+  "Effects/lights/",
+  "[Ll]ights?/.*(nav|beacon|strobe|landing|taxi)",
+  "/(nav|beacon|strobe)",
+  "(^|/)[Ll]ights?/(beacon|RedLight|GreenLight|StrobeLight)\\.xml$",
+  "procedural_(nav|strobe)"
+ ],
+ "max_tex": 2048,
+ "interior_max_tex": 1024,
+ "displays": [
+  [
+   "^IFD\\.Screen$",
+   "pfd",
+   "LH-IFD"
+  ],
+  [
+   "^IFD\\.Screen$",
+   "nd",
+   "RH-IFD"
+  ]
+ ]
+}

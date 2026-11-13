@@ -19,6 +19,7 @@
 //! *indicated* air data and attitude through [`Systems::air_data`].
 
 pub mod alerts;
+pub mod cabin;
 pub mod defs;
 pub mod failures;
 mod session;
@@ -298,6 +299,9 @@ pub struct Eng {
     pub oil_p_mul: f32,
     /// Fuel reaching the engine.
     pub fed: bool,
+    /// Seconds of negative g: a float carburettor runs dry (pistons), the
+    /// inverted oil system's endurance (aerobats). Recovers at positive g.
+    pub neg_g: f32,
 }
 
 /// Aural alerts (the audio director plays them).
@@ -428,6 +432,13 @@ pub struct Systems {
     rng: u64,
     /// What the flight model gets.
     pub fx: Effects,
+    // ---- cabin and mission-scripted degradations (Track M)
+    /// Cabin pressurisation, oxygen masks (cabin.rs).
+    pub cabin: cabin::Cabin,
+    /// The alternate (gravity) gear extension does not work either.
+    pub alt_gear_fail: bool,
+    /// Wheel-brake effectiveness 0..1 (anti-skid / partial brakes).
+    pub brake_factor: f32,
 }
 
 impl Default for Systems {
@@ -485,6 +496,9 @@ impl Default for Systems {
             time: 0.0,
             rng: 0x9E37_79B9_7F4A_7C15,
             fx: Effects::default(),
+            cabin: cabin::Cabin::default(),
+            alt_gear_fail: false,
+            brake_factor: 1.0,
         }
     }
 }
@@ -657,6 +671,13 @@ impl Systems {
                     let s = ac.surfaces();
                     self.jam[i.min(2)] = Some([s.elevator, s.aileron, s.rudder][i.min(2)]);
                 }
+                Kind::Decompression => {
+                    if !self.cabin.ready {
+                        self.cabin = cabin::Cabin::new(def, ac.pos.y);
+                    }
+                    self.cabin.decompress(3.0);
+                    self.note("Rapid decompression!");
+                }
                 Kind::BirdStrike => {
                     self.windscreen_cracked = true;
                     if self.n_eng > 0 {
@@ -684,6 +705,7 @@ impl Systems {
                     }
                 }
                 Kind::StaticBlock => self.static_p = None,
+                Kind::Decompression => self.cabin.leak_tau = None,
                 Kind::FlapAsym | Kind::FlapJam => {
                     if !self.fail.any_of(Kind::FlapAsym) && !self.fail.any_of(Kind::FlapJam) {
                         self.flap_lock = None;
@@ -728,6 +750,9 @@ impl Systems {
         self.ai = None;
         self.dg = None;
         self.windscreen_cracked = false;
+        self.cabin.leak_tau = None;
+        self.alt_gear_fail = false;
+        self.brake_factor = 1.0;
         self.fx = self.effects(def, Some(ac));
     }
 
@@ -1005,6 +1030,12 @@ impl Systems {
         } else {
             self.smoke = (self.smoke - dt / 45.0).max(0.0);
         }
+        // Cabin pressure (bleed from any running engine or the APU).
+        if !self.cabin.ready {
+            self.cabin = cabin::Cabin::new(def, alt);
+        }
+        let bleed = (0..n).any(|i| self.eng[i].run) || (sd.apu && self.apu > 0.95);
+        self.cabin.step(alt, bleed, dt);
         // Carburettor heat / prop overspeed / control jams are in the effects.
         self.fx = self.effects(def, Some(ac));
     }
@@ -1253,10 +1284,26 @@ impl Systems {
         }
         let e = &mut self.eng[i];
         e.agent_t += dt;
+        // Negative g (Track H2b): float carburettors starve; inverted fuel /
+        // oil systems keep going, the oil for a limited time.
+        if piston && (sd.neg_g_cutout || sd.inverted_system) {
+            if ac.g_load() < -0.15 && !ac.on_ground {
+                e.neg_g += dt;
+            } else {
+                e.neg_g = (e.neg_g - 3.0 * dt).max(0.0);
+            }
+        }
+        let inv_oil_out = sd.inverted_system && e.neg_g > defs::INVERTED_OIL_S;
         // Oil: a fire cooks it, a dead or starved engine loses pressure.
-        let t_add = 70.0 * e.fire + 25.0 * e.bird + 20.0 * e.overspeed;
+        let t_add = 70.0 * e.fire + 25.0 * e.bird + 20.0 * e.overspeed + if inv_oil_out { 25.0 } else { 0.0 };
         e.oil_t_add += (t_add - e.oil_t_add) * (dt / 20.0).min(1.0);
-        let p_mul = if e.dead { 0.0 } else { 1.0 - 0.3 * e.bird };
+        let p_mul = if e.dead {
+            0.0
+        } else if inv_oil_out {
+            0.15
+        } else {
+            1.0 - 0.3 * e.bird
+        };
         e.oil_p_mul += (p_mul - e.oil_p_mul) * (dt / 3.0).min(1.0);
         // Governor failure: overspeed builds in a couple of seconds.
         let os = if self.fail.has(Failure::new(Kind::PropOverspeed, i)) && e.run { 1.0 } else { 0.0 };
@@ -1375,6 +1422,11 @@ impl Systems {
             if e.carb_ice > 0.0 {
                 p *= 1.0 - 0.75 * e.carb_ice.powf(1.5);
             }
+            if sd.neg_g_cutout && e.neg_g > 0.4 {
+                // The float bowl has emptied: the engine coughs and dies away
+                // until positive g returns (it picks up again on its own).
+                p *= 0.04 + 0.04 * (self.time * 13.0 + i as f32).sin().max(0.0);
+            }
             if sd.carburettor && self.sw.carb_heat {
                 p *= 0.9;
             }
@@ -1407,7 +1459,11 @@ impl Systems {
         // Gear: hydraulics (or the uplocks) and the alternate extension.
         if def.retractable_gear {
             let normal = !self.fail.any_of(Kind::GearExtend) && (sd.gear_hyd == 0 || self.hyd_any(sd.gear_hyd));
-            if self.sw.alt_gear {
+            if self.sw.alt_gear && self.alt_gear_fail && !normal {
+                // The gravity extension jams too: the gear stays in the wells.
+                fx.gear_down = 0.0;
+                fx.gear_up = 0.0;
+            } else if self.sw.alt_gear {
                 fx.gear_down = def.gear_time.max(0.5) / sd.alt_gear_s.max(def.gear_time).max(1.0);
                 fx.gear_up = 0.0;
             } else if !normal {
@@ -1454,6 +1510,7 @@ impl Systems {
         } else {
             0.0
         };
+        fx.brakes *= self.brake_factor.clamp(0.0, 1.0);
         if sd.nws_hyd != 0 && !self.hyd_any(sd.nws_hyd) {
             fx.steering = 0.0;
         }

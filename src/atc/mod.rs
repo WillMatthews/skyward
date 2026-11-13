@@ -2177,6 +2177,10 @@ fn persons(def: &AircraftDef) -> u32 {
         "crj700" => 70,
         "citationx" => 10,
         "concorde" => 100,
+        "extra500" => 4,
+        "zlin" => 1,
+        "otter" => 6,
+        "dc3" => 24,
         _ => 2,
     }
 }

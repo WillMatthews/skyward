@@ -1,0 +1,265 @@
+{
+  "aerorp_body": [
+    -0.0,
+    -0.12207925319671631,
+    0.0008153915405273438
+  ],
+  "cg_structural_m": [
+    3.530815362930298,
+    0.0,
+    1.7720792293548584
+  ],
+  "chord_m": 1.3220000267028809,
+  "contacts": [
+    {
+      "brake_group": "NONE",
+      "damping_n_s_m": 34271.30078125,
+      "name": "NOSE",
+      "pos": [
+        -0.0,
+        -1.6260792016983032,
+        2.1158154010772705
+      ],
+      "retractable": 1.0,
+      "spring_n_m": 60000.0,
+      "static_friction": 0.699999988079071,
+      "steer_deg": 30.0,
+      "type": "BOGEY"
+    },
+    {
+      "brake_group": "LEFT",
+      "damping_n_s_m": 34271.30078125,
+      "name": "LEFT_MAIN",
+      "pos": [
+        1.059999942779541,
+        -1.5620791912078857,
+        -0.7021844387054443
+      ],
+      "retractable": 1.0,
+      "spring_n_m": 183000.0,
+      "static_friction": 0.699999988079071,
+      "steer_deg": 0.0,
+      "type": "BOGEY"
+    },
+    {
+      "brake_group": "RIGHT",
+      "damping_n_s_m": 34271.30078125,
+      "name": "RIGHT_MAIN",
+      "pos": [
+        -1.059999942779541,
+        -1.5620791912078857,
+        -0.7021844387054443
+      ],
+      "retractable": 1.0,
+      "spring_n_m": 183000.0,
+      "static_friction": 0.699999988079071,
+      "steer_deg": 0.0,
+      "type": "BOGEY"
+    },
+    {
+      "brake_group": "",
+      "damping_n_s_m": 2670.68359375,
+      "name": "LEFT_WING",
+      "pos": [
+        5.800000190734863,
+        0.4279208183288574,
+        -0.9691846370697021
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 26706.8359375,
+      "static_friction": 1.0,
+      "steer_deg": 0.0,
+      "type": "STRUCTURE"
+    },
+    {
+      "brake_group": "",
+      "damping_n_s_m": 26706.8359375,
+      "name": "MIDDLE_WING",
+      "pos": [
+        -0.0,
+        0.7129206657409668,
+        0.3808152675628662
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 267068.375,
+      "static_friction": 1.0,
+      "steer_deg": 0.0,
+      "type": "STRUCTURE"
+    },
+    {
+      "brake_group": "",
+      "damping_n_s_m": 2670.68359375,
+      "name": "RIGHT_WING",
+      "pos": [
+        -5.800000190734863,
+        0.4279208183288574,
+        -0.9691846370697021
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 26706.8359375,
+      "static_friction": 1.0,
+      "steer_deg": 0.0,
+      "type": "STRUCTURE"
+    },
+    {
+      "brake_group": "",
+      "damping_n_s_m": 14593.8994140625,
+      "name": "NOSE",
+      "pos": [
+        -0.0,
+        -0.7820792198181152,
+        2.530815362930298
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 145939.0,
+      "static_friction": 1.0,
+      "steer_deg": 0.0,
+      "type": "STRUCTURE"
+    },
+    {
+      "brake_group": "",
+      "damping_n_s_m": 14593.8994140625,
+      "name": "BELLEY",
+      "pos": [
+        -0.0,
+        -1.2020792961120605,
+        0.03081536293029785
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 145939.0,
+      "static_friction": 1.0,
+      "steer_deg": 0.0,
+      "type": "STRUCTURE"
+    },
+    {
+      "brake_group": "",
+      "damping_n_s_m": 2670.68359375,
+      "name": "VENTRAL FIN",
+      "pos": [
+        -0.0,
+        -0.5430792570114136,
+        -5.264184951782227
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 26706.8359375,
+      "static_friction": 1.0,
+      "steer_deg": 0.0,
+      "type": "STRUCTURE"
+    },
+    {
+      "brake_group": "",
+      "damping_n_s_m": 2670.68359375,
+      "name": "VERTICAL STABILIZER",
+      "pos": [
+        -0.0,
+        1.951920747756958,
+        -5.781185150146484
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 26706.8359375,
+      "static_friction": 1.0,
+      "steer_deg": 0.0,
+      "type": "STRUCTURE"
+    },
+    {
+      "brake_group": "NONE",
+      "damping_n_s_m": 34271.30078125,
+      "name": "FWD_JACK",
+      "pos": [
+        -0.0,
+        -1.8220791816711426,
+        0.9848153591156006
+      ],
+      "retractable": 1.0,
+      "spring_n_m": 400000.0,
+      "static_friction": 10.0,
+      "steer_deg": 0.0,
+      "type": "BOGEY"
+    },
+    {
+      "brake_group": "NONE",
+      "damping_n_s_m": 34271.30078125,
+      "name": "LEFT_JACK",
+      "pos": [
+        2.634999990463257,
+        -1.8720792531967163,
+        -0.5676844120025635
+      ],
+      "retractable": 1.0,
+      "spring_n_m": 183000.0,
+      "static_friction": 10.0,
+      "steer_deg": 0.0,
+      "type": "BOGEY"
+    },
+    {
+      "brake_group": "NONE",
+      "damping_n_s_m": 34271.30078125,
+      "name": "RIGHT_JACK",
+      "pos": [
+        -2.634999990463257,
+        -1.8720792531967163,
+        -0.5676844120025635
+      ],
+      "retractable": 1.0,
+      "spring_n_m": 183000.0,
+      "static_friction": 10.0,
+      "steer_deg": 0.0,
+      "type": "BOGEY"
+    },
+    {
+      "brake_group": "NONE",
+      "damping_n_s_m": 1.0,
+      "name": "PROP",
+      "pos": [
+        -0.0,
+        -1.3210792541503906,
+        3.142815351486206
+      ],
+      "retractable": 0.0,
+      "spring_n_m": 1.0,
+      "static_friction": 0.00009999999747378752,
+      "steer_deg": 0.0,
+      "type": "BOGEY"
+    }
+  ],
+  "empty_cg_structural_m": [
+    3.499500036239624,
+    0.0,
+    1.659000039100647
+  ],
+  "empty_kg": 1385.0,
+  "engines": [
+    {
+      "file": "turbine_250-B17F2",
+      "pos": [
+        -0.0,
+        -0.2734792232513428,
+        3.302215337753296
+      ],
+      "thruster": "propeller_MTV-5-1-D-C-F-R(A)",
+      "thruster_pos": [
+        -0.0,
+        -0.2734792232513428,
+        3.302215337753296
+      ]
+    }
+  ],
+  "eyepoint_body": [
+    0.6603999733924866,
+    0.2599208354949951,
+    2.377833127975464
+  ],
+  "fuel_initial_kg": 380.9499816894531,
+  "inertia_loaded_kg_m2": {
+    "pitch_iyy": 5647.3740234375,
+    "roll_ixx": 5239.5380859375,
+    "yaw_izz": 9511.060546875
+  },
+  "ixx": 3919.669921875,
+  "iyy": 5313.45068359375,
+  "izz": 8319.2998046875,
+  "loaded_kg": 1985.9500732421875,
+  "pointmass_kg": 220.0,
+  "wing_area_m2": 14.024999618530273,
+  "wingspan_m": 11.0
+}

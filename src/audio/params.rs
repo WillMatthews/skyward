@@ -74,6 +74,9 @@ pub enum SoundSet {
     V2500,
     /// Bristol Siddeley Olympus 301 turbojets (FGUK Vulcan recordings): the howl.
     Olympus,
+    /// Pratt & Whitney Wasp-family radials (FGAddon DC-3 R-1830 recordings;
+    /// also the Otter's R-1340).
+    Radial,
 }
 
 /// Static per-type sound parameters (sent with every frame; tiny).
@@ -239,10 +242,23 @@ pub enum Clip {
     Warning,
     Caution,
     Smoke,
+    /// Reactive windshear warning (missions).
+    Windshear,
+    /// Cabin PA announcements (missions, `assets/audio/pa`).
+    PaCrewStations,
+    PaBrace,
+    PaHeadsDown,
+    PaMasks,
+    PaEvacuate,
+    PaRemainSeated,
+    PaDivert,
+    PaLifejackets,
+    PaPurser,
+    PaEmergencyDescent,
 }
 
 impl Clip {
-    pub const ALL: [Clip; 30] = [
+    pub const ALL: [Clip; 41] = [
         Clip::Ft2500,
         Clip::Ft1000,
         Clip::Ft500,
@@ -273,9 +289,45 @@ impl Clip {
         Clip::Warning,
         Clip::Caution,
         Clip::Smoke,
+        Clip::Windshear,
+        Clip::PaCrewStations,
+        Clip::PaBrace,
+        Clip::PaHeadsDown,
+        Clip::PaMasks,
+        Clip::PaEvacuate,
+        Clip::PaRemainSeated,
+        Clip::PaDivert,
+        Clip::PaLifejackets,
+        Clip::PaPurser,
+        Clip::PaEmergencyDescent,
     ];
     pub fn index(self) -> usize {
         Clip::ALL.iter().position(|c| *c == self).unwrap_or(0)
+    }
+    /// Cabin PA clips: (mission id, clip, words).
+    pub const PA: [(&'static str, Clip, &'static str); 10] = [
+        ("crew_stations", Clip::PaCrewStations, "Cabin crew, at stations."),
+        ("brace", Clip::PaBrace, "This is the captain. Brace for impact."),
+        ("heads_down", Clip::PaHeadsDown, "Brace! Brace! Heads down! Stay down!"),
+        ("masks", Clip::PaMasks, "Put your own oxygen mask on first. Pull the mask towards you, place it over your nose and mouth, and breathe normally."),
+        ("evacuate", Clip::PaEvacuate, "Evacuate! Evacuate! Release your seatbelts and get out!"),
+        ("remain_seated", Clip::PaRemainSeated, "This is the captain. Remain seated. Remain seated."),
+        ("divert", Clip::PaDivert, "Ladies and gentlemen, this is the captain. We have a technical problem, and we are diverting to the nearest airport. Please remain seated with your seatbelts fastened."),
+        ("lifejackets", Clip::PaLifejackets, "Put on your life jacket now. Do not inflate it until you leave the aircraft."),
+        ("purser", Clip::PaPurser, "Purser to the flight deck, please. Purser to the flight deck."),
+        ("emergency_descent", Clip::PaEmergencyDescent, "Emergency descent! Emergency descent! Masks on, fasten your seatbelts!"),
+    ];
+    /// The PA clip with mission id `id`.
+    pub fn pa(id: &str) -> Option<Clip> {
+        Clip::PA.iter().find(|p| p.0 == id).map(|p| p.1)
+    }
+    /// Words of a PA clip (subtitles).
+    pub fn words(self) -> &'static str {
+        Clip::PA.iter().find(|p| p.1 == self).map(|p| p.2).unwrap_or("")
+    }
+    /// Spoken over the cabin PA (not the cockpit speaker).
+    pub fn is_pa(self) -> bool {
+        Clip::PA.iter().any(|p| p.1 == self)
     }
 }
 

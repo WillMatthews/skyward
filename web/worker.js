@@ -4,7 +4,8 @@
 // sky glow); the worker answers "ready", "db" (its airport database is in),
 // "tile" (the finished tile, encoded), "job" (data undefined if it failed)
 // or "error".
-import init, { skyward_worker_init, skyward_worker_build, skyward_worker_job } from "./pkg/skyward.js";
+// (scripts/web-build.sh fills in the content-hashed module name.)
+import init, { skyward_worker_init, skyward_worker_build, skyward_worker_job } from "./pkg/__GLUE__";
 
 let ready = null;
 self.onmessage = async (e) => {

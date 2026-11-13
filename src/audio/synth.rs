@@ -292,6 +292,8 @@ pub struct Synth {
     /// Engine voices' share of exterior mix in the interior path.
     ife: [f32; MAX_ENG],
     speaker: Speaker,
+    /// The cabin PA (missions): its own channel, under the cockpit voices.
+    pa: Speaker,
     /// COM 1 / COM 2 receivers (ATC, ATIS).
     radio: super::radio::Radio,
     fdn: Fdn,
@@ -351,6 +353,7 @@ impl Synth {
             prev_mach: 0.0,
             ife: [1.0; MAX_ENG],
             speaker: Speaker::new(sr),
+            pa: Speaker::new(sr),
             radio: super::radio::Radio::new(sr),
             fdn: Fdn::new(sr),
             world_lp: OnePole::new(700.0, sr),
@@ -521,6 +524,7 @@ impl Synth {
                 }
             }
             Event::Crash { .. } | Event::Impact { .. } | Event::Separation { .. } | Event::Explosion { .. } | Event::Scrape { .. } | Event::Fire { .. } => {}
+            Event::Speak(c) if c.is_pa() => self.pa.play(c),
             Event::Speak(c) => speaker.play(c),
             Event::Radio(id) => self.radio.start(id),
             Event::RadioCut(ch) => self.radio.cut(ch),
@@ -948,7 +952,7 @@ impl Synth {
         let amb_g = 1.0 - 0.8 * ins;
         lis.0 += al * amb_g;
         lis.1 += ar * amb_g;
-        let voice = self.speaker.tick();
+        let voice = self.speaker.tick() + 0.7 * self.pa.tick();
         let com = self.radio.tick();
         let duck = (1.0 - 0.42 * self.speaker.active) * (1.0 - 0.3 * self.radio.active);
 

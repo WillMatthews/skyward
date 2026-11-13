@@ -316,7 +316,7 @@ pub mod web {
 
     async fn load((z, x, y): Key) -> Result<DemTile, String> {
         let url = format!("{URL}/{z}/{x}/{y}.png");
-        let r = crate::platform::web::fetch(&url, Duration::from_secs(25)).await?;
+        let r = crate::platform::web::fetch_cached(&url, Duration::from_secs(25)).await?;
         match r.status {
             200..=299 => decode(&r.body),
             // No tile: sea level.

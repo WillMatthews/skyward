@@ -11,7 +11,7 @@ use glam::{Vec2, Vec3};
 
 /// Minimum live cockpit instruments per type (needles + flags + drums +
 /// display screens), from the current imports with some headroom.
-const MIN_LIVE: [(&str, usize); 14] = [
+const MIN_LIVE: [(&str, usize); 19] = [
     ("kestrel", 50),
     ("swift", 18),
     ("peregrine", 20),
@@ -26,6 +26,12 @@ const MIN_LIVE: [(&str, usize); 14] = [
     ("crj700", 20),
     ("citationx", 50),
     ("concorde", 75),
+    // Track H2b.
+    ("extra500", 60),
+    ("cub", 14),
+    ("zlin", 14),
+    ("otter", 26),
+    ("dc3", 28),
 ];
 
 /// Channels computed in `models.rs` (controls, surfaces, gear, lights, engines' basics).

@@ -9,8 +9,8 @@
 //! compiled module) the same work runs on the page: async downloads, builds
 //! from `try_recv` as many per frame as the frame budget allows
 //! (platform::web::may_work) — at least one. A build that read a DEM tile
-//! still in flight is redone once it has arrived. Downloads are cached by
-//! the browser's HTTP cache.
+//! still in flight is redone once it has arrived. Tile downloads are kept in
+//! Cache Storage across visits (platform::web::fetch_cached).
 
 use super::{TILEJSON_URL, TileResult, gunzip_if_needed};
 use crate::osm::TileId;
@@ -81,6 +81,7 @@ pub struct Pool {
 impl Pool {
     pub fn new(workers: usize) -> Pool {
         let st = Rc::new(RefCell::new(St::default()));
+        web::trim_tile_cache();
         start_workers(&st, workers);
         if !st.borrow().workers.is_empty() {
             let weak = Rc::downgrade(&st);
@@ -202,8 +203,10 @@ fn start_workers(st: &Rc<RefCell<St>>, n: usize) {
     let n = n.min(cpus.saturating_sub(1).max(1)).min(3);
     let opts = web_sys::WorkerOptions::new();
     opts.set_type(web_sys::WorkerType::Module);
+    // The build names the script by its content hash (index.html says which).
+    let url = js_sys::Reflect::get(&window, &JsValue::from_str("skywardWorker")).ok().and_then(|v| v.as_string()).unwrap_or_else(|| "worker.js".into());
     for i in 0..n {
-        let w = match web_sys::Worker::new_with_options("worker.js", &opts) {
+        let w = match web_sys::Worker::new_with_options(&url, &opts) {
             Ok(w) => w,
             Err(e) => {
                 web::log(&format!("tiles: no workers ({e:?}); building on the page"));
@@ -300,6 +303,16 @@ pub fn skyward_worker_job(kind: String, data: &[u8]) -> Option<js_sys::Uint8Arra
             let (src, (eye, haze)): (Vec<crate::lights::sky::GlowSource>, (glam::Vec3, f32)) = wire::decode(data).ok()?;
             wire::encode(&crate::lights::sky::skyglow(&src, eye, haze))
         }
+        // An image (thumbnails) / an aircraft texture with its mip chain
+        // (platform::web::preload_dir).
+        "image" => web::decode_image_job(data)?,
+        "texture" => web::decode_texture_job(data)?,
+        // A departure / overview map tile (ui/overview.rs).
+        "overview" => crate::ui::overview::web::decode_job(data)?,
+        // An engine / cockpit sound sample (audio/samples.rs).
+        "sample" => crate::audio::samples::decode_job(data)?,
+        // An ATC voice (audio/radio.rs).
+        "radio" => crate::audio::radio::decode_job(data)?,
         _ => return None,
     };
     Some(js_sys::Uint8Array::from(&out[..]))
@@ -480,7 +493,7 @@ async fn fetch_template() -> Result<String, String> {
 
 async fn fetch_url(template: &str, id: TileId) -> Result<(Vec<u8>, usize), String> {
     let url = template.replace("{z}", &id.z.to_string()).replace("{x}", &id.x.to_string()).replace("{y}", &id.y.to_string());
-    let r = web::fetch(&url, Duration::from_secs(25)).await?;
+    let r = web::fetch_cached(&url, Duration::from_secs(25)).await?;
     match r.status {
         // No data here (open ocean etc.): an empty tile is a valid answer.
         204 | 404 => Ok((Vec::new(), 0)),

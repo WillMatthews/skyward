@@ -8,6 +8,7 @@
 //!                     [--realtime [--warp N]]   (stream + render in real time, straight & level, report timings)
 //!                     [--gear up|down] [--flaps N] [--spoilers F] [--reverse] [--fail BITS] [--ap] [--fps HZ]   (setup / test knobs)
 //! Systems:    --fail pitot,vacuum,fire2@30,... (names, optional @seconds to arm) [--cold-dark] [--panel failures|armed|systems]
+//! Missions:   skyward --mission river|v1|decompression|... [--mission-bot]   (airline emergencies; --menu-screen missions|briefing|debrief)
 //! Auto flight: skyward [--bot | --watch] ...        (hand the aircraft to the AI pilot; --watch adds the cinematic camera)
 //! Soak test:  skyward --shot out.png --bot --soak --seconds 1800 [--warp 8] [--shot-every 300] [--weather scattered]
 //! Weather:    live METAR + real local time by default; --no-live, --metar "EGLC 121450Z 22012KT 3000 RA BKN008 09/08 Q1002", --time HH.MM, --date MM-DD, --weather clear|few|scattered|broken|overcast
@@ -35,6 +36,7 @@ mod gfx_aircraft;
 mod hud;
 mod jsbsim;
 mod lights;
+mod missions;
 mod models;
 mod mvt;
 mod osm;
@@ -49,6 +51,7 @@ mod terrain;
 mod landmarks;
 mod tiles;
 mod vfx;
+mod water;
 mod ui;
 mod weather;
 mod world;
@@ -153,6 +156,9 @@ struct Args {
     vsync: Option<bool>,
     /// Location given on the command line (skip the saved last flight).
     location_given: bool,
+    /// Airline-emergency mission to fly (missions/), and fly it with the scripted pilot.
+    mission: Option<String>,
+    mission_bot: bool,
 }
 
 fn parse_vec3(s: &str) -> Option<Vec3> {
@@ -256,6 +262,8 @@ fn parse_args_from(argv: Vec<String>) -> Args {
         audio_until: None,
         vsync: None,
         location_given: false,
+        mission: None,
+        mission_bot: false,
     };
     let mut i = 0;
     let next = |i: &mut usize| -> String {
@@ -343,6 +351,8 @@ fn parse_args_from(argv: Vec<String>) -> Args {
             "--audio-script" => a.audio_script = next(&mut i),
             "--audio-until" => a.audio_until = Some(next(&mut i)),
             "--no-hud" => a.no_hud = true,
+            "--mission" => a.mission = Some(next(&mut i)),
+            "--mission-bot" => a.mission_bot = true,
             "--hud" => {
                 a.hud_mode = match next(&mut i).as_str() {
                     "minimal" => Some(ui::settings::HudMode::Minimal),
@@ -383,16 +393,56 @@ fn parse_args_from(argv: Vec<String>) -> Args {
             "--map-zoom" => a.map_zoom = next(&mut i).parse().ok(),
             "--radius-km" => a.radius = next(&mut i).parse::<f32>().ok().map(|k| k * 1000.0),
             "-h" | "--help" => {
-                println!("{}", include_str!("main.rs").lines().take(14).collect::<Vec<_>>().join("\n"));
+                println!("{}", include_str!("main.rs").lines().take(17).collect::<Vec<_>>().join("\n"));
                 std::process::exit(0);
             }
             other => eprintln!("ignoring unknown argument {other}"),
         }
         i += 1;
     }
+    if let Some(id) = a.mission.clone() {
+        match missions::defs::by_id(&id) {
+            Some(m) => a = args_for_mission(&a, m),
+            None => {
+                eprintln!("unknown mission {id} (missions: {})", missions::defs::all().iter().map(|m| m.id.as_str()).collect::<Vec<_>>().join(", "));
+                a.mission = None;
+            }
+        }
+    }
     if let Some(s) = &a.start_at {
         a.start = s.as_start();
     }
+    a
+}
+
+/// Arguments for flying mission `m`: its aircraft, the start (scenery around
+/// it), conditions (time, date, METAR, no live weather).
+fn args_for_mission(base: &Args, m: &missions::defs::Mission) -> Args {
+    let mut a = base.clone();
+    a.mission = Some(m.id.clone());
+    a.aircraft = m.aircraft_index().unwrap_or(0);
+    a.aircraft_given = true;
+    let (lat, lon) = missions::start_latlon(m, (m.target.lat, m.target.lon));
+    a.lat = lat;
+    a.lon = lon;
+    a.location_given = true;
+    a.airport = None;
+    a.airport_ident = Some(m.target.airport.clone());
+    a.start_at = Some(if m.start.on_runway {
+        startpos::Spec::Runway(m.target.runway.clone())
+    } else {
+        startpos::Spec::Air { lat, lon, alt_m: m.start.alt_ft * 0.3048, hdg: (m.target.course_deg + m.start.hdg_rel).rem_euclid(360.0) }
+    });
+    a.start = a.start_at.as_ref().map(|s| s.as_start()).unwrap_or(Start::Runway);
+    a.live = false;
+    a.live_given = true;
+    a.hours = Some(m.hours);
+    a.day_of_year = Some(m.day);
+    a.metar = (!m.metar.is_empty()).then(|| m.metar.clone());
+    a.weather = None;
+    a.bot = false;
+    a.watch = false;
+    a.heading = None;
     a
 }
 
@@ -534,6 +584,10 @@ impl Session {
                     }
                     if let Some(h) = args.heading {
                         sim.set_heading(h.to_radians());
+                    }
+                    // An airline-emergency mission takes the start over (missions/).
+                    if let Some(id) = &args.mission {
+                        sim.begin_mission(id, args.mission_bot);
                     }
                     sim.hours = args.hours.unwrap_or(sim.hours);
                     sim.day_of_year = args.day_of_year.unwrap_or(sim.day_of_year);
@@ -1040,6 +1094,19 @@ fn render_thumbs(gpu: &Gpu, renderer: &mut Renderer, ui: &mut Ui, s: &Session, f
         for c in px.chunks_mut(4) {
             c[3] = 255;
         }
+        // `SKYWARD_THUMBS_OUT=web/thumbs`: also write them as JPEGs (the
+        // browser build ships these instead of downloading every aircraft).
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(dir) = std::env::var_os("SKYWARD_THUMBS_OUT") {
+            let rgb: Vec<u8> = px.chunks(4).flat_map(|c| [c[0], c[1], c[2]]).collect();
+            let path = std::path::Path::new(&dir).join(format!("{}.jpg", def.id));
+            let r = std::fs::File::create(&path).map_err(|e| e.to_string()).and_then(|f| {
+                image::codecs::jpeg::JpegEncoder::new_with_quality(std::io::BufWriter::new(f), 82).encode(&rgb, w, h, image::ExtendedColorType::Rgb8).map_err(|e| e.to_string())
+            });
+            if let Err(e) = r {
+                eprintln!("thumbnail {}: {e}", path.display());
+            }
+        }
         let img = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &px);
         let handle = ui.ctx.load_texture(format!("thumb_{}", def.id), img, egui::TextureOptions::LINEAR);
         ui.st.thumbs.insert(def.id, handle.id());
@@ -1201,6 +1268,16 @@ fn headless(args: Args) -> Result<(), String> {
         ui.st.controls_page = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
         ui.st.controls_axis = it.next().and_then(input::AxisAction::from_id).map(|a| (a, 0));
     }
+    // Missions: the selected card / briefing, and the HUD of the one being flown.
+    if let Some(id) = &args.mission {
+        ui.st.missions.sel = missions::defs::all().iter().position(|m| &m.id == id).unwrap_or(0);
+        ui.st.missions.active = Some(id.clone());
+        ui.st.missions.bot = args.mission_bot;
+        // (The weather panel makes room for the mission panel: I shows it.)
+        ui.st.show_wx = false;
+        // (Captures never touch the player's saved records.)
+        ui.st.missions.records = Some(Default::default());
+    }
     // Aircraft-screen screenshots: SKYWARD_AIRCRAFT_GROUP=light|warbird|jet|airliner|military|rotor.
     ui.st.aircraft_group = std::env::var("SKYWARD_AIRCRAFT_GROUP").ok().and_then(|g| ui::menus::Group::parse(&g));
     let custom = args.start_at.clone().map(|spec| startpos::CustomStart { airport: ui.st.plan.airport.clone(), spec });
@@ -1338,6 +1415,17 @@ fn headless(args: Args) -> Result<(), String> {
         }
     }
 
+    // Missions: the outcome (and the debrief screen when asked for).
+    if let Some(run) = s.sim.as_ref().and_then(|x| x.mission.as_ref()) {
+        match &run.end {
+            Some(d) => {
+                eprintln!("mission {}: {} — {} ({:.0} points, {}, {:?}) after {:.0} s", run.m.id, d.headline, d.reason, d.score.total, d.score.grade, d.score.medal, d.time_s);
+                let cp = s.sim.as_ref().and_then(|x| x.mission_checkpoint.as_ref()).map(|c| c.name.clone());
+                ui.st.missions.last = Some((run.m.id.clone(), d.clone(), false, cp));
+            }
+            None => eprintln!("mission {}: running at {:.0} s", run.m.id, run.t),
+        }
+    }
     // Wait for the scenery around the final camera to finish streaming.
     s.follow();
     let focus = match ov {
@@ -1402,7 +1490,7 @@ fn headless(args: Args) -> Result<(), String> {
         rebase_check(&gpu, &mut renderer, &mut ui, &mut s, &tex, &view, w, h, &raw, &path, ov)?;
     }
     // Menu screens: thumbnails, the departure map's tiles and METAR.
-    if matches!(ui.st.screen, Screen::Aircraft | Screen::Main) {
+    if matches!(ui.st.screen, Screen::Aircraft | Screen::Main | Screen::Missions | Screen::Briefing) {
         render_thumbs(&gpu, &mut renderer, &mut ui, &s, format);
     }
     if matches!(ui.st.screen, Screen::Departure | Screen::Conditions | Screen::Loading) || (ui.st.screen == Screen::Main && s.sim.is_none()) {
@@ -2368,7 +2456,18 @@ impl App {
         } else {
             args2
         };
-        ui.st.screen = if self.args.no_menu { Screen::Loading } else { Screen::Main };
+        // `--mission ID`: straight into it (its own start and conditions).
+        let (args2, custom) = match &self.args.mission {
+            Some(id) => {
+                ui.st.missions.active = Some(id.clone());
+                ui.st.missions.bot = self.args.mission_bot;
+                ui.st.show_wx = false;
+                let c = self.args.start_at.clone().map(|spec| startpos::CustomStart { airport: ui.st.plan.airport.clone(), spec });
+                (self.args.clone(), c)
+            }
+            None => (args2, custom),
+        };
+        ui.st.screen = if self.args.no_menu || self.args.mission.is_some() { Screen::Loading } else { Screen::Main };
         let audio = audio::Audio::new(ui.st.settings.sound.muted);
         ui.audio_status = audio.status().to_string();
         ui.st.audio_status = ui.audio_status.clone();
@@ -2566,7 +2665,10 @@ impl App {
             return;
         }
         remember_plan(&mut r.ui.st);
-        let (args2, custom) = args_for_plan(&self.args, &r.ui.st);
+        let (mut args2, custom) = args_for_plan(&self.args, &r.ui.st);
+        // A free flight: no mission.
+        args2.mission = None;
+        r.ui.st.missions.active = None;
         // Same departure area: keep the loaded world, just re-place / re-select.
         let reuse = r.session.as_ref().is_some_and(|s| {
             let home = s.world.home;
@@ -2591,6 +2693,9 @@ impl App {
             }
             if let Some(sim) = s.sim.as_mut() {
                 let before = Some(sim.ac.pos);
+                sim.mission = None;
+                sim.mission_pilot = None;
+                sim.tenders = None;
                 sim.custom_start = custom;
                 sim.select(&s.world, args2.aircraft, args2.start, args2.watch);
                 if !args2.live {
@@ -2609,6 +2714,30 @@ impl App {
             r.session = Some(new);
             r.ui.st.go(Screen::Loading);
         }
+        r.input.held.clear();
+        r.input.pressed.clear();
+    }
+
+    /// Fly the mission chosen in the briefing (missions/): a new session at its start.
+    fn start_mission(&mut self) {
+        let Some(r) = self.run.as_mut() else { return };
+        let Some(m) = r.ui.st.missions.pending.take().and_then(|id| missions::defs::by_id(&id)) else { return };
+        let args2 = args_for_mission(&self.args, m);
+        r.ui.st.missions.active = Some(m.id.clone());
+        r.ui.st.show_wx = false;
+        r.ui.st.plan.aircraft = args2.aircraft;
+        r.ui.st.plan.airport = m.target.airport.clone();
+        if let Some(spec) = &args2.start_at {
+            r.ui.st.plan.spec = spec.clone();
+        }
+        // Browser: the aircraft downloads first (the loading screen shows it).
+        let _ = aircraft_assets(args2.aircraft);
+        let custom = args2.start_at.clone().map(|spec| startpos::CustomStart { airport: m.target.airport.clone(), spec });
+        let mut new = Session::new(&args2, r.ui.st.db.clone(), custom);
+        let old = r.session.take();
+        replace_session(old, &mut new, &mut r.renderer, &mut r.ui);
+        r.session = Some(new);
+        r.ui.st.go(Screen::Loading);
         r.input.held.clear();
         r.input.pressed.clear();
     }
@@ -2690,6 +2819,21 @@ impl App {
                 let budget = if notice.is_some() { None } else { Some(UPLOAD_BUDGET) };
                 sync_gpu(s, &mut r.renderer, &mut r.ui, &r.gpu, budget);
                 if let Some(sim) = s.sim.as_mut() {
+                    // A mission has ended: the debrief (and the best result kept) a few seconds later.
+                    if r.ui.st.screen == Screen::Flying && sim.mission_over_for().is_some_and(|t| t > 3.5) {
+                        if let Some(run) = sim.mission.as_ref() {
+                            if let Some(d) = run.end.clone() {
+                                let id = run.m.id.clone();
+                                let best = !r.ui.st.missions.bot && r.ui.st.missions.records().record(&id, &d);
+                                if !r.ui.st.missions.bot {
+                                    r.ui.st.missions.records().save();
+                                }
+                                let cp = sim.mission_checkpoint.as_ref().map(|c| c.name.clone());
+                                r.ui.st.missions.last = Some((id, d, best, cp));
+                                r.ui.st.go(Screen::Debrief);
+                            }
+                        }
+                    }
                     if let Some((msg, _)) = sim.note.take() {
                         let kind = if msg.contains("too short") || msg.contains("tight") { ui::toast::Kind::Warn } else { ui::toast::Kind::Info };
                         r.ui.st.toasts.push(kind, msg, "", 7.0);
@@ -2720,9 +2864,23 @@ impl App {
         let notice = notice.map(|n| if r.ui.st.screen == Screen::Loading { loading_text(&r.ui.st, &n) } else { n });
         // Thumbnails for the aircraft cards, once there is scenery to render them over.
         // (Not in the browser: it would download every aircraft.)
-        if !platform::WEB && matches!(r.ui.st.screen, Screen::Aircraft | Screen::Main) && r.ui.thumbs.is_empty() {
+        if !platform::WEB && matches!(r.ui.st.screen, Screen::Aircraft | Screen::Main | Screen::Missions | Screen::Briefing) && r.ui.thumbs.is_empty() {
             if let Some(s) = r.session.as_ref().filter(|s| s.sim.is_some()) {
                 render_thumbs(&r.gpu, &mut r.renderer, &mut r.ui, s, r.format);
+            }
+        }
+        // (The browser loads pre-rendered ones: platform::web::thumbs_start.)
+        #[cfg(target_arch = "wasm32")]
+        {
+            if matches!(r.ui.st.screen, Screen::Aircraft | Screen::Main) {
+                platform::web::thumbs_start(&r.ui.st.defs);
+            }
+            for (id, w, h, px) in platform::web::thumbs_take() {
+                let Some(def) = r.ui.st.defs.iter().find(|d| d.id == id) else { continue };
+                let img = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &px);
+                let handle = r.ui.ctx.load_texture(format!("thumb_{id}"), img, egui::TextureOptions::LINEAR);
+                r.ui.st.thumbs.insert(def.id, handle.id());
+                r.ui.thumbs.push(handle);
             }
         }
         #[cfg(target_arch = "wasm32")]
@@ -2797,7 +2955,24 @@ impl App {
         for a in actions {
             let Some(r) = self.run.as_mut() else { return };
             match a {
-                Action::Goto(s) => r.ui.st.go(s),
+                Action::Goto(s) => {
+                    // Leaving a mission for the menus ends it.
+                    if matches!(s, Screen::Missions | Screen::Main) && r.ui.st.missions.active.take().is_some() {
+                        if let Some(sim) = r.session.as_mut().and_then(|x| x.sim.as_mut()) {
+                            sim.mission = None;
+                            sim.mission_pilot = None;
+                            sim.tenders = None;
+                        }
+                    }
+                    r.ui.st.go(s)
+                }
+                Action::StartMission => self.start_mission(),
+                Action::RetryCheckpoint => {
+                    if let Some(sim) = r.session.as_mut().and_then(|x| x.sim.as_mut()) {
+                        sim.mission_retry_checkpoint();
+                    }
+                    r.ui.st.go(Screen::Flying);
+                }
                 Action::Back => {
                     let b = r.ui.st.back_to;
                     r.ui.st.go(b);

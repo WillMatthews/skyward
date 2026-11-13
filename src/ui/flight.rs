@@ -154,6 +154,10 @@ pub fn draw(ctx: &egui::Context, st: &mut UiState, sim: &mut Sim, world: &World,
     if mode != HudMode::Off {
         y = weather_panel(ctx, st, sim, world, Pos2::new(sp::L, y));
     }
+    // ---- mission: objectives, clock, crew / cabin / ATC lines (ui/missions.rs)
+    if sim.mission.is_some() {
+        y = super::missions::hud(ctx, st, sim, Pos2::new(sp::L, y + sp::S));
+    }
     let _ = y;
     // ---- top centre: auto flight / AP strip + toasts
     let mut ty = sp::M;
@@ -308,21 +312,40 @@ fn annunciators(p: &egui::Painter, screen: Rect, sim: &Sim, y: f32) -> f32 {
     let mut items: Vec<(String, Color32, bool)> = Vec::new(); // text, colour, lit
     if def.has_engine {
         let t = sim.ctl.throttle * 100.0;
-        let lab = if sim.ctl.reverse { format!("REV {t:.0}%") } else { format!("THR {t:.0}%") };
+        let n = crate::missions::n_eng(def);
+        let lab = match sim.ctl.engine_throttle {
+            // Split throttles (differential thrust): every lever.
+            Some(l) if n > 1 && !sim.ctl.reverse => format!("THR {}", l.iter().take(n).map(|x| format!("{:.0}", x * 100.0)).collect::<Vec<_>>().join("/")),
+            _ if sim.ctl.reverse => format!("REV {t:.0}%"),
+            _ => format!("THR {t:.0}%"),
+        };
         items.push((lab, if sim.ctl.reverse { pal::AMBER } else { pal::TEXT }, true));
     }
-    let flap = match def.flap_label {
-        "Airbrakes" => format!("AIRBRAKE {}", sim.flap_label()),
-        // Concorde: the lever droops the nose / visor.
-        "Nose" => format!("NOSE {}", sim.flap_label()),
-        _ => format!("FLAPS {}", sim.flap_label()),
-    };
-    items.push((flap, pal::TEXT, sim.ctl.flaps > 0.01));
+    if def.flap_detents.len() > 1 {
+        let flap = match def.flap_label {
+            "Airbrakes" => format!("AIRBRAKE {}", sim.flap_label()),
+            // Concorde: the lever droops the nose / visor.
+            "Nose" => format!("NOSE {}", sim.flap_label()),
+            _ => format!("FLAPS {}", sim.flap_label()),
+        };
+        items.push((flap, pal::TEXT, sim.ctl.flaps > 0.01));
+    }
+    if def.smoke_system {
+        items.push(("SMOKE".into(), pal::CYAN, sim.vfx.smoke));
+    }
+    if def.on_water() && ac.water.afloat() {
+        // On the water: on the step (planing) or the water rudders down.
+        let w = ac.water.last;
+        let (lab, lit) = if w.planing > 0.5 { ("ON STEP", true) } else { ("WATER RUDDER", w.rudders_down) };
+        items.push((lab.into(), pal::CYAN, lit));
+    }
     if def.has_spoilers {
         let s = ac.surfaces().spoilers;
         items.push((if def.category == Category::FastJet { "SPD BRK".into() } else { "SPOILERS".into() }, pal::CYAN, s > 0.05));
     }
-    items.push(("BRAKES".into(), pal::AMBER, sim.ctl.brakes > 0.5));
+    if !def.on_water() {
+        items.push(("BRAKES".into(), pal::AMBER, sim.ctl.brakes > 0.5));
+    }
     if def.has_afterburner {
         items.push(("REHEAT".into(), pal::AMBER, ac.afterburner() > 0.02));
     }
@@ -817,17 +840,25 @@ pub fn control_rows(def: &crate::flight::AircraftDef) -> Vec<(&'static str, &'st
         v.push(("Engine", "Shift Ctrl  /  = −", if def.has_afterburner { "Throttle (above 90 %: reheat)".into() } else { "Throttle".into() }));
         if def.has_reverser {
             v.push(("Engine", "T", "Reverse thrust (on the ground)".into()));
+        } else if def.smoke_system {
+            v.push(("Engine", "T", "Airshow smoke on / off".into()));
         }
         v.push(("Engine", "K", "Engine failure practice".into()));
     }
-    v.push(("Systems", "F V", def.flap_label.into()));
+    if def.flap_detents.len() > 1 {
+        v.push(("Systems", "F V", def.flap_label.into()));
+    }
     if def.retractable_gear {
         v.push(("Systems", "G", "Landing gear".into()));
     }
     if def.has_spoilers {
         v.push(("Systems", "/  \\", "Spoilers · speed brake".into()));
     }
-    v.push(("Systems", "B  Space", "Wheel brakes".into()));
+    if def.on_water() {
+        v.push(("Systems", "Q E", "Water rudders (below ~20 kt)".into()));
+    } else {
+        v.push(("Systems", "B  Space", "Wheel brakes".into()));
+    }
     v.push(("Systems", "L", "Landing · taxi lights".into()));
     v.extend([
         ("Autopilot", "Z", "Engage · disengage".into()),

@@ -78,6 +78,14 @@ models later.
 - ✅ **Quadcopter**: an original 5" FPV quad — acro / angle modes,
   Betaflight-style rates, airmode mixer, 6S battery sag, prop wash, tilted
   wide FPV camera with OSD, gamepad mode 2, a scenic-orbit bot.
+- ✅ **More propeller types** (H2b): Extra EA-500 turboprop single, Piper
+  PA-18 Super Cub, Zlin Z-50 LX aerobat (snap rolls, spins, inverted
+  flight, smoke), DHC-3 Otter on floats and the DC-3 / C-47 — FlightGear
+  GPL models, flight models calibrated to published figures.
+- ✅ **Water operations**: float hydrodynamics (buoyancy, the hump, planing
+  on the step, spray, water rudders, weathervaning, wind-driven chop),
+  floatplane starts and bot circuits on rivers / docks / lakes; the same
+  hull model is the ditching API for the missions track.
 - Polish carried over from v2:
   - Moon and stars at night.
   - Glass facades reflecting their neighbours (not just the sky).

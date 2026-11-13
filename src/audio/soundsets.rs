@@ -548,6 +548,43 @@ pub static OLYMPUS: Set = Set {
     samples: &["vul_x_turb", "vul_x_howl", "vul_x_jet", "vul_x_blast", "vul_i_eng", "vul_start", "vul_stop"],
 };
 
+// ------------------------------------------------------------ P&W radials (R-1830 / R-1340)
+// FGAddon Douglas-Dc3 Sounds/dc-3-sound.xml: the idle loop (pitch 0.3 +
+// 0.0004·rpm), the slow (0.0005·rpm) and cruise (0.00028·rpm) exterior loops,
+// the cockpit high / low loops (0.000226 / 0.000746·rpm), start and shutdown.
+// The FG volumes follow manifold pressure; here power (≈ MAP) blends the
+// exterior loops: the idle clatter fades out as the throttle comes up.
+const R18_IDLE_V: &[(f32, f32)] = &[(0.0, 1.0), (0.12, 0.9), (0.3, 0.25), (0.5, 0.0)];
+const R18_SLOW_V: &[(f32, f32)] = &[(0.0, 0.35), (0.25, 0.9), (0.6, 0.7), (1.0, 0.45)];
+const R18_CRUISE_V: &[(f32, f32)] = &[(0.0, 0.0), (0.2, 0.25), (0.6, 0.8), (1.0, 1.0)];
+const R18_IHI_V: &[(f32, f32)] = &[(0.0, 0.3), (0.5, 0.75), (1.0, 1.0)];
+const R18_ILO_V: &[(f32, f32)] = &[(0.0, 0.9), (0.5, 0.6), (1.0, 0.45)];
+
+pub static RADIAL: Set = Set {
+    layers: &[
+        l("r18_idle", Case, (Pow, R18_IDLE_V), Lin(Rpm, 0.3, 0.0004, 0.1, 2.0)).fire(),
+        l("r18_slow", Front, (Pow, R18_SLOW_V), Lin(Rpm, 0.0, 0.0005, 0.35, 2.0)).fire(),
+        l("r18_cruise", Rear, (Pow, R18_CRUISE_V), Lin(Rpm, 0.0, 0.00028, 0.15, 2.0)).fire(),
+        l("r18_i_hi", Int, (Pow, R18_IHI_V), Lin(Rpm, 0.0, 0.000226, 0.15, 4.0)),
+        l("r18_i_lo", Int, (Pow, R18_ILO_V), Lin(Rpm, 0.0, 0.000746, 0.5, 4.0)).g(0.7),
+    ],
+    groups: &[],
+    start: &[shot("r18_start", Case, 0.9, 0.0), shot("r18_start", Int, 0.4, 0.0)],
+    stop: &[shot("r18_stop", Case, 0.8, 0.0), shot("r18_stop_int", Int, 0.5, 0.0)],
+    detail: Detail {
+        front: 0.35,
+        rear: 0.3,
+        case: 0.45,
+    },
+    int_from_ext: 0.35,
+    gain: 0.9,
+    // Big radials: ~16 dB from idle to take-off power outside, ~9 dB inside.
+    level: (Pow, &[(0.0, -16.0), (0.3, -8.0), (0.7, -2.5), (1.0, 0.0)]),
+    level_int: (Pow, &[(0.0, -9.0), (0.5, -3.0), (1.0, 0.0)]),
+    gain_int: 0.8,
+    samples: &["r18_idle", "r18_slow", "r18_cruise", "r18_i_hi", "r18_i_lo", "r18_start", "r18_stop", "r18_stop_int"],
+};
+
 // ------------------------------------------------------------ A320 CFM56-5B
 // FG A320-family Systems/cfm56-sound.xml tables, verbatim.
 const CFM_IDLE_V: &[(f32, f32)] = &[
@@ -1019,6 +1056,7 @@ pub fn set(s: SoundSet) -> Option<&'static Set> {
         SoundSet::Cfm56 => &CFM56,
         SoundSet::V2500 => &V2500,
         SoundSet::Olympus => &OLYMPUS,
+        SoundSet::Radial => &RADIAL,
     })
 }
 

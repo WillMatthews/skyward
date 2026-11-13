@@ -322,6 +322,48 @@ def concorde():
         d.rounded_rectangle(box(*b), radius=int(6 * k), outline=(168, 168, 170), width=max(2, int(3 * k)))
     im.save(out("concorde", "concorde-neutral.png"))
 
+def dc3():
+    """DC-3 default texture (a 1950s airline scheme): the airline titles and the
+    emblems on the nose and fin are painted out (scanline fill between the
+    paint either side, which carries the cheatline straight through), and the
+    blue cheatline / fin sweep is repainted in an original oxblood with a gold
+    pin stripe, so no operator's livery remains."""
+    import numpy as np
+    a = np.asarray(Image.open(os.path.join(root, "dc3/Models/texture.png")).convert("RGB")).astype(np.float64)
+    for (x0, y0, x1, y1), rows in [
+        ((636, 296, 1018, 337), True), ((1036, 659, 1418, 700), True),   # fuselage titles
+        ((404, 350, 506, 450), True), ((1536, 710, 1638, 810), True),    # nose emblems
+        ((1750, 162, 1804, 216), False), ((236, 522, 290, 580), False),  # fin emblems
+    ]:
+        if rows:
+            l, r = a[y0:y1, x0 - 3][:, None, :], a[y0:y1, x1 + 2][:, None, :]
+            t = np.linspace(0.0, 1.0, x1 - x0)[None, :, None]
+        else:
+            l, r = a[y0 - 3, x0:x1][None, :, :], a[y1 + 2, x0:x1][None, :, :]
+            t = np.linspace(0.0, 1.0, y1 - y0)[:, None, None]
+        f = l * (1.0 - t) + r * t
+        # Snap to the paint on either side (white or cheatline): a clean edge
+        # running straight across the box instead of a blended smear.
+        lum = lambda c: c @ [0.299, 0.587, 0.114]
+        fl, ll, rl = lum(f), lum(l * np.ones_like(f)), lum(r * np.ones_like(f))
+        bright = np.where((ll > rl)[..., None], l * np.ones_like(f), r * np.ones_like(f))
+        darkc = np.where((ll > rl)[..., None], r * np.ones_like(f), l * np.ones_like(f))
+        mid = 0.5 * (ll + rl)
+        snap = np.where((np.abs(ll - rl) > 40.0)[..., None], np.where((fl > mid)[..., None], bright, darkc), f)
+        a[y0:y1, x0:x1] = snap
+    r, g, b = a[..., 0], a[..., 1], a[..., 2]
+    mx, mn = a.max(2), a.min(2)
+    sat = (mx - mn) / np.maximum(mx, 1.0)
+    blue = (b > r + 25) & (b > g + 10) & (sat > 0.25)
+    lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0
+    dark = blue & (lum < 0.42)
+    light = blue & ~dark
+    ox = np.array([112.0, 24.0, 32.0])     # oxblood cheatline
+    gold = np.array([206.0, 172.0, 104.0])  # pin stripe
+    a = np.where(dark[..., None], np.clip(ox * np.clip(lum / 0.22, 0.4, 1.8)[..., None], 0, 255), a)
+    a = np.where(light[..., None], np.clip(gold * np.clip(lum / 0.6, 0.6, 1.3)[..., None], 0, 255), a)
+    Image.fromarray(a.astype("uint8")).save(out("dc3", "texture-neutral.png"))
+
 which = sys.argv[2:] or ["a320", "atr72"]
 for w in which:
     globals()[w]()

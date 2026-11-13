@@ -1,0 +1,32 @@
+{
+  "id": "uncontained",
+  "title": "Shrapnel",
+  "tagline": "An uncontained engine failure climbing out of Brize Norton.",
+  "aircraft": "galaxy",
+  "difficulty": 3,
+  "minutes": 10,
+  "history": "Inspired by a 2010 uncontained engine failure on a four-engine airliner, whose debris cut fuel, hydraulic and electrical lines; the crew worked through dozens of checklists and landed heavy on a long runway, with partial brakes, without injury.",
+  "situation": "Heavy C-5 out of RAF Brize Norton's runway 25, climbing through 3,500 ft with 73 aboard, when number 2 lets go. Debris has gone through the left wing. You are heavy, leaking fuel, and short of hydraulics and brakes — but the aircraft flies.",
+  "failures": ["Engine 2 destroyed (uncontained)", "Left wing fuel leak", "Hydraulic system 2 lost", "Generator 2 offline", "Brakes about half effective (anti-skid damaged)"],
+  "tips": ["Fly the aircraft first: rudder against the dead engine, keep the speed", "Long final to runway 07 or 25 (3,050 m) — every metre counts with weak brakes", "Gear may need the alternate extension (O → Systems)", "Full reverse on the good engines, brakes early and firm"],
+  "target": { "airport": "EGVN", "runway": "25", "course_deg": 253.4, "length_m": 3050, "width_m": 56, "elev_ft": 288, "lat": 51.753899, "lon": -1.56179 },
+  "start": { "x_nm": 6.5, "y_nm": 0, "alt_ft": 3500, "hdg_rel": 0, "kias": 220, "flaps": 1, "gear_down": false, "throttle": 0.85 },
+  "fuel_frac": 0.8,
+  "time": "11:00",
+  "date": "08-19",
+  "metar": "EGVN 191100Z 25012KT 9999 FEW025 16/09 Q1015",
+  "pax": 73,
+  "par_s": 720,
+  "events": [
+    { "id": "boom", "when": { "t": 6 }, "do": [ { "engine_dead": 1 }, { "fail": "leak-left" }, { "fail": "hyd2" }, { "fail": "gen2" }, { "brake_factor": 0.5 },
+      { "note": "Engineer: Number two's gone — uncontained! Fuel leak left wing, hydraulic two's down, generator two offline." }, { "checkpoint": "Uncontained failure" } ] },
+    { "id": "pa", "when": { "after": "boom", "delay": 40 }, "do": [ { "pa": "divert" } ] },
+    { "id": "atc", "when": { "after": "boom", "delay": 25 }, "do": [ { "note": "ATC: Both runway ends available, fire service positioning at the mid-point." } ] },
+    { "id": "down", "when": { "after": "boom", "on_ground": true, "ias_below_kt": 20 }, "do": [ { "pa": "remain_seated" } ] }
+  ],
+  "objectives": [
+    { "id": "mayday", "text": "Declare MAYDAY", "kind": "player", "act": "mayday", "after": "boom", "within_s": 120, "points": 40 },
+    { "id": "control", "text": "Keep control (no stall) for 2 minutes", "kind": "in_control", "s": 120, "after": "boom", "points": 40 },
+    { "id": "land", "text": "Land and stop on the runway", "kind": "land", "after": "boom", "required": true, "points": 40 }
+  ]
+}

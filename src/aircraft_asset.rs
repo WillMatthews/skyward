@@ -200,6 +200,9 @@ pub struct Texture {
     pub height: u32,
     /// RGBA8, sRGB-encoded colour.
     pub rgba: Vec<u8>,
+    /// Mip levels 1.. if already built (the browser builds them in a
+    /// worker), else empty (built at upload).
+    pub mips: Vec<Vec<u8>>,
 }
 
 /// Texture-coordinate animation of a chunk (UV space, v down).
@@ -521,7 +524,12 @@ impl AircraftAsset {
 }
 
 fn load_texture(dir: &str, file: &str) -> Texture {
-    let fallback = || Texture { width: 1, height: 1, rgba: vec![200, 200, 200, 255] };
+    let fallback = || Texture { width: 1, height: 1, rgba: vec![200, 200, 200, 255], mips: Vec::new() };
+    // Browser: decoded in a worker while the aircraft downloaded.
+    #[cfg(target_arch = "wasm32")]
+    if let Some((width, height, rgba, mips)) = crate::platform::web::take_decoded_texture(&format!("aircraft/{dir}/{file}")) {
+        return Texture { width, height, rgba, mips };
+    }
     let Ok(bytes) = crate::assets::read(&format!("aircraft/{dir}/{file}")) else {
         eprintln!("aircraft texture missing: {dir}/{file}");
         return fallback();
@@ -529,7 +537,7 @@ fn load_texture(dir: &str, file: &str) -> Texture {
     match image::load_from_memory(&bytes) {
         Ok(img) => {
             let img = img.to_rgba8();
-            Texture { width: img.width(), height: img.height(), rgba: img.into_raw() }
+            Texture { width: img.width(), height: img.height(), rgba: img.into_raw(), mips: Vec::new() }
         }
         Err(e) => {
             eprintln!("aircraft texture {dir}/{file}: {e}");
