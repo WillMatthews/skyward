@@ -16,7 +16,7 @@ struct CloudU {
     shape: vec4<f32>,    // base, layer top, sigma, stratus thickness
     cells: vec4<f32>,    // cell size, probability, r_min, r_max
     cells2: vec4<f32>,   // h_min, h_max, stratus coverage, cirrus amount
-    seed: vec4<u32>,     // seed, frame, cumulus visible, 0
+    seed: vec4<u32>,     // seed, frame, cumulus visible, quality 0..3 (step size)
     layers: vec4<f32>,   // stratus base, mid-layer coverage param, mid base, mid thickness
     drift: vec4<f32>,    // field drift x, z (m: clouds move with the wind), lowest base, 0
     gfog: vec4<f32>,     // ground fog extinction (/km), fog top (km), cirrus extra drift x, z (m)
@@ -856,7 +856,8 @@ fn fs_trace(in: FsOut) -> TraceOut {
     if (t1 > t0) {
         let jit = fract(pix_noise(px) + U.fog.z);
         // Secondary targets (water reflection) march more coarsely.
-        let qstep = select(1.0, 1.7, U.fog.w > 0.5);
+        var qsteps = array<f32, 4>(1.6, 1.25, 1.0, 0.75);
+        let qstep = select(1.0, 1.7, U.fog.w > 0.5) * qsteps[min(U.seed.w, 3u)];
         var t = t0 + step_at(t0) * qstep * jit;
         // Cheap coarse march (base shape only) until a cloud is hit, then step
         // back and march finely with full detail + lighting until the ray has
@@ -868,6 +869,7 @@ fn fs_trace(in: FsOut) -> TraceOut {
         if (U.storm.x > 0.5 && U.fog.w < 0.5) {
             max_it += 100;
         }
+        max_it = i32(f32(max_it) / qsteps[min(U.seed.w, 3u)]);
         for (var i = 0; i < max_it; i++) {
             if (t >= t1 || T < 0.008) {
                 break;

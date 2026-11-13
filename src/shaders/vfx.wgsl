@@ -24,7 +24,7 @@ struct VfxU {
     off: vec4<f32>,               // frame origin - eye (xyz), w = time (s)
     screen: vec4<f32>,            // w, h, 1/w, 1/h
     fires: array<vec4<f32>, 4>,   // fire lights: eye-relative position, intensity (cd)
-    misc: vec4<f32>,              // x = haze strength scale, y = cloud result bound
+    misc: vec4<f32>,              // x = haze strength scale, y = cloud result bound, z = vapour step factor (quality)
     key: vec4<f32>,               // toward the key light
     vol: array<vec4<f32>, 20>,    // condensation volumes (vfx/mod.rs `Vfx::volume`)
 };
@@ -757,7 +757,8 @@ fn fs_vol(in: VO) -> @location(0) vec4<f32> {
     }
     let t = V.off.w;
     let wing = ii > 0u;
-    let n = select(32, 24, wing);
+    // (misc.z: the effects quality's step factor.)
+    let n = max(i32(f32(select(32, 24, wing)) * V.misc.z), 8);
     let dt = (s1 - s0) / f32(n);
     // Interleaved gradient noise: per-pixel start offset (no banding).
     let jit = fract(52.9829189 * fract(dot(px, vec2<f32>(0.06711056, 0.00583715))));

@@ -167,3 +167,7 @@ src/wx/storm.rs
 src/wx/tests.rs
 src/wx/turbulence.rs
 src/wx/wake.rs
+src/gfx/quality.rs
+src/gfx/taa.rs
+src/gfx/perf.rs
+src/gfx/hdr_ui.rs

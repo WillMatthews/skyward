@@ -673,6 +673,8 @@ pub struct CloudAtmos {
 }
 
 pub struct CloudRenderer {
+    /// Ray-march quality 0 (low) .. 3 (ultra), gfx::quality (default 2).
+    quality: u32,
     atmos: CloudAtmos,
     /// Thunderstorms (wx/): cells uniform, storm maps (tower / anvil / rain;
     /// anvil levels / shaft bottom / base), lenticular grid.
@@ -989,6 +991,7 @@ impl CloudRenderer {
             cirrus_drift: Vec2::ZERO,
             shadow_frame: None,
             frame_counter: 0,
+            quality: 2,
             prepared_frame: None,
         }
     }
@@ -1060,7 +1063,7 @@ impl CloudRenderer {
             shape: [p.base, self.field.top().max(self.storm_top()).max(if self.lent.grid.is_empty() { 0.0 } else { self.lent.alt + self.lent.thick * 2.0 + 1500.0 }), p.sigma, p.strato_thick],
             cells: [p.cell, p.prob, p.r_min, p.r_max],
             cells2: [p.h_min, p.h_max, p.strato, p.cirrus],
-            seed: [self.field.seed, fidx, p.visible as u32, 0],
+            seed: [self.field.seed, fidx, p.visible as u32, self.quality],
             layers: [p.strato_base, p.mid, p.mid_base, p.mid_thick],
             drift: [self.field.drift.x, self.field.drift.y, self.storm.cells.iter().take(MAX_STORM).map(|c| c.base).fold(self.field.base(), f32::min), 0.0],
             gfog: [frame.ground_fog[0], frame.ground_fog[1], self.cirrus_drift.x, self.cirrus_drift.y],
@@ -1373,6 +1376,11 @@ impl CloudRenderer {
             s.prev_vp.1 += delta;
         }
         self.shadow_origin += vec2(delta.x, delta.z);
+    }
+
+    /// Ray-march quality: 0 low (coarse steps) .. 2 high (the reference) .. 3 ultra (finer).
+    pub fn set_quality(&mut self, q: u8) {
+        self.quality = q.min(3) as u32;
     }
 
     /// Forget temporal history (e.g. after a camera cut / teleport).

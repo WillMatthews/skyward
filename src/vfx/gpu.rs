@@ -65,6 +65,8 @@ struct Timing {
 }
 
 pub struct VfxRenderer {
+    /// Effects quality 0 (low: no heat-haze distortion, coarse vapour) .. 2 (high), gfx::quality.
+    pub quality: u8,
     bgl: wgpu::BindGroupLayout,
     blit_bgl: wgpu::BindGroupLayout,
     particles: wgpu::RenderPipeline,
@@ -218,6 +220,7 @@ impl VfxRenderer {
             lit: Vec::new(),
             grid: Grid::default(),
             timing,
+            quality: 2,
             drawn: (0, 0),
         }
     }
@@ -262,7 +265,7 @@ impl VfxRenderer {
             off: [off.x, off.y, off.z, time],
             screen: [w as f32, h as f32, 1.0 / w as f32, 1.0 / h as f32],
             fires,
-            misc: [1.0, if clouds.is_some() { 1.0 } else { 0.0 }, 0.0, 0.0],
+            misc: [if self.quality == 0 { 0.0 } else { 1.0 }, if clouds.is_some() { 1.0 } else { 0.0 }, [0.5, 0.75, 1.0][self.quality.min(2) as usize], 0.0],
             key: [key.x, key.y, key.z, 0.0],
             vol: f.vol,
         };

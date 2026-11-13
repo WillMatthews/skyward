@@ -48,14 +48,15 @@ item lands; keep entries one line.
 - [ ] **P2** Night follow-ups: light pools beyond 4 km, halos behind clouds, README/help for L key
 - [x] Supersonic + atmospheric VFX: vapour cone, shock diamonds, heat haze, Schmidt–Appleman contrails, vortex / wing condensation (L)
 - [x] Crash VFX: fireball, fuel fire + smoke column, dust, spray, sparks, tyre / engine smoke; GPU particles lit by sun/moon/fires (L)
-- [ ] **P1** VFX follow-ups: vapour cone ray-march costs ~1.2 ms at 1440p when it fills the screen (half-res option); wing-surface fog low-contrast on white airliners; smoke at night only lit by fire ambient (no volumetric glow); fire streaks on still-sliding wrecks; particles drawn over clouds (no cloud depth); haze strength untuned for props
-- [ ] **P1** TAA/upscaling (DLSS-class quality via own TAA + sharpening) with MSAA fallback
+- [ ] **P1** VFX follow-ups: vapour cone ray-march costs ~1.2 ms at 1440p when it fills the screen (Effects quality Low / Medium now march 50 / 75 % of the steps, GFX; a half-res pass is still open); wing-surface fog low-contrast on white airliners; smoke at night only lit by fire ambient (no volumetric glow); fire streaks on still-sliding wrecks; particles drawn over clouds (no cloud depth); haze strength untuned for props
+- [x] **P1** TAA / TAAU (jittered Halton, camera + aircraft + cloud motion vectors, floating-origin-safe reprojection, Catmull-Rom history, YCoCg variance clipping, disocclusion test, CAS sharpening, converged headless shots) with MSAA 4× and FXAA options; aircraft glass alpha-blended and foliage dithered without MSAA; motion blur, depth of field, lens flare / dirt, chromatic aberration, film grain, HDR (scRGB) output (GFX)
+- [ ] **P1** GFX follow-ups: SSR for glass towers / wet runways (not started: planar water + puddle reflections only); GTAO; particles / rain have no motion vectors (TAA clips them); airport vehicles are treated as static (road traffic has motion vectors; the dynamic mesh — missiles, tracers, flames, tenders — is a reactive mask); dynamic resolution re-creates the scene targets per 5 % step (resets cloud history: a viewport-based scheme would not); HDR untested on a real HDR display; runway edge-line segments from two meshes disagree by ~1 px at some sub-pixel offsets (a kink with TAA at rest, crawl with MSAA in motion)
 - [ ] **P1** Screen-space or ray-traced reflections for glass towers/wet streets
 - [x] **P1** Rain on canopy/windscreen droplets + wipers; icing on airframe: drops on the fitted windscreen panes (refracting, blown up the glass at speed, wiped analytically along the blade sweep), procedural 3D wiper arms on the airliners (off / slow / fast / auto), misting, frost from the frame, rime ice on leading edges (WX)
 - [x] **P1** Lightning/thunderstorms (CB clouds), rain shafts: storm cells from METAR TS / CB / TCU / VCTS / GR + CAPE, towers with anvils / overshooting tops / dark bases, rain shafts + virga, CG / IC lightning (branching channels, cloud lit from inside after the temporal filter, scene flash), thunder by distance / c, lenticulars over mountain waves (WX)
 - [ ] **P2** WX follow-ups: rainbows; hail particles (hail only raises radar returns); shelf / wall clouds on the gust front; storms are static cells (no growth / decay lifecycle); lightning doesn't light the terrain locally (ambient lift only); wipers are procedural arms (the imported models' wiper nodes are flattened at import); thunder uses the recorded thunder + procedural crack / rumble (no channel-geometry synthesis); CB visual polish (follow-up). Wakes come from MP players and live ADS-B traffic (`LiveTraffic::wake_sources`); turbulence is in Settings › Weather & Time, cockpit head motion in Settings › Camera
 - [ ] **P2** Photo mode (free cam, DOF, exposure, filters)
-- [ ] **P2** Quality presets (Low → Ultra) and dynamic resolution
+- [x] **P2** Quality presets Low / Medium / High / Ultra / Custom (auto-detected from the GPU), every knob in Settings › Video with cost hints, render scale 50–200 %, dynamic resolution, frame limiter, present modes, window modes, performance overlay (Ctrl+F3) with per-pass GPU timestamps (GFX)
 
 ## 3. Aircraft
 - [x] Real aircraft from FlightGear (GPL): C172, ASK 21, Spitfire IX, F-16, ATR 72, E190, A320 — textured models, cockpits, animations, neutral liveries (N)
@@ -138,7 +139,7 @@ item lands; keep entries one line.
 - [x] **P1** CI: fmt (formatted paths) + clippy -D warnings + tests + release build + wasm32 check on push; lavapipe smoke render nightly; local golden image/audio regression `scripts/regress.sh` (P)
 - [ ] **P2** CI follow-ups: one-shot `cargo fmt` of the tree when no track is active → `cargo fmt --check`; burn down the crate-wide clippy allows in Cargo.toml
 - [ ] **P1** Native release packages (Linux AppImage/Flatpak, Windows, macOS)
-- [ ] **P1** Performance budgets enforced in CI (GPU timing on soak runs)
+- [ ] **P1** Performance budgets enforced in CI (GPU timing on soak runs) — the measuring is there (`SKYWARD_BENCH_FRAMES`, GFX)
 - [ ] **P1** Licence/attribution audit for every asset and data source (OSM/OpenMapTiles, FlightGear, OurAirports, fonts, audio)
 - [ ] **P1** 8-hour soak (bot) with memory/VRAM leak checks; offline mode test
 - [ ] **P2** Crash logs, opt-in diagnostics (no tracking by default) (settings persistence: done, SET)
@@ -178,3 +179,4 @@ item lands; keep entries one line.
 | WX | Weather drama + turbulence: Dryden turbulence field + rotational gusts, thunderstorms / lightning / thunder, rain shafts, mountain waves / rotors / lenticulars, CAT, wake vortices, weather radar, windscreen rain / wipers / frost, airframe ice, cockpit shake (`src/wx/`) | ✅ |
 | next | H2 extra aircraft (proposed) | ⏳ awaiting decision |
 | SET | Settings redesign: rail + search + Apply / Revert, new settings, accessibility palettes, panel chrome polish (`ui/settings*.rs`, `ui/palette.rs`, `ui/chrome.rs`, `ui/geffects.rs`) | ✅ |
+| GFX | TAA / TAAU, MSAA / FXAA, presets + Settings › Video, dynamic resolution, frame limiter, motion blur / DOF / lens effects, HDR output, performance overlay (`src/gfx/`, `src/ui/settings_video.rs`) | ✅ |

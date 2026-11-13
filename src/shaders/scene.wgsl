@@ -1061,6 +1061,9 @@ fn fs_main(in: VOut) -> FOut {
         let under = col * 0.75;
         col = mix(col, mix(under, refl, fres), puddle);
     }
+    if (alpha_dither(s.alpha, px)) {
+        discard;
+    }
     o.col = vec4<f32>(apply_fog_px(col, px, dist), s.alpha);
     return o;
 }
