@@ -78,7 +78,7 @@ pub(super) fn segmented(ui: &mut Ui, rect: Rect, id: &str, items: &[&str], sel: 
     out
 }
 
-fn heading(p: &egui::Painter, at: Pos2, title: &str, sub: &str) -> f32 {
+pub(super) fn heading(p: &egui::Painter, at: Pos2, title: &str, sub: &str) -> f32 {
     p.text(at, Align2::LEFT_TOP, title, f_display(30.0), pal::TEXT);
     p.text(at + Vec2::new(0.0, 40.0), Align2::LEFT_TOP, sub, f_ui(14.0), pal::TEXT2);
     at.y + 70.0
@@ -118,7 +118,7 @@ pub fn backdrop_pub(p: &egui::Painter, screen: Rect, strength: f32) {
 }
 
 /// Darken the 3D scene behind a menu: strong on the left, lighter right.
-fn backdrop(p: &egui::Painter, screen: Rect, strength: f32) {
+pub(super) fn backdrop(p: &egui::Painter, screen: Rect, strength: f32) {
     let mut m = epaint::Mesh::default();
     let a = |v: f32| Color32::from_rgba_premultiplied(5, 7, 10, (v * 255.0 * strength) as u8);
     m.colored_vertex(screen.left_top(), a(0.92));
@@ -175,11 +175,13 @@ fn spec_lines(d: &AircraftDef) -> Vec<(&'static str, String)> {
         EngineKind::Electric => format!("{n} × brushless motor, 6S LiPo"),
         EngineKind::Jet => {
             let dry = d.static_thrust / n.max(1) as f32 / 1000.0;
+            // (The Vulcan's Olympus 301s and Concorde's 593s are pure turbojets.)
+            let kind = if matches!(d.id, "vulcan" | "concorde") { "turbojet" } else { "turbofan" };
             if d.has_afterburner {
-                format!("{n} × turbofan, {:.0} kN · {:.0} kN reheat", dry, (d.static_thrust + d.ab_static_thrust) / 1000.0)
+                // Thrust per engine, dry and with reheat.
+                format!("{n} × {kind}, {:.0} kN · {:.0} kN reheat", dry, (d.static_thrust + d.ab_static_thrust) / n.max(1) as f32 / 1000.0)
             } else {
-                // (The Vulcan's Olympus 301s are pure turbojets.)
-                format!("{n} × {}, {:.0} kN", if d.id == "vulcan" { "turbojet" } else { "turbofan" }, dry)
+                format!("{n} × {kind}, {:.0} kN", dry)
             }
         }
     };
@@ -200,6 +202,9 @@ fn spec_lines(d: &AircraftDef) -> Vec<(&'static str, String)> {
 }
 
 // ---------------------------------------------------------------- main menu
+
+/// Why Missions is greyed out while connected (missions are single-player).
+pub const MISSIONS_SOLO: &str = "Missions are single-player — leave the server to fly one.";
 
 pub fn main_menu(ui: &mut Ui, st: &mut UiState) {
     let screen = ui.ctx().content_rect();
@@ -223,8 +228,9 @@ pub fn main_menu(ui: &mut Ui, st: &mut UiState) {
         p.text(r.min + Vec2::new(20.0, 37.0), Align2::LEFT_TOP, format!("{def} · {} · {spec}", l.airport), f_ui(13.0), Color32::from_rgb(20, 44, 70));
         by += 76.0;
     }
-    let items: [(&str, Action, &str); 5] = [
+    let items: [(&str, Action, &str); 6] = [
         ("New flight", Action::Goto(Screen::Aircraft), "new"),
+        ("Multiplayer", Action::Goto(Screen::Multiplayer), "multiplayer"),
         ("Missions", Action::Goto(Screen::Missions), "missions"),
         ("Settings", Action::Goto(Screen::Settings), "settings"),
         ("Credits", Action::Goto(Screen::Credits), "credits"),
@@ -234,7 +240,13 @@ pub fn main_menu(ui: &mut Ui, st: &mut UiState) {
     for (i, (label, act, id)) in items.into_iter().filter(|it| !(crate::platform::WEB && matches!(it.1, Action::Quit))).enumerate() {
         let r = Rect::from_min_size(Pos2::new(x, by), Vec2::new(bw, 48.0));
         let kind = if i == 0 && last.is_none() { Btn::Primary } else { Btn::Secondary };
-        if button(ui, r, id, label, kind, true).clicked() {
+        // Missions are single-player: not while connected to a server.
+        let solo_only = matches!(act, Action::Goto(Screen::Missions)) && st.mp.connected();
+        let mut resp = button(ui, r, id, label, kind, !solo_only);
+        if solo_only {
+            resp = resp.on_hover_text(MISSIONS_SOLO);
+        }
+        if resp.clicked() {
             st.actions.push(act);
         }
         by += 58.0;
@@ -257,8 +269,10 @@ pub fn main_menu(ui: &mut Ui, st: &mut UiState) {
     p.text(Pos2::new(tx, card.min.y + 64.0), Align2::LEFT_TOP, ap, f_ui(13.0), pal::TEXT2);
     p.text(Pos2::new(tx, card.min.y + 84.0), Align2::LEFT_TOP, st.plan.spec.label(), f_ui(13.0), pal::TEXT3);
     if button(ui, Rect::from_min_size(Pos2::new(tx, card.max.y - 46.0), Vec2::new(card.max.x - tx - 16.0, 36.0)), "flynow", "Fly", Btn::Primary, true).clicked() {
+        st.plan.dogfight = None;
         st.actions.push(Action::Fly);
     }
+    dogfight_card(ui, st, Rect::from_min_size(Pos2::new(card.min.x, card.min.y - 286.0), Vec2::new(cw, 274.0)));
     p.text(Pos2::new(x, screen.max.y - 28.0), Align2::LEFT_BOTTOM, format!("{} · {} · {}", crate::hud::ATTRIBUTION, airports::CREDIT, WEATHER_CREDIT_SHORT), f_ui(11.0), pal::TEXT3);
 }
 
@@ -270,6 +284,56 @@ const WEATHER_CREDIT: &str = if crate::platform::WEB {
     "METARs: aviationweather.gov (NOAA) · forecasts: Open-Meteo (CC BY 4.0)"
 };
 const WEATHER_CREDIT_SHORT: &str = if crate::platform::WEB { "Weather: METARs via VATSIM, Open-Meteo" } else { "Weather: NOAA aviationweather.gov, Open-Meteo" };
+
+/// The dogfight quick start: aircraft, opponent, format, opponents' skill.
+fn dogfight_card(ui: &mut Ui, st: &mut UiState, card: Rect) {
+    use crate::weapons::ai::Difficulty;
+    use crate::weapons::setup::Format;
+    let p = ui.painter().clone();
+    panel(&p, card, sp::R_CARD);
+    let x = card.min.x + 18.0;
+    let w = card.width() - 36.0;
+    p.text(Pos2::new(x, card.min.y + 16.0), Align2::LEFT_TOP, "DOGFIGHT", f_inst_b(11.0), pal::ACCENT);
+    p.text(Pos2::new(x, card.min.y + 34.0), Align2::LEFT_TOP, "Guns, missiles and AI pilots over this airfield", f_ui(13.0), pal::TEXT2);
+    let types = [("peregrine", "Spitfire IX"), ("lancer", "F-16C")];
+    let lw = 84.0;
+    let mut y = card.min.y + 62.0;
+    let row = |p: &egui::Painter, y: f32, label: &str| {
+        p.text(Pos2::new(x, y + 15.0), Align2::LEFT_CENTER, label, f_ui(13.0), pal::TEXT3);
+        Rect::from_min_size(Pos2::new(x + lw, y), Vec2::new(w - lw, 30.0))
+    };
+    let names: Vec<&str> = types.iter().map(|t| t.1).collect();
+    let sel = types.iter().position(|t| t.0 == st.dogfight.player).unwrap_or(0);
+    if let Some(i) = segmented(ui, row(&p, y, "You"), "df_you", &names, sel) {
+        st.dogfight.player = types[i].0.to_string();
+    }
+    y += 38.0;
+    let sel = types.iter().position(|t| t.0 == st.dogfight.opponent).unwrap_or(0);
+    if let Some(i) = segmented(ui, row(&p, y, "Opponent"), "df_opp", &names, sel) {
+        st.dogfight.opponent = types[i].0.to_string();
+    }
+    y += 38.0;
+    let fmts = [Format::OneVOne, Format::TwoVTwo];
+    let sel = fmts.iter().position(|f| *f == st.dogfight.format).unwrap_or(0);
+    if let Some(i) = segmented(ui, row(&p, y, "Format"), "df_fmt", &["1 v 1", "2 v 2"], sel) {
+        st.dogfight.format = fmts[i];
+    }
+    y += 38.0;
+    let names: Vec<&str> = Difficulty::ALL.iter().map(|d| d.name()).collect();
+    let sel = Difficulty::ALL.iter().position(|d| *d == st.dogfight.difficulty).unwrap_or(1);
+    if let Some(i) = segmented(ui, row(&p, y, "Pilots"), "df_skill", &names, sel) {
+        st.dogfight.difficulty = Difficulty::ALL[i];
+    }
+    y += 44.0;
+    if button(ui, Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, 36.0)), "df_fight", "Fight", Btn::Primary, true).clicked() {
+        if let Some(i) = st.defs.iter().position(|d| d.id == st.dogfight.player) {
+            st.plan.aircraft = i;
+        }
+        st.plan.watch = false;
+        st.plan.dogfight = Some(st.dogfight.clone());
+        st.actions.push(Action::Fly);
+    }
+}
 
 pub fn credits(ui: &mut Ui, st: &mut UiState) {
     let screen = ui.ctx().content_rect();
@@ -315,7 +379,7 @@ pub fn credits(ui: &mut Ui, st: &mut UiState) {
     }
 }
 
-fn esc(ui: &Ui) -> bool {
+pub(super) fn esc(ui: &Ui) -> bool {
     ui.input(|i| i.key_pressed(egui::Key::Escape))
 }
 
@@ -1635,6 +1699,7 @@ pub fn conditions(ui: &mut Ui, st: &mut UiState) {
     let summary = format!("{} · {} · {}", def.name, st.plan.airport, st.plan.spec.label());
     p.text(Pos2::new(content.max.x - 250.0, fy + 24.0), Align2::RIGHT_CENTER, summary, f_ui(14.0), pal::TEXT2);
     if button(ui, Rect::from_min_size(Pos2::new(content.max.x - 230.0, fy), Vec2::new(230.0, 48.0)), "fly", "Fly", Btn::Primary, !st.plan.airport.is_empty()).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.any()) {
+        st.plan.dogfight = None;
         st.actions.push(Action::Fly);
     }
 }
@@ -1811,7 +1876,12 @@ pub fn pause(ui: &mut Ui, st: &mut UiState, title: &str, sub: &str) {
         ("Main menu", Action::Goto(Screen::Main), Btn::Ghost),
         ("Quit", Action::Quit, Btn::Ghost),
     ];
-    let items: Vec<_> = items.into_iter().filter(|it| !(crate::platform::WEB && matches!(it.1, Action::Quit))).collect();
+    let mut items: Vec<_> = items.into_iter().filter(|it| !(crate::platform::WEB && matches!(it.1, Action::Quit))).collect();
+    // Multiplayer: the server sets the airport; leaving keeps the flight going alone.
+    if st.mp.connected() {
+        items.retain(|it| !matches!(it.1, Action::Goto(Screen::Departure)));
+        items.insert(items.len().saturating_sub(2), ("Leave server", Action::LeaveServer, Btn::Secondary));
+    }
     // Rows tighten on short windows so the card always fits.
     let step = ((screen.height() - 48.0 - 130.0) / items.len() as f32).clamp(44.0, 54.0);
     let h = 120.0 + items.len() as f32 * step + 10.0;
@@ -1888,6 +1958,9 @@ mod tests {
         assert_eq!(of("hercules"), Group::Military);
         assert_eq!(of("galaxy"), Group::Military);
         assert_eq!(of("vulcan"), Group::Military);
+        for id in ["triple7", "crj700", "citationx", "concorde"] {
+            assert_eq!(of(id), Group::Airliner, "{id}");
+        }
         assert_eq!(of("ec130"), Group::Rotor);
         assert_eq!(of("fpv"), Group::Rotor);
         for id in ["extra500", "cub", "zlin", "otter"] {

@@ -37,11 +37,13 @@ mod sampled;
 pub mod samples;
 mod soundsets;
 pub mod synth;
+mod traffic;
 #[cfg(test)]
 mod scenarios;
 #[cfg(test)]
 mod tests;
 mod voice;
+pub mod weapons;
 
 pub use synth::Settings;
 
@@ -59,6 +61,17 @@ pub struct Audio {
     status: String,
     clock: f32,
     stats_at: f32,
+    /// Multiplayer: other aircraft, and the spectator's ear (overrides the sim's).
+    traffic: [params::TrafficFrame; params::MAX_TRAFFIC],
+    listener: Option<Listener>,
+}
+
+/// A listener placed by the caller (multiplayer spectator camera).
+#[derive(Clone, Copy, Debug)]
+pub struct Listener {
+    pub pos: glam::Vec3,
+    pub fwd: glam::Vec3,
+    pub up: glam::Vec3,
 }
 
 impl Audio {
@@ -84,6 +97,8 @@ impl Audio {
             status: String::new(),
             clock: 0.0,
             stats_at: 10.0,
+            traffic: Default::default(),
+            listener: None,
         };
         a.try_open();
         a
@@ -116,6 +131,13 @@ impl Audio {
         self.settings = s;
     }
 
+    /// Other aircraft for the next `update` (multiplayer); `listener`: the
+    /// spectator camera (no own aircraft) or None.
+    pub fn set_traffic(&mut self, t: [params::TrafficFrame; params::MAX_TRAFFIC], listener: Option<Listener>) {
+        self.traffic = t;
+        self.listener = listener;
+    }
+
     /// A UI click (menu).
     pub fn click(&mut self) {
         self.events.push(Event::UiClick);
@@ -137,10 +159,16 @@ impl Audio {
                 self.try_open();
             }
         }
-        let frame = match sim {
-            Some(s) => self.director.capture(s, world, dt, menu, &mut self.events),
-            None => Frame { active: false, warp: 1.0, ..Frame::default() },
+        let mut frame = match (sim, self.listener) {
+            (Some(_), Some(l)) => {
+                // Spectating: the world from the spectator camera, no own aircraft.
+                let right = l.fwd.cross(l.up).normalize_or(glam::Vec3::X);
+                Frame { active: false, spectator: true, menu, warp: 1.0, ear_pos: l.pos, ear_right: right, ear_up: l.up, ear_fwd: l.fwd, ear_agl: 100.0, day: 1.0, ..Frame::default() }
+            }
+            (Some(s), None) => self.director.capture(s, world, dt, menu, &mut self.events),
+            (None, _) => Frame { active: false, warp: 1.0, ..Frame::default() },
         };
+        frame.traffic = self.traffic;
         if let Ok(mut sh) = self.shared.lock() {
             sh.frame = frame;
             sh.seq = sh.seq.wrapping_add(1);

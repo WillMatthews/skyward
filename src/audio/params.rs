@@ -126,6 +126,26 @@ pub struct EngineFrame {
     pub throttle: f32,
 }
 
+/// Other aircraft voiced at once (multiplayer traffic, nearest first).
+pub const MAX_TRAFFIC: usize = 6;
+
+/// Another aircraft's engines (multiplayer, `traffic.rs`). `id` 0 = empty slot.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TrafficFrame {
+    pub id: u32,
+    pub profile: Profile,
+    pub n_engines: u8,
+    /// A representative engine (one voice per aircraft).
+    pub eng: EngineFrame,
+    pub pos: Vec3,
+    pub vel: Vec3,
+    /// Nose direction (jet / prop directivity).
+    pub axis: Vec3,
+    pub tas: f32,
+    pub reverser: f32,
+    pub rotor: RotorFrame,
+}
+
 /// Continuous state, sampled once per video frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Frame {
@@ -207,6 +227,11 @@ pub struct Frame {
     pub day: f32,
     /// City-ness under the listener 0..1.
     pub urban: f32,
+
+    // --- multiplayer
+    pub traffic: [TrafficFrame; MAX_TRAFFIC],
+    /// Spectating another aircraft: no own aircraft, the world stays audible.
+    pub spectator: bool,
 }
 
 /// Recorded speech clips (pre-rendered, see assets/audio/CREDITS.md).
@@ -392,4 +417,22 @@ pub enum Event {
     /// Thunder clap at a distance (km).
     Thunder(f32),
     UiClick,
+    /// Gun fire this frame (weapons/): `rounds` from gun type `gun`
+    /// (0 = 20 mm Hispano, 1 = .303 Browning, 2 = M61A1, 3 = .50) firing at
+    /// `rate` rounds / s, at `pos`; `own` = the listener's aircraft.
+    Gun { gun: u8, rounds: u16, rate: f32, pos: Vec3, own: bool },
+    /// A round passed the listener `miss` m away (supersonic: a crack, else a whiz).
+    Crack { pos: Vec3, miss: f32, cal: f32, supersonic: bool },
+    /// A round / fragment struck an airframe (`own`: the listener's).
+    Hit { pos: Vec3, energy: f32, own: bool },
+    /// A missile left its rail.
+    Missile { pos: Vec3, own: bool },
+    /// A flare cartridge fired.
+    Countermeasure { pos: Vec3, own: bool },
+    /// Ejection seat fired / canopy jettisoned.
+    Eject { pos: Vec3, own: bool, seat: bool },
+    /// Cockpit weapon tones, sent every frame: AIM-9 seeker growl (signal
+    /// 0..1; `locked` = the high tracking tone), RWR (worst threat 0 = none,
+    /// 1 search, 2 track, 3 launch / active; `rwr_new` = a new emitter).
+    Tones { growl: f32, locked: bool, rwr: u8, rwr_new: bool },
 }

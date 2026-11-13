@@ -10,12 +10,14 @@
 //! Systems:    --fail pitot,vacuum,fire2@30,... (names, optional @seconds to arm) [--cold-dark] [--panel failures|armed|systems]
 //! Missions:   skyward --mission river|v1|decompression|... [--mission-bot]   (airline emergencies; --menu-screen missions|briefing|debrief)
 //! Auto flight: skyward [--bot | --watch] ...        (hand the aircraft to the AI pilot; --watch adds the cinematic camera)
+//! Dogfight:  skyward --aircraft spitfire|f16 --dogfight [1v1|2v2] [--opponent ID] [--difficulty rookie|average|veteran|ace] [--dogfight-ai] [--shot-when guns|hit|lock|missile|flares|smoke|eject|chute|kill] [--view-bandit] [--eject-at S]
 //! Soak test:  skyward --shot out.png --bot --soak --seconds 1800 [--warp 8] [--shot-every 300] [--weather scattered]
 //! Weather:    live METAR + real local time by default; --no-live, --metar "EGLC 121450Z 22012KT 3000 RA BKN008 09/08 Q1002", --time HH.MM, --date MM-DD, --weather clear|few|scattered|broken|overcast
 //! Controllers: --controllers [SECONDS] lists devices and prints their inputs (SKYWARD_FAKE_INPUT=xbox,x52,pedals,tca adds virtual ones)
 //! Sound:      --mute (N toggles in flight; volumes in Settings › Sound); offline: --audio-render out.wav --seconds S [--audio-script "2:cam=cockpit,9:gear"] [--audio-until Final]
 //! Display:    --vsync on|off (default on: FIFO present, smoothed frame step); SKYWARD_FRAME_LOG=file logs per-frame timing
 //! Traffic:    --traffic off|low|medium|high (road traffic density; SKYWARD_NO_TRAFFIC=1 forces it off)
+//! Multiplayer: skyward --connect host[:port] --name CALLSIGN [--password PW]   (server: cargo run -p skyward-server -- --help)
 
 mod airport;
 mod airports;
@@ -40,6 +42,7 @@ mod lights;
 mod missions;
 mod models;
 mod mvt;
+mod net;
 mod osm;
 mod rotor;
 mod scenario;
@@ -54,6 +57,7 @@ mod tiles;
 mod traffic;
 mod vfx;
 mod water;
+mod weapons;
 mod ui;
 mod weather;
 mod world;
@@ -160,9 +164,25 @@ struct Args {
     vsync: Option<bool>,
     /// Location given on the command line (skip the saved last flight).
     location_given: bool,
+    /// Multiplayer (net/): join this server ("host[:port]") as `mp_name`.
+    mp_connect: Option<String>,
+    mp_name: Option<String>,
+    mp_password: String,
+    /// Headless tests: hold at the start until this many players are in.
+    mp_wait: usize,
+    /// Headless tests: chat cues "SECONDS:text,..." after the start.
+    mp_chat: String,
     /// Airline-emergency mission to fly (missions/), and fly it with the scripted pilot.
     mission: Option<String>,
     mission_bot: bool,
+    /// Dogfight quick start (weapons/): format, opponent, difficulty, AI-flown.
+    dogfight: Option<weapons::setup::Config>,
+    /// Headless: fast-forward until this happens in the fight (guns, hit, lock, missile, flares, smoke, eject, kill), then shoot.
+    shot_when: Option<String>,
+    /// Headless: eject / bail out at this many seconds.
+    eject_at: Option<f32>,
+    /// Chase camera on the (first) opponent.
+    view_bandit: bool,
 }
 
 fn parse_vec3(s: &str) -> Option<Vec3> {
@@ -267,8 +287,17 @@ fn parse_args_from(argv: Vec<String>) -> Args {
         audio_until: None,
         vsync: None,
         location_given: false,
+        mp_connect: None,
+        mp_name: None,
+        mp_password: String::new(),
+        mp_wait: 0,
+        mp_chat: String::new(),
         mission: None,
         mission_bot: false,
+        dogfight: None,
+        shot_when: None,
+        eject_at: None,
+        view_bandit: false,
     };
     let mut i = 0;
     let next = |i: &mut usize| -> String {
@@ -297,6 +326,27 @@ fn parse_args_from(argv: Vec<String>) -> Args {
             "--start" => a.start = Start::parse(&next(&mut i)).unwrap_or(Start::Runway),
             "--start-at" => a.start_at = startpos::Spec::decode(&next(&mut i)),
             "--shot" => a.shot = Some(next(&mut i)),
+            "--dogfight" => {
+                let mut cfg = a.dogfight.take().unwrap_or_default();
+                cfg.opponent = String::new();
+                if let Some(f) = argv.get(i + 1).and_then(|v| weapons::setup::Format::parse(v)) {
+                    cfg.format = f;
+                    i += 1;
+                }
+                a.dogfight = Some(cfg);
+            }
+            "--opponent" => {
+                let v = flight::resolve_id(&next(&mut i));
+                a.dogfight.get_or_insert_with(Default::default).opponent = v;
+            }
+            "--difficulty" => {
+                let v = next(&mut i);
+                a.dogfight.get_or_insert_with(Default::default).difficulty = weapons::ai::Difficulty::parse(&v).unwrap_or(weapons::ai::Difficulty::Average);
+            }
+            "--dogfight-ai" => a.dogfight.get_or_insert_with(Default::default).autopilot = true,
+            "--shot-when" => a.shot_when = Some(next(&mut i)),
+            "--eject-at" => a.eject_at = next(&mut i).parse().ok(),
+            "--view-bandit" => a.view_bandit = true,
             "--width" => a.width = next(&mut i).parse().unwrap_or(1920),
             "--height" => a.height = next(&mut i).parse().unwrap_or(1080),
             "--cam" => a.cam = CamMode::parse(&next(&mut i)).unwrap_or(CamMode::Chase),
@@ -373,6 +423,11 @@ fn parse_args_from(argv: Vec<String>) -> Args {
                 }
             }
             "--vsync" => a.vsync = Some(next(&mut i) != "off"),
+            "--connect" | "--mp-connect" => a.mp_connect = Some(next(&mut i)),
+            "--name" | "--mp-name" => a.mp_name = Some(next(&mut i)),
+            "--password" | "--mp-password" => a.mp_password = next(&mut i),
+            "--mp-wait" => a.mp_wait = next(&mut i).parse().unwrap_or(0),
+            "--mp-chat" => a.mp_chat = next(&mut i),
             // --time HH.MM (local clock), --date MM-DD, --weather clear|few|scattered|broken|overcast
             "--time" => a.hours = parse_time(&next(&mut i)),
             "--date" => {
@@ -399,12 +454,17 @@ fn parse_args_from(argv: Vec<String>) -> Args {
             "--radius-km" => a.radius = next(&mut i).parse::<f32>().ok().map(|k| k * 1000.0),
             "--traffic" => a.traffic = traffic::Level::parse(&next(&mut i)),
             "-h" | "--help" => {
-                println!("{}", include_str!("main.rs").lines().take(18).collect::<Vec<_>>().join("\n"));
+                println!("{}", include_str!("main.rs").lines().take(20).collect::<Vec<_>>().join("\n"));
                 std::process::exit(0);
             }
             other => eprintln!("ignoring unknown argument {other}"),
         }
         i += 1;
+    }
+    // Missions are single-player.
+    if a.mission.is_some() && a.mp_connect.is_some() {
+        eprintln!("--mission ignored: missions are single-player (drop --connect to fly one)");
+        a.mission = None;
     }
     if let Some(id) = a.mission.clone() {
         match missions::defs::by_id(&id) {
@@ -603,6 +663,16 @@ impl Session {
                         sim.enable_bot(w);
                         if args.watch {
                             sim.cam = CamMode::Cinematic;
+                        }
+                    }
+                    if let Some(cfg) = args.dogfight.clone() {
+                        let mut cfg = cfg;
+                        if cfg.opponent.is_empty() {
+                            cfg.opponent = sim.def().id.to_string();
+                        }
+                        sim.start_dogfight(w, cfg);
+                        if args.view_bandit {
+                            sim.view_unit = sim.combat.as_ref().and_then(|c| c.units.iter().find(|u| u.team != 0).map(|u| u.id));
                         }
                     }
                     if let Some((msg, _)) = &sim.note {
@@ -923,6 +993,18 @@ fn render_frame(
             let sim = s.sim.as_mut().unwrap();
             sim.qnh_hpa = s.world.wx.qnh_hpa;
             let (mut fv, mut dynm) = sim.frame(w as f32 / h as f32);
+            // Multiplayer spectator (net/): our aircraft is hidden, the camera follows another.
+            let mut view_override = view_override;
+            if ui.st.mp.spectate.is_some() {
+                fv.aircraft = None;
+                fv.vfx = None;
+                fv.acl.n_sprites = 0;
+                fv.acl.n_spots = 0;
+                dynm = scene::MeshData::default();
+                if view_override.is_none() {
+                    view_override = ui.st.mp.spectate_view(ui.st.dt);
+                }
+            }
             // Live glass cockpit screens (only drawn with the cockpit interior).
             // (SKYWARD_NO_DISPLAYS=1 leaves the screens dark, for A/B timing.)
             if let Some(af) = fv.aircraft.as_mut().filter(|af| af.draws.iter().any(|d| af.asset.chunks[d.chunk as usize].display.is_some())) {
@@ -939,7 +1021,19 @@ fn render_frame(
                 if let Some(af) = fv.aircraft.as_mut() {
                     af.shift(d);
                 }
+                for af in &mut fv.others {
+                    af.shift(d);
+                }
                 fv = FrameView { eye, view: glam::camera::rh::view::look_at_mat4(eye, look, Vec3::Y), ..fv };
+            }
+            // Other players' aircraft (net/): real models, lights, afterburners — eye-relative.
+            if ui.st.mp.connected() {
+                let (frames, lights, flames) = ui.st.mp.render_traffic(fv.eye);
+                dynm.append(&flames, glam::Mat4::IDENTITY);
+                renderer.set_traffic(frames, lights);
+                ui.st.mp.cam = Some((fv.eye, fv.view, fv.fov_y));
+            } else {
+                ui.st.mp.cam = None;
             }
             // Browser: the scene may render below the output size (upscaled by the tonemap pass).
             #[cfg(target_arch = "wasm32")]
@@ -955,7 +1049,7 @@ fn render_frame(
                 let wd = &mut s.world;
                 renderer.set_traffic_level(wd.traffic.level());
                 let snap = wd.traffic.frame(traffic_frame(&fv, sim.time as f64, w, h, wd.traffic.level()));
-                renderer.traffic.prepare(device, queue, snap, sim.time as f64, fv.eye);
+                renderer.road_traffic.prepare(device, queue, snap, sim.time as f64, fv.eye);
             }
             renderer.render(device, queue, &mut enc, target, w, h, &fv, &dynm);
         }
@@ -986,7 +1080,11 @@ fn render_frame(
             let Session { sim, world, .. } = s;
             let sim = sim.as_mut().unwrap();
             if on_screen && !hide_hud {
-                ui::flight::draw(&ctx, st, sim, world, ppp_now, fps);
+                // (Spectating: the watched aircraft is the subject, not our parked one.)
+                if st.mp.spectate.is_none() {
+                    ui::flight::draw(&ctx, st, sim, world, ppp_now, fps);
+                }
+                ui::mp::draw(&ctx, st, sim);
             }
             if let (Some(msg), Screen::Flying) = (loading, st.screen) {
                 let (t, d, f) = loading_info(msg);
@@ -1165,7 +1263,7 @@ fn plan_from_args(args: &Args, db: Option<&airports::Db>) -> ui::Plan {
             _ => startpos::Spec::Runway(String::new()),
         },
     };
-    ui::Plan { aircraft: args.aircraft, airport, spec, watch: args.watch }
+    ui::Plan { aircraft: args.aircraft, airport, spec, watch: args.watch, dogfight: args.dogfight.clone() }
 }
 
 /// Arguments for flying a plan with the chosen conditions.
@@ -1181,6 +1279,7 @@ fn args_for_plan(base: &Args, st: &UiState) -> (Args, Option<startpos::CustomSta
     a.start = plan.spec.as_start();
     a.bot = plan.watch;
     a.watch = plan.watch;
+    a.dogfight = plan.dogfight.clone();
     a.heading = None;
     let c = &st.settings.conditions;
     a.live = c.live;
@@ -1207,6 +1306,21 @@ fn args_for_plan(base: &Args, st: &UiState) -> (Args, Option<startpos::CustomSta
 }
 
 /// A finished flight choice: remember it.
+/// A multiplayer join succeeded: fly from the server's airport.
+fn mp_start_flight(st: &mut UiState) {
+    let Some(sv) = st.mp.server.clone() else { return };
+    let db = st.db.clone();
+    match db.as_ref().and_then(|d| d.index_of(&sv.airport).map(|i| (d, i))) {
+        Some((d, i)) => ui::menus::pick_default_spec(st, d, i),
+        None => {
+            st.plan.airport = sv.airport.clone();
+            st.plan.spec = startpos::Spec::Runway(String::new());
+        }
+    }
+    st.plan.watch = false;
+    st.actions.push(Action::Fly);
+}
+
 fn remember_plan(st: &mut UiState) {
     let id = st.defs[st.plan.aircraft.min(st.defs.len() - 1)].id.to_string();
     st.settings.last = Some(ui::settings::LastFlight { aircraft: id, airport: st.plan.airport.clone(), start: st.plan.spec.encode(), watch: st.plan.watch });
@@ -1257,6 +1371,8 @@ fn headless(args: Args) -> Result<(), String> {
         ui.st.settings.ui_scale = v.clamp(0.7, 1.6);
     }
     ui.hide_hud = args.no_hud;
+    // (Captures neither read nor write the player's multiplayer favourites / recents.)
+    ui.st.mp.prefs = net::prefs::Prefs { read_only: true, ..net::prefs::Prefs::from_json(&serde_json::Value::Null) };
     ui.st.db = db.clone();
     ui.st.plan = plan_from_args(&args, db.as_deref());
     if let Some(m) = args.hud_mode {
@@ -1319,6 +1435,12 @@ fn headless(args: Args) -> Result<(), String> {
     ui.st.aircraft_group = std::env::var("SKYWARD_AIRCRAFT_GROUP").ok().and_then(|g| ui::menus::Group::parse(&g));
     let custom = args.start_at.clone().map(|spec| startpos::CustomStart { airport: ui.st.plan.airport.clone(), spec });
 
+    // Multiplayer (net/): join first; the handshake runs while the scenery loads.
+    if let Some(addr) = &args.mp_connect {
+        let def = &ui.st.defs[args.aircraft.min(ui.st.defs.len() - 1)];
+        let name = args.mp_name.clone().unwrap_or_else(|| ui.st.mp.prefs.name.clone());
+        ui.st.mp.join(addr, &args.mp_password, &name, def.id);
+    }
     // Load the start area + spawn.
     let mut s = Session::new(&args, db.clone(), custom);
     // Captures simulate the traffic in this thread (reproducible); the
@@ -1329,6 +1451,7 @@ fn headless(args: Args) -> Result<(), String> {
     let t0 = Instant::now();
     let mut last_msg = String::new();
     while s.sim.is_none() {
+        ui.st.mp.poll();
         sync_gpu(&mut s, &mut renderer, &mut ui, &gpu, None);
         if let Some(m) = s.advance_loading() {
             if m != last_msg && t0.elapsed() > Duration::from_millis(500) {
@@ -1342,6 +1465,7 @@ fn headless(args: Args) -> Result<(), String> {
     }
     // Air starts away from the spawn area (or a re-spawn at another airfield) wait for their scenery.
     while s.check_catch_up(None).is_some() {
+        ui.st.mp.poll();
         s.follow();
         sync_gpu(&mut s, &mut renderer, &mut ui, &gpu, None);
         if t0.elapsed() > Duration::from_secs(240) {
@@ -1431,6 +1555,9 @@ fn headless(args: Args) -> Result<(), String> {
     }
     let mut input = Input::default();
     input.pressed.extend(args.press.iter().copied());
+    if args.mp_connect.is_some() {
+        mp_headless_start(&args, &mut s, &mut ui)?;
+    }
 
     if args.soak {
         return soak_flight(&args, &gpu, &mut renderer, &mut ui, &mut s, &tex, &view, w, h, &raw, &mut input);
@@ -1441,16 +1568,49 @@ fn headless(args: Args) -> Result<(), String> {
         // (`--audio-script` cues work here too: ATC requests for comms shots.)
         let mut cues = audio::render::parse_script(&args.audio_script);
         let steps = (args.seconds * 60.0) as usize;
+        // Multiplayer: everyone shares one timeline, so fly in real time (paced to the wall clock).
+        let mp = ui.st.mp.connected();
+        let mut chat = mp_chat_cues(&args.mp_chat);
+        let paced = Instant::now();
         for i in 0..steps.max(1) {
+            if mp {
+                let due = paced + Duration::from_secs_f64(i as f64 / 60.0);
+                let now = Instant::now();
+                if due > now {
+                    std::thread::sleep(due - now);
+                }
+                ui.st.mp.poll();
+                let t = i as f32 / 60.0;
+                while chat.first().is_some_and(|c| c.0 <= t) {
+                    let (_, text) = chat.remove(0);
+                    ui.st.mp.say(&text);
+                }
+            }
             let sim = s.sim.as_mut().unwrap();
             for c in cues.due(i as f32 / 60.0, sim, &s.world) {
                 audio::render::apply(&c, sim, &mut input, &s.world);
+            }
+            if let Some(t) = args.eject_at {
+                let now = i as f32 / 60.0;
+                if (now - t).abs() < 0.5 / 60.0 || (now - t - 0.2).abs() < 0.5 / 60.0 {
+                    input.pressed.push(Key::Eject);
+                }
             }
             sim.update(&s.world, &mut input, if steps == 0 { 0.0 } else { 1.0 / 60.0 });
             if let (Some(t), None) = (args.throttle, &sim.bot) {
                 sim.ctl.throttle = t;
             }
-            if i % 30 == 0 {
+            if mp {
+                ui.st.mp.fly(sim, &mut s.world, false, 1.0 / 60.0);
+            }
+            if let Some(w) = &args.shot_when {
+                if sim.combat_moment(w) {
+                    eprintln!("shot-when {w}: at {:.1} s", i as f32 / 60.0);
+                    s.follow();
+                    break;
+                }
+            }
+            if i % if mp { 10 } else { 30 } == 0 {
                 s.follow();
                 sync_gpu(&mut s, &mut renderer, &mut ui, &gpu, None);
             }
@@ -1478,7 +1638,13 @@ fn headless(args: Args) -> Result<(), String> {
         s.world.set_focus(focus, Vec2::ZERO);
     }
     let tw = Instant::now();
+    let mut last_step = Instant::now();
     loop {
+        if ui.st.mp.connected() {
+            let dt = last_step.elapsed().as_secs_f32().min(0.1);
+            last_step = Instant::now();
+            mp_headless_step(&mut s, &mut ui, &mut input, dt);
+        }
         sync_gpu(&mut s, &mut renderer, &mut ui, &gpu, None);
         // (The floating origin may have moved: follow the world's focus.)
         let focus = if ov.is_some() { focus } else { s.world.focus() };
@@ -1535,6 +1701,21 @@ fn headless(args: Args) -> Result<(), String> {
     if matches!(ui.st.screen, Screen::Aircraft | Screen::Main | Screen::Missions | Screen::Briefing) {
         render_thumbs(&gpu, &mut renderer, &mut ui, &s, format);
     }
+    // The server browser: let LAN discovery run (broadcast + mDNS + pings), then
+    // select the first server so its details show.
+    if ui.st.screen == Screen::Multiplayer {
+        let tw = Instant::now();
+        while tw.elapsed() < Duration::from_secs(7) {
+            render_frame(&gpu, &mut renderer, &mut ui, Some(&mut s), &view, w, h, raw(), 1.0, 0.0, None, ov);
+            let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+            if tw.elapsed() > Duration::from_millis(3500) && ui.st.browser.selected.is_none() {
+                let first = ui.st.browser.visible(&ui.st.mp.prefs).first().map(|e| e.key.clone());
+                ui.st.browser.selected = first;
+            }
+            std::thread::sleep(Duration::from_millis(30));
+        }
+        eprintln!("server browser: {} servers listed", ui.st.browser.entries.len());
+    }
     if matches!(ui.st.screen, Screen::Departure | Screen::Conditions | Screen::Loading) || (ui.st.screen == Screen::Main && s.sim.is_none()) {
         let tw = Instant::now();
         loop {
@@ -1548,6 +1729,33 @@ fn headless(args: Args) -> Result<(), String> {
                 break;
             }
             std::thread::sleep(Duration::from_millis(30));
+        }
+    }
+    // Multiplayer captures: SKYWARD_MP_UI="players" | "wheel" | "chat:draft text" | "spectate:Name" | "tags-off".
+    if let Ok(v) = std::env::var("SKYWARD_MP_UI") {
+        for item in v.split(',') {
+            let (k, arg) = item.split_once(':').unwrap_or((item, ""));
+            let mp = &mut ui.st.mp;
+            match k {
+                "players" => mp.show_players = true,
+                "wheel" => mp.wheel = Some(net::Wheel { sel: arg.parse().ok(), held: false }),
+                "chat" => {
+                    mp.chat_open = true;
+                    mp.chat_draft = arg.to_string();
+                }
+                "tags-off" => mp.tags = false,
+                "spectate" => {
+                    if let Some(id) = mp.remotes.values().find(|r| r.name.eq_ignore_ascii_case(arg)).map(|r| r.id) {
+                        mp.start_spectating(id);
+                        // Let the pinned (hidden) aircraft pull the scenery and the origin over.
+                        for _ in 0..20 {
+                            mp_headless_step(&mut s, &mut ui, &mut Input::default(), 1.0 / 60.0);
+                            sync_gpu(&mut s, &mut renderer, &mut ui, &gpu, None);
+                        }
+                    }
+                }
+                _ => {}
+            }
         }
     }
     // Traffic: refill and settle from the resident tiles, so the picture
@@ -1598,7 +1806,61 @@ fn headless(args: Args) -> Result<(), String> {
     let px = gfx::read_texture(&gpu, &tex, w, h);
     image::save_buffer(&path, &px, w, h, image::ColorType::Rgba8).map_err(|e| e.to_string())?;
     eprintln!("wrote {path}");
+    ui.st.mp.leave();
     Ok(())
+}
+
+/// "2:Hello,5.5:Follow me" → [(2.0, "Hello"), (5.5, "Follow me")].
+fn mp_chat_cues(s: &str) -> Vec<(f32, String)> {
+    let mut v: Vec<(f32, String)> = s.split(',').filter_map(|c| c.split_once(':')).filter_map(|(t, m)| Some((t.trim().parse().ok()?, m.trim().to_string()))).collect();
+    v.sort_by(|a, b| a.0.total_cmp(&b.0));
+    v
+}
+
+/// Headless multiplayer: wait for the connection and (`--mp-wait N`) for N
+/// players, sending our (held) state meanwhile, so test clients start together.
+fn mp_headless_start(args: &Args, s: &mut Session, ui: &mut Ui) -> Result<(), String> {
+    let t0 = Instant::now();
+    while !ui.st.mp.connected() {
+        ui.st.mp.poll();
+        if let net::Status::Failed(e) | net::Status::Closed(e) = &ui.st.mp.status {
+            return Err(format!("multiplayer: {e}"));
+        }
+        if t0.elapsed() > Duration::from_secs(20) {
+            return Err("multiplayer: no connection after 20 s".into());
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let want = args.mp_wait.max(1);
+    let mut last = Instant::now();
+    loop {
+        ui.st.mp.poll();
+        let dt = last.elapsed().as_secs_f32();
+        last = Instant::now();
+        if let Some(sim) = s.sim.as_mut() {
+            ui.st.mp.fly(sim, &mut s.world, true, dt);
+        }
+        let ready = ui.st.mp.remotes.values().filter(|r| r.cur.is_some()).count() + 1;
+        if ready >= want {
+            break;
+        }
+        if t0.elapsed() > Duration::from_secs(180) {
+            return Err(format!("multiplayer: only {ready} of {want} players after 180 s"));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    eprintln!("multiplayer: {} players in, starting", ui.st.mp.remotes.len() + 1);
+    Ok(())
+}
+
+/// Headless multiplayer: one real-time step of the sim and the session.
+fn mp_headless_step(s: &mut Session, ui: &mut Ui, input: &mut Input, dt: f32) {
+    ui.st.mp.poll();
+    if let Some(sim) = s.sim.as_mut() {
+        sim.update(&s.world, input, dt);
+        ui.st.mp.fly(sim, &mut s.world, false, dt);
+    }
+    s.follow();
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1834,7 +2096,7 @@ fn realtime_flight(
             );
             if s.world.traffic.level() != traffic::Level::Off {
                 let t = s.world.traffic.stats();
-                eprintln!("  traffic: {} vehicles, {} drawn, main thread {:.3} + {:.3} ms (sim / upload), sim worker {:.2} ms", t.vehicles, t.drawn, s.world.traffic.main_ms, renderer.traffic.prepare_ms, t.sim_ms);
+                eprintln!("  traffic: {} vehicles, {} drawn, main thread {:.3} + {:.3} ms (sim / upload), sim worker {:.2} ms", t.vehicles, t.drawn, s.world.traffic.main_ms, renderer.road_traffic.prepare_ms, t.sim_ms);
             }
             frames = 0;
             sum_ms = 0.0;
@@ -2231,6 +2493,8 @@ struct Running {
     loader: airports::Loader,
     format: wgpu::TextureFormat,
     quit: bool,
+    /// Multiplayer: how long the controller's camera button has been held (quick-chat wheel).
+    cam_hold: Option<f32>,
     saved_at: Instant,
     applied: ui::settings::Settings,
     /// Browser diagnostics: the longest frame since the last report.
@@ -2289,6 +2553,19 @@ fn ui_action(r: &mut Running, k: Key, flying: bool) -> bool {
             st.toasts.push(ui::toast::Kind::Info, if m { "Sound muted" } else { "Sound on" }, "", 1.6);
         }
         _ if st.screen != Screen::Flying => return !matches!(k, Key::Menu),
+        // Multiplayer (ui/mp.rs).
+        Key::Chat if st.mp.connected() => {
+            st.mp.chat_open = true;
+            st.mp.chat_open_frame = st.frame_no;
+            st.mp.wheel = None;
+        }
+        Key::PlayerList if st.mp.connected() => st.mp.show_players = !st.mp.show_players,
+        Key::NameTags if st.mp.connected() => {
+            st.mp.tags = !st.mp.tags;
+            st.toasts.push(ui::toast::Kind::Info, if st.mp.tags { "Name tags on" } else { "Name tags off" }, "", 1.4);
+        }
+        Key::QuickChat if st.mp.connected() => st.mp.wheel = if st.mp.wheel.is_some() { None } else { Some(net::Wheel::default()) },
+        Key::Chat | Key::PlayerList | Key::NameTags | Key::QuickChat => {}
         Key::Map => st.map.mode = st.map.mode.next(),
         Key::Instruments => {
             st.settings.hud = st.settings.hud.next();
@@ -2545,6 +2822,7 @@ impl App {
             loader,
             format,
             quit: false,
+            cam_hold: None,
             saved_at: Instant::now(),
             applied,
             #[cfg(target_arch = "wasm32")]
@@ -2601,6 +2879,21 @@ impl ApplicationHandler for App {
                         }
                         if pressed && code == KeyCode::Escape {
                             r.ui.st.comms.open = false;
+                            return;
+                        }
+                    }
+                    // Multiplayer: Esc closes the chat / quick-chat wheel; 1–8 pick a quick message.
+                    if screen == Screen::Flying && (r.ui.st.mp.chat_open || r.ui.st.mp.wheel.is_some()) {
+                        if pressed && code == KeyCode::Escape {
+                            r.ui.st.mp.chat_open = false;
+                            r.ui.st.mp.wheel = None;
+                            return;
+                        }
+                        if let (false, Some(d)) = (r.ui.st.mp.chat_open, comms_digit(code)) {
+                            if pressed && (1..=net::QUICK_CHAT.len() as u8).contains(&d) {
+                                r.ui.st.mp.say(net::QUICK_CHAT[d as usize - 1]);
+                                r.ui.st.mp.wheel = None;
+                            }
                             return;
                         }
                     }
@@ -2695,14 +2988,59 @@ fn poll_controllers(r: &mut Running, dt: f32) {
         _ => None,
     };
     let in_flight = r.session.as_ref().is_some_and(|s| s.sim.is_some());
+    // Multiplayer: holding the controller's camera (View) button opens the
+    // quick-chat wheel (right stick picks, release sends); a tap still
+    // changes the camera.
+    let mp_pad = r.ui.st.mp.connected() && r.ui.st.screen == Screen::Flying;
     for k in r.ui.st.input.take_pressed() {
+        if mp_pad && k == Key::Camera && r.ui.st.input.held.contains(&Key::Camera) {
+            r.cam_hold = Some(0.0);
+            continue;
+        }
         if !ui_action(r, k, in_flight) && r.ui.st.screen == Screen::Flying {
             r.input.pressed.push(k);
+        }
+    }
+    if let Some(t) = r.cam_hold {
+        let st = &mut r.ui.st;
+        if st.input.held.contains(&Key::Camera) {
+            let t = t + dt;
+            r.cam_hold = Some(t);
+            if t > 0.35 && mp_pad {
+                let x = st.input.analog.get(input::AxisAction::LookX).unwrap_or(0.0);
+                let y = st.input.analog.get(input::AxisAction::LookY).unwrap_or(0.0);
+                let mut w = st.mp.wheel.unwrap_or(net::Wheel { sel: None, held: true });
+                w.held = true;
+                if let Some(i) = ui::mp::wheel_pick(egui::vec2(x, -y)) {
+                    w.sel = Some(i);
+                }
+                st.mp.wheel = Some(w);
+            }
+        } else {
+            r.cam_hold = None;
+            match st.mp.wheel.take() {
+                Some(w) if w.held => {
+                    if let Some(i) = w.sel {
+                        st.mp.say(net::QUICK_CHAT[i]);
+                    }
+                }
+                other => {
+                    st.mp.wheel = other;
+                    if t <= 0.35 {
+                        r.input.pressed.push(Key::Camera);
+                    }
+                }
+            }
         }
     }
     let st = &r.ui.st;
     r.input.pad_held = if st.screen == Screen::Flying { st.input.held.clone() } else { Default::default() };
     r.input.analog = st.input.analog;
+    if st.mp.wheel.is_some_and(|w| w.held) {
+        // (The right stick picks in the wheel instead of looking around.)
+        r.input.analog.v[input::AxisAction::LookX.idx()] = None;
+        r.input.analog.v[input::AxisAction::LookY.idx()] = None;
+    }
     r.input.mouse = st.settings.controls.mouse.clone();
     r.input.dragging = r.right_drag;
 }
@@ -2754,6 +3092,9 @@ impl App {
                 sim.tenders = None;
                 sim.custom_start = custom;
                 sim.select(&s.world, args2.aircraft, args2.start, args2.watch);
+                if let Some(cfg) = args2.dogfight.clone() {
+                    sim.start_dogfight(&s.world, cfg);
+                }
                 if !args2.live {
                     sim.hours = args2.hours.unwrap_or(sim.hours);
                     sim.day_of_year = args2.day_of_year.unwrap_or(sim.day_of_year);
@@ -2777,6 +3118,11 @@ impl App {
     /// Fly the mission chosen in the briefing (missions/): a new session at its start.
     fn start_mission(&mut self) {
         let Some(r) = self.run.as_mut() else { return };
+        // Missions are single-player: not while connected to a server.
+        if r.ui.st.mp.connected() {
+            r.ui.st.missions.pending = None;
+            return;
+        }
         let Some(m) = r.ui.st.missions.pending.take().and_then(|id| missions::defs::by_id(&id)) else { return };
         let args2 = args_for_mission(&self.args, m);
         r.ui.st.missions.active = Some(m.id.clone());
@@ -2856,6 +3202,15 @@ impl App {
             }
         }
         r.ui.st.toasts.tick(dt);
+        // Multiplayer (net/): network every frame; a join that succeeded starts
+        // the flight at the server's airport.
+        r.ui.st.mp.poll();
+        if std::mem::take(&mut r.ui.st.mp.start_flight) {
+            mp_start_flight(&mut r.ui.st);
+        }
+        for (k, t, b) in std::mem::take(&mut r.ui.st.mp.notices) {
+            r.ui.st.toasts.push(k, t, b, 5.0);
+        }
         poll_controllers(r, dt);
         let screen = r.ui.st.screen;
         let mut notice: Option<String> = None;
@@ -2864,11 +3219,22 @@ impl App {
                 r.input.pressed.retain(|k| *k != Key::Screenshot);
                 let before = s.sim.as_ref().map(|x| x.ac.pos);
                 if screen == Screen::Flying && s.catch_up.is_none() {
-                    s.sim.as_mut().unwrap().update(&s.world, &mut r.input, dt);
+                    let sim = s.sim.as_mut().unwrap();
+                    // Damage / crash assists (missions override them in the sim).
+                    sim.assists = damage::Assists { structural: r.ui.st.settings.structural_damage, crashes: r.ui.st.settings.crashes };
+                    sim.update(&s.world, &mut r.input, dt);
                 } else {
                     r.input.pressed.clear();
                     r.input.orbit_delta = glam::Vec2::ZERO;
                     r.input.zoom_delta = 0.0;
+                }
+                // Multiplayer: our state out, others in, the server's time and weather.
+                if let Some(sim) = s.sim.as_mut() {
+                    r.ui.st.mp.fly(sim, &mut s.world, screen != Screen::Flying, dt);
+                    if std::mem::take(&mut r.ui.st.mp.want_restart) {
+                        sim.paused = false;
+                        r.input.pressed.push(Key::Reset);
+                    }
                 }
                 s.follow();
                 notice = s.check_catch_up(before);
@@ -2961,6 +3327,16 @@ impl App {
             r.ui.audio_clicks = 0;
         }
         r.audio.set_settings(r.ui.st.settings.sound);
+        {
+            // Other players' engines; the spectator camera is the listener.
+            let mp = &r.ui.st.mp;
+            let ear = mp.cam.map(|c| c.0).unwrap_or_default();
+            let listener = mp.cam.filter(|_| mp.spectate.is_some()).map(|(eye, view, _)| {
+                let inv = view.inverse();
+                audio::Listener { pos: eye, fwd: -inv.z_axis.truncate(), up: inv.y_axis.truncate() }
+            });
+            r.audio.set_traffic(mp.sounds(ear), listener);
+        }
         if let Some(s) = r.session.as_ref() {
             r.audio.update(s.sim.as_ref(), &s.world, dt, r.ui.st.screen != Screen::Flying);
         }
@@ -3042,7 +3418,15 @@ impl App {
                     r.input.pressed.push(Key::Reset);
                     r.ui.st.go(Screen::Flying);
                 }
-                Action::Quit => r.quit = true,
+                Action::Quit => {
+                    r.ui.st.mp.leave();
+                    r.quit = true;
+                }
+                Action::LeaveServer => {
+                    r.ui.st.mp.leave();
+                    r.ui.st.toasts.push(ui::toast::Kind::Info, "Left the server", "Flying on alone", 3.0);
+                    r.ui.st.go(Screen::Flying);
+                }
                 Action::FlyLast => {
                     if let Some(l) = r.ui.st.settings.last.clone() {
                         if let Some(i) = r.ui.st.defs.iter().position(|d| d.id == l.aircraft) {
@@ -3051,6 +3435,7 @@ impl App {
                         r.ui.st.plan.airport = l.airport;
                         r.ui.st.plan.spec = startpos::Spec::decode(&l.start).unwrap_or(startpos::Spec::Runway(String::new()));
                         r.ui.st.plan.watch = l.watch;
+                        r.ui.st.plan.dogfight = None;
                     }
                     self.start_flight();
                 }

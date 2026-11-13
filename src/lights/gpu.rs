@@ -350,7 +350,7 @@ impl LightRenderer {
         let stars_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("stars"), contents: bytemuck::cast_slice(&stars), usage: wgpu::BufferUsages::VERTEX });
         let dyn_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("aircraft lights"),
-            size: (std::mem::size_of::<LightInst>() * super::place::AC_SPRITES) as u64,
+            size: (std::mem::size_of::<LightInst>() * super::place::DYN_SPRITES) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -453,7 +453,7 @@ impl LightRenderer {
 
     /// This frame's aircraft light sprites (eye-relative).
     pub fn set_aircraft(&mut self, queue: &wgpu::Queue, sprites: &[LightInst]) {
-        self.dyn_n = sprites.len().min(super::place::AC_SPRITES) as u32;
+        self.dyn_n = sprites.len().min(super::place::DYN_SPRITES) as u32;
         if self.dyn_n > 0 {
             queue.write_buffer(&self.dyn_buf, 0, bytemuck::cast_slice(&sprites[..self.dyn_n as usize]));
         }

@@ -1,0 +1,147 @@
+{
+ "props": {},
+ "channels": [
+  [
+   "^fcs/left-(?:out|in)-aileron/final-deg$",
+   "aileron_l",
+   20.0,
+   0.0
+  ],
+  [
+   "^fcs/right-(?:out|in)-aileron/final-deg$",
+   "aileron_r",
+   20.0,
+   0.0
+  ],
+  [
+   "^fcs/(?:left|right)-elevator/final-deg$",
+   "elevator",
+   27.0,
+   0.0
+  ],
+  [
+   "^fcs/rudder/final-deg$",
+   "rudder",
+   27.3,
+   0.0
+  ],
+  [
+   "^fcs/spoilers/(?:left|right)-(?:in|out)-final-deg$",
+   "spoilers",
+   45.0,
+   0.0
+  ],
+  [
+   "^surface-positions/reverser-norm(?:\\[(\\d)\\])?$",
+   "eng{1}_reverser",
+   1.0,
+   0.0
+  ],
+  [
+   "^fcs/stabilizer/final-deg$",
+   "const",
+   0.0,
+   0.0
+  ]
+ ],
+ "light_models": [
+  "procedural_light",
+  "Effects/lights/",
+  "[Ll]ights?/.*(nav|beacon|strobe|landing|taxi)",
+  "/(nav|beacon|strobe)",
+  "light-cone",
+  "dome_cone"
+ ],
+ "max_tex": 2048,
+ "interior_max_tex": 1024,
+ "id": "triple7",
+ "name": "Boeing 777-300ER",
+ "fg_name": "777",
+ "model": "Models/777-300ER.xml",
+ "fdm": {
+  "cg_model": [
+   4.9,
+   0.0,
+   -0.5
+  ]
+ },
+ "exclude_models": [
+  "Effects/",
+  "Autopush",
+  "Ground/",
+  "Operations",
+  "Human",
+  "pilot",
+  "Pilot",
+  "EFB",
+  "cargo-ramp",
+  "marker",
+  "light-cone",
+  "dome_cone",
+  "lowpedestal"
+ ],
+ "interior_models": [
+  "flightdeck",
+  "Instruments",
+  "OHpanel",
+  "Panel3",
+  "APpanel",
+  "pedestal",
+  "gear-ctl",
+  "MidSidePanel",
+  "interior",
+  "panel\\.xml"
+ ],
+ "eye_view": [
+  -0.57,
+  0.8,
+  -28.0781
+ ],
+ "exclude_objects": [
+  [
+   "^(AI|ASI|Alt1|Alt2|Alt3|Alt4|Alt5|Alt6|AltitudeCursor|Alttext10|Alttext100|Alttext1000|Alttext10000|Asitext\\.001|Asitext\\.010|Asitext\\.100|Backplane|Bank_ind|Box\\-alt\\-alert|Box\\-mode|Box\\-pitch|Box\\-roll|Box\\-speed|CursorMask1|CursorMask2|CursorMask3|CursorMask4|Display_0|Display_1|FDpitch|FDpitch_rembrandt|FDroll|FDroll_rembrandt|Heading_mark|Hsi|IAS_window|Imarker|Mmarker|Mode_announciator|Omarker|OverSpeedInd|Power\\.off|Ralt|Roll\\.needle|Slip\\.needle|SpeedTarget|StallSpeedInd|Track|VSI\\.needle|VS_ind|VrefMark|coarseGSPointer|coarseLocPointer|gspointer|gsscale|hdg\\-bug|locpointer|locscale|minimum_head|minimum_head_a|minimum_tail|minimum_tail_a|runway|runway_bar|speedtrend\\.down|speedtrend\\.up)$",
+   "PFD/PFD_[LR]\\.ac"
+  ],
+  [
+   "^Power\\.off$",
+   "ND/ND_[LR]\\.ac"
+  ],
+  [
+   "^EFIS\\.screenoff$",
+   "UEICAS/UEICAS\\.ac"
+  ],
+  [
+   "^MFD\\.screenoff$",
+   "MFD/mfd\\.ac"
+  ],
+  "\\.spot$"
+ ],
+ "displays": [
+  [
+   "^EFIS\\.screen$",
+   "pfd",
+   "PFD/PFD_[LR]\\.ac"
+  ],
+  [
+   "^ND\\.screen[LR]$",
+   "nd"
+  ],
+  [
+   "^EFIS\\.screen$",
+   "ewd",
+   "UEICAS/UEICAS\\.ac"
+  ],
+  [
+   "^MFD\\.screen$",
+   "sd"
+  ],
+  [
+   "^CDuscreen$",
+   "mcdu"
+  ]
+ ],
+ "fuel_kg": 0,
+ "force_models": [
+  "^(Pedestal|OHpanel)$"
+ ]
+}

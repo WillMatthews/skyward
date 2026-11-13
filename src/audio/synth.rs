@@ -296,6 +296,10 @@ pub struct Synth {
     pa: Speaker,
     /// COM 1 / COM 2 receivers (ATC, ATIS).
     radio: super::radio::Radio,
+    /// Other aircraft (multiplayer).
+    traffic: super::traffic::Traffic,
+    /// Guns, cracks, hits, launches, seeker / RWR tones (weapons.rs).
+    weapons: super::weapons::Weapons,
     fdn: Fdn,
     world_lp: OnePole,
     world_lp2: OnePole,
@@ -355,6 +359,8 @@ impl Synth {
             speaker: Speaker::new(sr),
             pa: Speaker::new(sr),
             radio: super::radio::Radio::new(sr),
+            traffic: super::traffic::Traffic::default(),
+            weapons: super::weapons::Weapons::new(sr),
             fdn: Fdn::new(sr),
             world_lp: OnePole::new(700.0, sr),
             world_lp2: OnePole::new(1100.0, sr),
@@ -413,6 +419,7 @@ impl Synth {
             for e in &mut self.emit {
                 e.est += f.shift;
             }
+            self.traffic.shift(f.shift);
         }
         self.frame = *f;
         self.frame.cut = cut;
@@ -467,6 +474,19 @@ impl Synth {
                     return;
                 }
                 _ => {}
+            }
+        }
+        // Weapons (weapons.rs): guns and tones are voices, the rest one-shots.
+        {
+            let ear = self.ear;
+            let pool = &mut self.pool;
+            let rng = &mut self.rng;
+            let mut add = |s: Shot| {
+                let s = if s.route == Route::World { s.delayed((s.wpos.distance(ear) / SPEED_OF_SOUND).min(8.0), sr) } else { s };
+                pool.add(s.init(sr, rng));
+            };
+            if self.weapons.event(e, &mut add) {
+                return;
             }
         }
         let rng = &mut self.rng;
@@ -581,6 +601,7 @@ impl Synth {
                 );
             }
             Event::UiClick => add(Shot::new(Kind::Click, Route::Ui, 0.35, 0.03), rng),
+            Event::Gun { .. } | Event::Crack { .. } | Event::Hit { .. } | Event::Missile { .. } | Event::Countermeasure { .. } | Event::Eject { .. } | Event::Tones { .. } => {}
         }
     }
 
@@ -653,7 +674,7 @@ impl Synth {
         self.g_radio.to(st.radio.clamp(0.0, 2.0), n);
         self.g_ui.to(st.ui.clamp(0.0, 2.0), n);
 
-        let world_target = if !self.have_frame || !f.active || f.paused { 0.0 } else if f.menu { 0.45 } else { 1.0 };
+        let world_target = if !self.have_frame || (!f.active && !f.spectator) || f.paused { 0.0 } else if f.menu { 0.45 } else { 1.0 };
         let w = self.world.go(world_target, dt, 0.35, 0.18);
         self.world_r.to(w, n);
         let mf = self.muffle.go(if f.menu || f.paused { 1.0 } else { 0.0 }, dt, 0.2, 0.3);
@@ -694,6 +715,7 @@ impl Synth {
         }
         let ear = self.ear;
         let (er, eu, ef) = (f.ear_right, f.ear_up, f.ear_fwd);
+        self.weapons.control(ear, er, f.interior, if f.cut { Vec3::ZERO } else { f.shift });
         let axis = f.ac_rot * Vec3::Z;
         // Supersonic source: exact retarded-time solution with the full
         // speed (silence ahead of the Mach cone, boom on entering it). At
@@ -833,6 +855,9 @@ impl Synth {
             }
         }
 
+        // Other aircraft (multiplayer).
+        self.traffic.control(&f.traffic, ear, er, sf, eng_warp, n, sr);
+
         // World-placed one-shots and the wreck follow the listener.
         for s in self.pool.shots.iter_mut().flatten() {
             if s.route == Route::World {
@@ -889,13 +914,16 @@ impl Synth {
             ext_eng.1 += s * em.gr.tick();
             send += s * em.send.tick();
         }
-        // Airframe emitter (aero / ground / airframe one-shots).
+        // Airframe emitter (aero / ground / airframe one-shots), plus the guns (weapons.rs).
         let (mut a_ext, mut a_int) = self.air.tick(&mut self.rng);
-        let mut cock_shots = 0.0f32;
+        let (w_ext, w_int, w_world, w_tones) = self.weapons.tick(&mut self.rng);
+        a_ext += w_ext;
+        a_int += w_int;
+        let mut cock_shots = w_tones;
         let mut lis = (0.0f32, 0.0f32);
         let lis_g = 1.0 - 0.45 * ins;
         let mut ui = 0.0f32;
-        let mut wext = (0.0f32, 0.0f32);
+        let mut wext = w_world;
         for slot in self.pool.shots.iter_mut() {
             if let Some(s) = slot {
                 match s.tick(sr, &mut self.rng) {
@@ -939,6 +967,10 @@ impl Synth {
         let (fl, fr) = self.wreck.tick(&mut self.rng);
         wext.0 += fl;
         wext.1 += fr;
+        // Other aircraft: world-placed too (muffled through the airframe inside).
+        let (tl, tr, _) = self.traffic.tick();
+        wext.0 += tl;
+        wext.1 += tr;
         send += (wext.0 + wext.1) * 0.15;
         // Heard from the cockpit: through the airframe, muffled.
         let wi = self.world_lp.lp(self.world_lp2.lp((wext.0 + wext.1) * 0.5)) * 0.35;

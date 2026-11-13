@@ -1,0 +1,86 @@
+{
+ "props": {
+  "sim/virtual-cockpit": 1,
+  "sim/model/yokes": 1,
+  "sim/current-view/internal": 1
+ },
+ "channels": [],
+ "light_models": [
+  "procedural_light",
+  "Effects/lights/",
+  "[Ll]ights?/.*(nav|beacon|strobe|landing|taxi)",
+  "/(nav|beacon|strobe)"
+ ],
+ "max_tex": 2048,
+ "interior_max_tex": 1024,
+ "id": "crj700",
+ "name": "Bombardier CRJ700",
+ "fg_name": "CRJ700-family",
+ "model": "Models/CRJ700.xml",
+ "fdm": {
+  "jsbsim": "CRJ700jsb.xml"
+ },
+ "vrp_m": [
+  18.43,
+  0.0,
+  0.25
+ ],
+ "fuel_kg": 4000,
+ "pointmass_kg": {
+  "Payload": 6000
+ },
+ "exclude_models": [
+  "Effects/",
+  "Pushback",
+  "Human",
+  "pilot",
+  "Pilot",
+  "marker"
+ ],
+ "interior_models": [
+  "Flightdeck",
+  "Instruments",
+  "Interior"
+ ],
+ "eye_view": [
+  -0.528,
+  -0.468,
+  -13.105
+ ],
+ "exclude_objects": [
+  [
+   "^(ADF1Ptr|ADF2Ptr|AGL|AGL1|AGL10|AGL100|AGL1000|AIPtr|AltBug|AltBugM|AltPtr|AltTape|AltTapeM|FD|GS|GSPtr|HSI|HSIBug|HdgFrame|HdgPtr|IASBug|ILS|ILSPtr|MachBug|NAVPtr|NAVTrack|Off|Overspeed|Pitch|Roll|RollPtr|SpdPtr|SpdTape|Symbols1|Symbols2|VNAVAdvise|VNAVPtr|VS|VSPtr)$",
+   "PFD/pfd\\.ac"
+  ],
+  [
+   "^(ADF1|ADF1Ptr|ADF2|ADF2Ptr|GS|GSPtr|HSI1|HSI1Bug|HSI2|HSI2Bug|HSI3|HSI3Bug|HSI6|HSI6Bug|HSIHdg|NAV1From|NAV1Ptr|NAV1To|NAV1Track|NAV2From|NAV2Ptr|NAV2To|NAV2Track|NoRadar|Screen|Wind)$",
+   "MFD/mfd\\.ac"
+  ],
+  [
+   "^(APUEGT|APURPM|APUReadings|AileronTrim|ElecAPUGen|ElecBus1|ElecBus2|ElecExtAC|ElecGen1|ElecGen2|ElecSeg1|ElecSeg2|ElecSeg3|ElecSeg4|ElecSeg5|ElecServBus|ElevatorTrim|Flaps1|Flaps20|Flaps30|Flaps45|Flaps8|GearLInd|GearNInd|GearRInd|ITT1|ITT2|N11|N12|N21|N22|Off|OilPress1|OilPress2|RudderTrim|Symbols1|Symbols2|Symbols3)$",
+   "EICAS/eicas\\.ac"
+  ]
+ ],
+ "displays": [
+  [
+   "^Screen$",
+   "pfd",
+   "PFD/pfd\\.ac"
+  ],
+  [
+   "^Off$",
+   "nd",
+   "MFD/mfd\\.ac"
+  ],
+  [
+   "^Screen$",
+   "ewd",
+   "EICAS/eicas\\.ac"
+  ],
+  [
+   "^Display$",
+   "mcdu",
+   "CDU/cdu\\.ac"
+  ]
+ ]
+}

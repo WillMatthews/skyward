@@ -35,6 +35,7 @@
   <a href="#aircraft">Aircraft</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#controls">Controls</a> ·
+  <a href="#multiplayer">Multiplayer</a> ·
   <a href="#architecture">Architecture</a> ·
   <a href="#credits-and-licences">Credits</a>
 </p>
@@ -142,6 +143,20 @@ painted over or composited.
   a V1 engine fire, rapid decompression, a belly landing, unreliable airspeed at night, a microburst on final, an uncontained engine failure,
   a dual bird strike over the Thames (land or ditch), smoke with a clock running, jammed flaps in a crosswind, a fuel-exhaustion glide and
   thrust-only control. Each has a briefing, live objectives, cabin PA, fire tenders and a scored debrief with medals.
+- **Multiplayer.** A shared sky on your LAN: a headless dedicated server, a server browser that finds
+  it by itself, everyone's real models, lights and engine sound, name tags, traffic on the map and
+  TCAS on the ND, chat, a quick-chat wheel and spectating. Time and weather come from the server.
+- **Dogfights.** The Spitfire IX (2 × 20 mm Hispano + 4 × .303) and the F-16C (M61A1, AIM-9M,
+  AIM-120C, flares, chaff, radar and RWR) fire real ballistics: Mach-dependent drag, gravity,
+  dispersion and tracers. Missiles fly proportional navigation with IR or radar seekers that flares,
+  chaff, the sun and the Doppler notch can fool. Hits land on per-part hit volumes cut from the real
+  model and drive the structure and systems simulations: spars weaken, wings and tails tear off, the
+  engine loses power, catches fire or seizes when the glycol runs out, and tanks leak or burn. The
+  pilot can be wounded or killed, or can eject (ACES II) or bail out under a parachute. AI opponents
+  from rookie to ace fly the same flight model with BFM. Quick-start 1v1 or 2v2 from the main menu.
+  The HUD has a gun funnel and LCOS, seeker and ASE circles and launch zones; the Spitfire has a Mk II
+  gyro gunsight; the F-16 has an RWR with tones. Fights work in multiplayer too: hits are
+  claimed by the shooter, checked by the server and applied by the target (`--combat on|off` on the server).
 - **Sound.** Real FlightGear engine recordings mixed with Skyward's own synthesis: prop blade-pass,
   afterburner crackle, positional / Doppler mixing, sonic-boom N-waves, GPWS callouts, impacts.
 - **Instruments.** Full 3D cockpits with live needles and glass displays, a 2D glass or steam-gauge
@@ -157,7 +172,7 @@ painted over or composited.
 
 ## Aircraft
 
-Twelve flyable types. The FlightGear models, cockpits and flight-dynamics data are GPL, credited per
+Twenty-one flyable types. The FlightGear models, cockpits and flight-dynamics data are GPL, credited per
 aircraft in [`assets/aircraft/<id>/CREDITS.md`](assets/aircraft) and rebuilt by
 [`tools/fgimport/`](tools/fgimport).
 
@@ -197,6 +212,34 @@ aircraft in [`assets/aircraft/<id>/CREDITS.md`](assets/aircraft) and rebuilt by
     <td valign="top"><b>Airbus Helicopters EC130 B4</b><br><code>ec130</code> <sub>(<code>heli</code>)</sub><br><sub><i>Skyward rotor flight model</i></sub><br><sub>Collective, cyclic, pedals. VEMD, autorotation, stability assist.</sub></td>
     <td width="190" valign="top"><img src="docs/media/aircraft/fpv.jpg" width="190" alt="5-inch FPV quadcopter"></td>
     <td valign="top"><b>5″ FPV quadcopter</b><br><code>fpv</code> <sub>(<code>quad</code>, <code>drone</code>)</sub><br><sub><i>Skyward quad flight model</i></sub><br><sub>Acro / angle modes, Betaflight-style rates, 6S sag, OSD.</sub></td>
+  </tr>
+  <tr>
+    <td width="190" valign="top"><img src="docs/media/aircraft/extra500.jpg" width="190" alt="Extra EA-500"></td>
+    <td valign="top"><b>Extra EA-500</b><br><code>extra500</code> <sub>(<code>ea500</code>)</sub><br><sub><i>Calibrated flight model</i></sub><br><sub>Six-seat turboprop tourer with glass IFDs.</sub></td>
+    <td width="190" valign="top"><img src="docs/media/aircraft/cub.jpg" width="190" alt="PA-18 Super Cub"></td>
+    <td valign="top"><b>Piper PA-18 Super Cub</b><br><code>cub</code> <sub>(<code>pa18</code>)</sub><br><sub><i>Calibrated flight model</i></sub><br><sub>Tube-and-fabric bush taildragger.</sub></td>
+  </tr>
+  <tr>
+    <td width="190" valign="top"><img src="docs/media/aircraft/zlin.jpg" width="190" alt="Zlin Z-50 LX"></td>
+    <td valign="top"><b>Zlin Z-50 LX</b><br><code>zlin</code> <sub>(<code>z50</code>)</sub><br><sub><i>Calibrated flight model</i></sub><br><sub>Unlimited aerobat: snap rolls, spins, inverted systems, airshow smoke.</sub></td>
+    <td width="190" valign="top"><img src="docs/media/aircraft/otter.jpg" width="190" alt="DHC-3 Otter on floats"></td>
+    <td valign="top"><b>DHC-3 Otter (floats)</b><br><code>otter</code> <sub>(<code>dhc3</code>, <code>floatplane</code>)</sub><br><sub><i>Calibrated flight model</i></sub><br><sub>Radial bush plane on floats: planing, step, water rudders; starts on the water.</sub></td>
+  </tr>
+  <tr>
+    <td width="190" valign="top"><img src="docs/media/aircraft/dc3.jpg" width="190" alt="DC-3 / C-47"></td>
+    <td valign="top"><b>Douglas DC-3 / C-47</b><br><code>dc3</code> <sub>(<code>dc-3</code>)</sub><br><sub><i>Calibrated flight model</i></sub><br><sub>The classic twin-radial airliner, tail-wheel handling.</sub></td>
+    <td width="190" valign="top"><img src="docs/media/aircraft/triple7.jpg" width="190" alt="Boeing 777-300ER"></td>
+    <td valign="top"><b>Boeing 777-300ER</b><br><code>triple7</code> <sub>(<code>777</code>)</sub><br><sub><i>Calibrated flight model</i></sub><br><sub>Widebody twin, 513 kN GE90s, FBW, live PFD / ND / EICAS / MFD / CDUs.</sub></td>
+  </tr>
+  <tr>
+    <td width="190" valign="top"><img src="docs/media/aircraft/crj700.jpg" width="190" alt="Bombardier CRJ700"></td>
+    <td valign="top"><b>Bombardier CRJ700</b><br><code>crj700</code> <sub>(<code>crj</code>)</sub><br><sub><i>JSBSim + patches flight model</i></sub><br><sub>Regional jet: rear-mounted CF34s, T-tail, live glass displays.</sub></td>
+    <td width="190" valign="top"><img src="docs/media/aircraft/citationx.jpg" width="190" alt="Cessna Citation X"></td>
+    <td valign="top"><b>Cessna Citation X</b><br><code>citationx</code> <sub>(<code>citation</code>)</sub><br><sub><i>Calibrated flight model</i></sub><br><sub>Mach 0.92 business jet with its live Primus 2000 panel.</sub></td>
+  </tr>
+  <tr>
+    <td width="190" valign="top"><img src="docs/media/aircraft/concorde.jpg" width="190" alt="Concorde"></td>
+    <td valign="top"><b>Aerospatiale/BAC Concorde</b><br><code>concorde</code> <sub>(<code>sst</code>)</sub><br><sub><i>JSBSim + delta aero flight model</i></sub><br><sub>Mach 2 at FL550, reheat, vortex lift, trim-fuel CG transfer, droop nose / visor, live analogue cockpit.</sub></td>
   </tr>
 </table>
 
@@ -239,6 +282,7 @@ cargo run --release -- --airport EGLL                     # any ICAO / IATA / na
 cargo run --release -- --airport EGKK --aircraft a320 --start-at final:26L:5 --no-menu
 cargo run --release -- --airport LOWI --aircraft c172     # Innsbruck, in the Alps
 cargo run --release -- --watch --aircraft vulcan          # sit back: AI pilot + cinematic camera
+cargo run --release -- --aircraft f16 --dogfight 2v2 --difficulty ace --no-menu   # guns, missiles, AI wingman
 ```
 
 ### Browser version
@@ -262,6 +306,7 @@ scenery, terrain, live weather and sound in a tab.
   - Lighter defaults: low scenery detail, 2048² shadow cascades, and the 3D view drawn at
     ≤ 1.6 Mpixel and scaled up.
   - Sound starts after you click Fly.
+  - No multiplayer: browsers cannot send the UDP packets the game and LAN discovery use.
   - No aircraft-card thumbnails and no Quit button.
   - Tiles are built in Web Workers (`src/tiles_web.rs`).
 - **URL options.** The query string is the command line, e.g.
@@ -296,6 +341,7 @@ Every key can be rebound in **Settings › Controls**. Press **H** or **F1** in 
 | **C** | Camera: chase, cockpit, tower, fly-by, cinematic | **2** | APPR: ILS capture and autoland |
 | **Right-drag, wheel** | Look / orbit, zoom | **J** | Hand over to the AI pilot |
 | **M** | Moving map | **F3** / **F4** | Radios & flight plan / ATC comms |
+| **Space** (armed, in the air) | Fire | **F5 / F7 / F8** | Weapon · lock · flares |
 | **Esc** | Pause menu | **O** / **F2** | Systems & failures |
 
 <details>
@@ -320,6 +366,10 @@ Every key can be rebound in **Settings › Controls**. Press **H** or **F1** in 
 | F3 | **radios & flight plan** panel: COM / NAV / ADF frequencies, course, ident, transponder; route, destination + approach, direct-to, predictions |
 | F5 / F7–F10 | **split throttles**: F7/F8 left engines −/+, F9/F10 right engines −/+, F5 brings the levers back together |
 | F4 | **ATC comms menu**: the requests for the unit on COM 1 (1–9 pick, 0 = tune a station, Esc closes), read-back / assist / subtitle / COM 2 options |
+| Space (in the air) | **weapons** (Spitfire, F-16): fire the selected weapon — guns (held), a missile in SRM / MRM (press); still the wheel brakes on the ground |
+| Right Alt | Spitfire: cannon only (the second button); F-16: weapon release (pickle) |
+| F5 / F7 / F8 / F9 | armed single-engine types: master mode GUN → SRM → MRM (Spitfire: cannon + MG / cannon / MG), radar lock / AIM-9 uncage, flares + chaff, gun harmonisation range |
+| F10 twice | eject (F-16 ACES II) / bail out (Spitfire) |
 | ; | navigation display: ROSE ILS → ROSE VOR → ROSE NAV → ARC → PLAN |
 | K | engine-failure practice (fails engine 1, then 2, then restores) |
 | O / F2 | **systems & failures** panel: fail / arm / random failures, repair; systems (battery, generators, fuel, engine start, APU, hydraulics, anti-ice, alternate gear, fire handles) |
@@ -339,6 +389,7 @@ Every key can be rebound in **Settings › Controls**. Press **H** or **F1** in 
 | Esc / Tab | pause menu: resume, restart, change aircraft / airport, settings |
 | H / F1 | help |
 | F12 | screenshot |
+| Enter, F11, Num *, Backspace / Num 0 | multiplayer (when connected): chat, players & spectate, name tags, quick-chat wheel |
 
 Stick inputs disconnect the autopilot (flashing AP DISCONNECT); throttle keys only drop the
 autothrottle.
@@ -406,7 +457,7 @@ the real flight model through the controls and autopilot. Nothing is scripted or
 | `--airport CODE` | start at an airport (OurAirports ident / ICAO / IATA / name; Nominatim fallback) |
 | `--start-at SPEC` | `runway:27L`, `final:27L:5` (NM), `apron`, `air:LAT:LON:ALT_M:HDG`, `thermal` |
 | `--start S` | `runway` `approach` `city` `thermal` |
-| `--aircraft ID` | `kestrel` `swift` `peregrine` `lancer` `aerolink` `meridian190` `meridian320` `hercules` `galaxy` `vulcan` `ec130` `fpv` (or `c172` `ask21` `spitfire` `f16` `atr72` `e190` `a320` `c130` `c5` `heli` `quad` `drone`) |
+| `--aircraft ID` | `kestrel` `swift` `peregrine` `lancer` `aerolink` `meridian190` `meridian320` `hercules` `galaxy` `vulcan` `ec130` `fpv` `extra500` `cub` `zlin` `otter` `dc3` `triple7` `crj700` `citationx` `concorde` (or `c172` `ask21` `spitfire` `f16` `atr72` `e190` `a320` `c130` `c5` `heli` `quad` `drone` `ea500` `pa18` `z50` `dhc3` `777` `crj` `citation` `sst`) |
 | `--no-menu` | fly straight away (skip the main menu) |
 | `--bot` / `--watch` | hand the aircraft to the auto-flight bot / + cinematic camera (+ glider relaunch) |
 | `--live` / `--no-live` | follow the real weather and time (default on) / don't |
@@ -422,6 +473,7 @@ the real flight model through the controls and autopilot. Nothing is scripted or
 | `--traffic off\|low\|medium\|high` | road traffic density (default: the Settings choice; captures simulate it in-thread and settle it, reproducibly) |
 | `--mute` | start muted |
 | `--controllers` | list game controllers and print their inputs |
+| `--connect HOST[:PORT] --name CALLSIGN [--password PW]` | join a multiplayer server (also works headless) |
 
 **Headless (no window).** These render offscreen and write a PNG. They're used for the screenshots
 on this page, the golden tests and soak tests.
@@ -437,7 +489,7 @@ on this page, the golden tests and soak tests.
 | `--press ap,ap_appr,nd_mode` | press keys (Settings › Controls ids) after the spawn |
 | `--audio-script "2:atc=clearance,40:atc=taxi"` | scripted cues, including ATC requests (see `src/audio/render.rs`) |
 | `--eye x,y,z --look x,y,z`, `--eye-ll lat,lon,h --look-ll lat,lon,h` | fixed camera (local frame / by geography) |
-| `--menu-screen S` | capture a menu: `main` `aircraft` `airport` `conditions` `settings` `pause` `loading` `credits` |
+| `--menu-screen S` | capture a menu: `main` `aircraft` `airport` `conditions` `settings` `pause` `loading` `credits` `missions` `multiplayer` |
 | `--no-hud`, `--stats` | hide the HUD, print the final state |
 | `--realtime [--fps HZ]`, `--then-reset` | stream + render in real time; frame-time / streaming report |
 | `--soak [--shot-every S]` | fly the bot for `--seconds` of sim time; minute log, events, PNGs |
@@ -467,10 +519,155 @@ skyward --shot m.png --aircraft meridian320 --bot --soak --seconds 4200 --warp 8
 
 </details>
 
+## Multiplayer
+
+Fly with other people on your network. One machine runs the dedicated server; everyone else picks it
+in **Main menu › Multiplayer** (desktop build only).
+
+```sh
+cargo build --release -p skyward-server        # headless: no GPU, audio or window needed
+target/release/skyward-server --name "Friday night" --airport EGKK --max-players 12
+target/release/skyward-server --config server.toml   # same keys as the flags
+cargo run --release -- --connect 192.168.1.20 --name Alpha   # join without the browser
+```
+
+- **Shared sky.** Everyone starts at the server's airport. Time (`real` or a fixed `HH:MM`) and
+  weather (`live` METAR, a preset, a METAR string, or `own`) come from the server. Time warp is off.
+- **Ports (UDP).** **47820** game traffic (`--port`), **47821** LAN discovery, **5353** mDNS
+  (`_skyward._udp`). Open them in a host firewall for other machines to see and join, e.g.
+  `sudo ufw allow 47820:47821/udp` and `sudo ufw allow 5353/udp`.
+- **LAN discovery.** The browser finds servers by itself (one broadcast per subnet plus an mDNS query
+  every 3 s, no port scanning) and shows players, airport, ping, weather and the message of the day.
+  **Add by address** takes `host[:port]`; favourites and recent servers are remembered.
+- **Over the internet.** Forward UDP 47820 and use **Add by address**. Nothing is listed publicly:
+  no master server, no telemetry.
+- **Air combat.** Spitfires and F-16s can fight: hits are claimed by the shooter, checked by the
+  server (combat on, both flying, in range, rate-limited) and applied by the target, which reports
+  its damage and who shot it down. `--combat off` (or `combat off` in the console) disarms everyone;
+  the browser shows the setting. The dogfight AI is single-player.
+- **Missions are single-player.** The Missions menu is disabled while you're connected.
+
+| Key (rebindable) | Action |
+|---|---|
+| **Enter** | chat (Enter sends, Esc closes) |
+| **F11** | players: who is flying what and where; **Spectate** follows another aircraft (◀ ▶ to switch, **Fly** to respawn) |
+| **Num \*** | name tags on / off |
+| **Backspace** / **Num 0**, or hold the controller's **View** button | quick-chat wheel (1–8 / click; on a controller: right stick picks, release sends) |
+| **Esc** › **Leave server** | keep flying alone |
+
+<details>
+<summary><b>Server options, config file and console</b></summary>
+
+`skyward-server --help`:
+
+```
+skyward-server — Skyward dedicated multiplayer server
+
+USAGE:
+    skyward-server [OPTIONS]
+
+OPTIONS:
+    -c, --config <FILE>      TOML config file (flags override it)
+    -n, --name <NAME>        server name shown in the browser   [Skyward server]
+    -p, --port <PORT>        UDP game port                        [47820]
+    -b, --bind <ADDR>        address to listen on                 [0.0.0.0]
+    -m, --max-players <N>    player slots (1-64)                  [16]
+        --password <PW>      require a password to join           [none]
+        --motd <TEXT>        message of the day (browser + on join)
+    -a, --airport <ICAO>     airport everyone starts at           [EGLC]
+        --region <TEXT>      region label for the browser ("London")
+        --time <MODE>        `real` (UTC now) or a local time `HH:MM`   [real]
+        --day <N>            day of year with a fixed time (1-366)       [today]
+        --weather <MODE>     `live` (METAR of the airport, refreshed every 10 min),
+                             `own` (each client keeps its own), a preset
+                             (clear, few, scattered, broken, overcast, rain, fog)
+                             or a full METAR string                       [live]
+        --tick-hz <N>        snapshot rate, 10-60 Hz              [30]
+        --combat <on|off>    air combat: weapons fire and do damage [on]
+        --no-discovery       don't answer LAN discovery broadcasts (UDP 47821)
+        --no-mdns            don't announce over mDNS (_skyward._udp)
+        --ban-file <FILE>    banned addresses, one per line (ban / unban keep it updated)
+        --log-level <LVL>    debug, info, warn                    [info]
+        --log-json           log as JSON lines
+        --no-console         don't read commands from stdin
+    -h, --help               this help
+    -V, --version            version
+
+PORTS (UDP; open them in a host firewall for LAN play):
+    47820   game traffic (or --port)
+    47821   LAN discovery broadcasts (shared by all servers on a host)
+    5353    mDNS (shared with the system's responder)
+
+CONSOLE (type `help` while running):
+    list · kick <player> [reason] · ban <player|ip> [reason] · unban <ip> · bans
+    say <text> · combat on|off · time real|HH:MM · weather live|own|<preset>|<METAR> · motd <text>
+    status · quit
+
+EXAMPLE:
+    skyward-server --name "Friday night" --airport EGKK --max-players 12 --time 21:30
+```
+
+`server.toml` uses the same keys (`name`, `port`, `bind`, `max_players`,
+`password`, `motd`, `airport`, `region`, `time`, `day`, `weather`, `tick_hz`, `combat`,
+`ban_file`, `log_level`, and the switches `discovery`, `mdns`, `log_json`,
+`console`):
+
+```toml
+name = "Friday night"
+airport = "EGKK"
+region = "London"
+max_players = 12
+time = "21:30"
+weather = "live"
+motd = "Gatwick departures; be nice on 118.5."
+```
+
+**Console** (stdin): `list`, `kick`, `ban`, `unban`, `bans`, `say`, `time`, `weather`, `motd`,
+`status`, `quit`. Logs are timestamped lines on stderr (`--log-json` for JSON lines). Ctrl-C,
+SIGTERM or `quit` shut down cleanly; bans persist with `--ban-file bans.txt`.
+
+**Testing.** `scripts/mp-loopback.sh` runs a server and two headless clients on 127.0.0.1 and writes
+what each saw. `SKYWARD_NET_SIM="lat=75,jitter=10,loss=2"` puts a simulated bad link (ms / ms / %)
+under a client.
+
+</details>
+
+<details>
+<summary><b>How the netcode works</b></summary>
+
+**How it works** (`crates/skyward-net`, shared by the game and the server):
+UDP with a small reliability layer of our own — 16-bit sequence numbers and
+32-packet ack bit fields on every packet; aircraft states are unreliable and
+latest-wins, chat / joins / events / world sync are reliable, ordered and
+resent until acknowledged. No async runtime or TLS (QUIC would need
+certificates on a LAN box), identical on every OS, and the protocol and
+interpolation code is sans-IO, so loss, latency and 32 clients are tested
+deterministically. Clients send their state at the server's tick rate (30
+Hz): position as latitude / longitude (f64) and altitude — never the
+floating-origin frame — attitude and velocities in the local tangent frame,
+surfaces, engines, rotor, lights, damage. The server relays new samples as
+snapshots; clients sync their clock to the server's (NTP-style, slewed) and
+draw others ~1.25 send intervals plus the measured lag and jitter in the
+past, along cubic Hermite curves through positions and velocities with
+slerped attitude, dead-reckoning up to 0.6 s through gaps and blending the
+correction out. Handshake: protocol version check (a clear "version
+mismatch" both in the browser and on join), a stateless keyed cookie before
+the server keeps any state, SHA-256 password proof (the password never
+crosses the wire), random session tokens. Every datagram is size-capped,
+bounds-checked and rate-limited; requests are padded so replies never
+amplify; nothing panics on bad input.
+
+The browser build has no multiplayer: browsers cannot send UDP, WebTransport would need a TLS
+certificate the browser trusts on every LAN server, and WebSockets would add head-of-line blocking
+to the 30 Hz state stream.
+
+</details>
+
 ## Architecture
 
-A single Rust crate. The simulation and world streaming are platform-independent; `src/platform/`
-adapts fetch, storage and threading for the browser.
+A Cargo workspace: the game (`skyward`), the multiplayer protocol (`crates/skyward-net`) and the
+dedicated server (`crates/skyward-server`). The simulation and world streaming are
+platform-independent; `src/platform/` adapts fetch, storage and threading for the browser.
 
 ```mermaid
 flowchart LR
@@ -554,6 +751,9 @@ Settings › Display switches to mailbox / immediate for the lowest latency.
 | `src/ui/` | design system, instruments (`gauges.rs`, `glass.rs`, `hudsym.rs`), moving map, menus, panels |
 | `src/models.rs`, `src/aircraft_asset.rs`, `src/assets.rs` | imported aircraft models and animations; asset loading |
 | `src/platform/`, `src/tiles_web.rs`, `web/` | browser build: fetch, localStorage, Web Worker tile pool, page shell |
+| `src/net/`, `src/ui/browser.rs`, `src/ui/mp.rs` | multiplayer client: session, remote aircraft, LAN server browser, name tags, chat, player list |
+| `crates/skyward-net/` | multiplayer protocol: codec, reliability layer, handshake, clock sync, interpolation, discovery (sans-IO) |
+| `crates/skyward-server/` | headless dedicated server: config, console, logging |
 | `tools/fgimport/` | offline converter: FlightGear aircraft → Skyward assets (+ neutral liveries) |
 | `tools/regress/`, `tests/goldens/` | golden image / audio comparison tool and the committed goldens |
 | `assets/` | aircraft, audio, fonts (each with its CREDITS / licence files) |
@@ -577,7 +777,6 @@ These are being built now or planned. They aren't in `main` yet. See [`ROADMAP.m
 [`PLAN.md`](PLAN.md).
 
 - **More challenges.** Crosswind and short-field landings, glider task racing, scored tours.
-- **Multiplayer.** A shared sky.
 - **Live traffic.** Real ADS-B traffic as AI aircraft.
 - **More aircraft.** And military types with weapons.
 - **Releases and replays.** Native release packages, and a replay / flight recorder.

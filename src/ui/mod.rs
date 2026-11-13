@@ -8,6 +8,7 @@
 
 #![allow(deprecated)]
 
+pub mod browser;
 pub mod canvas;
 pub mod comms;
 pub mod controls;
@@ -16,9 +17,11 @@ pub mod flight;
 pub mod gauges;
 pub mod glass;
 pub mod hudsym;
+pub mod weapons;
 pub mod map;
 pub mod mapdata;
 pub mod menus;
+pub mod mp;
 pub mod missions;
 pub mod overview;
 pub mod radio;
@@ -436,6 +439,8 @@ pub enum Screen {
     Pause,
     Loading,
     Flying,
+    /// Server browser (net/, ui/browser.rs).
+    Multiplayer,
     /// Airline-emergency missions (ui/missions.rs): cards, briefing, debrief.
     Missions,
     Briefing,
@@ -453,6 +458,7 @@ impl Screen {
             "credits" => Screen::Credits,
             "pause" => Screen::Pause,
             "loading" => Screen::Loading,
+            "multiplayer" | "mp" | "servers" => Screen::Multiplayer,
             "missions" => Screen::Missions,
             "briefing" => Screen::Briefing,
             "debrief" => Screen::Debrief,
@@ -471,6 +477,8 @@ pub enum Action {
     Restart,
     /// Systems & failures panel (over the flight).
     Failures,
+    /// Leave the multiplayer server (keep flying alone).
+    LeaveServer,
     Quit,
     /// Fly the mission in `missions.pending` (missions/).
     StartMission,
@@ -485,10 +493,14 @@ pub struct Plan {
     pub airport: String,
     pub spec: crate::startpos::Spec,
     pub watch: bool,
+    /// A dogfight quick start (weapons/).
+    pub dogfight: Option<crate::weapons::setup::Config>,
 }
 
 pub struct UiState {
     pub screen: Screen,
+    /// The main menu's dogfight choices.
+    pub dogfight: crate::weapons::setup::Config,
     /// Where Back / Done returns to from settings and credits.
     pub back_to: Screen,
     pub settings: settings::Settings,
@@ -522,6 +534,9 @@ pub struct UiState {
     pub controls_axis: Option<(crate::input::AxisAction, usize)>,
     /// Aircraft screen: the family filter (None: all).
     pub aircraft_group: Option<menus::Group>,
+    /// Multiplayer session (net/) and the server browser's model.
+    pub mp: crate::net::Mp,
+    pub browser: crate::net::browse::Browser,
     /// Missions: selection, records, the active one, the last result.
     pub missions: missions::MissionUi,
     /// Seconds since the last frame / since start, frame counter.
@@ -538,7 +553,8 @@ impl UiState {
             settings,
             settings_dirty: false,
             settings_tab: 0,
-            plan: Plan { aircraft: 0, airport: "EGLC".into(), spec: crate::startpos::Spec::Runway(String::new()), watch: false },
+            plan: Plan { aircraft: 0, airport: "EGLC".into(), spec: crate::startpos::Spec::Runway(String::new()), watch: false, dogfight: None },
+            dogfight: Default::default(),
             defs: crate::flight::catalogue(),
             picker: menus::Picker::default(),
             toasts: toast::Toasts::default(),
@@ -560,6 +576,8 @@ impl UiState {
             controls_page: 0,
             controls_axis: None,
             aircraft_group: None,
+            mp: crate::net::Mp::new(),
+            browser: Default::default(),
             missions: Default::default(),
             dt: 1.0 / 60.0,
             time: 0.0,
@@ -573,6 +591,9 @@ impl UiState {
         }
         if s == Screen::Departure && self.screen != Screen::Departure {
             self.picker.selected = None;
+        }
+        if s != Screen::Multiplayer {
+            self.browser.close();
         }
         self.screen = s;
     }
@@ -590,6 +611,7 @@ pub fn draw_menus(ctx: &egui::Context, st: &mut UiState, in_flight: bool, loadin
             Screen::Conditions => menus::conditions(ui, st),
             Screen::Settings => menus::settings(ui, st, in_flight),
             Screen::Credits => menus::credits(ui, st),
+            Screen::Multiplayer => browser::draw(ui, st),
             Screen::Pause if st.missions.active.is_some() => missions::pause(ui, st),
             Screen::Missions => missions::missions_menu(ui, st),
             Screen::Briefing => missions::briefing(ui, st),

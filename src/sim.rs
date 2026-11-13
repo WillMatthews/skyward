@@ -227,6 +227,22 @@ pub enum Key {
     CommsNext,
     CommsPrev,
     CommsSelect,
+    /// Multiplayer (net/, ui/mp.rs): chat, player list, name tags, quick-chat wheel.
+    Chat,
+    PlayerList,
+    NameTags,
+    QuickChat,
+    /// Weapons (weapons/): gun trigger (held); weapon release (missile;
+    /// held = the Spitfire's cannon button); master mode / gun group;
+    /// radar lock / seeker uncage; flare + chaff program; sight
+    /// (harmonisation); eject / bail out (press twice).
+    GunTrigger,
+    WeaponRelease,
+    WeaponSelect,
+    TargetLock,
+    Countermeasures,
+    SightMode,
+    Eject,
 }
 
 impl Key {
@@ -378,6 +394,10 @@ pub struct Sim {
     pub start: Start,
     pub ac: Aircraft,
     pub ctl: Controls,
+    /// Keyboard pitch feel (input/key_pitch.rs).
+    key_pitch: crate::input::key_pitch::KeyPitch,
+    /// Damage / crash assists from the settings (missions fly Realistic).
+    pub assists: crate::damage::Assists,
     flap_idx: usize,
     pub spoiler_idx: usize,
     pub cam: CamMode,
@@ -473,6 +493,13 @@ pub struct Sim {
     pub mission_pilot: Option<crate::missions::pilot::MissionPilot>,
     pub mission_mayday: bool,
     pub tenders: Option<crate::missions::tenders::Tenders>,
+    /// Guns, missiles, damage and the other aircraft in a fight (weapons/);
+    /// None for unarmed types.
+    pub combat: Option<Box<crate::weapons::Combat>>,
+    /// Chase camera on another aircraft in the fight (spectating).
+    pub view_unit: Option<u32>,
+    /// Eject pressed once: seconds left to press it again.
+    eject_armed: f32,
 }
 
 /// Cinematic camera state.
@@ -536,6 +563,8 @@ impl Sim {
             start,
             ac,
             ctl: Controls::default(),
+            key_pitch: Default::default(),
+            assists: Default::default(),
             flap_idx: 0,
             spoiler_idx: 0,
             cam: CamMode::Chase,
@@ -595,12 +624,121 @@ impl Sim {
             mission_pilot: None,
             mission_mayday: false,
             tenders: None,
+            combat: None,
+            view_unit: None,
+            eject_armed: 0.0,
         };
         s.nav = crate::nav::NavState::new(&s.defs[sel]);
         s.atc = crate::atc::Atc::new(&s.defs[sel]);
         s.light_rig = crate::lights::AircraftLightRig::from_model(&s.model);
+        s.arm();
         s.reset(world);
         s
+    }
+
+    /// Weapons for an armed type (a practice range of one until a fight starts).
+    fn arm(&mut self) {
+        let def = &self.defs[self.sel];
+        self.combat = crate::weapons::guns::loadout(def).map(|_| {
+            let mut c = crate::weapons::Combat::new(Default::default());
+            let id = c.add_unit(self.sel, 0, "You", None);
+            c.local = Some(id);
+            Box::new(c)
+        });
+        self.refit_hits();
+        self.view_unit = None;
+    }
+
+    /// A fight for any type (multiplayer: an unarmed aircraft can still be shot).
+    pub fn ensure_combat(&mut self) {
+        if self.combat.is_none() {
+            let mut c = crate::weapons::Combat::new(Default::default());
+            let id = c.add_unit(self.sel, 0, "You", None);
+            c.local = Some(id);
+            self.combat = Some(Box::new(c));
+            self.refit_hits();
+        }
+    }
+
+    /// The local aircraft's hit volumes from its model's parts and planform.
+    fn refit_hits(&mut self) {
+        let def = self.defs[self.sel].clone();
+        let geom = self.part_geom(&def);
+        let planform: Vec<(f32, f32, f32, f32)> = self.model.parts.as_ref().map(|p| p.planform.clone()).unwrap_or_default();
+        if let Some(u) = self.combat.as_mut().and_then(|c| c.local_unit_mut()) {
+            let sd = crate::damage::struct_def(def.id);
+            u.hm = std::sync::Arc::new(crate::weapons::hitbox::HitModel::build(&def, sd, &geom, crate::weapons::hitbox::planform_for(&def, sd, &planform)));
+            u.bd = crate::weapons::bdmg::BattleDamage::new(&u.hm);
+        }
+    }
+
+    /// Start a dogfight around the aircraft's present position (air start).
+    pub fn start_dogfight(&mut self, world: &World, cfg: crate::weapons::setup::Config) {
+        let mut cfg = cfg;
+        cfg.player = self.defs[self.sel].id.to_string();
+        let mut c = crate::weapons::Combat::new(Default::default());
+        let xz = vec2(self.ac.pos.x, self.ac.pos.z);
+        let ground = crate::flight::Environment::ground_height(world, xz);
+        let heading = self.ac.heading();
+        if cfg.autopilot {
+            c.autopilot = Some(crate::weapons::ai::Brain::new(crate::weapons::ai::Difficulty::Ace, 0xACE));
+        }
+        crate::weapons::setup::Dogfight::start(&mut c, cfg, Some(&mut self.ac), xz, ground, heading);
+        self.combat = Some(Box::new(c));
+        self.refit_hits();
+        self.bot = None;
+        self.ap = Autopilot::new();
+        self.ctl.gear_down = false;
+        self.ctl.flaps = 0.0;
+        self.flap_idx = 0;
+        self.ctl.throttle = if self.def().has_afterburner { 0.88 } else { 0.9 };
+        self.debris = None;
+        self.severity = None;
+        self.known_lost = 0;
+        self.vfx.clear();
+        self.snap_pose();
+        self.cam_heading = self.ac.heading();
+        self.say("Fight's on — Space: fire · F5: weapon · F7: lock · F8: flares · F10 ×2: eject", 6.0);
+    }
+
+    /// A dogfight respawn: fresh aircraft a few km from the fight, re-armed.
+    fn dogfight_respawn(&mut self, world: &World) {
+        let Some(c) = self.combat.as_mut() else { return };
+        let Some(df) = c.dogfight.as_mut() else { return };
+        df.player_respawn = false;
+        let target = c.units.iter().filter(|u| u.team != 0 && u.alive()).find_map(|u| u.ai.as_ref().map(|a| a.ac.pos)).unwrap_or(df.centre);
+        let jet = self.defs[self.sel].engine_kind == EngineKind::Jet;
+        let (alt, dist, spd) = if jet { (5500.0, 7000.0, 420.0 * KT) } else { (2600.0, 3200.0, 270.0 * KT) };
+        let ang = (self.time * 0.37).sin() * PI;
+        let mut pos = target + vec3(ang.cos(), 0.0, ang.sin()) * dist;
+        let g = crate::flight::Environment::ground_height(world, vec2(pos.x, pos.z));
+        pos.y = (g + alt).max(target.y);
+        let d = target - pos;
+        let heading = d.x.atan2(-d.z);
+        let id = c.local;
+        let def = self.defs[self.sel].clone();
+        self.ac = Aircraft::airborne(&def, pos, heading, spd);
+        self.ac.sys = crate::systems::Systems::new(&def, false);
+        self.ctl = Controls { gear_down: false, throttle: if def.has_afterburner { 0.88 } else { 0.9 }, ..Default::default() };
+        self.flap_idx = 0;
+        self.debris = None;
+        self.severity = None;
+        self.known_lost = 0;
+        self.crash_clock = 0.0;
+        self.ap = Autopilot::new();
+        if let (Some(c), Some(id)) = (self.combat.as_mut(), id) {
+            c.rearm(id);
+            if let Some(u) = c.unit_mut(id) {
+                u.prev_pos = pos;
+            }
+            c.autopilot_ctl = None;
+        }
+        self.snap_pose();
+        self.cam_heading = heading;
+        if self.cam == CamMode::Chase {
+            self.orbit_yaw = 0.0;
+        }
+        self.say("Back in the fight", 3.0);
     }
 
     pub fn def(&self) -> &AircraftDef {
@@ -613,6 +751,7 @@ impl Sim {
         self.start = if start.valid_for(&self.defs[self.sel]) { start } else { Start::default_for(&self.defs[self.sel]) };
         (self.model, self.size) = load_model(&self.defs[self.sel]);
         self.light_rig = crate::lights::AircraftLightRig::from_model(&self.model);
+        self.arm();
         self.landing_lights = None;
         self.bot = None;
         self.nav = crate::nav::NavState::new(&self.defs[self.sel]);
@@ -719,6 +858,14 @@ impl Sim {
         self.crash_clock = 0.0;
         self.audio_events.clear();
         self.vfx.clear();
+        if let Some(c) = self.combat.as_mut().filter(|c| c.dogfight.is_none()) {
+            if let Some(id) = c.local {
+                c.rearm(id);
+            }
+            c.rounds.clear();
+            c.missiles.clear();
+            c.decoys.clear();
+        }
         if let Some(sc) = self.scenario.as_mut() {
             sc.restart();
         }
@@ -883,6 +1030,9 @@ impl Sim {
             d.rebase(r.delta);
         }
         self.vfx.rebase(r.delta);
+        if let Some(c) = &mut self.combat {
+            c.rebase(r.delta);
+        }
     }
 
     /// Hand the aircraft to the auto-flight bot.
@@ -1026,8 +1176,33 @@ impl Sim {
                 self.say("A/THR off — manual throttle", 3.0);
             }
         }
+        let mut trig = crate::weapons::Trigger::default();
+        // (Weight on wheels: no guns on the ground — Space is the wheel brakes there.)
+        let airborne = !self.ac.on_ground;
+        let trig_held = (held(Key::GunTrigger) && airborne, held(Key::WeaponRelease) && airborne);
+        self.eject_armed = (self.eject_armed - dt).max(0.0);
         for k in std::mem::take(&mut input.pressed) {
             match k {
+                Key::WeaponRelease => trig.release = true,
+                // Space: the selected weapon — a missile in SRM / MRM (the guns are held, below).
+                Key::GunTrigger if self.combat.as_ref().and_then(|c| c.local_unit()).is_some_and(|u| u.master != crate::weapons::Master::Gun) => trig.release = true,
+                Key::WeaponSelect => trig.select = true,
+                Key::TargetLock => trig.lock = true,
+                Key::Countermeasures => trig.cm = true,
+                Key::SightMode => trig.sight = true,
+                Key::Eject if self.combat.is_some() => {
+                    if self.eject_armed > 0.0 {
+                        trig.eject = true;
+                        self.eject_armed = 0.0;
+                    } else {
+                        self.eject_armed = 1.5;
+                        let what = if self.combat.as_ref().and_then(|c| c.local_unit()).is_some_and(|u| u.load.seat) { "EJECT" } else { "BAIL OUT" };
+                        self.say(format!("{what}? Press again"), 1.5);
+                    }
+                }
+                Key::Reset if self.combat.as_ref().is_some_and(|c| c.dogfight.is_some()) => {
+                    self.dogfight_respawn(world);
+                }
                 Key::Camera => {
                     self.cam = self.cam.next();
                     self.flyby_pos = None;
@@ -1191,7 +1366,13 @@ impl Sim {
             cur + (target - cur).clamp(-r * dt, r * dt)
         };
         if !bot_on && !self.ap.engaged {
-            self.ctl.elevator = approach(self.ctl.elevator, h(Key::PitchUp) - h(Key::PitchDown), 2.2);
+            // Keys: progressive travel, easing off near the limit load on
+            // stick-to-surface aircraft (input/key_pitch.rs).
+            let band = (def.control_law == crate::flight::ControlLaw::Direct && !self.ac.on_ground && def.rotor.is_none()).then(|| {
+                let sd = crate::damage::struct_def(def.id);
+                crate::input::key_pitch::Feel::new(sd.n_lim, sd.n_lim_neg, def.vs1_kt, self.ac.airspeed_kt())
+            });
+            self.ctl.elevator = self.key_pitch.step(self.ctl.elevator, h(Key::PitchUp) - h(Key::PitchDown), self.ac.g_load(), band, dt);
             self.ctl.aileron = approach(self.ctl.aileron, h(Key::RollRight) - h(Key::RollLeft), 3.0);
             self.ctl.rudder = approach(self.ctl.rudder, h(Key::YawRight) - h(Key::YawLeft), 2.5);
             self.ctl.trim = (self.ctl.trim + (h(Key::TrimUp) - h(Key::TrimDown)) * 0.25 * dt).clamp(-1.0, 1.0);
@@ -1219,6 +1400,21 @@ impl Sim {
             let det = def.flap_detents;
             let full = det.last().copied().unwrap_or(1.0).max(1e-3);
             self.flap_idx = (0..det.len()).min_by(|&a, &b| (det[a] / full - self.ctl.flaps).abs().total_cmp(&(det[b] / full - self.ctl.flaps).abs())).unwrap_or(0);
+        }
+        // Weapons: the pilot's triggers; the dogfight AI flying this aircraft; no pilot, no inputs.
+        let sun = self.sun_dir();
+        if let Some(c) = self.combat.as_mut() {
+            trig.guns = trig_held.0;
+            trig.cannon = trig_held.1;
+            c.set_trigger(trig);
+            c.sun = sun;
+            if c.local_incapacitated() {
+                self.ctl.elevator *= 0.98;
+                self.ctl.aileron *= 0.98;
+                self.ctl.rudder = 0.0;
+            } else if let (Some(_), Some(ac_ctl)) = (&c.autopilot, c.autopilot_ctl) {
+                self.ctl = Controls { gear_down: false, flaps: 0.0, ..ac_ctl };
+            }
         }
         if let Some((hdg, alt)) = self.level_hold {
             // Crude wings-level / heading / altitude hold for scripted test flights.
@@ -1273,7 +1469,16 @@ impl Sim {
                 self.systems_step(&amb, DT);
                 let def = &self.defs[self.sel];
                 let env = mission_glue::MissionEnv { inner: world, run: self.mission.as_ref() };
+                // Missions are scored with the airframe and crashes realistic.
+                self.ac.assists = if self.mission.is_some() { crate::damage::Assists::default() } else { self.assists };
                 self.ac.step(def, &self.ctl, &env, DT);
+                // The fight (weapons/): rounds, missiles, damage, the other aircraft.
+                if let Some(c) = self.combat.as_mut() {
+                    c.step(Some((&mut self.ac, def)), world, DT);
+                    if let Some(a) = c.autopilot_ctl.filter(|_| c.autopilot.is_some() && !c.local_incapacitated()) {
+                        self.ctl = Controls { gear_down: false, flaps: 0.0, ..a };
+                    }
+                }
                 self.acc -= DT;
                 steps += 1;
                 if self.ac.crashed.is_some() {
@@ -1292,6 +1497,17 @@ impl Sim {
         if let Some(t) = self.tenders.as_mut() {
             t.update(world, self.ac.pos, if self.paused { 0.0 } else { dt * self.warp.min(4) as f32 });
         }
+        // The fight goes on after the local aircraft is down.
+        if !self.paused && (self.ac.crashed.is_some() || self.needs_respawn) {
+            if let Some(c) = self.combat.as_mut() {
+                let n = ((dt * self.warp.min(4) as f32) / DT).round().clamp(1.0, 64.0) as usize;
+                let def = &self.defs[self.sel];
+                for _ in 0..n {
+                    c.step(Some((&mut self.ac, def)), world, DT);
+                }
+            }
+        }
+        self.combat_frame(world);
         self.systems_frame();
         // Air traffic control: the frequency, ATIS, the controllers (atc/).
         crate::atc::step(self, world, dt);
@@ -1322,6 +1538,77 @@ impl Sim {
         let target = if f.x.abs() + f.z.abs() > 1e-3 { f.x.atan2(-f.z) } else { self.ac.heading() };
         let d = wrap(target - self.cam_heading);
         self.cam_heading += d * (1.0 - (-4.0 * dt).exp());
+    }
+
+    /// Captures (`--shot-when`): has this moment come in the fight?
+    pub fn combat_moment(&self, what: &str) -> bool {
+        let Some(c) = self.combat.as_deref() else { return false };
+        let local = c.local_unit();
+        let others = || c.units.iter().filter(|u| Some(u.id) != c.local);
+        match what {
+            "guns" => local.is_some_and(|u| u.guns.iter().any(|g| g.since < 0.02)) && c.rounds.iter().filter(|r| Some(r.shooter) == c.local).count() > 25,
+            "hit" => others().any(|u| u.hit_flash < 0.02 && u.bd.total > 0.0),
+            "lock" => local.is_some_and(|u| u.master == crate::weapons::Master::Srm && u.seeker.locked.is_some() && u.seeker.dir.angle_between(self.ac.rot * Vec3::Z) < 0.12),
+            "radar" => local.is_some_and(|u| u.radar.stt.is_some()),
+            "gunsight" => local.is_some_and(|u| {
+                let fwd = self.ac.rot * Vec3::Z;
+                c.units.iter().filter(|o| o.team != u.team && o.alive()).filter_map(|o| o.ai.as_ref()).any(|a| a.ac.pos.distance(self.ac.pos) < 1000.0 && fwd.angle_between(a.ac.pos - self.ac.pos) < 0.15)
+            }),
+            "missile" => c.missiles.iter().any(|m| Some(m.owner) == c.local && (1.0..2.0).contains(&m.t)),
+            "flares" => c.decoys.iter().filter(|d| d.flare && d.t > 0.5).count() >= 3,
+            "smoke" | "damaged" => others().any(|u| u.flying() && u.ai.as_ref().is_some_and(|a| a.ac.crashed.is_none() && { let t = u.bd.trail(&a.ac); t.0.max(t.2) > 0.3 && u.bd.total > 0.0 })),
+            "eject" => c.chutes.iter().any(|ch| (0.25..0.4).contains(&ch.t)),
+            "chute" => c.chutes.iter().any(|ch| ch.stage == crate::weapons::eject::Stage::Canopy && ch.open > 0.9),
+            "kill" => !c.feed.is_empty(),
+            _ => false,
+        }
+    }
+
+    /// Per frame: the fight's messages, sounds, cockpit tones and respawns (weapons/).
+    fn combat_frame(&mut self, world: &World) {
+        let Some(c) = self.combat.as_mut() else { return };
+        if let Some(n) = c.notes.drain(..).next_back() {
+            self.note = Some((n, 3.5));
+        }
+        self.audio_events.append(&mut c.audio);
+        // Gun reports: one event per gun type and aircraft this frame.
+        let mut guns: Vec<(u32, u8, u16, f32, Vec3)> = Vec::new();
+        for f in &c.fx {
+            if let crate::weapons::Fx::Muzzle { unit, kind, rate, pos, rounds, .. } = *f {
+                let g = match kind {
+                    crate::weapons::events::WeaponKind::Hispano => 0,
+                    crate::weapons::events::WeaponKind::Browning303 => 1,
+                    crate::weapons::events::WeaponKind::M61 => 2,
+                    _ => 3,
+                };
+                match guns.iter_mut().find(|x| x.0 == unit && x.1 == g) {
+                    Some(x) => {
+                        x.2 = x.2.saturating_add(rounds as u16);
+                        x.3 = x.3.max(rate);
+                    }
+                    None => guns.push((unit, g, rounds as u16, rate, pos)),
+                }
+            }
+        }
+        // (Several guns of a type fire together: the rate is per gun, the reports add.)
+        let local = c.local;
+        for (unit, g, rounds, rate, pos) in guns {
+            let n_guns = c.unit(unit).map(|u| u.load.guns.iter().filter(|x| matches!((g, x.kind), (0, crate::weapons::events::WeaponKind::Hispano) | (1, crate::weapons::events::WeaponKind::Browning303) | (2, crate::weapons::events::WeaponKind::M61) | (3, crate::weapons::events::WeaponKind::Mg50))).count()).unwrap_or(1).max(1);
+            self.audio_events.push(crate::audio::params::Event::Gun { gun: g, rounds, rate: rate * n_guns as f32, pos, own: Some(unit) == local });
+        }
+        if let Some(u) = c.local_unit() {
+            let srm = u.master == crate::weapons::Master::Srm && u.missiles_left(crate::weapons::missiles::MissileKind::Aim9) > 0;
+            let rwr = if u.load.rwr { u.rwr.worst().map(|e| match e { crate::weapons::events::Emission::Search => 1, crate::weapons::events::Emission::Track => 2, _ => 3 }).unwrap_or(0) } else { 0 };
+            self.audio_events.push(crate::audio::params::Event::Tones {
+                growl: if srm { u.seeker.signal } else { 0.0 },
+                locked: srm && u.seeker.locked.is_some(),
+                rwr,
+                rwr_new: u.load.rwr && u.rwr.new_t < 0.05,
+            });
+        }
+        if c.dogfight.as_ref().is_some_and(|d| d.player_respawn) {
+            self.dogfight_respawn(world);
+        }
     }
 
     /// Structural events, loose parts and the wreck (damage.rs, debris.rs).
@@ -1486,7 +1773,11 @@ impl Sim {
             tips,
             planform: &planform,
         };
+        let dt_fx = ctx.dt;
         self.vfx.update(ctx);
+        if let Some(c) = self.combat.as_mut() {
+            self.vfx.weapons(c, Some((pos, rot, self.ac.vel)), world, dt_fx);
+        }
     }
 
     /// Part boxes from the model (or estimated from the flight geometry).
@@ -1522,7 +1813,10 @@ impl Sim {
         let def = self.def();
         let v = def.flap_detents.get(self.flap_idx).copied().unwrap_or(0.0);
         // (The Vulcan's flap lever drives its airbrakes: shown like the glider's.)
-        if def.has_engine && def.flap_label != "Airbrakes" {
+        if def.flap_label == "Nose" {
+            // Concorde's droop nose / visor lever.
+            ["UP", "VISOR", "5°", "12.5°"].get(self.flap_idx).copied().unwrap_or("UP").into()
+        } else if def.has_engine && def.flap_label != "Airbrakes" {
             format!("{v:.0}°")
         } else if self.ctl.flaps < 0.02 {
             "closed".into()
@@ -1693,7 +1987,17 @@ impl Sim {
     /// Camera + world-space dynamic geometry for the current state.
     pub fn frame(&mut self, aspect: f32) -> (FrameView, MeshData) {
         (self.rpos, self.rrot) = self.pose();
-        let pos = self.rpos;
+        // Chase camera on another aircraft in the fight, or on the pilot's parachute.
+        let follow = self.combat.as_ref().and_then(|c| {
+            if let Some(u) = self.view_unit.and_then(|id| c.unit(id)).and_then(|u| u.ai.as_ref()) {
+                return Some(u.ac.pos);
+            }
+            c.local_chute().filter(|ch| ch.t > 0.6).map(|ch| ch.pos + Vec3::Y * (2.5 * ch.open))
+        });
+        let pos = match (follow, self.cam) {
+            (Some(p), CamMode::Chase) => p,
+            _ => self.rpos,
+        };
         let mut fov = 60f32.to_radians();
         let show_aircraft = true;
         let (eye, target, cam_up) = match self.cam {
@@ -1722,7 +2026,15 @@ impl Sim {
                 static FOV: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
                 let f = *FOV.get_or_init(|| std::env::var("SKYWARD_COCKPIT_FOV").ok().and_then(|v| v.parse::<f32>().ok()).filter(|v| (5.0..=120.0).contains(v)));
                 fov = f.unwrap_or(72.0).to_radians();
-                let e = pos + self.rrot * self.model.eye;
+                let mut e = pos + self.rrot * self.model.eye;
+                // Gun recoil / hits shake the cockpit.
+                if let Some(u) = self.combat.as_ref().and_then(|c| c.local_unit()) {
+                    let k = u.shake * 0.012 + if u.hit_flash < 0.15 { 0.02 } else { 0.0 };
+                    if k > 0.0 {
+                        let t = self.real_time * 97.0;
+                        e += self.rrot * vec3((t * 1.3).sin(), (t * 1.7).cos(), 0.0) * k;
+                    }
+                }
                 // Head-look (input/sim_glue.rs).
                 let head = self.rrot * self.pilot.look_rot();
                 match self.defs[self.sel].rotor.as_ref().and_then(|r| r.quad()) {
@@ -1768,8 +2080,16 @@ impl Sim {
             acl.n_sprites = 0;
             acl.n_spots = 0;
         }
-        let mut fv = FrameView { eye, view, fov_y: fov, time: self.time, sun_dir: self.sun_dir(), exposure: 1.0, clock, acl, aircraft: None, vfx: None };
+        let mut fv = FrameView { eye, view, fov_y: fov, time: self.time, sun_dir: self.sun_dir(), exposure: 1.0, clock, acl, aircraft: None, vfx: None, others: Vec::new() };
         let mut dynm = MeshData::default();
+        // The fight: missiles, parachutes, holes; the other aircraft (weapons/).
+        let mut others = Vec::new();
+        let daylight = crate::cockpit::daylight(self.sun_dir().y);
+        if let Some(c) = self.combat.as_mut() {
+            crate::weapons::render::meshes(c, eye, self.time, Some((self.rpos, self.rrot)), &mut dynm);
+            others = crate::weapons::render::aircraft_frames(c, eye, self.time, self.hours, daylight);
+        }
+        fv.others = others;
         if show_aircraft {
             // Eye-relative (see gfx: rendering is camera-relative, no f32 cancellation).
             // Close up (and from the cockpit) the interior is drawn too.
@@ -1784,6 +2104,10 @@ impl Sim {
             let vf = self.effects_frame(eye);
             if std::env::var_os("SKYWARD_VFX_STATS").is_some() {
                 eprintln!("vfx: {} particles, {} mesh verts, {} haze verts", vf.particles.len(), vf.mesh.len(), vf.haze.len());
+            }
+            let mut vf = vf;
+            if let Some(c) = self.combat.as_ref() {
+                crate::weapons::render::particles(c, vf.origin, eye, &mut vf.particles);
             }
             fv.vfx = Some(std::sync::Arc::new(vf));
         }
@@ -1801,7 +2125,7 @@ impl Sim {
                 }
             }
         }
-        self.last_view = Some(FrameView { aircraft: None, vfx: None, ..fv });
+        self.last_view = Some(FrameView { aircraft: None, vfx: None, others: Vec::new(), ..fv });
         (fv, dynm)
     }
 

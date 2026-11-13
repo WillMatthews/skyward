@@ -14,6 +14,10 @@
 //! | `hercules` | Lockheed C-130H Hercules | FGAddon C130 |
 //! | `galaxy` | Lockheed C-5M Super Galaxy | FGMEMBERS/C-5 |
 //! | `vulcan` | Avro Vulcan B.2 | FGMEMBERS/AvroVulcanB2 (FGUK) |
+//! | `triple7` | Boeing 777-300ER | FGAddon 777 |
+//! | `crj700` | Bombardier CRJ700 | FGMEMBERS/CRJ700-family (2016) + FGAddon JSBSim FDM |
+//! | `citationx` | Cessna Citation X | FGMEMBERS/CitationX |
+//! | `concorde` | Aerospatiale/BAC Concorde | FGAddon Concorde |
 //! | `extra500` | Extra EA-500 | FGAddon extra500 |
 //! | `cub` | Piper PA-18 Super Cub | FGAddon Piper-PA-18 |
 //! | `zlin` | Zlin Z-50 LX | FGAddon Zlin-50lx |
@@ -310,6 +314,23 @@ impl AircraftModel {
         if std::env::var_os("SKYWARD_CHAN_DUMP").is_some() {
             let s: Vec<String> = a.channels.iter().zip(&self.chan).map(|(n, v)| format!("{n}={v:.2}")).collect();
             eprintln!("chan t={:.2}: {}", inp.time, s.join(" "));
+        }
+        a.pose(&self.chan, &mut self.state, dt, &mut self.pose);
+    }
+
+    /// Evaluate the animation from named channel values instead of the flight
+    /// model — another player's aircraft (net/remote.rs): `channel(name)`
+    /// gives each animation channel; cockpit instruments read 0 (only the
+    /// exterior is drawn).
+    pub fn update_channels(&mut self, time: f32, channel: &dyn Fn(&str) -> f32) {
+        let Some(a) = &self.asset else { return };
+        let dt = match self.last_time {
+            Some(t) => (time - t).clamp(0.0, 0.25),
+            None => 0.0,
+        };
+        self.last_time = Some(time);
+        for (k, name) in a.channels.iter().enumerate() {
+            self.chan[k] = if self.chan_src.get(k).copied().flatten().is_some() { 0.0 } else { channel(name) };
         }
         a.pose(&self.chan, &mut self.state, dt, &mut self.pose);
     }

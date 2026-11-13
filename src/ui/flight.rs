@@ -178,6 +178,10 @@ pub fn draw(ctx: &egui::Context, st: &mut UiState, sim: &mut Sim, world: &World,
     }
     // ---- warnings / banners
     warnings(&p, screen, sim);
+    // ---- weapons: gunsight, markers, stores, RWR, kill feed (weapons/)
+    if mode != HudMode::Off {
+        super::weapons::draw(&p, screen, sim);
+    }
     if sim.show_help {
         help(ctx, sim);
     }
@@ -322,7 +326,12 @@ fn annunciators(p: &egui::Painter, screen: Rect, sim: &Sim, y: f32) -> f32 {
         items.push((lab, if sim.ctl.reverse { pal::AMBER } else { pal::TEXT }, true));
     }
     if def.flap_detents.len() > 1 {
-        let flap = if def.flap_label == "Airbrakes" { format!("AIRBRAKE {}", sim.flap_label()) } else { format!("FLAPS {}", sim.flap_label()) };
+        let flap = match def.flap_label {
+            "Airbrakes" => format!("AIRBRAKE {}", sim.flap_label()),
+            // Concorde: the lever droops the nose / visor.
+            "Nose" => format!("NOSE {}", sim.flap_label()),
+            _ => format!("FLAPS {}", sim.flap_label()),
+        };
         items.push((flap, pal::TEXT, sim.ctl.flaps > 0.01));
     }
     if def.smoke_system {
@@ -551,6 +560,8 @@ fn moving_map(ctx: &egui::Context, p: &egui::Painter, st: &mut UiState, sim: &mu
     map::range_rings(&mp, &view, st.map.range, true, ring_col);
     let me = view.to_screen(pos);
     map::trend(&mp, &view, pos, v, sim.ac.turn_rate(), if dark { pal::GREEN } else { Color32::from_rgb(20, 140, 70) });
+    // Multiplayer traffic (ui/mp.rs).
+    super::mp::map_traffic(&mp, &view, st, sim, dark);
     map::aircraft_symbol(&mp, me, view.screen_angle(sim.ac.heading()), 13.0, if dark { pal::AMBER } else { Color32::from_rgb(255, 196, 30) });
     map::wind_block(&mp, rect.min + Vec2::new(8.0, 8.0), &view, world, dark);
     // compass / orientation button
@@ -855,6 +866,7 @@ pub fn control_rows(def: &crate::flight::AircraftDef) -> Vec<(&'static str, &'st
         v.push(("Systems", "B  Space", "Wheel brakes".into()));
     }
     v.push(("Systems", "L", "Landing · taxi lights".into()));
+    v.extend(super::weapons::control_rows(def));
     v.extend([
         ("Autopilot", "Z", "Engage · disengage".into()),
         ("Autopilot", "Ins Del", "Heading −/+ 5°".into()),
