@@ -83,6 +83,10 @@ painted over or composited.
 - **~49,000 airports** from OurAirports, each detailed from map data, Overpass and procedural fill:
   markings, holding points, terminals, hangars, towers, jet bridges, parked aircraft, driving
   ground vehicles, windsocks in the real wind, lit signs, taxiway lights and stop bars.
+- **Road traffic.** Cars, vans, buses, lorries and motorbikes drive the real road network: lanes on
+  the painted lane lines, one-way streets, keep-left or keep-right by country, give-way at junctions,
+  queues, rush hours and quiet nights, red double-deckers and black cabs in London. Head, tail and
+  brake lights at night. Off / Low / Medium / High in Settings › Display.
 - **Fly as far as you like.** A floating origin re-centres the world as you fly, so London to Paris
   and beyond stays precise and hitch-free.
 
@@ -415,6 +419,7 @@ the real flight model through the controls and autopilot. Nothing is scripted or
 | `--vsync on\|off` | present with vsync (default on) / mailbox or immediate |
 | `--hud full\|minimal\|off`, `--map corner\|large\|off` | instrument / map mode |
 | `--radius-km R`, `--map-zoom N` | detailed-tile load radius, moving-map zoom step 0–5 |
+| `--traffic off\|low\|medium\|high` | road traffic density (default: the Settings choice; captures simulate it in-thread and settle it, reproducibly) |
 | `--mute` | start muted |
 | `--controllers` | list game controllers and print their inputs |
 
@@ -453,8 +458,9 @@ skyward --shot m.png --aircraft meridian320 --bot --soak --seconds 4200 --warp 8
 | `SKYWARD_ORBIT=yaw,pitch,dist` | chase-camera angle for captures |
 | `SKYWARD_LOOK=yaw,pitch` | cockpit head-look for captures |
 | `SKYWARD_COCKPIT_FOV=deg` | cockpit field of view for captures |
-| `SKYWARD_NO_VFX`, `SKYWARD_NO_AIRPORTS`, `SKYWARD_NO_OVERPASS`, `SKYWARD_NO_LANDMARKS`, `SKYWARD_FLAT_TERRAIN` | switch layers off |
+| `SKYWARD_NO_VFX`, `SKYWARD_NO_AIRPORTS`, `SKYWARD_NO_OVERPASS`, `SKYWARD_NO_LANDMARKS`, `SKYWARD_NO_TRAFFIC`, `SKYWARD_FLAT_TERRAIN` | switch layers off |
 | `SKYWARD_GPU_TIMING`, `SKYWARD_UI_TIMING`, `SKYWARD_VFX_STATS` | per-pass GPU timing, UI CPU cost, effect counts |
+| `SKYWARD_TRAFFIC_INLINE`, `SKYWARD_TRAFFIC_GPU_REPEAT=N` | road traffic: simulate in the render thread (as in the browser); draw it N times (GPU cost measurement) |
 | `SKYWARD_FRAME_LOG=file`, `SKYWARD_SOAK_LOG=10`, `SKYWARD_REBASE_LOG` | frame times, soak log interval, origin shifts |
 | `SKYWARD_AIRPORT_DEBUG`, `SKYWARD_TERRAIN_DEBUG`, `SKYWARD_DEBUG_DEBRIS`, `BOT_TRACE=Final,Flare` | debug logging |
 | `SKYWARD_UI_SCRIPT="4:aircraft,7:departure,10:airport=EGKK,12:fly"` | drive the menus for tests |
@@ -530,6 +536,7 @@ Settings › Display switches to mailbox / immediate for the lowest latency.
 | `src/tiles.rs`, `src/mvt.rs`, `src/osm.rs` | tile download, disk cache, worker pool; MVT decoder; projections / frames / tile math |
 | `src/scene.rs`, `src/terrain.rs` | per-tile meshes (ground, buildings, trees), collision; DEM grids, drape, runway flattening |
 | `src/world.rs` | streaming, floating origin, runway merging, environment queries (ground, wind, lift) |
+| `src/traffic/` | road traffic: per-tile lane graphs, microsimulation (worker thread), vehicle meshes, instanced renderer |
 | `src/landmarks.rs`, `src/landmarks/` | landmark registry by location and the procedural London models |
 | `src/airport/`, `src/airports.rs` | airport detail (markings, stands, signs, lights, vehicles, Overpass, parked fleet); OurAirports database |
 | `src/gfx.rs`, `src/gfx_aircraft.rs`, `src/shaders/` | wgpu renderer; textured aircraft renderer; WGSL shaders |

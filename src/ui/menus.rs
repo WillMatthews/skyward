@@ -1714,6 +1714,11 @@ pub fn settings(ui: &mut Ui, st: &mut UiState, in_flight: bool) {
                         s.detail = i as u8;
                     }
                     y += row_h;
+                    label(&p, y, "Road traffic", "Moving cars, buses and lorries");
+                    if let Some(i) = segmented(ui, ctrl(y), "traffic", &crate::traffic::Level::NAMES, s.traffic as usize) {
+                        s.traffic = i as u8;
+                    }
+                    y += row_h;
                     label(&p, y, "Vertical sync", "Off: lowest latency, may stutter");
                     if let Some(i) = segmented(ui, ctrl(y), "vsync", &["On", "Off"], if s.vsync { 0 } else { 1 }) {
                         s.vsync = i == 0;

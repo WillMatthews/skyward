@@ -15,6 +15,7 @@
 //! Controllers: --controllers [SECONDS] lists devices and prints their inputs (SKYWARD_FAKE_INPUT=xbox,x52,pedals,tca adds virtual ones)
 //! Sound:      --mute (N toggles in flight; volumes in Settings › Sound); offline: --audio-render out.wav --seconds S [--audio-script "2:cam=cockpit,9:gear"] [--audio-until Final]
 //! Display:    --vsync on|off (default on: FIFO present, smoothed frame step); SKYWARD_FRAME_LOG=file logs per-frame timing
+//! Traffic:    --traffic off|low|medium|high (road traffic density; SKYWARD_NO_TRAFFIC=1 forces it off)
 
 mod airport;
 mod airports;
@@ -50,6 +51,7 @@ mod systems;
 mod terrain;
 mod landmarks;
 mod tiles;
+mod traffic;
 mod vfx;
 mod water;
 mod ui;
@@ -109,6 +111,8 @@ struct Args {
     realtime: bool,
     warp: u32,
     radius: Option<f32>,
+    /// Road traffic density (Settings, `--traffic off|low|medium|high`).
+    traffic: Option<traffic::Level>,
     map_zoom: Option<usize>,
     map_mode: Option<ui::flight::MapMode>,
     hud_mode: Option<ui::settings::HudMode>,
@@ -226,6 +230,7 @@ fn parse_args_from(argv: Vec<String>) -> Args {
         realtime: false,
         warp: 1,
         radius: None,
+        traffic: None,
         map_zoom: None,
         map_mode: None,
         hud_mode: None,
@@ -392,8 +397,9 @@ fn parse_args_from(argv: Vec<String>) -> Args {
             "--metar" => a.metar = Some(next(&mut i)),
             "--map-zoom" => a.map_zoom = next(&mut i).parse().ok(),
             "--radius-km" => a.radius = next(&mut i).parse::<f32>().ok().map(|k| k * 1000.0),
+            "--traffic" => a.traffic = traffic::Level::parse(&next(&mut i)),
             "-h" | "--help" => {
-                println!("{}", include_str!("main.rs").lines().take(17).collect::<Vec<_>>().join("\n"));
+                println!("{}", include_str!("main.rs").lines().take(18).collect::<Vec<_>>().join("\n"));
                 std::process::exit(0);
             }
             other => eprintln!("ignoring unknown argument {other}"),
@@ -516,6 +522,7 @@ impl Session {
         if let Some(r) = args.radius {
             world.radius = r;
         }
+        world.traffic.set_level(args.traffic.unwrap_or_else(traffic::Level::default_for_platform));
         if let Some(db) = db {
             world.set_airport_db(db);
         }
@@ -858,6 +865,28 @@ fn loading_info(msg: &str) -> (String, String, Option<f32>) {
     (title, rest.join(" · "), frac)
 }
 
+/// What the traffic simulation needs of this frame: time, local hours and
+/// the view (level of detail, culling, lights after dusk).
+fn traffic_frame(fv: &FrameView, time: f64, w: u32, h: u32, level: traffic::Level) -> traffic::Frame {
+    let fwd = -fv.view.inverse().z_axis.truncate().normalize_or(Vec3::NEG_Z);
+    let aspect = w as f32 / h.max(1) as f32;
+    let half_diag = ((fv.fov_y * 0.5).tan() * (1.0 + aspect * aspect).sqrt()).atan();
+    // Detailed meshes out to ~160 m at 1440p / 60°, scaled with the pixel density.
+    let px_per_m = h as f32 * 0.5 / (fv.fov_y * 0.5).tan();
+    let lod0 = (160.0 * px_per_m / 1250.0).clamp(70.0, 320.0);
+    // Head / tail lights out to the simulated radius from dusk.
+    let lights = fv.sun_dir.normalize_or(Vec3::Y).y < 0.08;
+    let view = traffic::View {
+        eye: fv.eye,
+        fwd,
+        cos_half: (half_diag + 0.2).min(std::f32::consts::PI).cos(),
+        lod0_dist: lod0,
+        draw_dist: level.draw_dist(),
+        light_dist: if lights { level.radius() } else { 0.0 },
+    };
+    traffic::Frame { time, hours: fv.clock.local_hours, view }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_frame(
     gpu: &Gpu,
@@ -920,6 +949,13 @@ fn render_frame(
                 let wd = &s.world;
                 let af = wd.airport_detail.frame(&wd.proj, fv.eye, sim.time, &|p| flight::Environment::wind(wd, p), &|xz| flight::Environment::ground_height(wd, xz));
                 renderer.set_airport_frame(af);
+            }
+            {
+                // Road traffic (traffic/): this frame's vehicles.
+                let wd = &mut s.world;
+                renderer.set_traffic_level(wd.traffic.level());
+                let snap = wd.traffic.frame(traffic_frame(&fv, sim.time as f64, w, h, wd.traffic.level()));
+                renderer.traffic.prepare(device, queue, snap, sim.time as f64, fv.eye);
             }
             renderer.render(device, queue, &mut enc, target, w, h, &fv, &dynm);
         }
@@ -1160,6 +1196,7 @@ fn args_for_plan(base: &Args, st: &UiState) -> (Args, Option<startpos::CustomSta
         a.weather = clouds::Weather::ALL.into_iter().find(|w| w.name() == c.preset);
     }
     a.radius = Some(ui::settings::detail_radius(st.settings.detail));
+    a.traffic = Some(traffic::Level::from_u8(st.settings.traffic));
     // A runway start with no end chosen yet: let the sim pick (into wind, long enough).
     let custom = match &plan.spec {
         startpos::Spec::Runway(e) | startpos::Spec::Final(e, _) if e.is_empty() => None,
@@ -1284,6 +1321,11 @@ fn headless(args: Args) -> Result<(), String> {
 
     // Load the start area + spawn.
     let mut s = Session::new(&args, db.clone(), custom);
+    // Captures simulate the traffic in this thread (reproducible); the
+    // real-time / soak runs keep the worker thread (timings).
+    if !args.realtime && !args.soak {
+        s.world.traffic.set_inline();
+    }
     let t0 = Instant::now();
     let mut last_msg = String::new();
     while s.sim.is_none() {
@@ -1508,12 +1550,19 @@ fn headless(args: Args) -> Result<(), String> {
             std::thread::sleep(Duration::from_millis(30));
         }
     }
+    // Traffic: refill and settle from the resident tiles, so the picture
+    // doesn't depend on the order the tiles streamed in.
+    s.world.traffic.reset();
     // Two frames: the first lets egui load fonts + map textures.
     let t0 = Instant::now();
     let note_s = loading_text(&ui.st, "Loading scenery\n37 / 52 tiles");
     let note = (ui.st.screen == Screen::Loading).then_some(note_s.as_str());
     for _ in 0..3 {
         render_frame(&gpu, &mut renderer, &mut ui, Some(&mut s), &view, w, h, raw(), 1.0, 0.0, note, ov);
+    }
+    if s.world.traffic.level() != traffic::Level::Off {
+        let t = s.world.traffic.stats();
+        eprintln!("traffic: {} vehicles ({} drawn, {} active lanes), {:.2} ms", t.vehicles, t.drawn, t.active_lanes, t.sim_ms);
     }
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
     let t1 = Instant::now();
@@ -1783,6 +1832,10 @@ fn realtime_flight(
                 s.world.downloaded_bytes() as f64 / 1e6,
                 sim.ac.crashed.as_ref().map(|c| format!(" CRASHED {c}")).unwrap_or_default(),
             );
+            if s.world.traffic.level() != traffic::Level::Off {
+                let t = s.world.traffic.stats();
+                eprintln!("  traffic: {} vehicles, {} drawn, main thread {:.3} + {:.3} ms (sim / upload), sim worker {:.2} ms", t.vehicles, t.drawn, s.world.traffic.main_ms, renderer.traffic.prepare_ms, t.sim_ms);
+            }
             frames = 0;
             sum_ms = 0.0;
             max_ms = 0.0;
@@ -2680,6 +2733,9 @@ impl App {
             s.custom = custom.clone();
             let w = &mut s.world;
             w.radius = args2.radius.unwrap_or(w.radius);
+            if let Some(l) = args2.traffic {
+                w.traffic.set_level(l);
+            }
             if args2.live {
                 w.set_live(true);
             } else {
@@ -3012,6 +3068,11 @@ impl App {
         if s.detail != r.applied.detail {
             if let Some(sess) = r.session.as_mut() {
                 sess.world.radius = ui::settings::detail_radius(s.detail);
+            }
+        }
+        if s.traffic != r.applied.traffic {
+            if let Some(sess) = r.session.as_mut() {
+                sess.world.traffic.set_level(traffic::Level::from_u8(s.traffic));
             }
         }
         r.applied = s;

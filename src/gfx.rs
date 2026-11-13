@@ -562,6 +562,12 @@ pub struct Renderer {
     pub airport: crate::airport::gfx::AirportRenderer,
     /// This frame's airport instances (set before `render`).
     airport_frame: Option<crate::airport::Frame>,
+    /// Road traffic (traffic/gpu.rs): prepared before `render`.
+    pub traffic: crate::traffic::gpu::TrafficRenderer,
+    /// Traffic setting: simulated radius (m, 0 = off) and density share
+    /// (the far light streaks follow it).
+    traffic_radius: f32,
+    traffic_density: f32,
     targets: Option<Targets>,
     atmos: Atmosphere,
     clouds: CloudRenderer,
@@ -1028,6 +1034,9 @@ impl Renderer {
             aircraft: crate::gfx_aircraft::AircraftRenderer::new(device, queue, &globals_bgl, &shadow_bgl, IMMEDIATE_SIZE),
             airport: crate::airport::gfx::AirportRenderer::new(device, queue, &globals_bgl, &shadow_bgl),
             airport_frame: None,
+            traffic: crate::traffic::gpu::TrafficRenderer::new(device, &globals_bgl, &shadow_bgl),
+            traffic_radius: crate::traffic::Level::default().radius(),
+            traffic_density: crate::traffic::Level::default().density(),
             globals_bgl,
             post_bgl,
             sky_main,
@@ -1086,6 +1095,13 @@ impl Renderer {
     /// Airport instances for the next `render` (airport/: parked aircraft, vehicles, windsocks).
     pub fn set_airport_frame(&mut self, f: crate::airport::Frame) {
         self.airport_frame = Some(f);
+    }
+
+    /// The road traffic setting (far light streaks, the simulated radius).
+    pub fn set_traffic_level(&mut self, l: crate::traffic::Level) {
+        self.traffic_radius = l.radius();
+        self.traffic_density = l.density();
+        self.lights.streaks = l != crate::traffic::Level::Off;
     }
 
     pub fn set_airport_lights(&mut self, device: &wgpu::Device, l: &[crate::lights::LightInst]) {
@@ -1623,7 +1639,7 @@ impl Renderer {
             city: [street, night.office, night.homes, night.hours],
             lmap: [lmap_c.x - fv.eye.x, lmap_c.y - fv.eye.z, 1.0 / crate::lights::gpu::MAP_SIZE, if street > 0.0 { 1.0 } else { 0.0 }],
             misc: [airport_level, beacon, wx.fog_ext, wx.fog_top],
-            misc2: [night.traffic, n_spots as f32, night.moon_alpha, 0.0],
+            misc2: [night.traffic * self.traffic_density, n_spots as f32, night.moon_alpha, self.traffic_radius],
             alights: spots,
             pre: [pre, 1.0 / pre, plane_h, 0.0],
         };
@@ -1849,6 +1865,7 @@ impl Renderer {
                 pass.draw_indexed(0..n, 0, 0..1);
             }
             self.airport.draw_shadow(&mut pass, i);
+            self.traffic.draw_shadow(&mut pass, i);
             self.aircraft.draw_shadow(&mut pass);
             pass.set_pipeline(&self.shadow_tree);
             for t in &tiles {
@@ -1861,7 +1878,7 @@ impl Renderer {
         }
 
         if street > 0.0 {
-            self.lights.draw_map(encoder, &tile_draws, world_xf);
+            self.lights.draw_map(encoder, &tile_draws, world_xf, self.traffic.lights().map(|(b, n, _)| (b, n)));
         }
         if let Some(p) = prof {
             p.mark(encoder, 2);
@@ -2042,6 +2059,7 @@ impl Renderer {
                 pass.draw_indexed(0..n, 0, 0..1);
             }
             self.airport.draw_main(&mut pass);
+            self.traffic.draw_main(&mut pass);
             self.aircraft.draw_main(&mut pass);
             pass.set_pipeline(&self.tree_main);
             for tile in &tiles {
@@ -2053,6 +2071,11 @@ impl Renderer {
             }
             // Lights, traffic and stars (additive, depth-tested).
             self.lights.draw_sprites(&mut pass, &tile_draws, world_xf, false, street > 0.0 || night_k > 0.0);
+            if let (Some((buf, n, repeat)), true) = (self.traffic.lights(), street > 0.0) {
+                for _ in 0..repeat {
+                    self.lights.draw_vehicle_lights(&mut pass, buf, n);
+                }
+            }
         }
         if let Some(p) = self.prof.as_ref() {
             p.mark(encoder, 4);

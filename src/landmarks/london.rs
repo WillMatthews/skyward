@@ -11,19 +11,19 @@ use std::f32::consts::{FRAC_PI_2, PI, TAU};
 use std::sync::OnceLock;
 
 pub static LANDMARKS: &[Landmark] = &[
-    Landmark { name: "The Shard", lat: 51.504408, lon: -0.086438, heading: 41.0, suppress: Suppress::Rect(-36.0, 36.0, -36.0, 36.0), build: shard, animate: None },
-    Landmark { name: "Tower Bridge", lat: 51.5055314, lon: -0.0753864, heading: 22.7, suppress: Suppress::Rect(-19.0, 19.0, -168.0, 168.0), build: tower_bridge, animate: None },
-    Landmark { name: "London Eye", lat: 51.503342, lon: -0.119677, heading: 8.0, suppress: Suppress::Rect(-10.0, 50.0, -70.0, 70.0), build: london_eye, animate: Some(london_eye_wheel) },
-    Landmark { name: "St Paul's Cathedral", lat: 51.513774, lon: -0.098479, heading: -6.3, suppress: Suppress::Rect(-84.0, 86.0, -46.0, 46.0), build: st_pauls, animate: None },
-    Landmark { name: "Elizabeth Tower (Big Ben)", lat: 51.5007121, lon: -0.1245519, heading: 6.0, suppress: Suppress::Rect(-11.0, 11.0, -11.0, 11.0), build: big_ben, animate: None },
-    Landmark { name: "Palace of Westminster", lat: 51.499317, lon: -0.124576, heading: 10.3, suppress: Suppress::Rect(-58.0, 56.0, -136.0, 134.0), build: westminster, animate: None },
-    Landmark { name: "BT Tower", lat: 51.5214383, lon: -0.1388047, heading: 0.0, suppress: Suppress::Circle(12.0), build: bt_tower, animate: None },
-    Landmark { name: "30 St Mary Axe (Gherkin)", lat: 51.514475, lon: -0.080333, heading: 0.0, suppress: Suppress::Circle(32.0), build: gherkin, animate: None },
-    Landmark { name: "20 Fenchurch Street (Walkie-Talkie)", lat: 51.511253, lon: -0.083544, heading: 13.0, suppress: Suppress::Rect(-34.0, 34.0, -40.0, 42.0), build: walkie_talkie, animate: None },
-    Landmark { name: "One Canada Square", lat: 51.504935, lon: -0.019524, heading: 9.0, suppress: Suppress::Rect(-28.0, 28.0, -28.0, 28.0), build: canada_square, animate: None },
-    Landmark { name: "The O2", lat: 51.502935, lon: 0.003205, heading: 0.0, suppress: Suppress::Circle(176.0), build: the_o2, animate: None },
-    Landmark { name: "Wembley Stadium", lat: 51.556038, lon: -0.279600, heading: 7.0, suppress: Suppress::Rect(-152.0, 152.0, -146.0, 146.0), build: wembley, animate: None },
-    Landmark { name: "Battersea Power Station", lat: 51.481787, lon: -0.144541, heading: 12.6, suppress: Suppress::Rect(-84.0, 82.0, -86.0, 86.0), build: battersea, animate: None },
+    Landmark { name: "The Shard", lat: 51.504408, lon: -0.086438, heading: 41.0, suppress: Suppress::Rect(-36.0, 36.0, -36.0, 36.0), build: shard, deck: 0.0, animate: None },
+    Landmark { name: "Tower Bridge", lat: 51.5055314, lon: -0.0753864, heading: 22.7, suppress: Suppress::Rect(-19.0, 19.0, -168.0, 168.0), build: tower_bridge, deck: 9.0, animate: None },
+    Landmark { name: "London Eye", lat: 51.503342, lon: -0.119677, heading: 8.0, suppress: Suppress::Rect(-10.0, 50.0, -70.0, 70.0), build: london_eye, deck: 0.0, animate: Some(london_eye_wheel) },
+    Landmark { name: "St Paul's Cathedral", lat: 51.513774, lon: -0.098479, heading: -6.3, suppress: Suppress::Rect(-84.0, 86.0, -46.0, 46.0), build: st_pauls, deck: 0.0, animate: None },
+    Landmark { name: "Elizabeth Tower (Big Ben)", lat: 51.5007121, lon: -0.1245519, heading: 6.0, suppress: Suppress::Rect(-11.0, 11.0, -11.0, 11.0), build: big_ben, deck: 0.0, animate: None },
+    Landmark { name: "Palace of Westminster", lat: 51.499317, lon: -0.124576, heading: 10.3, suppress: Suppress::Rect(-58.0, 56.0, -136.0, 134.0), build: westminster, deck: 0.0, animate: None },
+    Landmark { name: "BT Tower", lat: 51.5214383, lon: -0.1388047, heading: 0.0, suppress: Suppress::Circle(12.0), build: bt_tower, deck: 0.0, animate: None },
+    Landmark { name: "30 St Mary Axe (Gherkin)", lat: 51.514475, lon: -0.080333, heading: 0.0, suppress: Suppress::Circle(32.0), build: gherkin, deck: 0.0, animate: None },
+    Landmark { name: "20 Fenchurch Street (Walkie-Talkie)", lat: 51.511253, lon: -0.083544, heading: 13.0, suppress: Suppress::Rect(-34.0, 34.0, -40.0, 42.0), build: walkie_talkie, deck: 0.0, animate: None },
+    Landmark { name: "One Canada Square", lat: 51.504935, lon: -0.019524, heading: 9.0, suppress: Suppress::Rect(-28.0, 28.0, -28.0, 28.0), build: canada_square, deck: 0.0, animate: None },
+    Landmark { name: "The O2", lat: 51.502935, lon: 0.003205, heading: 0.0, suppress: Suppress::Circle(176.0), build: the_o2, deck: 0.0, animate: None },
+    Landmark { name: "Wembley Stadium", lat: 51.556038, lon: -0.279600, heading: 7.0, suppress: Suppress::Rect(-152.0, 152.0, -146.0, 146.0), build: wembley, deck: 0.0, animate: None },
+    Landmark { name: "Battersea Power Station", lat: 51.481787, lon: -0.144541, heading: 12.6, suppress: Suppress::Rect(-84.0, 82.0, -86.0, 86.0), build: battersea, deck: 0.0, animate: None },
 ];
 
 // ---------------------------------------------------------------- palette

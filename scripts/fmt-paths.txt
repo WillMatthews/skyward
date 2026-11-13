@@ -74,3 +74,10 @@ src/flight/ga.rs
 src/flight/tests/ga_types.rs
 src/vfx/spray.rs
 src/vfx/smoke.rs
+src/traffic/mod.rs
+src/traffic/net.rs
+src/traffic/sim.rs
+src/traffic/vehicle.rs
+src/traffic/mesh.rs
+src/traffic/gpu.rs
+src/traffic/tests.rs

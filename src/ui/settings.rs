@@ -76,6 +76,8 @@ pub struct Settings {
     pub vsync: bool,
     /// Scenery detail: 0 low, 1 medium, 2 high, 3 ultra (tile load radius).
     pub detail: u8,
+    /// Road traffic: 0 off, 1 low, 2 medium, 3 high (traffic::Level).
+    pub traffic: u8,
     pub speed: SpeedUnit,
     pub alt: AltUnit,
     pub map_style: MapStyle,
@@ -97,6 +99,7 @@ impl Default for Settings {
             vsync: true,
             // The browser streams on the main thread: lighter by default.
             detail: if crate::platform::WEB { 0 } else { 2 },
+            traffic: crate::traffic::Level::default_for_platform().as_u8(),
             speed: SpeedUnit::Knots,
             alt: AltUnit::Feet,
             map_style: MapStyle::Auto,
@@ -183,6 +186,7 @@ impl Settings {
             "hud": self.hud.name(),
             "vsync": self.vsync,
             "detail": self.detail,
+            "traffic": self.traffic,
             "speed": match self.speed { SpeedUnit::Knots => "kt", SpeedUnit::Kmh => "kmh", SpeedUnit::Mph => "mph" },
             "alt": match self.alt { AltUnit::Feet => "ft", AltUnit::Metres => "m" },
             "map_style": match self.map_style { MapStyle::Auto => "auto", MapStyle::Day => "day", MapStyle::Night => "night" },
@@ -237,6 +241,7 @@ impl Settings {
             },
             vsync: b("vsync", true),
             detail: (f("detail", if crate::platform::WEB { 0.0 } else { 2.0 }) as u8).min(3),
+            traffic: (f("traffic", d.traffic as f32) as u8).min(3),
             speed: match st("speed").as_str() {
                 "kmh" => SpeedUnit::Kmh,
                 "mph" => SpeedUnit::Mph,
@@ -265,7 +270,7 @@ mod tests {
 
     #[test]
     fn round_trip() {
-        let mut s = Settings { hud: HudMode::Minimal, vsync: false, detail: 1, speed: SpeedUnit::Kmh, alt: AltUnit::Metres, ..Settings::default() };
+        let mut s = Settings { hud: HudMode::Minimal, vsync: false, detail: 1, traffic: 3, speed: SpeedUnit::Kmh, alt: AltUnit::Metres, ..Settings::default() };
         s.push_recent("EGLL");
         s.push_recent("EGLC");
         s.push_recent("EGLL");
