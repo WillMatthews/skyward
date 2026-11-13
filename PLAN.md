@@ -28,9 +28,11 @@ item lands; keep entries one line.
 - [x] Buildings with procedural facades, pitched roofs, trees, seasons (E, H)
 - [x] **P0** Terrain elevation (Terrarium DEM, 3 LODs to ~95 km, draped layers, flattened runways, terrain shadows, alpine shading) (T)
 - [x] **P0** Procedural landmarks registry: 12 London landmarks incl. turning London Eye, floodlit at night (T)
-- [ ] **P1** Terrain follow-ups: aprons/taxiways flattened like runways; detail normals near the ground; per-water-body reflection planes; far-field popping (geomorph); coastal sea in horizon tiles; OSM `building:part` / `roof:shape` via Overpass for non-landmark buildings; more cities' landmarks
+- [x] **P1** Aprons / taxiways graded like runways: the airfield around each runway is levelled to its plane (by airport class; hills and water left alone) (A)
+- [ ] **P1** Terrain follow-ups: detail normals near the ground; per-water-body reflection planes; far-field popping (geomorph); coastal sea in horizon tiles; OSM `building:part` / `roof:shape` via Overpass for non-landmark buildings; more cities' landmarks
 - [ ] **P1** Satellite/aerial imagery option for ground texture (licence-clean source) blended with vector landuse
-- [ ] **P1** Airports: terminals, hangars, jet bridges, apron markings, stands, parked aircraft, ground vehicles, windsocks, signage
+- [x] **P1** Airports, worldwide and data-driven (map tiles + OurAirports + Overpass, procedural fallback): concrete aprons, taxiway centre / edge lines, holding positions, stand lead-ins / numbers / restraint lines; glass terminals, hangars with doors, control towers, fire station, fuel farm; stands with jet bridges and parked aircraft (real assets, textured + clustered LODs); parked and driving ground vehicles; wind-driven windsocks; lit runway-holding / location / direction signs; taxiway / stop-bar / guard lights and floodlit aprons (A)
+- [ ] **P1** Airport follow-ups: browser builds layouts / parked-type LODs on the page (one-off hitches; parked types limited to downloaded aircraft); no widebody / bizjet assets (A320 stands in on big stands); terminal-piece canopies on multi-part buildings; taxiway centrelines stop at the runway edge (no lead-on curves); vehicles drive the service roads straight through (no junction logic); fire station / fuel farm / tower are procedural where OSM has none; Overpass flaky (1 h back-off, cached forever)
 - [ ] **P1** Bridges with decks/towers, tunnels hidden, rail with trains, motorways with moving traffic (day + night)
 - [ ] **P1** Water: coastline/ocean waves, tides on the Thames, boats/ships moving, shoreline foam
 - [ ] **P2** Vegetation: species by region, hedgerows as geometry, forest LOD canopies, grass blades near ground
@@ -125,4 +127,5 @@ item lands; keep entries one line.
 | P | Input devices (gilrs/evdev, rebinding, curves, head-look) + CI/goldens | ✅ |
 | T | Terrain elevation + landmarks | ✅ |
 | L | Structure/flex/crashes + supersonic/atmospheric VFX (damage, debris, vfx) | ✅ |
-| next | Airports detail, live 3D cockpit instruments, ATC, missions, release packaging | ⏳ to schedule |
+| A (v3) | Airport detail: markings, buildings, stands, jet bridges, parked aircraft, vehicles, signs, windsocks, airfield lights, airfield grading (`src/airport/`) | ✅ |
+| next | Live 3D cockpit instruments, ATC, missions, release packaging | ⏳ to schedule |

@@ -6,3 +6,12 @@ src/input/sim_glue.rs
 src/ui/controls.rs
 src/platform/mod.rs
 src/tiles_web.rs
+src/airport/mod.rs
+src/airport/fleet.rs
+src/airport/font.rs
+src/airport/gfx.rs
+src/airport/layout.rs
+src/airport/mesh.rs
+src/airport/overpass.rs
+src/airport/tile.rs
+src/airport/types.rs

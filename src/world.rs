@@ -183,6 +183,8 @@ pub struct World {
     /// Resident tiles at the last check (a new tile re-checks at once, so the
     /// result doesn't depend on wall-clock timing: deterministic headless shots).
     base_check_tiles: usize,
+    /// Airport detail (airport/): layouts, bakes, stands, vehicles.
+    pub airport_detail: crate::airport::AirportScene,
 }
 
 fn rect_dist(r: (Vec2, Vec2), p: Vec2) -> f32 {
@@ -239,6 +241,7 @@ impl World {
             terrain_base: 0.0,
             base_check: None,
             base_check_tiles: 0,
+            airport_detail: crate::airport::AirportScene::new(),
         }
     }
 
@@ -515,6 +518,7 @@ impl World {
             self.radius_eff = (self.radius_eff + 50.0).min(self.radius);
         }
 
+        self.airport_detail.update();
         let due = match self.last_schedule {
             None => true,
             Some((t, p)) => t.elapsed() > Duration::from_millis(250) || p.distance(self.focus) > 150.0,
@@ -540,6 +544,9 @@ impl World {
             if !dup {
                 self.airports.push(a.clone());
             }
+        }
+        if let Some(a) = &b.aero {
+            self.airport_detail.add_tile(b.id, a.clone(), b.grid.clone(), self.airport_db.as_ref());
         }
         let trees = b.trees.len();
         let water = b.collision.water_levels(&b.grid);
@@ -631,6 +638,7 @@ impl World {
             self.tiles.remove(&id);
             self.uploads.retain(|u| u.id != id);
             self.evicted.push(id);
+            self.airport_detail.remove_tile(id);
         }
         let now = Instant::now();
         let busy = self.pool.in_flight();
@@ -877,6 +885,7 @@ impl World {
                 self.tiles.remove(&id);
                 self.uploads.retain(|u| u.id != id);
                 self.evicted.push(id);
+                self.airport_detail.remove_tile(id);
             }
         }
         self.airport_db = Some(db);
@@ -1058,6 +1067,7 @@ mod tests {
             lines: vec![],
             runways: vec![RunwayPiece { a: rw.0, b: rw.1, name: "09/27".into() }],
             airports: vec![],
+            aero: Default::default(),
         };
         (scene::build_tile(id, &tp, f), tower, pond, rw)
     }
