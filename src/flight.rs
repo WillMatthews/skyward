@@ -1143,8 +1143,17 @@ impl AircraftDef {
     /// [`trim_point`](Self::trim_point) at altitude `alt` (m) with the gear
     /// down or up (`gear_down` is ignored for fixed gear).
     pub fn trim_point_at(&self, speed: f32, flap: f32, alt: f32, gear_down: bool) -> TrimPoint {
+        self.trim_point_path(speed, flap, alt, gear_down, 0.0)
+    }
+
+    /// [`trim_point_at`](Self::trim_point_at) on a straight path at flight-path
+    /// angle `gamma` (rad, negative = descending: -3° for a glidepath). The
+    /// engines make up the difference (idle if even that is too much);
+    /// gliders ignore `gamma` and fly their own glide angle.
+    pub fn trim_point_path(&self, speed: f32, flap: f32, alt: f32, gear_down: bool, gamma: f32) -> TrimPoint {
+        let path = if self.has_engine { finite_or(gamma, 0.0) } else { 0.0 };
         if let Some(j) = &self.jsb {
-            return self.trim_point_jsb(j, speed, flap, alt, gear_down);
+            return self.trim_point_jsb(j, speed, flap, alt, gear_down, path);
         }
         let w = self.mass * GRAVITY;
         let atm = isa(alt);
@@ -1156,14 +1165,14 @@ impl AircraftDef {
         let gear = if self.retractable_gear && gear_down { self.cd_gear } else { 0.0 };
         let extra_cd = gear + self.wave_drag(mach);
         let a_hi = self.alpha_usable(flap);
-        let mut gamma = 0.0f32;
+        let mut gamma = path;
         let mut alpha = 0.0f32;
         let mut thrust = 0.0f32;
         for _ in 0..30 {
             // Solve for alpha such that the forces normal to the path balance.
             let need = |a: f32| -> f32 {
                 let ld = self.lift_drag(a, flap, 1.0);
-                let t = if self.has_engine { q * s * (ld.cd + extra_cd) / a.cos() } else { 0.0 };
+                let t = if self.has_engine { (q * s * (ld.cd + extra_cd) + w * gamma.sin()).max(0.0) / a.cos() } else { 0.0 };
                 q * s * ld.cl + t * a.sin() - w * gamma.cos()
             };
             let (mut lo, mut hi) = (-0.25f32, a_hi);
@@ -1182,7 +1191,7 @@ impl AircraftDef {
             }
             let ld = self.lift_drag(alpha, flap, 1.0);
             if self.has_engine {
-                thrust = q * s * (ld.cd + extra_cd) / alpha.cos();
+                thrust = (q * s * (ld.cd + extra_cd) + w * gamma.sin()).max(0.0) / alpha.cos();
                 break;
             }
             gamma = -((ld.cd + extra_cd) / ld.cl.max(0.05)).atan();
@@ -1259,7 +1268,7 @@ impl AircraftDef {
     /// Exact trim against the JSBSim aerodynamics: Newton on (alpha,
     /// elevator) for lift = weight and zero pitching moment, thrust balancing
     /// drag (or, for a glider, the glide path balancing drag).
-    fn trim_point_jsb(&self, j: &JsbDef, speed: f32, flap: f32, alt: f32, gear_down: bool) -> TrimPoint {
+    fn trim_point_jsb(&self, j: &JsbDef, speed: f32, flap: f32, alt: f32, gear_down: bool, path: f32) -> TrimPoint {
         let w = self.mass * GRAVITY;
         let atm = isa(alt);
         let ias = finite_or(speed, 30.0).max(1.0);
@@ -1278,7 +1287,7 @@ impl AircraftDef {
             i.cg_aft_m = self.cg_scheduled(mach);
             j.aero.eval_steady(&i)
         };
-        let (mut a, mut e, mut thrust, mut gamma) = (deg(3.0), 0.0f32, 0.0f32, 0.0f32);
+        let (mut a, mut e, mut thrust, mut gamma) = (deg(3.0), 0.0f32, 0.0f32, path);
         for _ in 0..25 {
             let o = eval(a, e, thrust);
             let lift_dir = Vec3::new(0.0, a.cos(), a.sin());
@@ -3494,6 +3503,41 @@ impl Aircraft {
         let sd = crate::damage::struct_def(def.id);
         a.dmg.flex = [sd.tip_per_g; 2];
         a
+    }
+
+    /// [`airborne`](Self::airborne) already configured and trimmed: flap
+    /// surface `flap` (0..1), gear as given (fixed gear: always down), on a
+    /// straight path at `gamma` (rad, -3° for a glidepath) at indicated
+    /// `speed_ms`. Returns the controls that hold it there (throttle, trim,
+    /// flap and gear levers). Helicopters: the plain air start.
+    pub fn airborne_configured(def: &AircraftDef, pos: Vec3, heading_rad: f32, speed_ms: f32, flap: f32, gear_down: bool, gamma: f32) -> (Self, Controls) {
+        let mut a = Self::airborne(def, pos, heading_rad, speed_ms);
+        if def.rotor.is_some() {
+            let mut c = trimmed_controls_at(def, speed_ms, pos.y);
+            c.gear_down = a.gear_pos > 0.5;
+            return (a, c);
+        }
+        let flap = finite_or(flap, 0.0).clamp(0.0, 1.0);
+        let gear_down = gear_down || !def.retractable_gear;
+        let speed = finite_or(speed_ms, 30.0).max(1.0);
+        let alt = finite_or(pos.y, 0.0);
+        let tp = def.trim_point_path(speed, flap, alt, gear_down, gamma);
+        let atm = isa(alt);
+        let tas = tas_from_cas(speed, alt);
+        a.rot = attitude(heading_rad, tp.pitch, 0.0);
+        a.vel = attitude(heading_rad, tp.gamma, 0.0) * Vec3::Z * tas;
+        a.air_vel = a.vel;
+        a.alpha = tp.alpha;
+        a.surf.flaps = flap;
+        a.peak_flap = flap;
+        a.alpha_peak = def.alpha_usable(flap);
+        a.gear_pos = if gear_down { 1.0 } else { 0.0 };
+        a.surf.gear = 1.0 - a.gear_pos;
+        a.settle_engines(def, tp.throttle, tas * tp.alpha.cos(), &atm);
+        a.trim = tp.trim;
+        a.surf.elevator = if def.control_law == ControlLaw::Direct { (tp.trim * def.trim_authority).clamp(-1.0, 1.0) } else { tp.elevator.clamp(-1.0, 1.0) };
+        let c = Controls { throttle: tp.throttle, trim: tp.trim, flaps: flap, gear_down, ..Default::default() };
+        (a, c)
     }
 
     pub fn forward(&self) -> Vec3 {
