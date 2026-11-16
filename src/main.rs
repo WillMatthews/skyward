@@ -61,6 +61,7 @@ mod systems;
 mod terrain;
 mod bathy;
 mod landcover;
+mod sattint;
 mod cog;
 mod dem;
 mod overture;

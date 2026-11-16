@@ -200,3 +200,5 @@ src/ui/boot.rs
 src/bathy/mod.rs
 src/bathy/source.rs
 src/bathy/gpu.rs
+src/sattint/mod.rs
+src/sattint/source.rs

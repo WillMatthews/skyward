@@ -367,6 +367,8 @@ pub fn credits(ui: &mut Ui, st: &mut UiState) {
         ("Elevation detail", crate::dem::copdem::CREDIT),
         ("Land cover", crate::landcover::WORLDCOVER_CREDIT),
         ("Tree heights", crate::landcover::CANOPY_CREDIT),
+        ("Ground tint", crate::sattint::EOX_CREDIT),
+        ("Ground tint fallback", crate::sattint::GIBS_CREDIT),
         ("More buildings", crate::overture::CREDIT),
         ("Night lights", crate::lights::nightlights::CREDIT),
         ("Sea depth", crate::bathy::CREDIT),

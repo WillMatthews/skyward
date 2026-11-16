@@ -87,6 +87,18 @@ others; per-item sources, authors and licences are listed in:
         (registry.opendata.aws/dataforgood-fb-forests). Skyward uses the
         1/4000-degree aggregate (95th-percentile height, canopy cover),
         resampled to its scenery grid.
+  * Satellite ground tint (src/sattint/; read at run time, cached under
+    cache/sattint/, not redistributed; only a blurred, reduced colour ratio
+    per ~100 m is derived from it):
+      - Sentinel-2 cloudless 2016 by EOX, CC BY 4.0
+        (https://creativecommons.org/licenses/by/4.0/): "EOxCloudless
+        https://cloudless.eox.at by EOX IT Services GmbH (Contains modified
+        Copernicus Sentinel data 2016)". Later EOxCloudless years are
+        CC BY-NC-SA 4.0 and are not used.
+      - Fallback: NASA Blue Marble: Next Generation (NASA Earth Observatory),
+        served by NASA's Global Imagery Browse Services (GIBS), part of
+        NASA's Earth Science Data and Information System (ESDIS); public
+        domain.
   * Elevation detail (src/dem/, desktop version; read at run time, cached
     under cache/copdem/, not redistributed): Copernicus DEM GLO-30 Public,
     free under the Copernicus DEM licence
