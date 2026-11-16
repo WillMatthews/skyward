@@ -1966,6 +1966,11 @@ fn headless(args: Args) -> Result<(), String> {
         let mp = ui.st.mp.connected();
         let mut chat = mp_chat_cues(&args.mp_chat);
         let paced = Instant::now();
+        // SKYWARD_SHOT_SEQ=t1,t2,..: also capture `<stem>_t<t>.png` at those sim
+        // times (crash sequences: frames after an impact, scenario.rs).
+        let mut seq: Vec<f32> = std::env::var("SKYWARD_SHOT_SEQ").ok().map(|v| v.split(',').filter_map(|x| x.trim().parse::<f32>().ok()).collect()).unwrap_or_default();
+        seq.sort_by(f32::total_cmp);
+        let stem = path.trim_end_matches(".png").to_string();
         for i in 0..steps.max(1) {
             if mp {
                 let due = paced + Duration::from_secs_f64(i as f64 / 60.0);
@@ -2003,6 +2008,21 @@ fn headless(args: Args) -> Result<(), String> {
                     s.follow();
                     break;
                 }
+            }
+            if seq.first().is_some_and(|t| (i + 1) as f32 / 60.0 >= *t) {
+                let t = seq.remove(0);
+                s.follow();
+                let tw = Instant::now();
+                loop {
+                    sync_gpu(&mut s, &mut renderer, &mut ui, &gpu, None);
+                    let f = s.world.focus();
+                    let (r, tot) = s.world.progress(f, 2500.0);
+                    if (r >= tot && s.world.uploads.is_empty()) || tw.elapsed() > Duration::from_secs(60) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                save_png(&gpu, &mut renderer, &mut ui, &mut s, &tex, &view, w, h, &raw, &format!("{stem}_t{t:05.2}.png"))?;
             }
             if i % if mp { 10 } else { 30 } == 0 {
                 s.follow();
