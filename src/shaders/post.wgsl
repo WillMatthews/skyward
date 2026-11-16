@@ -1,5 +1,5 @@
 // Bloom (downsample / upsample chain) and final tonemap (+ contrast-adaptive
-// sharpening after TAA, lens flare / dirt, chromatic aberration, film grain,
+// sharpening after TAA, lens dirt, chromatic aberration, film grain,
 // display brightness / gamma, HDR output).
 
 @group(0) @binding(0) var src: texture_2d<f32>;
@@ -7,9 +7,9 @@
 @group(0) @binding(2) var bloom_tex: texture_2d<f32>;
 
 struct PostU {
-    params: vec4<f32>, // x exposure, y bloom strength, z first-downsample flag (tonemap: look power), w saturation
+    params: vec4<f32>, // x exposure, y bloom strength, z first-downsample flag (tonemap: look power), w saturation (first downsample: glare cap, 0 = none)
     texel: vec4<f32>,  // xy = 1/size of src, z = 1 / pre-exposure
-    fx: vec4<f32>,     // tonemap: x sharpen 0..1, y lens flare, z lens dirt, w chromatic aberration
+    fx: vec4<f32>,     // tonemap: x sharpen 0..1, y unused, z lens dirt, w chromatic aberration
     fx2: vec4<f32>,    // tonemap: x film grain, y time (s), z brightness, w display gamma
     hdr: vec4<f32>,    // tonemap: x HDR output, y paper white / 80 nits, z peak / paper white
 };
@@ -45,26 +45,53 @@ fn karis(c: vec3<f32>) -> f32 {
     return 1.0 / (1.0 + dot(c, vec3<f32>(0.2126, 0.7152, 0.0722)) * atmos.expo.x * 0.58 * 0.25);
 }
 
+// What feeds the glare (first downsample only): at night the point lights
+// (lamps, landing lights, strobes) are thousands of times brighter than the
+// adapted scene, and their full energy spread over the bloom chain turns
+// into a milky veil across the screen. Above `params.w` (exposed luminance;
+// 0 = no cap, by day) the excess is dropped: lights keep a tight glow.
+fn glare_cap(c: vec3<f32>) -> vec3<f32> {
+    let cap = pu.params.w;
+    if (cap <= 0.0) {
+        return c;
+    }
+    let l = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722)) * atmos.expo.x;
+    return c * min(1.0, cap / max(l, 1e-6));
+}
+
 // 13-tap downsample (Jimenez 2014).
 @fragment
 fn fs_down(in: FsOut) -> @location(0) vec4<f32> {
     let t = pu.texel.xy;
     let uv = in.uv;
-    let a = s(uv + t * vec2<f32>(-2.0, -2.0));
-    let b = s(uv + t * vec2<f32>(0.0, -2.0));
-    let c = s(uv + t * vec2<f32>(2.0, -2.0));
-    let d = s(uv + t * vec2<f32>(-2.0, 0.0));
-    let e = s(uv);
-    let f = s(uv + t * vec2<f32>(2.0, 0.0));
-    let gg = s(uv + t * vec2<f32>(-2.0, 2.0));
-    let h = s(uv + t * vec2<f32>(0.0, 2.0));
-    let i = s(uv + t * vec2<f32>(2.0, 2.0));
-    let j = s(uv + t * vec2<f32>(-1.0, -1.0));
-    let k = s(uv + t * vec2<f32>(1.0, -1.0));
-    let l = s(uv + t * vec2<f32>(-1.0, 1.0));
-    let m = s(uv + t * vec2<f32>(1.0, 1.0));
+    let a0 = s(uv + t * vec2<f32>(-2.0, -2.0));
+    let b0 = s(uv + t * vec2<f32>(0.0, -2.0));
+    let c0 = s(uv + t * vec2<f32>(2.0, -2.0));
+    let d0 = s(uv + t * vec2<f32>(-2.0, 0.0));
+    let e0 = s(uv);
+    let f0 = s(uv + t * vec2<f32>(2.0, 0.0));
+    let gg0 = s(uv + t * vec2<f32>(-2.0, 2.0));
+    let h0 = s(uv + t * vec2<f32>(0.0, 2.0));
+    let i0 = s(uv + t * vec2<f32>(2.0, 2.0));
+    let j0 = s(uv + t * vec2<f32>(-1.0, -1.0));
+    let k0 = s(uv + t * vec2<f32>(1.0, -1.0));
+    let l0 = s(uv + t * vec2<f32>(-1.0, 1.0));
+    let m0 = s(uv + t * vec2<f32>(1.0, 1.0));
     if (pu.params.z > 0.5) {
         // first level: Karis average to kill fireflies
+        let a = glare_cap(a0);
+        let b = glare_cap(b0);
+        let c = glare_cap(c0);
+        let d = glare_cap(d0);
+        let e = glare_cap(e0);
+        let f = glare_cap(f0);
+        let gg = glare_cap(gg0);
+        let h = glare_cap(h0);
+        let i = glare_cap(i0);
+        let j = glare_cap(j0);
+        let k = glare_cap(k0);
+        let l = glare_cap(l0);
+        let m = glare_cap(m0);
         let g0 = (a + b + d + e) * 0.25;
         let g1 = (b + c + e + f) * 0.25;
         let g2 = (d + e + gg + h) * 0.25;
@@ -78,10 +105,10 @@ fn fs_down(in: FsOut) -> @location(0) vec4<f32> {
         let r = (g0 * w0 + g1 * w1 + g2 * w2 + g3 * w3 + g4 * w4) / (w0 + w1 + w2 + w3 + w4);
         return vec4<f32>(r, 1.0);
     }
-    var r = e * 0.125;
-    r += (a + c + gg + i) * 0.03125;
-    r += (b + d + f + h) * 0.0625;
-    r += (j + k + l + m) * 0.125;
+    var r = e0 * 0.125;
+    r += (a0 + c0 + gg0 + i0) * 0.03125;
+    r += (b0 + d0 + f0 + h0) * 0.0625;
+    r += (j0 + k0 + l0 + m0) * 0.125;
     return vec4<f32>(r, 1.0);
 }
 
@@ -206,28 +233,6 @@ fn smudges(p: vec2<f32>) -> f32 {
     return clamp(acc, 0.0, 1.0);
 }
 
-// Pseudo lens flare (Chapman): ghosts of the very brightest parts of the
-// bloom mirrored through the centre, and a halo ring; tinted by position.
-fn lens_flare(uv: vec2<f32>, expo: f32) -> vec3<f32> {
-    let tuv = vec2<f32>(1.0) - uv;
-    let gv = (vec2<f32>(0.5) - tuv) * 0.42;
-    var acc = vec3<f32>(0.0);
-    for (var i = 0; i < 4; i++) {
-        let o = fract(tuv + gv * f32(i));
-        let d = length(vec2<f32>(0.5) - o) / 0.7071;
-        let w = pow(max(1.0 - d, 0.0), 8.0);
-        let b = textureSampleLevel(bloom_tex, samp, o, 0.0).rgb * expo;
-        // Only what is far brighter than white (the sun, landing lights).
-        acc += max(b - vec3<f32>(6.0), vec3<f32>(0.0)) * w;
-    }
-    let hv = normalize(gv + vec2<f32>(1e-5)) * 0.45;
-    let hb = textureSampleLevel(bloom_tex, samp, fract(tuv + hv), 0.0).rgb * expo;
-    let hw = pow(max(1.0 - length(vec2<f32>(0.5) - fract(tuv + hv)) / 0.7071, 0.0), 5.0);
-    acc += max(hb - vec3<f32>(8.0), vec3<f32>(0.0)) * hw * 0.5;
-    let tint = mix(vec3<f32>(1.0, 0.82, 0.62), vec3<f32>(0.6, 0.8, 1.0), length(uv - 0.5) * 1.4);
-    return acc * tint * 0.0045 / max(expo, 1e-6);
-}
-
 @fragment
 fn fs_tonemap(in: FsOut) -> @location(0) vec4<f32> {
     var hdr = sharpened(in.uv, pu.fx.x);
@@ -237,10 +242,6 @@ fn fs_tonemap(in: FsOut) -> @location(0) vec4<f32> {
         hdr = vec3<f32>(s(in.uv + d).r, hdr.g, s(in.uv - d).b);
     }
     var bloom = textureSampleLevel(bloom_tex, samp, in.uv, 0.0).rgb;
-    let k_expo = atmos.expo.x * pu.params.x;
-    if (pu.fx.y > 0.0) {
-        hdr += lens_flare(in.uv, k_expo) * pu.fx.y;
-    }
     if (pu.fx.z > 0.0) {
         // Dirt on the lens, lit by the glare around it.
         let q = in.uv * vec2<f32>(pu.texel.y / pu.texel.x, 1.0);

@@ -357,8 +357,19 @@ impl AircraftAsset {
         Self::parse(&raw, dir)
     }
 
-    /// Parse a model; textures are read from `aircraft/<dir>/`.
+    /// Parse a model; textures are read from `aircraft/<dir>/`. The
+    /// animation corrections of `aircraft_fixups.rs` are applied
+    /// (`SKYWARD_NO_FIXUPS=1` shows the model as imported).
     pub fn parse(raw: &[u8], dir: &str) -> Result<AircraftAsset, String> {
+        let mut a = Self::parse_unfixed(raw, dir)?;
+        if std::env::var_os("SKYWARD_NO_FIXUPS").is_none() {
+            crate::aircraft_fixups::apply(&mut a);
+        }
+        Ok(a)
+    }
+
+    /// Parse a model as imported, without [`crate::aircraft_fixups`].
+    pub fn parse_unfixed(raw: &[u8], dir: &str) -> Result<AircraftAsset, String> {
         if raw.len() < 8 || &raw[0..4] != b"SKAC" {
             return Err("not a SKAC file".into());
         }
@@ -513,8 +524,47 @@ impl AircraftAsset {
             }
         }
         asset.textures = textures.iter().map(|f| load_texture(dir, f)).collect();
+        asset.settle_translucency();
         Ok(asset)
     }
+
+    /// The importer flags as translucent everything FlightGear blends or
+    /// alpha-tests (`blend` / `alpha-test` animations, transparent effects),
+    /// including panels and placards with cut-out labels. Drawn blended they
+    /// write no depth and show through each other in any order (see-through
+    /// panels, flicker in the cockpit). An opaque material colour over a
+    /// texture whose alpha is on / off is a cut-out: alpha-tested, depth
+    /// written. (Opaque or untextured "translucent" materials stay blended:
+    /// FlightGear's glass effects make those see-through in the shader.)
+    pub fn settle_translucency(&mut self) {
+        let kind: Vec<Option<bool>> = self.textures.iter().map(|t| alpha_kind(&t.rgba)).collect();
+        for m in self.materials.iter_mut().filter(|m| m.translucent && m.col.w >= 0.95) {
+            if m.tex.and_then(|t| kind.get(t).copied()) == Some(Some(false)) {
+                m.translucent = false;
+                m.alpha_tex = true;
+            }
+        }
+    }
+}
+
+/// A texture's alpha channel: None = opaque, Some(true) = a good part of the
+/// texels that aren't opaque are partly transparent (glass), Some(false) =
+/// on / off (cut-outs: labels, decals, frames).
+fn alpha_kind(rgba: &[u8]) -> Option<bool> {
+    let (mut holes, mut partial) = (0usize, 0usize);
+    for a in rgba.chunks_exact(4).map(|p| p[3]) {
+        if a < 250 {
+            holes += 1;
+            if (25..=230).contains(&a) {
+                partial += 1;
+            }
+        }
+    }
+    // (Cut-outs have a thin band of partial alpha along their edges.)
+    (holes > 0).then_some(partial * 3 > holes)
+}
+
+impl AircraftAsset {
 
     /// Index of a channel, if the model uses it.
     pub fn channel(&self, name: &str) -> Option<usize> {
@@ -804,6 +854,16 @@ mod tests {
 mod sign_tests {
     use super::*;
 
+    #[test]
+    fn texture_alpha_kinds() {
+        let px = |a: &[u8]| a.iter().flat_map(|&x| [128, 128, 128, x]).collect::<Vec<u8>>();
+        assert_eq!(alpha_kind(&px(&[255, 255, 252])), None);
+        // Labels: on / off with a thin anti-aliased edge → cut-out.
+        assert_eq!(alpha_kind(&px(&[255, 255, 255, 0, 0, 0, 0, 0, 120, 255])), Some(false));
+        // A glass pane in the texture → blended.
+        assert_eq!(alpha_kind(&px(&[255, 255, 70, 70, 70, 80, 0])), Some(true));
+    }
+
     /// Mean height (body Y) of the exterior vertices under nodes whose name matches.
     fn mean_y(a: &AircraftAsset, ch: &[f32], pat: &str) -> Option<f32> {
         let mut st = AnimState::default();
@@ -855,5 +915,70 @@ mod sign_tests {
         set(&mut ch, "elevator", 1.0);
         let pushed = mean_y(&a, &ch, "elevator").unwrap();
         assert!(pushed < base - 0.005, "elevator TE should go down for push: {base} → {pushed}");
+    }
+}
+
+#[cfg(test)]
+mod surface_audit {
+    use super::*;
+
+    /// Per exterior node: centroid (body frame) of its own geometry under `ch`.
+    fn centroids(a: &AircraftAsset, ch: &[f32]) -> Vec<Option<(Vec3, usize)>> {
+        let mut st = AnimState::default();
+        let mut pose = Pose::default();
+        a.pose(ch, &mut st, 0.0, &mut pose);
+        let mut acc = vec![(Vec3::ZERO, 0usize); a.nodes.len()];
+        for c in a.chunks.iter().filter(|c| !c.interior && pose.visible[c.node]) {
+            let m = pose.world[c.node];
+            for k in c.first..c.first + c.count {
+                acc[c.node].0 += m.transform_point3(Vec3::from(a.vertices[(a.indices[k as usize] + c.base_vertex) as usize].pos));
+                acc[c.node].1 += 1;
+            }
+        }
+        acc.into_iter().map(|(s, n)| (n > 0).then(|| (s / n as f32, n))).collect()
+    }
+
+    /// Which exterior parts move, and how, for each flight-control channel:
+    /// `SKAC_AUDIT=lancer cargo test --release surface_motion_dump -- --ignored --nocapture`
+    /// (all aircraft when unset).
+    #[test]
+    #[ignore]
+    fn surface_motion_dump() {
+        let ids: Vec<String> = match std::env::var("SKAC_AUDIT") {
+            Ok(v) => v.split(',').map(String::from).collect(),
+            Err(_) => {
+                let mut v: Vec<String> = std::fs::read_dir("assets/aircraft").unwrap().filter_map(|e| Some(e.ok()?.file_name().to_string_lossy().into_owned())).collect();
+                v.sort();
+                v
+            }
+        };
+        for id in ids {
+            let raw = std::fs::read(format!("assets/aircraft/{id}/model.skac")).unwrap();
+            let a = AircraftAsset::parse(&raw, "__none__").unwrap();
+            let base: Vec<f32> = a.channels.iter().map(|c| if c == "gear_pos" { 1.0 } else { 0.0 }).collect();
+            let c0 = centroids(&a, &base);
+            println!("== {id} ({} nodes) channels: {}", a.nodes.len(), a.channels.iter().filter(|c| !c.starts_with("ctl_")).cloned().collect::<Vec<_>>().join(" "));
+            for (label, set) in [("elevator+1", vec![("elevator", 1.0)]), ("aileron+1", vec![("aileron_l", 1.0), ("aileron_r", -1.0)]), ("rudder+1", vec![("rudder", 1.0)]), ("flaps1", vec![("flaps", 1.0)]), ("spoilers1", vec![("spoilers", 1.0)]), ("gear_up", vec![("gear_pos", 0.0)]), ("steer1", vec![("steer_norm", 1.0), ("steer_deg", 40.0)])] {
+                let mut ch = base.clone();
+                for (n, v) in &set {
+                    if let Some(i) = a.channel(n) {
+                        ch[i] = *v;
+                    }
+                }
+                let c1 = centroids(&a, &ch);
+                println!(" -- {label}");
+                for (i, (p0, p1)) in c0.iter().zip(&c1).enumerate() {
+                    match (p0, p1) {
+                        (Some((p0, n)), Some((p1, _))) if (*p1 - *p0).length() > 0.005 => {
+                            let d = *p1 - *p0;
+                            println!("   {:<36} n{:<5} at ({:6.2} {:6.2} {:6.2}) moves ({:6.3} {:6.3} {:6.3})", a.nodes[i].name, n, p0.x, p0.y, p0.z, d.x, d.y, d.z);
+                        }
+                        (Some((p0, _)), None) => println!("   {:<36} at ({:6.2} {:6.2} {:6.2}) hidden", a.nodes[i].name, p0.x, p0.y, p0.z),
+                        (None, Some((p1, _))) => println!("   {:<36} at ({:6.2} {:6.2} {:6.2}) shown", a.nodes[i].name, p1.x, p1.y, p1.z),
+                        _ => {}
+                    }
+                }
+            }
+        }
     }
 }

@@ -474,6 +474,8 @@ pub struct Sim {
     real_time: f32,
     /// Ground height under the aircraft (terrain.rs), for heights above the ground.
     pub ground_y: f32,
+    /// Ground height under the tower camera (`tower_xz`), kept by `update`.
+    tower_ground: f32,
     /// Altimeter setting for the cockpit instruments (the app copies the weather's QNH), hPa.
     pub qnh_hpa: f32,
     /// Physics state one fixed step back, for render interpolation.
@@ -484,8 +486,9 @@ pub struct Sim {
     rrot: Quat,
     /// Where the model's lights are (lights.rs).
     light_rig: crate::lights::AircraftLightRig,
-    /// Landing / taxi lights: None = automatic (gear down / with the bot), Some = the pilot's choice (L).
-    pub landing_lights: Option<bool>,
+    /// Exterior light switches: None = automatic by phase of flight
+    /// (lights/switches.rs), Some = the pilot's choice (L: landing lights).
+    pub light_sw: crate::lights::LightSwitches,
     /// Analog-input and head-look state (input/sim_glue.rs).
     pub pilot: pilot::Pilot,
     /// Loose parts and, after a crash, the wreck (debris.rs).
@@ -637,13 +640,14 @@ impl Sim {
             cine: Cine::default(),
             real_time: 0.0,
             ground_y: 0.0,
+            tower_ground: 0.0,
             qnh_hpa: 1013.25,
             prev_pos: Vec3::ZERO,
             prev_rot: Quat::IDENTITY,
             rpos: Vec3::ZERO,
             rrot: Quat::IDENTITY,
             light_rig: Default::default(),
-            landing_lights: None,
+            light_sw: Default::default(),
             pilot: Default::default(),
             debris: None,
             severity: None,
@@ -795,7 +799,7 @@ impl Sim {
         (self.model, self.size) = load_model(&self.defs[self.sel]);
         self.light_rig = crate::lights::AircraftLightRig::from_model(&self.model);
         self.arm();
-        self.landing_lights = None;
+        self.light_sw = Default::default();
         self.bot = None;
         self.nav = crate::nav::NavState::new(&self.defs[self.sel]);
         self.watch = watch;
@@ -1136,13 +1140,19 @@ impl Sim {
                 self.nav.plan.set_origin(Some(Wpt::new(a.code(), (a.lat, a.lon), WptKind::Airport)));
             }
         }
-        if self.ac.on_ground || self.nav.plan.approach.is_some() {
+        if self.ac.on_ground {
             return;
         }
         let Some(rw) = self.runway.clone().filter(|r| !r.airport.is_empty()) else { return };
         // The end being flown to: the one the aircraft points along.
         let ha = bot::heading_of(rw.b - rw.a);
         let ident = if bot::wrap_pi(ha - self.ac.heading()).abs() < PI / 2.0 { rw.ident_a.clone() } else { rw.ident_b.clone() };
+        // An approach already planned stays (the player's, across restarts),
+        // unless it is to another runway of this field: a final start on
+        // 27L kept the into-wind 27R of the spawn before it.
+        if self.nav.plan.approach.as_ref().is_some_and(|a| a.airport != rw.airport || a.runway == ident) {
+            return;
+        }
         if let Ok(msg) = self.nav.plan_approach(&adb, &rw.airport, &ident, ApprKind::Ils) {
             // (Every Sim built logs it — the menu thumbnails build one per type —
             // so only on request.)
@@ -1196,6 +1206,12 @@ impl Sim {
         let dt = dt.min(0.1);
         self.real_time += dt;
         self.ground_y = crate::flight::Environment::ground_height(world, vec2(self.ac.pos.x, self.ac.pos.z));
+        // Ground under the fixed cameras (tower, fly-by): their eyes stay above it.
+        let t = self.tower_xz();
+        self.tower_ground = crate::flight::Environment::ground_height(world, t);
+        if let Some(p) = &mut self.flyby_pos {
+            p.y = p.y.max(crate::flight::Environment::ground_height(world, vec2(p.x, p.z)) + 2.0);
+        }
         if let Some((_, t)) = &mut self.note {
             *t -= dt;
             if *t <= 0.0 {
@@ -1402,7 +1418,7 @@ impl Sim {
                 }
                 Key::LandingLights => {
                     let on = !self.landing_lights_on();
-                    self.landing_lights = Some(on);
+                    self.light_sw.landing = Some(on);
                     self.say(if on { "Landing lights on" } else { "Landing lights off" }, 2.0);
                 }
                 Key::LookCenter => {
@@ -1954,22 +1970,42 @@ impl Sim {
         self.snap_pose();
     }
 
-    /// Landing lights: the pilot's choice (L), else on with the gear down
-    /// (fixed gear: below ~3,000 ft) or whenever the bot flies.
-    pub fn landing_lights_on(&self) -> bool {
-        // The FPV quad has no landing lights (only its LED bar).
-        if self.defs[self.sel].category == Category::Drone {
-            return false;
+    /// The exterior lights as shown: the pilot's switches, else the
+    /// automatic state for the phase of flight (lights/switches.rs).
+    pub fn ext_lights(&self) -> crate::lights::ExtLights {
+        let def = &self.defs[self.sel];
+        // The FPV quad has only its LED bar (an emissive part of the model).
+        if def.category == Category::Drone {
+            return crate::lights::ExtLights::default();
         }
-        self.landing_lights.unwrap_or_else(|| {
-            if self.bot.is_some() {
-                self.ac.on_ground || self.ac.pos.y - self.ground_y < 3000.0
-            } else if self.defs[self.sel].retractable_gear {
-                self.ac.gear_pos() > 0.5
-            } else {
-                self.ac.pos.y - self.ground_y < 900.0
-            }
-        })
+        let ac = &self.ac;
+        let p = Vec2::new(ac.pos.x, ac.pos.z);
+        let on_runway = ac.on_ground
+            && self.runway.as_ref().is_some_and(|r| {
+                let len = r.a.distance(r.b);
+                let d = (r.b - r.a) / len.max(1.0);
+                let s = (p - r.a).dot(d);
+                (-30.0..=len + 30.0).contains(&s) && (p - r.a - d * s).length() < r.width * 0.5 + 5.0
+            });
+        let pushing = self.ground.push.as_ref().is_some_and(|p| p.attached());
+        let phase = crate::lights::switches::Phase {
+            powered: ac.sys.power != crate::systems::Power::Off,
+            has_engine: def.has_engine,
+            running: (0..ac.engine_count(def)).any(|i| ac.engine_running(i)),
+            on_ground: ac.on_ground || ac.water.afloat(),
+            gs: Vec2::new(ac.vel.x, ac.vel.z).length(),
+            throttle: self.ctl.throttle,
+            parking_brake: self.ctl.parking_brake,
+            pushback: pushing,
+            on_runway,
+            alt_ft: ac.pos.y * 3.280_84,
+        };
+        self.light_sw.resolve(&phase)
+    }
+
+    /// Landing lights on (switch or automatic).
+    pub fn landing_lights_on(&self) -> bool {
+        self.ext_lights().landing
     }
 
     /// Direction toward the sun for the current date / time of day.
@@ -2006,12 +2042,22 @@ impl Sim {
         MAP_RANGES[self.map_zoom.min(MAP_RANGES.len() - 1)]
     }
 
-    fn tower_eye(&self) -> Vec3 {
+    /// Ground point of the tower camera: beside the runway's midpoint.
+    fn tower_xz(&self) -> Vec2 {
         let (a, b, w) = self.runway.as_ref().map(|r| (r.a, r.b, r.width)).unwrap_or((Vec2::ZERO, vec2(0.0, -1000.0), 45.0));
         let d = (b - a).normalize_or(vec2(0.0, -1.0));
         let side = vec2(-d.y, d.x);
-        let mid = (a + b) * 0.5 + side * (w * 0.5 + 140.0 + self.size * 2.0);
-        vec3(mid.x, 38.0, mid.y)
+        (a + b) * 0.5 + side * (w * 0.5 + 140.0 + self.size * 2.0)
+    }
+
+    fn tower_eye(&self) -> Vec3 {
+        let mid = self.tower_xz();
+        // A 38 m cab above the ground there (`tower_ground`, kept by `update`)
+        // or the runway, whichever is higher. Heights are above sea level: a
+        // fixed 38 m put the eye a few metres up at Heathrow and underground
+        // at any field much above the sea.
+        let field = self.runway.as_ref().filter(|r| r.elev_known).map(|r| r.elev[0].max(r.elev[1])).unwrap_or(self.ground_y);
+        vec3(mid.x, field.max(self.tower_ground) + 38.0, mid.y)
     }
 
     fn flyby_eye(&mut self) -> Vec3 {
@@ -2031,7 +2077,9 @@ impl Sim {
         if need_new {
             let side = vel.cross(Vec3::Y).normalize_or_zero();
             let mut p = pos + vel * lead + side * (30.0 + self.size * 1.6 + speed * 0.08);
-            p.y = (p.y - 6.0 - self.size * 0.3).max(2.0);
+            // (At least 2 m over the ground under the aircraft; `update`
+            // lifts it over the ground under the eye itself.)
+            p.y = (p.y - 6.0 - self.size * 0.3).max(self.ground_y + 2.0);
             self.flyby_pos = Some(p);
         }
         self.flyby_pos.unwrap()
@@ -2094,7 +2142,7 @@ impl Sim {
                 let back = vec3(-yaw.sin(), 0.0, yaw.cos());
                 let p = self.cine.pitch;
                 let mut eye = pos + (back * p.cos() + Vec3::Y * p.sin()) * self.cine.dist;
-                eye.y = eye.y.max(2.0);
+                eye.y = eye.y.max(self.ground_y + 2.0);
                 (eye, pos + Vec3::Y * r * 0.1, Vec3::Y, 55f32.to_radians())
             }
         }
@@ -2115,6 +2163,7 @@ impl Sim {
             _ => self.rpos,
         };
         let mut fov = self.prefs.chase_fov.clamp(20.0, 120.0).to_radians();
+        let mut near = crate::gfx::NEAR;
         let show_aircraft = true;
         let (eye, target, cam_up) = match self.cam {
             CamMode::Chase => {
@@ -2125,7 +2174,7 @@ impl Sim {
                 let mut eye = pos + off;
                 // (A small drone is framed from just above the ground.)
                 let small = self.defs[self.sel].category == Category::Drone;
-                eye.y = if small { eye.y.max(self.ground_y + 0.12) } else { eye.y.max(1.0) };
+                eye.y = if small { eye.y.max(self.ground_y + 0.12) } else { eye.y.max(self.ground_y + 1.0) };
                 let target = pos + Vec3::Y * if small { 0.02 } else { 0.5 + self.size * 0.08 };
                 match self.crash_camera() {
                     // Destroyed: a slow orbit framing the whole wreckage (blended in).
@@ -2157,6 +2206,8 @@ impl Sim {
                     // FPV quad: the camera is bolted on, tilted up, wide-angle.
                     Some(q) => {
                         fov = 2.0 * ((q.cam_fov * 0.5).tan() / aspect.max(0.5)).atan();
+                        // (Its props turn a few cm from the camera: keep them out of the frustum.)
+                        near = 0.25;
                         let cam = self.rrot * Quat::from_rotation_x(-q.cam_tilt);
                         (e, e + cam * Vec3::Z * 100.0, cam * Vec3::Y)
                     }
@@ -2185,8 +2236,8 @@ impl Sim {
         let view = glam::camera::rh::view::look_at_mat4(eye, target, cam_up);
         let zone = crate::atmosphere::civil_offset_h(self.home_ll.0, self.home_ll.1, self.day_of_year);
         let clock = crate::atmosphere::SkyClock::new(self.lat_lon.0, self.lat_lon.1, zone, self.day_of_year, self.hours);
-        let on = self.landing_lights_on();
-        let mut acl = crate::lights::AircraftLights::build(&self.light_rig, self.rpos - eye, self.rrot, self.time, on, on && self.ac.on_ground);
+        let xl = self.ext_lights();
+        let mut acl = crate::lights::AircraftLights::build(&self.light_rig, self.rpos - eye, self.rrot, self.time, &xl);
         if !show_aircraft {
             // From the cockpit the lights shine out, but their lenses aren't seen.
             acl.n_sprites = 0;
@@ -2196,7 +2247,7 @@ impl Sim {
             acl.n_sprites = 0;
             acl.n_spots = 0;
         }
-        let mut fv = FrameView { eye, view, fov_y: fov, time: self.time, sun_dir: self.sun_dir(), exposure: 1.0, clock, acl, aircraft: None, vfx: None, others: Vec::new(), wx: None };
+        let mut fv = FrameView { eye, view, fov_y: fov, near, time: self.time, sun_dir: self.sun_dir(), exposure: 1.0, clock, acl, aircraft: None, vfx: None, others: Vec::new(), wx: None };
         let mut dynm = MeshData::default();
         // The fight: missiles, parachutes, holes; the other aircraft (weapons/).
         let mut others = Vec::new();
@@ -2250,28 +2301,22 @@ impl Sim {
     }
 
     /// Animate the aircraft model for this frame and return its draw list
-    /// (eye-relative); light glows and the afterburner flame go into `out`.
+    /// (eye-relative); light glows go into `out`.
     fn aircraft_mesh(&mut self, out: &mut MeshData, eye: Vec3, interior: bool) -> Option<crate::gfx_aircraft::AircraftFrame> {
         let def = &self.defs[self.sel];
         let ac = &self.ac;
-        let running = (0..ac.engine_count(def)).any(|i| ac.engine_running(i)) && def.has_engine;
-        // Lights: navigation always, beacon with an engine running, strobes on the
-        // runway / in flight, landing lights with the gear down below ~1,500 ft.
-        let strobe = !ac.on_ground || self.ctl.throttle > 0.5;
-        let beacon_flash = running && (self.time * 1.0).fract() < 0.12;
-        let st = (self.time / 1.2).fract();
-        let strobe_flash = strobe && (st < 0.05 || (0.12..0.17).contains(&st));
-        let landing = ac.gear_pos() > 0.5 && ac.pos.y - self.ground_y < 460.0 && running;
+        // Lights: the switches / phase of flight (lights/switches.rs).
+        let xl = self.ext_lights();
         let daylight = crate::cockpit::daylight(self.sun_dir().y);
         self.model.update(&ModelInputs {
             def,
             ac,
             ctl: &self.ctl,
             time: self.time,
-            nav: true,
-            beacon: running,
-            strobe,
-            landing,
+            nav: xl.nav,
+            beacon: xl.beacon,
+            strobe: xl.strobe,
+            landing: xl.landing || xl.taxi,
             ap: Some(&self.ap),
             qnh_hpa: self.qnh_hpa,
             hours: self.hours,
@@ -2281,7 +2326,6 @@ impl Sim {
         let m = Mat4::from_rotation_translation(self.rrot, self.rpos - eye);
         let mut local = MeshData::default();
         // (Navigation / beacon / strobe lights: crate::lights, from the model's light positions.)
-        let _ = (beacon_flash, strobe_flash);
         // (The afterburner plume is an effect: vfx::plume, ray-marched and additive.)
         // Linear vertex colours → the sRGB-encoded colours the scene shader expects.
         for v in &mut local.verts {
@@ -2292,6 +2336,7 @@ impl Sim {
         out.append(&local, m);
         let mut f = self.model.frame(m, interior)?;
         f.dynamics = Some(Box::new(self.structure_frame(m, eye)));
+        f.cockpit = self.cam == CamMode::Cockpit;
         Some(f)
     }
 
@@ -2339,6 +2384,11 @@ impl Sim {
 /// Load the model for an aircraft. Also returns the bounding radius.
 fn load_model(def: &AircraftDef) -> (AircraftModel, f32) {
     let mut model = models::build(def.id, def.eye);
+    // SKYWARD_EYE="dx,dy,dz": move the cockpit eye (body frame, m; x left,
+    // y up, z forward) — for tuning eye points with headless captures.
+    if let Some(v) = std::env::var("SKYWARD_EYE").ok().map(|s| s.split(',').filter_map(|x| x.trim().parse::<f32>().ok()).collect::<Vec<_>>()).filter(|v| v.len() == 3) {
+        model.eye += Vec3::new(v[0], v[1], v[2]);
+    }
     if let Some(a) = model.asset.clone() {
         model.parts = Some(models::classify(&a, def));
     }

@@ -130,7 +130,8 @@ fn extra500_base() -> AircraftDef {
         engine_count: 1,
         retractable_gear: true,
         has_reverser: true,
-        eye: Vec3::new(0.34, 0.338, 0.485),
+        // (FlightGear view 0.338: 10 cm under the roof; eye_tests.rs.)
+        eye: Vec3::new(0.34, 0.25, 0.485),
         vr_kt: 70.0,
         vref_kt: 85.0,
         vle_kt: 150.0,

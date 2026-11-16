@@ -855,7 +855,8 @@ fn generic_lights(a: &Live, info: Option<&TypeInfo>, eye: Vec3, time: f32, out: 
     if bits & lb::LANDING != 0 {
         rig.landing.push((vec3(0.0, -len * 0.03, len * 0.35), Vec3::Z));
     }
-    let l = crate::lights::AircraftLights::build(&rig, a.pos - eye, a.rot, time, bits & lb::LANDING != 0, bits & lb::TAXI != 0);
+    let on = crate::lights::ExtLights { nav: true, beacon: true, strobe: true, landing: bits & lb::LANDING != 0, taxi: bits & lb::TAXI != 0 };
+    let l = crate::lights::AircraftLights::build(&rig, a.pos - eye, a.rot, time, &on);
     out.extend_from_slice(&l.sprites[..l.n_sprites]);
 }
 
