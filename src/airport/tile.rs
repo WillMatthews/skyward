@@ -42,6 +42,8 @@ pub struct Piece {
     hi: Vec2,
     /// OurAirports ident, class, has a paved runway (None: no airport near).
     pub owner: Option<(String, AKind, bool)>,
+    /// The owner's apt.dat layout draws the pavement (`aptgeo.rs`).
+    apt_paved: bool,
 }
 
 impl Piece {
@@ -88,7 +90,8 @@ impl Ctx {
                 let c = (lo + hi) * 0.5;
                 let (lat, lon) = proj.to_latlon(c);
                 let owner = db.as_ref().and_then(|db| owner_of(db, lat, lon, ((hi - lo).length() * 0.5 / 1000.0) as f64));
-                Piece { outer: a.outer.clone(), holes: a.holes.clone(), lo, hi, owner }
+                let apt_paved = !super::aptgeo::disabled() && owner.as_ref().is_some_and(|o| super::aptdat::paved(&o.0) == Some(true));
+                Piece { outer: a.outer.clone(), holes: a.holes.clone(), lo, hi, owner, apt_paved }
             })
             .collect();
         let aprons = f
@@ -116,6 +119,12 @@ impl Ctx {
     /// lights (see airport/layout.rs): the generic ones are left out there.
     pub fn owned(&self, p: Vec2) -> bool {
         self.pieces.iter().any(|pc| pc.owner.is_some() && pc.near(p, 60.0))
+    }
+
+    /// Inside an aerodrome whose apt.dat layout draws the taxiway / apron
+    /// pavement: the map's own is left out there (no double drawing).
+    pub fn apt_paved(&self, p: Vec2) -> bool {
+        self.pieces.iter().any(|pc| pc.apt_paved && pc.near(p, 60.0))
     }
 
     pub fn class_at(&self, p: Vec2) -> Option<AKind> {

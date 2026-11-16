@@ -937,7 +937,11 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
         if a.kind == Kind::Apron && ring_area(&a.outer).abs() > 8000.0 && !owned {
             lights.apron(&a.outer);
         }
-        // Aprons at airports: concrete slabs.
+        // Aprons at airports: concrete slabs — unless apt.dat draws the pavement.
+        if a.kind == Kind::Apron && !aero.is_empty() && aero.apt_paved(a.outer[0]) {
+            rx_mask.fill(&a.outer, &a.holes, &mut mask_set);
+            continue;
+        }
         let concrete = a.kind == Kind::Apron && !aero.is_empty() && aero.at(a.outer[0]).is_some_and(|p| p.owner.is_some());
         flat.mat = if concrete { mat::CONCRETE } else { mat::ASPHALT };
         flat.flat_poly(&a.outer, &a.holes, 0.0, Vec3::Y, if concrete { CONCRETE } else { col });
@@ -984,6 +988,9 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
     let taxi_w = |pts: &[Vec2], width: f32| if aero.is_empty() { Some(width) } else { aero.taxiway_width(pts) };
     for l in &f.lines {
         if let Kind::Taxiway { width } = l.kind {
+            if aero.apt_paved(l.pts[l.pts.len() / 2]) {
+                continue;
+            }
             if let (Some(w), Some(crate::airports::Kind::Large)) = (taxi_w(&l.pts, width), aero.class_at(l.pts[l.pts.len() / 2])) {
                 flat.strip_cut(&l.pts, w + 15.0, 0.0, TAXI_SHOULDER, l.cut);
             }
@@ -996,7 +1003,9 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
             if !owned {
                 lights.taxiway(&l.pts, w);
             }
-            flat.strip_cut(&l.pts, w, 0.0, TAXI, l.cut);
+            if !aero.apt_paved(l.pts[l.pts.len() / 2]) {
+                flat.strip_cut(&l.pts, w, 0.0, TAXI, l.cut);
+            }
             rx_mask.stroke(&l.pts, w + 10.0, &mut mask_set);
         }
     }

@@ -434,11 +434,20 @@ pub fn build(ap: &Airport, tiles: &[(TileId, Arc<AeroTile>)], osm: Option<&OsmAi
         None => stands(&c, osm, &osm_xy),
     };
     occupy(&c, &mut l, stands);
-    marks(&c, &mut l);
-    signs(&c, &mut l);
-    lights_and_masts(&c, &mut l);
-    windsocks(&c, &mut l, osm, &osm_xy);
-    tower(&c, &mut l, osm, &osm_xy);
+    // apt.dat pavement, painted lines and taxiway lights (Track AD2).
+    let apt_geo = apt.filter(|_| !super::aptgeo::disabled());
+    let geo = apt_geo.filter(|a| !a.pavements.is_empty() || !a.lines.is_empty()).map(|a| super::aptgeo::build(a, &frame));
+    if let Some(g) = &geo {
+        l.aprons.extend(g.hard.iter().cloned());
+    }
+    marks(&c, &mut l, geo.as_ref());
+    match apt_geo.filter(|a| !a.signs.is_empty()) {
+        Some(a) => apt_signs(&mut l, a, &osm_xy),
+        None => signs(&c, &mut l),
+    }
+    lights_and_masts(&c, &mut l, geo.as_ref());
+    windsocks(&c, &mut l, osm, apt, &osm_xy);
+    tower(&c, &mut l, osm, apt, &osm_xy);
     services(&c, &mut l);
     routes(&c, &mut l);
     // Bounds.
@@ -1125,11 +1134,22 @@ fn offset(pts: &[Vec2], off: f32) -> Vec<Vec2> {
         .collect()
 }
 
-fn marks(c: &Ctx, l: &mut Layout) {
+/// Ground markings: the apt.dat pavement and painted lines where the
+/// airport has them (they replace the procedural lines), else procedural.
+fn marks(c: &Ctx, l: &mut Layout, geo: Option<&super::aptgeo::Geo>) {
     let mut m = MeshData::default();
     m.mat = mat::DIFFUSE;
+    if let Some(g) = geo {
+        // Painter's order (no depth write): pavement, then its paint.
+        m.append(&g.pave, glam::Mat4::IDENTITY);
+        m.append(&g.paint, glam::Mat4::IDENTITY);
+        if g.painted > 0 {
+            l.marks = m;
+            return;
+        }
+    }
     let big = matches!(c.kind, AKind::Large | AKind::Medium);
-    let paved = c.runways.iter().any(|r| r.paved) || !c.aprons.is_empty();
+    let paved = c.runways.iter().any(|r| r.paved) || !c.aprons.is_empty() || geo.is_some_and(|g| !g.pave.idx.is_empty());
     if !paved {
         l.marks = m;
         return;
@@ -1399,9 +1419,26 @@ fn signs(c: &Ctx, l: &mut Layout) {
     }
 }
 
+/// The apt.dat signs (row 20) with their real legends, front and back.
+fn apt_signs(l: &mut Layout, a: &AptAirport, xy: &dyn Fn((f64, f64)) -> Vec2) {
+    for s in &a.signs {
+        let (front, back) = super::aptgeo::sign_text(&s.text);
+        if front.is_empty() && back.is_empty() {
+            continue;
+        }
+        let at = xy((s.lat, s.lon));
+        // `hdg`: the heading of someone reading the front; the face looks back at them.
+        let facing = -mesh::heading_dir(s.hdg.to_radians());
+        let m = mesh::sign_faces(&front, &back, super::aptgeo::sign_size(s.size));
+        let mut g = MeshData::default();
+        g.append(&m, glam::Mat4::from_quat(mesh::heading_quat(mesh::dir_heading(facing))));
+        l.objects.push(Object { at, mesh: g, foot: None });
+    }
+}
+
 // ---------------------------------------------------------------- lights, masts
 
-fn lights_and_masts(c: &Ctx, l: &mut Layout) {
+fn lights_and_masts(c: &Ctx, l: &mut Layout, geo: Option<&super::aptgeo::Geo>) {
     let lit = c.runways.iter().any(|r| r.lighted);
     if !lit {
         return;
@@ -1411,7 +1448,12 @@ fn lights_and_masts(c: &Ctx, l: &mut Layout) {
         AKind::Medium => (Some(30.0), Some(50.0)),
         _ => (None, Some(60.0)),
     };
-    for t in &c.taxis {
+    // apt.dat taxiway lights replace the procedural ones.
+    let real = geo.filter(|g| !g.lights.is_empty());
+    if let Some(g) = real {
+        l.lights.extend_from_slice(&g.lights);
+    }
+    for t in c.taxis.iter().filter(|_| real.is_none()) {
         let keep = |p: Vec2| !c.in_apron(p) && c.runway_at(p, 3.0).is_none();
         if let Some(sp) = centre {
             for r in runs(&t.pts, sp, &keep) {
@@ -1494,8 +1536,12 @@ fn lights_and_masts(c: &Ctx, l: &mut Layout) {
 
 // ---------------------------------------------------------------- windsocks, tower
 
-fn windsocks(c: &Ctx, l: &mut Layout, osm: Option<&OsmAirport>, osm_xy: &dyn Fn((f64, f64)) -> Vec2) {
-    let mut socks: Vec<Vec2> = osm.map(|o| o.windsocks.iter().map(|p| osm_xy(*p)).filter(|p| c.in_aerodrome(*p) || c.runway_at(*p, 400.0).is_some()).collect()).unwrap_or_default();
+fn windsocks(c: &Ctx, l: &mut Layout, osm: Option<&OsmAirport>, apt: Option<&AptAirport>, osm_xy: &dyn Fn((f64, f64)) -> Vec2) {
+    // apt.dat windsocks (row 19), else the map's, else procedural.
+    let mut socks: Vec<Vec2> = apt.map(|a| a.windsocks.iter().map(|p| osm_xy(*p)).filter(|p| c.runway_at(*p, 2.0).is_none()).collect()).unwrap_or_default();
+    if socks.is_empty() {
+        socks = osm.map(|o| o.windsocks.iter().map(|p| osm_xy(*p)).filter(|p| c.in_aerodrome(*p) || c.runway_at(*p, 400.0).is_some()).collect()).unwrap_or_default();
+    }
     if socks.is_empty() {
         for (i, rw) in c.runways.iter().enumerate() {
             let len = rw.length();
@@ -1527,13 +1573,17 @@ fn windsocks(c: &Ctx, l: &mut Layout, osm: Option<&OsmAirport>, osm_xy: &dyn Fn(
     l.socks = socks;
 }
 
-fn tower(c: &Ctx, l: &mut Layout, osm: Option<&OsmAirport>, osm_xy: &dyn Fn((f64, f64)) -> Vec2) {
+fn tower(c: &Ctx, l: &mut Layout, osm: Option<&OsmAirport>, apt: Option<&AptAirport>, osm_xy: &dyn Fn((f64, f64)) -> Vec2) {
     if c.blds.iter().any(|b| b.class == BClass::Tower) || !matches!(c.kind, AKind::Large | AKind::Medium) {
         return;
     }
     let h = if c.kind == AKind::Large { 58.0 } else { 30.0 };
     let free = |p: Vec2| !c.in_building(p, 6.0) && !c.in_apron(p) && c.nearest_taxi(p, 30.0).is_none() && c.runway_at(p, 150.0).is_none() && c.in_aerodrome(p);
-    let mut at = osm.and_then(|o| o.towers.iter().map(|t| (osm_xy(t.0), t.1)).find(|(p, _)| free(*p)));
+    // The apt.dat tower viewpoint (row 14: the cab's eye height; the roof a few metres above).
+    let mut at = apt.and_then(|a| a.tower).map(|(p, eye)| (osm_xy(p), Some(eye + 4.0))).filter(|(p, _)| !c.in_building(*p, 2.0) && c.runway_at(*p, 100.0).is_none());
+    if at.is_none() {
+        at = osm.and_then(|o| o.towers.iter().map(|t| (osm_xy(t.0), t.1)).find(|(p, _)| free(*p)));
+    }
     if at.is_none() {
         // Beside the aprons, with a view of the runways' middle.
         let mid = c.runways.iter().map(|r| (r.a + r.b) * 0.5).sum::<Vec2>() / c.runways.len().max(1) as f32;

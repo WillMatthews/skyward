@@ -1,8 +1,9 @@
 //! Real airport layouts from X-Plane `apt.dat` (format 1100 / 1200): the
 //! ATC taxi route network (rows 1200 / 1201 / 1202 / 1204), startup / gate
-//! locations (1300 / 1301, legacy 15), taxiway signs (20), windsocks (19)
-//! and tower viewpoints (14). Pavement (110–116) and linear features (120)
-//! are recognised and skipped for now.
+//! locations (1300 / 1301, legacy 15), taxiway signs (20), windsocks (19),
+//! tower viewpoints (14), pavement (110 with its 111–116 Bezier rings) and
+//! linear features (120: painted lines and taxiway lights) — drawn by
+//! `aptgeo.rs` / `layout.rs`.
 //!
 //! Source: the X-Plane Scenery Gateway's community airports as shipped in
 //! FlightGear's `fgdata` (`Airports/apt.dat.ws3.gz`, pinned to a commit
@@ -31,10 +32,10 @@ pub const SOURCE_URL: &str = "https://gitlab.com/flightgear/fgdata/-/raw/228ac3d
 /// Shown in the credits.
 pub const CREDIT: &str = "X-Plane Scenery Gateway airports (Robin A. Peel, Laminar Research, Gateway artists) via FlightGear fgdata — GNU GPL";
 /// Index header: bump when the chunk selection changes.
-const INDEX_VERSION: &str = "skyward-aptdat-1";
-/// Rows kept in a chunk (the rest — pavement, lines, lights, frequencies — is
-/// dropped until something uses it).
-const KEEP: [&str; 13] = ["1", "16", "17", "14", "15", "19", "20", "1201", "1202", "1204", "1300", "1301", "1302"];
+const INDEX_VERSION: &str = "skyward-aptdat-2";
+/// Rows kept in a chunk (the rest — runways, frequencies, boundaries, light
+/// objects — is dropped until something uses it).
+const KEEP: [&str; 21] = ["1", "16", "17", "14", "15", "19", "20", "110", "111", "112", "113", "114", "115", "116", "120", "1201", "1202", "1204", "1300", "1301", "1302"];
 
 // ---------------------------------------------------------------- types
 
@@ -127,6 +128,37 @@ pub struct Sign {
     pub text: String,
 }
 
+/// A node of a pavement ring or linear feature (rows 111–116).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PathNode {
+    pub lat: f64,
+    pub lon: f64,
+    /// Bezier control point after the node (112 / 114 / 116); the one
+    /// before it is its mirror image through the node.
+    pub ctrl: Option<(f64, f64)>,
+    /// Line type of the segment starting here (0 none; 1–9 yellow, 20–25
+    /// white, 30–32 red, 40–43 others, +50 with a black border).
+    pub line: u8,
+    /// Light type of that segment (0 none, else 101–108 − 100).
+    pub light: u8,
+}
+
+/// A chain of nodes: closed (113 / 114) or open (115 / 116).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Path {
+    pub nodes: Vec<PathNode>,
+    pub closed: bool,
+}
+
+/// A pavement polygon (row 110): surface code, texture heading (deg),
+/// boundary first, then its holes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pavement {
+    pub surface: u8,
+    pub hdg: f32,
+    pub rings: Vec<Path>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AptAirport {
     pub ident: String,
@@ -143,6 +175,10 @@ pub struct AptAirport {
     pub windsocks: Vec<(f64, f64)>,
     /// Tower viewpoint: position and height above ground (m).
     pub tower: Option<((f64, f64), f32)>,
+    /// Pavement polygons in drawing order (later ones on top).
+    pub pavements: Vec<Pavement>,
+    /// Linear features (row 120): painted lines and lights.
+    pub lines: Vec<Path>,
 }
 
 impl AptAirport {
@@ -176,6 +212,15 @@ pub fn parse(text: &str) -> Vec<AptAirport> {
     let mut ids: HashMap<i64, u32> = HashMap::new();
     let mut pending: Vec<(i64, i64, bool, bool, Option<char>, String)> = Vec::new();
     let mut hot: Vec<Vec<Hot>> = Vec::new();
+    // The pavement / linear feature the 111–116 nodes belong to.
+    #[derive(PartialEq)]
+    enum Feat {
+        None,
+        Pave,
+        Line,
+    }
+    let mut feat = Feat::None;
+    let mut ring: Vec<PathNode> = Vec::new();
     let flush = |ap: &mut AptAirport, ids: &mut HashMap<i64, u32>, pending: &mut Vec<(i64, i64, bool, bool, Option<char>, String)>, hot: &mut Vec<Vec<Hot>>| {
         for (k, (a, b, oneway, runway, class, name)) in pending.drain(..).enumerate() {
             let (Some(&a), Some(&b)) = (ids.get(&a), ids.get(&b)) else { continue };
@@ -191,6 +236,12 @@ pub fn parse(text: &str) -> Vec<AptAirport> {
         let c = code(line);
         let f: Vec<&str> = line.split_ascii_whitespace().collect();
         let num = |i: usize| f.get(i).and_then(|x| x.parse::<f64>().ok());
+        if !matches!(c, "111" | "112" | "113" | "114" | "115" | "116") {
+            ring.clear();
+            if !c.is_empty() {
+                feat = Feat::None;
+            }
+        }
         match c {
             "1" | "16" | "17" => {
                 if let Some(ap) = out.last_mut() {
@@ -276,6 +327,51 @@ pub fn parse(text: &str) -> Vec<AptAirport> {
                         let (Some(lat), Some(lon), Some(hdg)) = (num(1), num(2), num(3)) else { continue };
                         ap.signs.push(Sign { lat, lon, hdg: hdg as f32, size: num(5).unwrap_or(2.0) as u8, text: rest(line, 6) });
                     }
+                    "110" => {
+                        let (Some(surf), Some(hdg)) = (num(1), num(3)) else { continue };
+                        ap.pavements.push(Pavement { surface: surf.clamp(0.0, 255.0) as u8, hdg: hdg as f32, rings: Vec::new() });
+                        feat = Feat::Pave;
+                    }
+                    "120" => {
+                        feat = Feat::Line;
+                    }
+                    "111" | "112" | "113" | "114" | "115" | "116" if feat != Feat::None => {
+                        let bez = matches!(c, "112" | "114" | "116");
+                        let (Some(lat), Some(lon)) = (num(1), num(2)) else { continue };
+                        if !lat.is_finite() || !lon.is_finite() || lat.abs() > 90.0 || lon.abs() > 180.0 {
+                            continue;
+                        }
+                        let ctrl = if bez { num(3).zip(num(4)).filter(|(a, b)| a.is_finite() && b.is_finite() && a.abs() <= 90.0 && b.abs() <= 180.0) } else { None };
+                        let first = if bez { 5 } else { 3 };
+                        let (mut line, mut light) = (0u8, 0u8);
+                        if !matches!(c, "115" | "116") {
+                            for k in first..first + 2 {
+                                match f.get(k).and_then(|x| x.parse::<u16>().ok()) {
+                                    Some(v @ 1..=99) => line = v as u8,
+                                    Some(v @ 101..=199) => light = (v - 100) as u8,
+                                    _ => {}
+                                }
+                            }
+                        }
+                        ring.push(PathNode { lat, lon, ctrl, line, light });
+                        if matches!(c, "113" | "114" | "115" | "116") {
+                            let p = Path { nodes: std::mem::take(&mut ring), closed: matches!(c, "113" | "114") };
+                            match feat {
+                                Feat::Pave => {
+                                    if let Some(pv) = ap.pavements.last_mut() {
+                                        if p.nodes.len() >= 3 {
+                                            pv.rings.push(p);
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    if p.nodes.len() >= 2 {
+                                        ap.lines.push(p);
+                                    }
+                                }
+                            }
+                        }
+                    }
                     "19" => {
                         if let (Some(lat), Some(lon)) = (num(1), num(2)) {
                             ap.windsocks.push((lat, lon));
@@ -294,6 +390,9 @@ pub fn parse(text: &str) -> Vec<AptAirport> {
     if let Some(ap) = out.last_mut() {
         flush(ap, &mut ids, &mut pending, &mut hot);
     }
+    for ap in &mut out {
+        ap.pavements.retain(|p| !p.rings.is_empty());
+    }
     out
 }
 
@@ -309,6 +408,8 @@ pub struct Chunk {
     pub ident: String,
     pub icao: String,
     pub text: String,
+    /// Has pavement polygons (the map's own pavement gives way: `tile.rs`).
+    pub paved: bool,
 }
 
 /// Split a whole apt.dat (decompressed, read line by line — the file is
@@ -336,7 +437,7 @@ pub fn split(r: impl BufRead, sink: &mut dyn FnMut(Chunk)) -> std::io::Result<us
             emit(cur.take(), net || starts >= 3, &mut n);
             (net, starts) = (false, 0);
             let ident = line.split_ascii_whitespace().nth(4).unwrap_or("").to_string();
-            cur = Some(Chunk { ident, icao: String::new(), text: String::new() });
+            cur = Some(Chunk { ident, icao: String::new(), text: String::new(), paved: false });
         } else if c == "99" {
             emit(cur.take(), net || starts >= 3, &mut n);
             (net, starts) = (false, 0);
@@ -358,12 +459,37 @@ pub fn split(r: impl BufRead, sink: &mut dyn FnMut(Chunk)) -> std::io::Result<us
             continue;
         }
         net |= c == "1202";
+        ch.paved |= c == "110";
         starts += (c == "1300" || c == "15") as u32;
-        ch.text.push_str(line);
+        if matches!(c, "111" | "112" | "113" | "114" | "115" | "116") {
+            compact_node(line, &mut ch.text);
+        } else {
+            ch.text.push_str(line);
+        }
         ch.text.push('\n');
     }
     emit(cur.take(), net || starts >= 3, &mut n);
     Ok(n)
+}
+
+/// A pavement / line node row with its coordinates cut to 7 decimals
+/// (≈1 cm) and single spaces: the chunks shrink by about a fifth.
+fn compact_node(line: &str, out: &mut String) {
+    let f: Vec<&str> = line.split_ascii_whitespace().collect();
+    let coords = if matches!(f[0], "112" | "114" | "116") { 4 } else { 2 };
+    for (i, x) in f.iter().enumerate() {
+        if i > 0 {
+            out.push(' ');
+        }
+        match x.parse::<f64>() {
+            Ok(v) if i >= 1 && i <= coords && v.is_finite() => {
+                let t = format!("{v:.7}");
+                let t = t.trim_end_matches('0').trim_end_matches('.');
+                out.push_str(if t == "-0" { "0" } else { t });
+            }
+            _ => out.push_str(x),
+        }
+    }
 }
 
 fn gzip(s: &[u8]) -> std::io::Result<Vec<u8>> {
@@ -378,22 +504,35 @@ fn gunzip(b: &[u8]) -> Option<String> {
     Some(s)
 }
 
-/// Index file text: version line, then "IDENT\tICAO" per chunk.
-fn index_text(entries: &[(String, String)]) -> String {
+/// Index file text: version line, then "IDENT\tICAO\tP" per chunk (P: has pavement).
+fn index_text(entries: &[(String, String, bool)]) -> String {
     let mut s = format!("{INDEX_VERSION}\t{SOURCE_COMMIT}\n");
-    for (i, c) in entries {
-        s.push_str(&format!("{i}\t{c}\n"));
+    for (i, c, p) in entries {
+        s.push_str(&format!("{i}\t{c}\t{}\n", if *p { "P" } else { "" }));
     }
     s
 }
 
-/// Index lookup: OurAirports ident or ICAO code → chunk stem.
-fn parse_index(text: &str) -> Option<HashMap<String, String>> {
+/// The chunk index: OurAirports ident or ICAO code → chunk stem; the stems
+/// of the airports with pavement.
+#[derive(Default)]
+struct Index {
+    stems: HashMap<String, String>,
+    paved: std::collections::HashSet<String>,
+}
+
+impl Index {
+    fn get(&self, key: &str) -> Option<&String> {
+        self.stems.get(key)
+    }
+}
+
+fn parse_index(text: &str) -> Option<Index> {
     let mut lines = text.lines();
     if !lines.next()?.starts_with(INDEX_VERSION) {
         return None;
     }
-    let mut m = HashMap::new();
+    let mut ix = Index::default();
     for l in lines {
         let mut f = l.split('\t');
         let ident = f.next().unwrap_or("").trim();
@@ -402,11 +541,14 @@ fn parse_index(text: &str) -> Option<HashMap<String, String>> {
         }
         let st = stem(ident);
         if let Some(icao) = f.next().map(str::trim).filter(|x| !x.is_empty()) {
-            m.entry(icao.to_ascii_uppercase()).or_insert_with(|| st.clone());
+            ix.stems.entry(icao.to_ascii_uppercase()).or_insert_with(|| st.clone());
         }
-        m.insert(ident.to_ascii_uppercase(), st);
+        if f.next().is_some_and(|p| p.trim() == "P") {
+            ix.paved.insert(st.clone());
+        }
+        ix.stems.insert(ident.to_ascii_uppercase(), st);
     }
-    Some(m)
+    Some(ix)
 }
 
 /// The compact data set as one archive (the browser build step,
@@ -421,7 +563,7 @@ pub fn compact_archive(gz: &[u8]) -> Result<Vec<u8>, String> {
     split(r, &mut |c| match gzip(c.text.as_bytes()) {
         Ok(b) => {
             files.push((format!("{}.dat.gz", stem(&c.ident)), b));
-            entries.push((c.ident, c.icao));
+            entries.push((c.ident, c.icao, c.paved));
         }
         Err(e) => err = Some(e.to_string()),
     })
@@ -457,7 +599,7 @@ pub enum Lookup {
 #[derive(Default)]
 struct Store {
     /// ident / ICAO → chunk stem; None until loaded.
-    index: Option<Arc<HashMap<String, String>>>,
+    index: Option<Arc<Index>>,
     /// Started loading the index (or the download / import).
     started: bool,
     parsed: HashMap<String, Option<Arc<AptAirport>>>,
@@ -487,6 +629,18 @@ fn from_chunk(text: &str) -> Option<Arc<AptAirport>> {
     parse(text).into_iter().next().map(Arc::new)
 }
 
+/// Does the airport's apt.dat layout have pavement? None while the index
+/// is not loaded (the map's pavement is drawn then). Cheap: index only.
+pub fn paved(ident: &str) -> Option<bool> {
+    if disabled() {
+        return Some(false);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    imp::load_index();
+    let key = ident.to_ascii_uppercase();
+    with_store(|s| s.index.as_ref().map(|ix| ix.get(&key).is_some_and(|st| ix.paved.contains(st))))
+}
+
 /// The apt.dat layout of an airport (OurAirports ident), if the data has one.
 pub fn lookup(ident: &str) -> Lookup {
     if disabled() {
@@ -508,8 +662,9 @@ mod imp {
         PathBuf::from("cache").join("aptdat")
     }
 
-    pub fn lookup(key: &str) -> Lookup {
-        let index = with_store(|s| {
+    /// Read the index (once), or start the download / import.
+    pub fn load_index() -> Option<Arc<Index>> {
+        with_store(|s| {
             if s.index.is_none() && !s.started {
                 s.started = true;
                 match std::fs::read_to_string(dir().join("index.tsv")).ok().and_then(|t| parse_index(&t)) {
@@ -518,7 +673,11 @@ mod imp {
                 }
             }
             s.index.clone()
-        });
+        })
+    }
+
+    pub fn lookup(key: &str) -> Lookup {
+        let index = load_index();
         let Some(index) = index else { return Lookup::Done(None) };
         let ap = index.get(key).and_then(|st| std::fs::read(dir().join(format!("{st}.dat.gz"))).ok()).and_then(|b| gunzip(&b)).and_then(|t| from_chunk(&t));
         with_store(|s| s.parsed.insert(key.to_string(), ap.clone()));
@@ -608,7 +767,7 @@ mod imp {
                 bytes += b.len() as u64;
                 std::fs::write(tmp.join(format!("{}.dat.gz", stem(&c.ident))), b)
             }) {
-                Ok(()) => entries.push((c.ident, c.icao)),
+                Ok(()) => entries.push((c.ident, c.icao, c.paved)),
                 Err(e) => err = Some(e.to_string()),
             }
         })
@@ -877,15 +1036,18 @@ pub(crate) mod tests {
         assert_eq!(n, 2);
         assert_eq!(got[0].ident, "EGLC");
         assert!(got[0].text.contains("1202 "));
-        assert!(!got[0].text.contains("\n111 "), "pavement rows kept");
+        assert!(got[0].text.contains("\n111 51.5043581 0.065751 54\n"), "pavement rows dropped / not compacted: {}", &got[0].text[got[0].text.len() - 200..]);
+        assert!(got[0].paved);
         assert_eq!(got[1].ident, "XGA");
         assert_eq!(got[1].icao, "EGXX");
-        assert!(!got[1].text.contains("110 "));
+        assert!(!got[1].text.contains("110 ") && !got[1].paved);
+        assert!(!got[0].text.contains("\n100 "), "runway rows kept");
         // The chunk parses back to the same airport.
         assert_eq!(parse(&got[0].text)[0].edges, parse(EGLC)[0].edges);
-        let ix = parse_index(&index_text(&[("XGA".into(), "EGXX".into())])).unwrap();
+        let ix = parse_index(&index_text(&[("XGA".into(), "EGXX".into(), false), ("EGLC".into(), String::new(), true)])).unwrap();
         assert_eq!(ix.get("EGXX").map(String::as_str), Some("XGA"));
         assert_eq!(ix.get("XGA").map(String::as_str), Some("XGA"));
+        assert!(ix.paved.contains("EGLC") && !ix.paved.contains("XGA"));
         assert_eq!(stem("k/../x"), "KX");
     }
 }

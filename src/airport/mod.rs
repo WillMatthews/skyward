@@ -11,7 +11,8 @@
 //! 2. **Layout** ([`layout::build`], background thread): the airport's
 //!    tiles + OurAirports runways + optional Overpass data ([`overpass`]) and
 //!    apt.dat layout ([`aptdat`]: the real taxi route network, holding
-//!    points and stands where the X-Plane Gateway has them) → markings,
+//!    points and stands where the X-Plane Gateway has them; [`aptgeo`]: its
+//!    pavement, painted lines, taxiway lights and sign legends) → markings,
 //!    stands, aircraft, vehicles, signs, lights, windsocks.
 //! 3. **Bake** ([`layout::bake`], background thread): the layout placed on
 //!    each tile's terrain (markings draped exactly like the tile's layers).
@@ -24,6 +25,7 @@
 //! so the floating origin never touches it.
 
 pub mod aptdat;
+pub mod aptgeo;
 pub mod fleet;
 pub mod font;
 pub mod gfx;
@@ -122,7 +124,19 @@ fn run(job: Job, tx: &mpsc::Sender<Msg>) {
             let _ = tx.send(Msg::Layout(ap.ident.clone(), generation, Arc::new(l)));
         }
         Job::Bake(ident, generation, l, id, grid) => {
+            let t0 = Instant::now();
             let b = layout::bake(&l, id, &grid);
+            if std::env::var_os("SKYWARD_AIRPORT_DEBUG").is_some() {
+                eprintln!(
+                    "airport {ident}: baked tile {:?} in {:.1} ms: {} mark tris, {} object tris, {} lights, {:.1} MB",
+                    id,
+                    t0.elapsed().as_secs_f32() * 1000.0,
+                    b.marks.idx.len() / 3,
+                    b.solids.idx.len() / 3,
+                    b.lights.len(),
+                    (gfx::mesh_bytes(&b.marks) + gfx::mesh_bytes(&b.solids)) as f64 / 1e6
+                );
+            }
             let _ = tx.send(Msg::Bake(ident, generation, id, Arc::new(b)));
         }
     }

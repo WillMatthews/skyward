@@ -19,6 +19,7 @@ src/airport/layout.rs
 src/airport/mesh.rs
 src/airport/overpass.rs
 src/airport/aptdat.rs
+src/airport/aptgeo.rs
 src/airport/tile.rs
 src/airport/types.rs
 src/systems/mod.rs

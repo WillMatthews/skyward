@@ -789,6 +789,8 @@ pub enum Panel {
     Location,
     /// Direction / destination: black on yellow.
     Direction,
+    /// Information / distance remaining: white on black.
+    Distance,
 }
 
 /// A sign: panels side by side on a frangible frame, facing +Z (readable
@@ -796,12 +798,19 @@ pub enum Panel {
 /// Internally lit at night (NIGHT_EMISSIVE faces). `back`: the back carries
 /// the same legend (mandatory signs are double-faced).
 pub fn sign(panels: &[(Panel, String)], size: f32, back: bool) -> MeshData {
+    sign_faces(panels, if back { panels } else { &[] }, size)
+}
+
+/// A sign with its own legends front (+Z) and back (empty: a plain back).
+pub fn sign_faces(front: &[(Panel, String)], back: &[(Panel, String)], size: f32) -> MeshData {
     let mut m = MeshData::default();
     let h = size;
     let pad = h * 0.35;
     let gap = h * 0.12;
-    let widths: Vec<f32> = panels.iter().map(|(_, t)| font::width(t) * h / 6.0 + 2.0 * pad).collect();
-    let total: f32 = widths.iter().sum::<f32>() + gap * (panels.len().saturating_sub(1)) as f32;
+    let widths = |panels: &[(Panel, String)]| -> Vec<f32> { panels.iter().map(|(_, t)| font::width(t) * h / 6.0 + 2.0 * pad).collect() };
+    let total_of = |w: &[f32]| w.iter().sum::<f32>() + gap * (w.len().saturating_sub(1)) as f32;
+    let (wf, wb) = (widths(front), widths(back));
+    let total = total_of(&wf).max(total_of(&wb));
     let ph = h + 2.0 * pad;
     let y0 = h * 0.55;
     let depth = 0.18;
@@ -811,20 +820,21 @@ pub fn sign(panels: &[(Panel, String)], size: f32, back: bool) -> MeshData {
     for s in [-1.0f32, 1.0] {
         aabox(&mut m, vec3(s * total * 0.38 - 0.05, 0.0, -depth * 0.6), vec3(s * total * 0.38 + 0.05, y0, -depth * 0.3), [0.5, 0.5, 0.52]);
     }
-    let mut x = -total * 0.5;
-    for ((kind, text), w) in panels.iter().zip(&widths) {
-        let (bg, fg, bg_lum, fg_lum) = match kind {
-            Panel::Mandatory => (SIGN_RED, [0.95, 0.95, 0.95], 60.0, 160.0),
-            Panel::Location => (SIGN_BLACK, SIGN_YELLOW, 0.0, 120.0),
-            Panel::Direction => (SIGN_YELLOW, SIGN_BLACK, 110.0, 0.0),
-        };
-        for face in if back { &[1.0f32, -1.0][..] } else { &[1.0f32][..] } {
-            let z = if *face > 0.0 { depth * 0.2 + 0.005 } else { -depth - 0.005 };
-            let n = Vec3::Z * *face;
+    for (panels, widths, face) in [(front, &wf, 1.0f32), (back, &wb, -1.0)] {
+        let mut x = -total_of(widths) * 0.5;
+        for ((kind, text), w) in panels.iter().zip(widths) {
+            let (bg, fg, bg_lum, fg_lum) = match kind {
+                Panel::Mandatory => (SIGN_RED, [0.95, 0.95, 0.95], 60.0, 160.0),
+                Panel::Location => (SIGN_BLACK, SIGN_YELLOW, 0.0, 120.0),
+                Panel::Direction => (SIGN_YELLOW, SIGN_BLACK, 110.0, 0.0),
+                Panel::Distance => (SIGN_BLACK, [0.95, 0.95, 0.95], 0.0, 150.0),
+            };
+            let z = if face > 0.0 { depth * 0.2 + 0.005 } else { -depth - 0.005 };
+            let n = Vec3::Z * face;
             // Background (lit at night: NIGHT_EMISSIVE, uv.y = 1 → also lit by day).
             m.mat = mat::NIGHT_EMISSIVE;
             let (a, b) = (x, x + w);
-            let p = |xx: f32, yy: f32| vec3(if *face > 0.0 { xx } else { -xx }, yy, z);
+            let p = |xx: f32, yy: f32| vec3(if face > 0.0 { xx } else { -xx }, yy, z);
             let i0 = m.v_uv(p(a, y0), n, bg, [bg_lum, 1.0]);
             m.v_uv(p(b, y0), n, bg, [bg_lum, 1.0]);
             m.v_uv(p(b, y0 + ph), n, bg, [bg_lum, 1.0]);
@@ -833,9 +843,9 @@ pub fn sign(panels: &[(Panel, String)], size: f32, back: bool) -> MeshData {
             // Legend, a hair in front.
             let (quads, tw) = font::quads(text, h, font::STROKE);
             let ox = a + (w - tw) * 0.5;
-            let z2 = z + 0.006 * *face;
+            let z2 = z + 0.006 * face;
             for q in quads {
-                let pp = |v: Vec2| vec3(if *face > 0.0 { ox + v.x } else { -(ox + v.x) }, y0 + pad + v.y, z2);
+                let pp = |v: Vec2| vec3(if face > 0.0 { ox + v.x } else { -(ox + v.x) }, y0 + pad + v.y, z2);
                 let j0 = m.v_uv(pp(q[0]), n, fg, [fg_lum, 1.0]);
                 m.v_uv(pp(q[1]), n, fg, [fg_lum, 1.0]);
                 m.v_uv(pp(q[2]), n, fg, [fg_lum, 1.0]);
@@ -851,15 +861,15 @@ pub fn sign(panels: &[(Panel, String)], size: f32, back: bool) -> MeshData {
                     (a + bw, y0 + bw, a + 2.0 * bw, y0 + ph - bw),
                     (b - 2.0 * bw, y0 + bw, b - bw, y0 + ph - bw),
                 ] {
-                    let j0 = m.v_uv(p(xa, ya) + vec3(0.0, 0.0, 0.006 * *face), n, fg, [fg_lum, 1.0]);
-                    m.v_uv(p(xb, ya) + vec3(0.0, 0.0, 0.006 * *face), n, fg, [fg_lum, 1.0]);
-                    m.v_uv(p(xb, yb) + vec3(0.0, 0.0, 0.006 * *face), n, fg, [fg_lum, 1.0]);
-                    m.v_uv(p(xa, yb) + vec3(0.0, 0.0, 0.006 * *face), n, fg, [fg_lum, 1.0]);
+                    let j0 = m.v_uv(p(xa, ya) + vec3(0.0, 0.0, 0.006 * face), n, fg, [fg_lum, 1.0]);
+                    m.v_uv(p(xb, ya) + vec3(0.0, 0.0, 0.006 * face), n, fg, [fg_lum, 1.0]);
+                    m.v_uv(p(xb, yb) + vec3(0.0, 0.0, 0.006 * face), n, fg, [fg_lum, 1.0]);
+                    m.v_uv(p(xa, yb) + vec3(0.0, 0.0, 0.006 * face), n, fg, [fg_lum, 1.0]);
                     m.idx.extend([j0, j0 + 1, j0 + 2, j0, j0 + 2, j0 + 3]);
                 }
             }
+            x += w + gap;
         }
-        x += w + gap;
     }
     m
 }
