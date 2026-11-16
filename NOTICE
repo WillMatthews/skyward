@@ -87,6 +87,15 @@ others; per-item sources, authors and licences are listed in:
         (registry.opendata.aws/dataforgood-fb-forests). Skyward uses the
         1/4000-degree aggregate (95th-percentile height, canopy cover),
         resampled to its scenery grid.
+  * Elevation detail (src/dem/, desktop version; read at run time, cached
+    under cache/copdem/, not redistributed): Copernicus DEM GLO-30 Public,
+    free under the Copernicus DEM licence
+    (https://dataspace.copernicus.eu/explore-data/data-collections/copernicus-contributing-missions/collections-description/COP-DEM).
+    Skyward resamples and blends it with Terrain Tiles, so the notice for
+    adapted data applies: "produced using Copernicus WorldDEM-30 © DLR e.V.
+    2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under
+    COPERNICUS by the European Union and ESA; all rights reserved"
+    (doi:10.5270/ESA-c5d3d65; registry.opendata.aws/copernicus-dem).
   * Live traffic (src/adsb/): aircraft positions from the adsb.lol API,
     made available under the Open Database License (ODbL) 1.0
     (https://opendatacommons.org/licenses/odbl/1-0/) — © adsb.lol

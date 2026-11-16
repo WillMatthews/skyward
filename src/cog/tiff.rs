@@ -1,8 +1,10 @@
-//! Minimal (Big)TIFF reader for the land-cover rasters: enough of the format
-//! to range-read Cloud-Optimised GeoTIFFs — the image file directories (one
-//! per overview), tile / strip offsets, the GeoTIFF pixel scale and tie point —
-//! and to decode one tile or strip (none / DEFLATE / LZW, horizontal
-//! predictor, 8- or 16-bit single-band samples).
+//! Minimal (Big)TIFF reader for the raster layers (land cover, canopy
+//! height, Copernicus DEM): enough of the format to range-read
+//! Cloud-Optimised GeoTIFFs — the image file directories (one per overview),
+//! tile / strip offsets, the GeoTIFF pixel scale, tie point and raster type —
+//! and to decode one tile or strip (none / DEFLATE / LZW; horizontal or
+//! floating-point predictor; 8- or 16-bit integer or 32-bit float
+//! single-band samples).
 //!
 //! Everything read here comes off the network: every offset, count and size is
 //! bounds-checked, decoded blocks are capped at their declared size, and
@@ -27,6 +29,11 @@ pub struct Ifd {
     /// GeoTIFF ModelPixelScale (x, y, z) and ModelTiepoint (i, j, k, x, y, z).
     pub scale: Option<[f64; 3]>,
     pub tie: Option<[f64; 6]>,
+    /// SampleFormat: 1 unsigned integer (default), 2 signed, 3 IEEE float.
+    pub format: u16,
+    /// GeoTIFF GTRasterTypeGeoKey is RasterPixelIsPoint: the tie point is a
+    /// pixel *centre* (otherwise its corner).
+    pub pixel_is_point: bool,
 }
 
 impl Ifd {
@@ -126,7 +133,7 @@ pub fn parse(b: &[u8]) -> Result<Parse, String> {
         if n > 4096 {
             return Err("TIFF directory too large".into());
         }
-        let mut d = Ifd { compression: 1, predictor: 1, bits: 8, ..Default::default() };
+        let mut d = Ifd { compression: 1, predictor: 1, bits: 8, format: 1, ..Default::default() };
         let mut rows_per_strip = None;
         let (mut tw, mut th) = (None, None);
         for i in 0..n {
@@ -152,7 +159,7 @@ pub fn parse(b: &[u8]) -> Result<Parse, String> {
                 }
             };
             // Only the tags we use are read (and may require more bytes).
-            let wanted = matches!(tag, 256 | 257 | 258 | 259 | 273 | 278 | 279 | 317 | 322 | 323 | 324 | 325 | 33550 | 33922);
+            let wanted = matches!(tag, 256 | 257 | 258 | 259 | 273 | 278 | 279 | 317 | 322 | 323 | 324 | 325 | 339 | 33550 | 33922 | 34735);
             if !wanted {
                 continue;
             }
@@ -170,6 +177,12 @@ pub fn parse(b: &[u8]) -> Result<Parse, String> {
                     259 => d.compression = one(vals())? as u16,
                     278 => rows_per_strip = Some(one(vals())? as u32),
                     317 => d.predictor = one(vals())? as u16,
+                    339 => d.format = one(vals())? as u16,
+                    // GeoKeyDirectory: 4-short header, then (key, location, count, value).
+                    34735 if typ == 3 => {
+                        let v = vals()?;
+                        d.pixel_is_point = v.get(4..).unwrap_or(&[]).chunks_exact(4).any(|k| k[0] == 1025 && k[1] == 0 && k[3] == 2);
+                    }
                     322 => tw = Some(one(vals())? as u32),
                     323 => th = Some(one(vals())? as u32),
                     273 | 324 => d.offsets = vals()?,
@@ -208,8 +221,8 @@ pub fn parse(b: &[u8]) -> Result<Parse, String> {
         if d.offsets.len() as u64 != blocks || d.counts.len() as u64 != blocks {
             return Err(format!("TIFF block table: {} offsets, {} counts, {} blocks", d.offsets.len(), d.counts.len(), blocks));
         }
-        if !matches!(d.bits, 8 | 16) {
-            return Err(format!("unsupported TIFF sample size {}", d.bits));
+        if !matches!((d.bits, d.format), (8 | 16, 1 | 2) | (32, 3)) {
+            return Err(format!("unsupported TIFF samples: {} bits, format {}", d.bits, d.format));
         }
         let pe = p + n * es;
         off = match r.u(pe, if big { 8 } else { 4 }) {
@@ -227,23 +240,16 @@ pub fn parse(b: &[u8]) -> Result<Parse, String> {
 /// Decode one block's compressed bytes into its samples (as u16; 8-bit
 /// samples widen). `max_samples` stops early (rows are decoded in order).
 pub fn decode_block(ifd: &Ifd, big_endian: bool, data: &[u8], max_samples: Option<usize>) -> Result<Vec<u16>, String> {
+    if ifd.bits > 16 {
+        return Err(format!("{}-bit samples are not integer samples", ifd.bits));
+    }
     let full = ifd.block_samples();
     let want = max_samples.map_or(full, |m| m.min(full));
     let bps = (ifd.bits / 8) as usize;
     // The predictor works on whole rows: decode whole rows.
     let row = ifd.block_w as usize;
     let want_rows = want.div_ceil(row);
-    let limit = want_rows * row * bps;
-    let raw = match ifd.compression {
-        1 => data[..data.len().min(limit)].to_vec(),
-        8 | 32946 => {
-            let mut out = Vec::with_capacity(limit);
-            flate2::read::ZlibDecoder::new(data).take(limit as u64).read_to_end(&mut out).map_err(|e| format!("deflate: {e}"))?;
-            out
-        }
-        5 => lzw(data, limit)?,
-        c => return Err(format!("unsupported TIFF compression {c}")),
-    };
+    let raw = inflate(ifd, data, want_rows * row * bps)?;
     // Short blocks (truncated data) are padded with zeros.
     let mut v: Vec<u16> = match bps {
         1 => raw.iter().map(|&b| b as u16).collect(),
@@ -261,6 +267,58 @@ pub fn decode_block(ifd: &Ifd, big_endian: bool, data: &[u8], max_samples: Optio
         return Err(format!("unsupported TIFF predictor {}", ifd.predictor));
     }
     v.truncate(want);
+    Ok(v)
+}
+
+/// Uncompress a block's bytes (at most `limit`).
+fn inflate(ifd: &Ifd, data: &[u8], limit: usize) -> Result<Vec<u8>, String> {
+    Ok(match ifd.compression {
+        1 => data[..data.len().min(limit)].to_vec(),
+        8 | 32946 => {
+            let mut out = Vec::with_capacity(limit);
+            flate2::read::ZlibDecoder::new(data).take(limit as u64).read_to_end(&mut out).map_err(|e| format!("deflate: {e}"))?;
+            out
+        }
+        5 => lzw(data, limit)?,
+        c => return Err(format!("unsupported TIFF compression {c}")),
+    })
+}
+
+/// Decode one block of 32-bit float samples (the whole block; truncated data
+/// is padded with NaN). Predictors: none, or floating point (3: per row, the
+/// bytes of all samples are split into planes, most significant first, and
+/// differenced byte by byte — TIFF Technical Note 3).
+pub fn decode_block_f32(ifd: &Ifd, big_endian: bool, data: &[u8]) -> Result<Vec<f32>, String> {
+    if ifd.bits != 32 || ifd.format != 3 {
+        return Err(format!("not float samples ({} bits, format {})", ifd.bits, ifd.format));
+    }
+    let row = ifd.block_w as usize;
+    let n = ifd.block_samples();
+    let raw = inflate(ifd, data, n * 4)?;
+    let rows = raw.len() / (row * 4);
+    let mut v = Vec::with_capacity(n);
+    match ifd.predictor {
+        1 => {
+            for c in raw[..rows * row * 4].chunks_exact(4) {
+                let b = [c[0], c[1], c[2], c[3]];
+                v.push(if big_endian { f32::from_be_bytes(b) } else { f32::from_le_bytes(b) });
+            }
+        }
+        3 => {
+            let mut r = vec![0u8; row * 4];
+            for src in raw.chunks_exact(row * 4) {
+                r.copy_from_slice(src);
+                for i in 1..r.len() {
+                    r[i] = r[i].wrapping_add(r[i - 1]);
+                }
+                for i in 0..row {
+                    v.push(f32::from_be_bytes([r[i], r[row + i], r[2 * row + i], r[3 * row + i]]));
+                }
+            }
+        }
+        p => return Err(format!("unsupported TIFF predictor {p} for float samples")),
+    }
+    v.resize(n, f32::NAN);
     Ok(v)
 }
 
@@ -505,6 +563,90 @@ pub mod fixture {
         }
         out
     }
+    /// A little-endian tiled float TIFF (DEFLATE, floating-point predictor
+    /// 3, SampleFormat 3, GeoKeyDirectory with RasterPixelIsPoint if `point`),
+    /// laid out like the Copernicus DEM COGs.
+    pub fn tiff_f32(w: u32, h: u32, bw: u32, bh: u32, px: impl Fn(u32, u32) -> f32, scale: [f64; 3], tie: [f64; 6], point: bool) -> Vec<u8> {
+        let (ba, bd) = (w.div_ceil(bw), h.div_ceil(bh));
+        let mut blocks = Vec::new();
+        for by in 0..bd {
+            for bx in 0..ba {
+                let mut raw = Vec::new();
+                for y in 0..bh {
+                    let vals: Vec<[u8; 4]> = (0..bw)
+                        .map(|x| {
+                            let (gx, gy) = (bx * bw + x, by * bh + y);
+                            (if gx < w && gy < h { px(gx, gy) } else { 0.0 }).to_be_bytes()
+                        })
+                        .collect();
+                    // Byte planes, most significant first, then byte differences.
+                    let mut r: Vec<u8> = (0..4).flat_map(|k| vals.iter().map(move |v| v[k])).collect();
+                    for i in (1..r.len()).rev() {
+                        r[i] = r[i].wrapping_sub(r[i - 1]);
+                    }
+                    raw.extend(r);
+                }
+                let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+                e.write_all(&raw).unwrap();
+                blocks.push(e.finish().unwrap());
+            }
+        }
+        let n = blocks.len() as u32;
+        let tags = 14u32;
+        let ifd_off = 8u32;
+        let arr_off = ifd_off + 2 + tags * 12 + 4;
+        let geo_off = arr_off + n * 8;
+        let keys_off = geo_off + 72;
+        let mut data_off = keys_off + 16;
+        let mut out = b"II".to_vec();
+        out.extend(42u16.to_le_bytes());
+        out.extend(ifd_off.to_le_bytes());
+        out.extend((tags as u16).to_le_bytes());
+        let tag = |out: &mut Vec<u8>, t: u16, typ: u16, cnt: u32, val: u32| {
+            out.extend(t.to_le_bytes());
+            out.extend(typ.to_le_bytes());
+            out.extend(cnt.to_le_bytes());
+            if typ == 3 && cnt == 1 {
+                out.extend((val as u16).to_le_bytes());
+                out.extend([0, 0]);
+            } else {
+                out.extend(val.to_le_bytes());
+            }
+        };
+        tag(&mut out, 256, 3, 1, w);
+        tag(&mut out, 257, 3, 1, h);
+        tag(&mut out, 258, 3, 1, 32);
+        tag(&mut out, 259, 3, 1, 8);
+        tag(&mut out, 277, 3, 1, 1);
+        tag(&mut out, 317, 3, 1, 3);
+        tag(&mut out, 322, 3, 1, bw);
+        tag(&mut out, 323, 3, 1, bh);
+        tag(&mut out, 324, 4, n, arr_off);
+        tag(&mut out, 325, 4, n, arr_off + n * 4);
+        tag(&mut out, 339, 3, 1, 3);
+        tag(&mut out, 33550, 12, 3, geo_off);
+        tag(&mut out, 33922, 12, 6, geo_off + 24);
+        tag(&mut out, 34735, 3, 8, keys_off);
+        out.extend(0u32.to_le_bytes());
+        assert_eq!(out.len() as u32, arr_off);
+        for b in &blocks {
+            out.extend(data_off.to_le_bytes());
+            data_off += b.len() as u32;
+        }
+        for b in &blocks {
+            out.extend((b.len() as u32).to_le_bytes());
+        }
+        for v in scale.iter().chain(tie.iter()) {
+            out.extend(v.to_le_bytes());
+        }
+        for k in [1u16, 1, 0, 1, 1025, 0, 1, if point { 2 } else { 1 }] {
+            out.extend(k.to_le_bytes());
+        }
+        for b in &blocks {
+            out.extend(b);
+        }
+        out
+    }
 }
 
 #[cfg(test)]
@@ -587,5 +729,26 @@ mod tests {
         let d = Ifd { width: 4, height: 2, block_w: 4, block_h: 2, bits: 16, compression: 1, predictor: 2, ..Default::default() };
         let raw: Vec<u8> = [100u16, 1, 2, 65535, 5, 5, 5, 5].iter().flat_map(|v| v.to_le_bytes()).collect();
         assert_eq!(decode_block(&d, false, &raw, None).unwrap(), vec![100, 101, 103, 102, 5, 10, 15, 20]);
+    }
+
+    #[test]
+    fn decodes_float_samples_with_the_floating_point_predictor() {
+        let px = |x: u32, y: u32| 1000.0 + x as f32 * 0.37 - y as f32 * 12.5 + if (x + y) % 7 == 0 { -3.25 } else { 0.0 };
+        let f = tiff_f32(40, 20, 16, 16, px, [0.25, 0.25, 0.0], [0.0, 0.0, 0.0, 11.0, 48.0, 0.0], true);
+        let (be, ifds) = ok(parse(&f).unwrap());
+        let d = &ifds[0];
+        assert_eq!((d.bits, d.format, d.predictor, d.pixel_is_point), (32, 3, 3, true));
+        let k = 3 + 1;
+        let blk = &f[d.offsets[k] as usize..(d.offsets[k] + d.counts[k]) as usize];
+        let v = decode_block_f32(d, be, blk).unwrap();
+        assert_eq!(v.len(), 256);
+        assert_eq!(v[0], px(16, 16));
+        assert_eq!(v[3 * 16 + 9], px(25, 19));
+        // Integer decoding refuses float samples (and vice versa).
+        assert!(decode_block(d, be, blk, None).is_err());
+        let (_, ifds) = ok(parse(&tiff_f32(8, 8, 8, 8, |_, _| 1.0, [1.0; 3], [0.0; 6], false)).unwrap());
+        assert!(!ifds[0].pixel_is_point);
+        let i8 = Ifd { width: 4, height: 1, block_w: 4, block_h: 1, bits: 8, format: 1, compression: 1, predictor: 1, ..Default::default() };
+        assert!(decode_block_f32(&i8, false, &[0; 4]).is_err());
     }
 }

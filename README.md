@@ -76,7 +76,8 @@ painted over or composited.
 - **Anywhere on Earth, endlessly.** OpenMapTiles vector tiles from OpenFreeMap (no API key) stream in
   around you: extruded buildings with facades and lit windows, trees, roads, rivers, parks and
   airfields out to ~7.5 km, a generalised far field to ~30 km, terrain to ~95 km.
-- **Real terrain.** DEM elevation (AWS Terrain Tiles) under every level of detail, with map layers
+- **Real terrain.** DEM elevation (AWS Terrain Tiles; Copernicus DEM GLO-30 on mountains and north
+  of 60° N in the desktop version) under every level of detail, with map layers
   draped exactly onto it, levelled lakes and runways, ridge shadows, rock and a seasonal snow line.
 - **Landmarks.** Procedural models built to real dimensions replace the OSM boxes: the Shard, Tower
   Bridge, the London Eye (its wheel turns), St Paul's, Big Ben, the Gherkin, Battersea and more.
@@ -618,7 +619,7 @@ skyward --shot m.png --aircraft meridian320 --bot --soak --seconds 4200 --warp 8
 | `SKYWARD_ORBIT=yaw,pitch,dist` | chase-camera angle for captures |
 | `SKYWARD_LOOK=yaw,pitch` | cockpit head-look for captures |
 | `SKYWARD_COCKPIT_FOV=deg` | cockpit field of view for captures |
-| `SKYWARD_NO_VFX`, `SKYWARD_NO_AIRPORTS`, `SKYWARD_NO_OVERPASS`, `SKYWARD_NO_APTDAT`, `SKYWARD_NO_LANDMARKS`, `SKYWARD_NO_TRAFFIC`, `SKYWARD_NO_LANDCOVER`, `SKYWARD_FLAT_TERRAIN` | switch layers off |
+| `SKYWARD_NO_VFX`, `SKYWARD_NO_AIRPORTS`, `SKYWARD_NO_OVERPASS`, `SKYWARD_NO_APTDAT`, `SKYWARD_NO_LANDMARKS`, `SKYWARD_NO_TRAFFIC`, `SKYWARD_NO_LANDCOVER`, `SKYWARD_NO_COPDEM`, `SKYWARD_FLAT_TERRAIN` | switch layers off |
 | `SKYWARD_APTDAT=path/apt.dat[.gz]` | build `cache/aptdat/` (airport layouts) from a local apt.dat instead of the one-time download |
 | `SKYWARD_GPU_TIMING`, `SKYWARD_UI_TIMING`, `SKYWARD_VFX_STATS` | per-pass GPU timing, UI CPU cost, effect counts |
 | `SKYWARD_BENCH_FRAMES=N` | headless GPU benchmark: N more frames, per-pass medians (timestamp queries) |
@@ -1028,6 +1029,7 @@ liveries are neutral, with no operator markings.
 | Airport detail | OpenStreetMap via the [Overpass API](https://overpass-api.de/) | ODbL |
 | Airport layouts (taxi networks, stands, holding points) | [X-Plane Scenery Gateway](https://gateway.x-plane.com/) community airports (Robin A. Peel, Laminar Research, Gateway artists) as shipped in FlightGear's [fgdata](https://gitlab.com/flightgear/fgdata) `Airports/apt.dat.ws3.gz` (pinned commit; ≈156 MB, downloaded once and split into `cache/aptdat/`; the web build ships the per-airport extracts). Not the Gateway API, whose terms reserve it for X-Plane products | GNU GPL |
 | Elevation | [Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) on AWS (Mapzen / Tilezen); sources below | see below |
+| Elevation detail (desktop) | Produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved — [Copernicus DEM GLO-30 Public](https://dataspace.copernicus.eu/explore-data/data-collections/copernicus-contributing-missions/collections-description/COP-DEM) ([doi:10.5270/ESA-c5d3d65](https://doi.org/10.5270/ESA-c5d3d65)), read from the [AWS Open Data registry](https://registry.opendata.aws/copernicus-dem/) (`copernicus-dem-30m`), blended into the terrain on rough ground and north of 60° N | [Copernicus DEM licence](https://dataspace.copernicus.eu/sites/default/files/media/files/2025-06/copernicus_contributing_mission_data_access_v2_cop_dem_licenses.pdf) (free, with attribution) |
 | Land cover (desktop) | © ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium — [ESA WorldCover 10 m 2021 v200](https://esa-worldcover.org/) ([doi:10.5281/zenodo.7254221](https://doi.org/10.5281/zenodo.7254221)), read from the [AWS Open Data registry](https://registry.opendata.aws/esa-worldcover-vito/) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
 | Tree heights (desktop) | Meta and World Resources Institute (WRI) - 2024. High Resolution Canopy Height Maps (CHM). Source imagery for CHM © 2016 Maxar. Read from the [AWS Open Data registry](https://registry.opendata.aws/dataforgood-fb-forests/) (the 1/4000° aggregate: 95th-percentile height and cover) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
 | Airports, runways, frequencies, navaids | [OurAirports](https://ourairports.com/data/) | Public domain |

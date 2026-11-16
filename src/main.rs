@@ -60,6 +60,8 @@ mod startpos;
 mod systems;
 mod terrain;
 mod landcover;
+mod cog;
+mod dem;
 mod landmarks;
 mod tiles;
 mod traffic;
