@@ -1290,9 +1290,10 @@ pub fn drape(src: &MeshData, grid: &Grid, out: &mut MeshData, mut push: impl FnM
 /// A terrain-only horizon tile (z9): base surface + skirts, bucketed by z10 cells.
 pub fn build_horizon_tile(id: TileId) -> crate::scene::TileBuild {
     let grid = build_grid(id, &[], &[]);
-    let (flat, ranges) = assemble(id, &grid, &MeshData::default(), crate::scene::LAND);
+    let (mut flat, ranges) = assemble(id, &grid, &MeshData::default(), crate::scene::LAND);
     let proj = Proj::tile_frame(id);
     let rect = id.rect(&proj);
+    crate::scene::sat_tint(id, rect, &mut flat);
     crate::scene::TileBuild::terrain_only(id, rect, flat, ranges, Arc::new(grid))
 }
 

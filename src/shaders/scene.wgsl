@@ -856,7 +856,11 @@ fn fs_main(in: VOut) -> FOut {
                 s = wet_paving(s, wp, px, fwp, 0.6);
                 s = snowy(s, np, ngeo, 0.8, fwp);
             } else {
-                s.albedo = srgb_to_lin(mountain(field_surface(wp, np, ngeo, fwp, dist, in.uv.y > 0.5), wp, np, ngeo0, fwp, true)) * 0.95;
+                // Satellite tint (sattint.rs): the tile builder scales the
+                // fields' vertex colour (LAND) by it. It modulates the
+                // seasonal palette; mountain rock / snow and snow cover come after.
+                let sat = in.col / vec3<f32>(0.56, 0.55, 0.50);
+                s.albedo = srgb_to_lin(mountain(field_surface(wp, np, ngeo, fwp, dist, in.uv.y > 0.5) * sat, wp, np, ngeo0, fwp, true)) * 0.95;
                 s.albedo *= 1.0 - 0.22 * g.wx.x;
                 s.rough = 0.92;
                 s = snowy(s, np, ngeo, 1.0, fwp);

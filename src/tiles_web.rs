@@ -387,6 +387,9 @@ pub async fn skyward_worker_build(z: u32, x: u32, y: u32, template: String) -> j
     for k in &keys {
         crate::terrain::web::start_load(*k);
     }
+    // Satellite tint imagery likewise (sattint.rs).
+    let sat_keys = crate::sattint::keys_for(id);
+    crate::sattint::source::web::start(&sat_keys);
     let (bytes, net) = if id.z == crate::terrain::HORIZON_ZOOM {
         (Ok(Vec::new()), 0)
     } else if template.is_empty() {
@@ -399,6 +402,7 @@ pub async fn skyward_worker_build(z: u32, x: u32, y: u32, template: String) -> j
     };
     if bytes.is_ok() {
         crate::terrain::web::ensure(&keys).await;
+        crate::sattint::source::web::ensure(&sat_keys).await;
     }
     let fetch_ms = t0.elapsed().as_secs_f32() * 1000.0;
     let mut build_ms = 0.0;
@@ -512,6 +516,9 @@ async fn fetch_job(st: &Rc<RefCell<St>>, id: TileId) -> Fetched {
     for k in &keys {
         crate::terrain::web::start_load(*k);
     }
+    // Satellite tint imagery likewise (sattint.rs).
+    let sat_keys = crate::sattint::keys_for(id);
+    crate::sattint::source::web::start(&sat_keys);
     let (bytes, net_bytes) = if id.z == crate::terrain::HORIZON_ZOOM {
         (Ok(Vec::new()), 0)
     } else {
@@ -525,6 +532,7 @@ async fn fetch_job(st: &Rc<RefCell<St>>, id: TileId) -> Fetched {
     };
     if bytes.is_ok() {
         crate::terrain::web::ensure(&keys).await;
+        crate::sattint::source::web::ensure(&sat_keys).await;
     }
     Fetched { id, bytes, net_bytes, fetch_ms: t0.elapsed().as_secs_f32() * 1000.0, attempts: 0 }
 }

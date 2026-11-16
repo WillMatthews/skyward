@@ -196,3 +196,5 @@ src/landcover/canopy.rs
 src/overture/mod.rs
 src/overture/pmtiles.rs
 src/ui/boot.rs
+src/sattint/mod.rs
+src/sattint/source.rs
