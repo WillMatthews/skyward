@@ -7,7 +7,7 @@
 //!                     [--menu-screen main|aircraft|airport|conditions|settings|pause|loading|credits] [--map-view LAT,LON,ZOOM] [--map-style day|night] [--hud full|minimal|off] [--map corner|large|off]
 //!                     [--realtime [--warp N]]   (stream + render in real time, straight & level, report timings)
 //!                     [--gear up|down] [--flaps N] [--spoilers F] [--reverse] [--fail BITS] [--ap] [--fps HZ]   (setup / test knobs)
-//! Model checks: SKYWARD_SURFACES="elevator=1,aileron=1,rudder=1,flaps=1,spoilers=1,gear=0" poses the surfaces (models.rs);
+//! Model checks: SKYWARD_SURFACES="elevator=1,aileron=1,rudder=1,flaps=1,spoilers=1,gear=0,steer=1" poses the surfaces (models.rs);
 //!             --menu-screen aircraft with SKYWARD_THUMBS_OUT=dir SKYWARD_THUMB_VIEW="nose_deg,elev_deg,dist,aim" renders every
 //!             model from that view; SKYWARD_NO_FIXUPS=1 shows models without the animation fixes (aircraft_fixups.rs)
 //! Settings:   --menu-screen settings [--settings-category video|display|camera|flight|assists|weather|traffic|sound|controls|multiplayer|accessibility|interface|data|about] [--settings-search TEXT] [--settings-from pause] [--palette deuteranopia|protanopia|tritanopia] [--high-contrast]; SKYWARD_CONFIG_DIR=dir for the settings file

@@ -991,6 +991,14 @@ the render / output resolution and a VRAM estimate.
   scenes in `tests/goldens/scenes.txt` with fixed time, date and METAR. It compares them with the
   committed PNGs perceptually (CIELAB ΔE + SSIM), and compares audio renders by spectral distance.
   After an intended change, run `scripts/regress.sh --update [scene...]`.
+- **Control surfaces.** `cargo test --release control_surface_checks -- --nocapture` checks every
+  aircraft in `assets/aircraft/` (elevator, ailerons, rudder, flaps, spoilers, leading-edge devices,
+  gear doors): each moves, the right way, both sides alike, about its leading edge, within sane
+  angles, and no part comes off the airframe in any pose; it prints a pass / fail table. What an
+  aircraft lacks is listed with the reason in `src/aircraft_fixups/checks.rs`. For a look,
+  `scripts/surface-sheet.sh [out-dir]` renders (headless, ~25 min) a contact sheet per aircraft:
+  neutral, elevator up / down, roll left / right, rudder left / right, flaps, spoilers, gear up /
+  down, plus an `index.html`.
 - **Smoke render.** [`render.yml`](.github/workflows/render.yml) is an on-demand software-Vulkan
   (lavapipe) smoke render.
 
