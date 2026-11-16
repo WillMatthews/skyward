@@ -144,6 +144,9 @@ painted over or composited.
   precipitation, the wind gradient and winds aloft up to the jet, gusts and drifting thermals.
   The forecast's upper air (winds and temperatures at seven pressure levels, the boundary layer,
   the freezing level) fills in between METAR stations and aloft.
+  Over the sea, the Open-Meteo Marine forecast sets the sea state: real swell (height, direction,
+  period) and wind sea on the water and under floats and ditching hulls, plus the surface current;
+  lakes, rivers, inland places and offline keep the wind-driven chop.
   Real local time and date, re-fetched along long flights.
 - **Turbulence that feels real.** The Dryden model of MIL-F-8785C as a frozen 3D field (low,
   medium and high-altitude intensities and scale lengths; light to extreme) with rotational gusts
@@ -342,6 +345,7 @@ scenery, terrain, live weather and sound in a tab.
   stream as on the desktop; the browser's HTTP cache stands in for `cache/`.
 - **Differences from native.**
   - No live METARs: aviationweather.gov sends no CORS headers, so weather comes from Open-Meteo.
+    (Open-Meteo's forecast and Marine APIs both send `Access-Control-Allow-Origin: *`.)
   - Settings are kept in `localStorage`.
   - Lighter defaults: low scenery detail, 2048² shadow cascades, and the 3D view drawn at
     ≤ 1.6 Mpixel and scaled up.
@@ -1027,6 +1031,7 @@ liveries are neutral, with no operator markings.
 | Airports, runways, frequencies, navaids | [OurAirports](https://ourairports.com/data/) | Public domain |
 | ILS (localizers, glideslopes, ILS DMEs, marker beacons) | [FlightGear](https://www.flightgear.org/) `fgdata` `Navaids/nav.dat.gz` (AIRAC 2013.10, © Robin A. Peel / X-Plane), compacted at build / first run; synthetic from OurAirports runway data where it has none; a few London ILS frequencies / idents / glidepaths from public charts | GPL-2.0-or-later |
 | Weather | METARs from [aviationweather.gov](https://aviationweather.gov/) (NOAA); forecasts and upper air (winds / temperatures aloft, CAPE, boundary layer, freezing level) from [Open-Meteo](https://open-meteo.com/) | Public / CC BY 4.0 |
+| Sea state | Waves, swell and currents from the [Open-Meteo Marine API](https://open-meteo.com/en/docs/marine-weather-api) ([Weather data by Open-Meteo.com](https://open-meteo.com/)), whose models are MeteoFrance MFWAM / SMOC (generated using E.U. Copernicus Marine Service Information), ECMWF WAM (European Centre for Medium-Range Weather Forecasts), DWD EWAM / GWAM (German Weather Service) and GFS Wave (NOAA NCEP); one request per place, no key, generic User-Agent | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
 | Place search fallback | [Nominatim](https://nominatim.org/) | ODbL |
 | Live traffic | ADS-B positions from the [adsb.lol](https://adsb.lol/) API (volunteer receivers; no API key, requests carry only a position, a radius and a generic `skyward-flightsim/0.x` User-Agent) | [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/) |
 

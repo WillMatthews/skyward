@@ -5,7 +5,11 @@
 //!   Open-Meteo (no key) for the local UTC offset, low / mid / high cloud
 //!   cover, precipitation, visibility, snow depth and the upper air: winds and
 //!   temperatures at 925–200 hPa, CAPE / lifted index / CIN, the
-//!   boundary-layer height and the freezing level (one request per place).
+//!   boundary-layer height and the freezing level (one request per place),
+//!   plus the Open-Meteo Marine API for the sea state (significant height,
+//!   direction and period of the wind sea and the swell, the surface
+//!   current: [`Marine`]); it answers nulls over land, after which that place
+//!   is not asked again.
 //!   Near a METAR station the METAR rules; the forecast fills in between
 //!   stations and aloft. Missing fields fall back to the old estimates.
 //!   A background thread refreshes both every ~10 minutes; the last good
@@ -449,6 +453,107 @@ impl OpenMeteo {
     }
 }
 
+// ================================================================== Open-Meteo Marine
+
+/// One wave system of the marine forecast: significant height (m), the
+/// direction it comes from (degrees true) and its mean period (s).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Waves {
+    pub h_m: f32,
+    pub from_deg: f32,
+    pub period_s: f32,
+}
+
+/// The sea state from the Open-Meteo Marine API (ocean only: the API
+/// answers nulls over land, lakes and most rivers).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Marine {
+    /// The total sea (wind sea + swell combined).
+    pub total: Option<Waves>,
+    pub wind_sea: Option<Waves>,
+    pub swell: Option<Waves>,
+    /// Surface current: km/h and the direction it flows towards (degrees true).
+    pub current_kmh: f32,
+    pub current_to: f32,
+    /// Distance from the requested place to the sea grid cell answering (km).
+    pub cell_km: f32,
+}
+
+/// The `current=` variables of the marine request.
+const MARINE_VARS: &str = "wave_height,wave_direction,wave_period,wind_wave_height,wind_wave_direction,wind_wave_period,swell_wave_height,swell_wave_direction,swell_wave_period,ocean_current_velocity,ocean_current_direction";
+
+/// A sea grid cell further than this from the place is not "here" (km).
+pub const MARINE_CELL_KM: f32 = 40.0;
+
+fn marine_url(lat: f64, lon: f64) -> String {
+    // `cell_selection=sea`: a coastal place gets the nearest sea cell (the
+    // nearest cell is often on land at a coast).
+    format!("https://marine-api.open-meteo.com/v1/marine?latitude={lat:.4}&longitude={lon:.4}&current={MARINE_VARS}&cell_selection=sea")
+}
+
+impl Marine {
+    /// Parse a marine answer for a request at `lat`, `lon`. None: no sea here
+    /// (all nulls, or the sea cell is more than [`MARINE_CELL_KM`] away).
+    pub fn parse(body: &str, lat: f64, lon: f64) -> Option<Marine> {
+        let v: serde_json::Value = serde_json::from_str(body).ok()?;
+        let c = v.get("current")?;
+        let f = |k: &str| c.get(k).and_then(|x| x.as_f64()).map(|x| x as f32).filter(|x| x.is_finite());
+        let waves = |p: &str| -> Option<Waves> {
+            let h = f(&format!("{p}height"))?.max(0.0);
+            Some(Waves { h_m: h, from_deg: f(&format!("{p}direction")).unwrap_or(0.0), period_s: f(&format!("{p}period")).unwrap_or(0.0).max(0.0) })
+        };
+        let cell_km = match (v.get("latitude").and_then(|x| x.as_f64()), v.get("longitude").and_then(|x| x.as_f64())) {
+            (Some(a), Some(b)) => haversine_km((lat, lon), (a, b)),
+            _ => 0.0,
+        };
+        let m = Marine {
+            total: waves("wave_"),
+            wind_sea: waves("wind_wave_"),
+            swell: waves("swell_wave_"),
+            current_kmh: f("ocean_current_velocity").unwrap_or(0.0).max(0.0),
+            current_to: f("ocean_current_direction").unwrap_or(0.0),
+            cell_km,
+        };
+        (m.total.is_some() || m.wind_sea.is_some() || m.swell.is_some()).then_some(m).filter(|m| m.cell_km <= MARINE_CELL_KM)
+    }
+
+    /// The sea state for the water model (world frame: +X east, -Z north).
+    /// Without a separate wind-sea / swell split the total sea stands in for
+    /// the wind sea.
+    pub fn ocean(&self) -> crate::water::Ocean {
+        // Direction of travel of waves coming from `from` degrees.
+        let to = |from: f32| {
+            let a = (from + 180.0).to_radians();
+            vec2(a.sin(), -a.cos())
+        };
+        let train = |w: Option<Waves>| w.map_or_else(crate::water::WaveTrain::default, |w| crate::water::WaveTrain { h: w.h_m, dir: to(w.from_deg), period: w.period_s });
+        let a = self.current_to.to_radians();
+        crate::water::Ocean {
+            wind_sea: train(self.wind_sea.or(if self.swell.is_none() { self.total } else { None })),
+            swell: train(self.swell),
+            current: vec2(a.sin(), -a.cos()) * self.current_kmh / 3.6,
+        }
+    }
+
+    /// Short text ("sea 1.7 m · swell 1.5 m 244° 7 s · wind sea 0.3 m").
+    pub fn text(&self) -> String {
+        let mut v = Vec::new();
+        if let Some(t) = self.total {
+            v.push(format!("sea {:.1} m", t.h_m));
+        }
+        if let Some(s) = self.swell {
+            v.push(format!("swell {:.1} m {:03.0}° {:.0} s", s.h_m, s.from_deg.rem_euclid(360.0), s.period_s));
+        }
+        if let Some(w) = self.wind_sea {
+            v.push(format!("wind sea {:.1} m", w.h_m));
+        }
+        if self.current_kmh >= 0.5 {
+            v.push(format!("current {:.1} kt", self.current_kmh / 1.852));
+        }
+        v.join(" · ")
+    }
+}
+
 // ================================================================== merged weather
 
 /// One description of the weather, from live data, a METAR string or a preset.
@@ -502,6 +607,9 @@ pub struct Wx {
     pub freezing_agl_m: Option<f32>,
     /// Forecast winds / temperatures aloft (pressure levels), lowest first.
     pub aloft: Vec<AloftLevel>,
+    /// The sea state from the Open-Meteo Marine forecast (None: inland, on a
+    /// preset / fixed METAR, offline): the water uses the wind's chop alone.
+    pub sea: Option<Marine>,
     /// Seconds east of UTC at the location.
     pub utc_offset_s: Option<i64>,
     pub tz: String,
@@ -634,6 +742,7 @@ impl Wx {
             bl_top_m: None,
             freezing_agl_m: None,
             aloft: Vec::new(),
+            sea: None,
             utc_offset_s: None,
             tz: String::new(),
             obs_unix: 0,
@@ -1106,6 +1215,12 @@ pub struct WxRender {
     pub season: Season,
     /// Bumped whenever the cloud field changes.
     pub cloud_version: u64,
+    /// Real sea state around the view (Open-Meteo Marine; zero without):
+    /// swell travel direction x, z, significant height (m), wavelength (m).
+    pub swell: [f32; 4],
+    /// Forecast wind sea: significant height (m), travel direction x, z,
+    /// weight 0..1 (how open the water is).
+    pub sea: [f32; 4],
 }
 
 // ================================================================== season
@@ -1255,6 +1370,8 @@ pub struct Fetched {
     pub lon: f64,
     pub metar_json: Option<String>,
     pub om_json: Option<String>,
+    /// Open-Meteo Marine answer (None: not asked, failed, or no sea here).
+    pub marine_json: Option<String>,
 }
 
 fn haversine_km(a: (f64, f64), b: (f64, f64)) -> f32 {
@@ -1367,7 +1484,7 @@ impl Fetched {
     /// Browser: METARs from VATSIM's mirror ([`web_metars`]: aviationweather.gov
     /// sends no CORS headers, so pages cannot read it) and Open-Meteo.
     #[cfg(target_arch = "wasm32")]
-    async fn fetch_web(lat: f64, lon: f64) -> Result<Fetched, String> {
+    async fn fetch_web(lat: f64, lon: f64, sea: &mut bool) -> Result<Fetched, String> {
         use crate::platform::web;
         let t = Duration::from_secs(15);
         let mut f = Fetched { unix: unix_now(), lat, lon, ..Default::default() };
@@ -1384,14 +1501,33 @@ impl Fetched {
             Ok(b) => errs.push(format!("Open-Meteo: {}", b.chars().take(120).collect::<String>())),
             Err(e) => errs.push(format!("Open-Meteo: {e}")),
         }
+        if *sea {
+            // (Sends `Access-Control-Allow-Origin: *`, like the forecast API.)
+            if let Ok(b) = web::get(&marine_url(lat, lon), t).await {
+                f.keep_marine(String::from_utf8_lossy(&b).into_owned(), sea);
+            }
+        }
         if f.metar_json.is_none() && f.om_json.is_none() {
             return Err(errs.join("; "));
         }
         Ok(f)
     }
 
+    /// Keep a marine answer if it has a sea state; clear `sea` (stop asking
+    /// for this place) if it says there is no sea here. Errors keep asking.
+    fn keep_marine(&mut self, body: String, sea: &mut bool) {
+        if !body.contains("\"current\"") {
+            return;
+        }
+        if Marine::parse(&body, self.lat, self.lon).is_some() {
+            self.marine_json = Some(body);
+        } else {
+            *sea = false;
+        }
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
-    fn fetch(lat: f64, lon: f64) -> Result<Fetched, String> {
+    fn fetch(lat: f64, lon: f64, sea: &mut bool) -> Result<Fetched, String> {
         let ag = agent();
         let mut f = Fetched { unix: unix_now(), lat, lon, ..Default::default() };
         let mut errs = Vec::new();
@@ -1416,6 +1552,13 @@ impl Fetched {
             Ok(b) => errs.push(format!("Open-Meteo: {}", b.chars().take(120).collect::<String>())),
             Err(e) => errs.push(format!("Open-Meteo: {e}")),
         }
+        // The sea state (a failure here is not a failed fetch).
+        if *sea {
+            match get(&ag, &marine_url(lat, lon)) {
+                Ok(b) => f.keep_marine(b, sea),
+                Err(e) => eprintln!("weather: Open-Meteo Marine: {e}"),
+            }
+        }
         if f.metar_json.is_none() && f.om_json.is_none() {
             return Err(errs.join("; "));
         }
@@ -1429,7 +1572,7 @@ impl Fetched {
     fn save(&self) {
         let v = serde_json::json!({
             "unix": self.unix, "lat": self.lat, "lon": self.lon,
-            "metar": self.metar_json, "open_meteo": self.om_json,
+            "metar": self.metar_json, "open_meteo": self.om_json, "marine": self.marine_json,
         });
         let _ = std::fs::create_dir_all("cache");
         let _ = std::fs::write(Self::path(), serde_json::to_string(&v).unwrap_or_default());
@@ -1443,6 +1586,7 @@ impl Fetched {
             lon: v.get("lon")?.as_f64()?,
             metar_json: v.get("metar").and_then(|x| x.as_str()).map(String::from),
             om_json: v.get("open_meteo").and_then(|x| x.as_str()).map(String::from),
+            marine_json: v.get("marine").and_then(|x| x.as_str()).map(String::from),
         })
     }
 
@@ -1462,7 +1606,12 @@ impl Fetched {
         stations.sort_by(|a, b| a.1.total_cmp(&b.1));
         let fill = stations.iter().skip(1).find(|(m, km)| *km < 60.0 && !m.layers.is_empty()).map(|(m, _)| m);
         let om = self.om_json.as_deref().and_then(OpenMeteo::parse);
-        Wx::from_sources(stations.first().cloned(), fill, om, self.unix as u64)
+        let mut w = Wx::from_sources(stations.first().cloned(), fill, om, self.unix as u64);
+        w.sea = self.marine_json.as_deref().and_then(|b| Marine::parse(b, self.lat, self.lon));
+        if w.sea.is_some() {
+            w.source.push_str(" + Open-Meteo Marine");
+        }
+        w
     }
 }
 
@@ -1528,8 +1677,10 @@ impl Live {
         let (lat, lon) = (self.lat, self.lon);
         #[cfg(target_arch = "wasm32")]
         crate::platform::web::spawn_local(async move {
+            // Ask for the sea state until the place turns out to be inland.
+            let mut sea = true;
             loop {
-                let r = Fetched::fetch_web(lat, lon).await;
+                let r = Fetched::fetch_web(lat, lon, &mut sea).await;
                 let ok = r.is_ok();
                 if tx.send(r).is_err() {
                     return;
@@ -1540,17 +1691,21 @@ impl Live {
         #[cfg(not(target_arch = "wasm32"))]
         std::thread::Builder::new()
             .name("weather".into())
-            .spawn(move || loop {
-                let r = Fetched::fetch(lat, lon);
-                if let Ok(f) = &r {
-                    f.save();
+            .spawn(move || {
+                // Ask for the sea state until the place turns out to be inland.
+                let mut sea = true;
+                loop {
+                    let r = Fetched::fetch(lat, lon, &mut sea);
+                    if let Ok(f) = &r {
+                        f.save();
+                    }
+                    let ok = r.is_ok();
+                    if tx.send(r).is_err() {
+                        return;
+                    }
+                    // Retry sooner after a failure.
+                    std::thread::sleep(if ok { REFRESH } else { Duration::from_secs(60) });
                 }
-                let ok = r.is_ok();
-                if tx.send(r).is_err() {
-                    return;
-                }
-                // Retry sooner after a failure.
-                std::thread::sleep(if ok { REFRESH } else { Duration::from_secs(60) });
             })
             .ok();
         self.rx = Some(rx);
@@ -2161,6 +2316,9 @@ pub fn hud(ctx: &egui::Context, sim: &crate::sim::Sim, world: &crate::world::Wor
             if let Some(t) = w.upper_air_text() {
                 row(ui, "Air", t);
             }
+            if let Some(m) = &w.sea {
+                row(ui, "Sea", m.text());
+            }
             let sun = sim.sun_dir().y.asin().to_degrees();
             let time = match &world.real_time {
                 Some(rt) => format!("{} live", rt.text),
@@ -2203,6 +2361,9 @@ pub fn save_report(shot: &str, world: &crate::world::World) {
     let _ = writeln!(s, "render: {r:?}");
     if let Some(o) = &w.om {
         let _ = writeln!(s, "open-meteo: {o:?}");
+    }
+    if let Some(m) = &w.sea {
+        let _ = writeln!(s, "sea: {}  ({m:?})", m.text());
     }
     // Thunderstorms / mountain waves (wx/): where the cells are, for framing shots.
     let wxs = &world.wxs;
@@ -2424,5 +2585,83 @@ mod upper_air_tests {
         let m = Metar::parse("EGLC 141420Z 21008KT 4000 RA BKN010 02/01 Q1012").unwrap();
         let w = Wx::from_sources(Some((m, 3.0)), None, Some(OpenMeteo { code: 63, freezing_msl: Some(100.0), ..Default::default() }), 0);
         assert_eq!(w.precip, Precip::Rain);
+    }
+}
+
+#[cfg(test)]
+mod marine_tests {
+    use super::*;
+
+    /// Recorded answers (2026-11-16) for the request [`marine_url`] makes:
+    /// off Land's End (50.0, -5.5), and inland Switzerland (47.0, 8.4).
+    const SEA: &str = include_str!("../tests/weather/open_meteo_marine_cornwall.json");
+    const LAND: &str = include_str!("../tests/weather/open_meteo_marine_inland.json");
+
+    #[test]
+    fn parses_the_marine_fixture() {
+        let m = Marine::parse(SEA, 50.0, -5.5).expect("sea state");
+        assert_eq!(m.total, Some(Waves { h_m: 1.66, from_deg: 248.0, period_s: 7.9 }));
+        assert_eq!(m.swell, Some(Waves { h_m: 1.54, from_deg: 244.0, period_s: 7.0 }));
+        assert_eq!(m.wind_sea, Some(Waves { h_m: 0.26, from_deg: 153.0, period_s: 1.9 }));
+        assert!((m.current_kmh - 0.3).abs() < 1e-6 && m.current_to == 45.0);
+        assert!(m.cell_km < 10.0, "cell {} km", m.cell_km);
+        assert_eq!(m.text(), "sea 1.7 m · swell 1.5 m 244° 7 s · wind sea 0.3 m");
+        // The request asks for exactly what is parsed (and nothing personal).
+        let u = marine_url(50.0, -5.5);
+        assert!(u.starts_with("https://marine-api.open-meteo.com/v1/marine?latitude=50.0000&longitude=-5.5000&current="));
+        for k in ["swell_wave_height", "wind_wave_period", "ocean_current_direction", "cell_selection=sea"] {
+            assert!(u.contains(k), "{k}");
+        }
+    }
+
+    #[test]
+    fn land_and_far_cells_are_no_sea() {
+        assert_eq!(Marine::parse(LAND, 47.0, 8.4), None);
+        // The sea cell ~110 km from the place asked for: not here.
+        assert_eq!(Marine::parse(SEA, 51.0, -5.5), None);
+        assert_eq!(Marine::parse("{}", 0.0, 0.0), None);
+        assert_eq!(Marine::parse("not json", 0.0, 0.0), None);
+    }
+
+    #[test]
+    fn ocean_directions_are_world_travel_directions() {
+        let o = Marine::parse(SEA, 50.0, -5.5).unwrap().ocean();
+        // Swell from 244° (WSW) travels towards 064°: east (+x) and north (-z).
+        assert!(o.swell.dir.x > 0.85 && o.swell.dir.y < -0.4 && o.swell.dir.y > -0.5, "{:?}", o.swell.dir);
+        assert!((o.swell.h - 1.54).abs() < 1e-6 && o.swell.period == 7.0);
+        // Wind sea from 153° (SSE) travels NNW: -x, -z.
+        assert!(o.wind_sea.dir.x < 0.0 && o.wind_sea.dir.y < 0.0);
+        // Current towards 045° at 0.3 km/h: NE, 0.083 m/s.
+        assert!((o.current.length() - 0.3 / 3.6).abs() < 1e-4 && o.current.x > 0.0 && o.current.y < 0.0);
+        // No split: the total sea stands in for the wind sea.
+        let total_only = Marine { total: Some(Waves { h_m: 2.0, from_deg: 270.0, period_s: 6.0 }), ..Default::default() }.ocean();
+        assert_eq!(total_only.wind_sea.h, 2.0);
+        assert!((total_only.wind_sea.dir - vec2(1.0, 0.0)).length() < 1e-5);
+        assert_eq!(total_only.swell.h, 0.0);
+    }
+
+    #[test]
+    fn decode_merges_the_sea_state_and_inland_stops_asking() {
+        let om = include_str!("../tests/weather/open_meteo_london_nov.json").to_string();
+        let mut f = Fetched { unix: 1_763_290_000, lat: 50.0, lon: -5.5, om_json: Some(om), ..Default::default() };
+        let w0 = f.decode();
+        assert_eq!(w0.sea, None);
+        assert!(!w0.source.contains("Marine"));
+        let mut sea = true;
+        f.keep_marine(SEA.to_string(), &mut sea);
+        assert!(sea && f.marine_json.is_some());
+        let w = f.decode();
+        assert_eq!(w.sea.unwrap().swell.unwrap().h_m, 1.54);
+        assert_eq!(w.source, format!("{} + Open-Meteo Marine", w0.source));
+        // Everything else is as without it.
+        assert_eq!(Wx { sea: None, source: w0.source.clone(), ..w.clone() }, w0);
+        // An inland answer: kept as "no sea", and the place is not asked again.
+        let mut g = Fetched { lat: 47.0, lon: 8.4, ..Default::default() };
+        g.keep_marine(LAND.to_string(), &mut sea);
+        assert!(!sea && g.marine_json.is_none());
+        // An error page neither keeps nor stops.
+        let mut sea = true;
+        g.keep_marine("{\"error\":true,\"reason\":\"x\"}".into(), &mut sea);
+        assert!(sea && g.marine_json.is_none());
     }
 }

@@ -182,6 +182,12 @@ pub struct World {
     /// Ground elevation (m) the cloud layers / ground fog are referred to
     /// (reported heights are above the ground): the terrain around the focus.
     pub terrain_base: f32,
+    /// The sea state around the focus with the marine forecast mixed in, and
+    /// how open the water is towards the wind sea (for the water shader;
+    /// None without a marine forecast). Re-estimated about once a second.
+    sea_view: Option<(crate::water::SeaState, f32)>,
+    sea_view_t: f32,
+    sea_view_tiles: usize,
     base_check: Option<Instant>,
     /// Resident tiles at the last check (a new tile re-checks at once, so the
     /// result doesn't depend on wall-clock timing: deterministic headless shots).
@@ -251,6 +257,9 @@ impl World {
             clock: (crate::sim::DEFAULT_HOURS, crate::sim::DEFAULT_DAY),
             real_time: None,
             terrain_base: 0.0,
+            sea_view: None,
+            sea_view_t: 0.0,
+            sea_view_tiles: 0,
             base_check: None,
             base_check_tiles: 0,
             airport_detail: crate::airport::AirportScene::new(),
@@ -355,6 +364,17 @@ impl World {
             self.apply_wx();
         }
         self.sim_time = if sim_time.is_finite() { sim_time } else { 0.0 };
+        // Real sea state around the view (only with a marine forecast: the
+        // offline / preset path stays the wind's).
+        if self.wx.sea.is_none() {
+            self.sea_view = None;
+        } else if self.sea_view.is_none() || (self.sim_time - self.sea_view_t).abs() > 1.0 || self.tiles.len() != self.sea_view_tiles {
+            // (Also when a tile arrives: deterministic headless shots.)
+            self.sea_view_t = self.sim_time;
+            self.sea_view_tiles = self.tiles.len();
+            let (s, wind_open, _) = crate::water::sea_mix(self, self.focus);
+            self.sea_view = Some((s, wind_open));
+        }
         // Weather heights follow the terrain: re-place the layers when the
         // ground around the focus is well above / below what they refer to.
         if self.base_check.is_none_or(|t| t.elapsed() > Duration::from_secs(2)) || self.tiles.len() != self.base_check_tiles {
@@ -479,6 +499,10 @@ impl World {
     pub fn render_weather(&self) -> WxRender {
         let cirrus_drift = self.wind.aloft * (self.sim_time % 1.0e6) * 1.5;
         let mut r = WxRender { drift: self.clouds.drift(), cirrus_drift, season: self.season, cloud_version: self.cloud_version, ..self.wx.render(self.sun_up()) };
+        if let Some((s, open)) = self.sea_view {
+            r.swell = [s.swell_dir.x, s.swell_dir.y, s.swell_h, s.swell_len];
+            r.sea = [s.wave_h, s.dir.x, s.dir.y, open];
+        }
         if r.fog_top > 0.0 {
             // Ground fog lies on the terrain (top above the local ground).
             r.fog_top += self.terrain_base;
@@ -1125,6 +1149,9 @@ impl Environment for World {
     }
     fn surface(&self, xz: Vec2) -> crate::ground::Surface {
         self.pavement.at(xz)
+    }
+    fn ocean(&self) -> Option<crate::water::Ocean> {
+        self.wx.sea.as_ref().map(|m| m.ocean())
     }
     fn wind(&self, p: Vec3) -> Vec3 {
         let xz = vec2(p.x, p.z);

@@ -159,7 +159,8 @@ impl Hull {
     }
 }
 
-/// Wind-driven surface state of a water body.
+/// Surface state of a water body: the local wind sea, plus (on the open
+/// sea, from the Open-Meteo Marine forecast) a swell and a surface current.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SeaState {
     /// Significant wave height, m (0 = glassy).
@@ -168,6 +169,59 @@ pub struct SeaState {
     pub dir: Vec2,
     /// Dominant wavelength, m.
     pub wavelength: f32,
+    /// Swell (long-crested waves from far away): significant height (m, 0 =
+    /// none), direction of travel (unit, world xz) and wavelength (m).
+    pub swell_h: f32,
+    pub swell_dir: Vec2,
+    pub swell_len: f32,
+    /// Surface current (world xz, m/s, the direction the water moves).
+    pub current: Vec2,
+}
+
+/// One wave system of a forecast: significant height (m, 0 = none), the
+/// direction it travels (unit, world xz) and its mean period (s).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct WaveTrain {
+    pub h: f32,
+    pub dir: Vec2,
+    pub period: f32,
+}
+
+impl WaveTrain {
+    /// Deep-water wavelength of the period (m): λ = g T² / 2π.
+    pub fn wavelength(&self) -> f32 {
+        G * self.period * self.period / (2.0 * PI)
+    }
+}
+
+/// The open-ocean sea state of a forecast (Open-Meteo Marine, weather.rs),
+/// in the world frame. Applies on the open sea only: lakes, rivers and
+/// sheltered water keep the wind-derived chop (see [`SeaState::with_ocean`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Ocean {
+    pub wind_sea: WaveTrain,
+    pub swell: WaveTrain,
+    /// Surface current (world xz, m/s).
+    pub current: Vec2,
+}
+
+/// Share of open water (0..1) along the ray from `xz` towards `toward`
+/// (unit) over `len` m: ~1 on the open sea, low on lakes, rivers and in the
+/// lee of a coast. (A fraction, not a run: a coastal start on land still sees
+/// the sea beyond the beach.)
+pub fn open_water(env: &dyn Environment, xz: Vec2, toward: Vec2, len: f32) -> f32 {
+    const N: usize = 24;
+    let d = toward.normalize_or_zero();
+    if d == Vec2::ZERO {
+        return 0.0;
+    }
+    let wet = (1..=N).filter(|&i| env.is_water(xz + d * (len * i as f32 / N as f32))).count();
+    wet as f32 / N as f32
+}
+
+fn smooth01(a: f32, b: f32, x: f32) -> f32 {
+    let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 impl SeaState {
@@ -177,7 +231,7 @@ impl SeaState {
         let w = Vec2::new(wind.x, wind.z);
         let u = w.length();
         if u < 1.5 {
-            return SeaState { wave_h: 0.0, dir: Vec2::X, wavelength: 1.0 };
+            return SeaState { wave_h: 0.0, dir: Vec2::X, wavelength: 1.0, ..Default::default() };
         }
         // Fully developed: Hs ≈ 0.0246 U² (Pierson–Moskowitz); fetch-limited
         // (JONSWAP): g Hs / U² = 0.0016 (g F / U²)^½, g Tp / U = 0.286 (g F / U²)^⅓.
@@ -186,27 +240,69 @@ impl SeaState {
         let hs = (0.0246 * u * u).min(0.0016 * x.sqrt() * u * u / G).min(4.0);
         // Peak period → deep-water wavelength.
         let tp = (0.286 * x.cbrt() * u / G).clamp(0.6, 9.0);
-        SeaState { wave_h: hs, dir: w / u, wavelength: G * tp * tp / (2.0 * PI) }
+        SeaState { wave_h: hs, dir: w / u, wavelength: G * tp * tp / (2.0 * PI), ..Default::default() }
+    }
+
+    /// The local wind sea `self` with a forecast's open-ocean sea state
+    /// mixed in: `wind_open` (0..1, how open the water is upwind) moves the
+    /// wind sea to the forecast's, `swell_open` (towards where the swell
+    /// comes from) lets the swell and the current in. Both 0: unchanged.
+    pub fn with_ocean(self, o: &Ocean, wind_open: f32, swell_open: f32) -> SeaState {
+        let mut s = self;
+        let ws = &o.wind_sea;
+        if ws.h > 0.0 && ws.period > 0.0 && wind_open > 0.0 {
+            let k = wind_open.clamp(0.0, 1.0);
+            let local_len = if self.glassy() { ws.wavelength() } else { self.wavelength };
+            s.wave_h = self.wave_h + (ws.h.min(8.0) - self.wave_h) * k;
+            s.wavelength = local_len + (ws.wavelength().clamp(1.0, 200.0) - local_len) * k;
+            if k > 0.5 || self.glassy() {
+                s.dir = ws.dir;
+            }
+        }
+        let k = swell_open.clamp(0.0, 1.0);
+        if o.swell.h > 0.0 && o.swell.period > 0.0 && k > 0.0 {
+            s.swell_h = o.swell.h.min(12.0) * k;
+            s.swell_dir = o.swell.dir;
+            s.swell_len = o.swell.wavelength().clamp(20.0, 600.0);
+        }
+        s.current = o.current * k;
+        s
     }
 
     pub fn glassy(&self) -> bool {
-        self.wave_h < 0.02
+        self.wave_h < 0.02 && self.swell_h < 0.02
     }
 
     /// Surface elevation above the mean level at `xz`, time `t` (s): three
-    /// crossing wave trains around the wind direction.
+    /// crossing wind-sea trains around the wind direction, plus two
+    /// long-crested swell trains.
     pub fn height(&self, xz: Vec2, t: f32) -> f32 {
         if self.glassy() {
             return 0.0;
         }
         let mut h = 0.0;
-        for (ang, amp, lf, ph) in [(0.0f32, 0.30f32, 1.0f32, 0.0f32), (0.45, 0.13, 0.62, 1.7), (-0.6, 0.08, 0.41, 4.1)] {
+        let rot = |d: Vec2, ang: f32| {
             let (s, c) = ang.sin_cos();
-            let d = Vec2::new(self.dir.x * c - self.dir.y * s, self.dir.x * s + self.dir.y * c);
-            let lambda = (self.wavelength * lf).max(0.5);
-            let kw = 2.0 * PI / lambda;
-            let om = (G * kw).sqrt();
-            h += amp * self.wave_h * (kw * d.dot(xz) - om * t + ph).sin();
+            Vec2::new(d.x * c - d.y * s, d.x * s + d.y * c)
+        };
+        if self.wave_h >= 0.02 {
+            for (ang, amp, lf, ph) in [(0.0f32, 0.30f32, 1.0f32, 0.0f32), (0.45, 0.13, 0.62, 1.7), (-0.6, 0.08, 0.41, 4.1)] {
+                let d = rot(self.dir, ang);
+                let lambda = (self.wavelength * lf).max(0.5);
+                let kw = 2.0 * PI / lambda;
+                let om = (G * kw).sqrt();
+                h += amp * self.wave_h * (kw * d.dot(xz) - om * t + ph).sin();
+            }
+        }
+        if self.swell_h >= 0.02 {
+            // A narrow spectrum: two nearby wavelengths / directions beat into
+            // sets (amplitudes sum to ~Hs / 2, the crest height).
+            for (ang, amp, lf, ph) in [(0.0f32, 0.36f32, 1.0f32, 0.6f32), (0.12, 0.16, 0.86, 2.9)] {
+                let d = rot(self.swell_dir, ang);
+                let kw = 2.0 * PI / (self.swell_len * lf).max(5.0);
+                let om = (G * kw).sqrt();
+                h += amp * self.swell_h * (kw * d.dot(xz) - om * t + ph).sin();
+            }
         }
         h
     }
@@ -418,7 +514,9 @@ pub fn water_contact(hulls: &[Hull], b: &BodyState, env: &dyn Environment, sea: 
         // ---- spray
         if let Some(k) = first_wet_fwd {
             let u = u_fwd.max(0.0);
-            let strength = ((u - 1.5) / 8.0).clamp(0.0, 1.0) * (dn[k] / 0.25).clamp(0.2, 1.0);
+            // Waves (chop / swell) rising into the bow throw spray even at low speed.
+            let slap = ((hw_rate[k] - b.vel.y).max(0.0) / 2.0).clamp(0.0, 1.0);
+            let strength = (((u - 1.5) / 8.0).clamp(0.0, 1.0) * (dn[k] / 0.25).clamp(0.2, 1.0)).max(0.6 * slap);
             if strength > 0.02 {
                 let planing = fore(k) && u > 9.0 && k < STRIPS - 3;
                 for side in [-1.0f32, 1.0] {
@@ -428,7 +526,7 @@ pub fn water_contact(hulls: &[Hull], b: &BodyState, env: &dyn Environment, sea: 
                     let rb = pts[k] + Vec3::new(side * half[k], dn[k] * 0.6, 0.0);
                     let p = b.pos + b.rot * rb;
                     let out = left * side;
-                    let vel = out * (0.35 * u + 1.0) + Vec3::Y * (0.18 * u + 0.8) - fwd * (0.25 * u);
+                    let vel = out * (0.35 * u + 1.0) + Vec3::Y * (0.18 * u + 0.8 + 3.0 * slap) - fwd * (0.25 * u);
                     c.spray[n_spray] = Spray { pos: p, vel: b.vel * 0.15 + vel, rate: strength, planing };
                     n_spray += 1;
                 }
@@ -508,21 +606,42 @@ impl WaterState {
         if !env.is_water(xz) {
             return;
         }
-        let gh = env.ground_height(xz);
-        let wind = env.wind(Vec3::new(pos.x, gh + 10.0, pos.z));
-        let w2 = Vec2::new(wind.x, wind.z);
-        let fetch = if w2.length() > 0.5 {
-            let up = -w2.normalize();
-            let mut f = 0.0;
-            while f < 20_000.0 && env.is_water(xz + up * (f + 100.0)) {
-                f += 100.0;
-            }
-            f.max(50.0)
-        } else {
-            50.0
-        };
-        self.sea = SeaState::from_wind(wind, fetch);
+        self.sea = sea_at(env, xz);
     }
+}
+
+/// The sea state at `xz` (on the water): the fetch-limited wind sea from
+/// the wind at 10 m and the open water upwind, with the environment's
+/// open-ocean forecast ([`Environment::ocean`]) mixed in where the water is
+/// open towards the wind / the swell. Inland, on lakes, without a forecast
+/// or offline: the wind sea alone.
+pub fn sea_at(env: &dyn Environment, xz: Vec2) -> SeaState {
+    sea_mix(env, xz).0
+}
+
+/// [`sea_at`], plus how open the water is (0..1) towards the wind sea and
+/// towards the swell (both 0 without a forecast).
+pub fn sea_mix(env: &dyn Environment, xz: Vec2) -> (SeaState, f32, f32) {
+    let gh = env.ground_height(xz);
+    let wind = env.wind(Vec3::new(xz.x, gh + 10.0, xz.y));
+    let w2 = Vec2::new(wind.x, wind.z);
+    let fetch = if w2.length() > 0.5 {
+        let up = -w2.normalize();
+        let mut f = 0.0;
+        while f < 20_000.0 && env.is_water(xz + up * (f + 100.0)) {
+            f += 100.0;
+        }
+        f.max(50.0)
+    } else {
+        50.0
+    };
+    let local = SeaState::from_wind(wind, fetch);
+    let Some(o) = env.ocean() else { return (local, 0.0, 0.0) };
+    // Open water towards the wind sea's / swell's source over ~12 km.
+    let open = |dir: Vec2| if dir == Vec2::ZERO { 0.0 } else { smooth01(0.45, 0.85, open_water(env, xz, -dir, 12_000.0)) };
+    let wind_open = open(if o.wind_sea.h > 0.0 { o.wind_sea.dir } else { w2.normalize_or_zero() });
+    let swell_open = open(o.swell.dir);
+    (local.with_ocean(&o, wind_open, swell_open), wind_open, swell_open)
 }
 
 // ---------------------------------------------------------------------------
@@ -632,6 +751,7 @@ mod tests {
         lo: Vec2,
         hi: Vec2,
         wind: Vec3,
+        ocean: Option<Ocean>,
     }
     impl Environment for Lake {
         fn ground_height(&self, _xz: Vec2) -> f32 {
@@ -649,6 +769,9 @@ mod tests {
         fn wind(&self, _p: Vec3) -> Vec3 {
             self.wind
         }
+        fn ocean(&self) -> Option<Ocean> {
+            self.ocean
+        }
     }
 
     fn otter_floats() -> [Hull; 2] {
@@ -662,7 +785,7 @@ mod tests {
         // Floats must carry ≥ 180 % of the weight (FAR 23 / CS-23).
         assert!(vol * RHO_WATER > 1.8 * 3_500.0, "reserve {vol}");
         // Find the floating height of a 3,500 kg body by bisection on the buoyancy.
-        let env = Lake { lo: Vec2::splat(-1e4), hi: Vec2::splat(1e4), wind: Vec3::ZERO };
+        let env = Lake { lo: Vec2::splat(-1e4), hi: Vec2::splat(1e4), wind: Vec3::ZERO, ocean: None };
         let sea = SeaState::default();
         let (mut lo, mut hi) = (0.5f32, 3.0f32);
         for _ in 0..40 {
@@ -681,7 +804,7 @@ mod tests {
         // At 25 m/s and 6° trim the forebody planes: a large share of the weight
         // carried dynamically, with drag well below the hump's.
         let hulls = otter_floats();
-        let env = Lake { lo: Vec2::splat(-1e4), hi: Vec2::splat(1e4), wind: Vec3::ZERO };
+        let env = Lake { lo: Vec2::splat(-1e4), hi: Vec2::splat(1e4), wind: Vec3::ZERO, ocean: None };
         let sea = SeaState::default();
         let w = 3_500.0 * G;
         let state =
@@ -705,10 +828,77 @@ mod tests {
         assert!(h.abs() < sea.wave_h);
     }
 
+    /// A forecast like the recorded Cornwall answer (tests/weather): 1.5 m
+    /// of 7 s swell from the WSW, a small wind sea, a weak current.
+    fn atlantic() -> Ocean {
+        Ocean {
+            wind_sea: WaveTrain { h: 0.26, dir: Vec2::new(-0.45, 0.89), period: 1.9 },
+            swell: WaveTrain { h: 1.54, dir: Vec2::new(0.9, -0.44), period: 7.0 },
+            current: Vec2::new(0.06, -0.06),
+        }
+    }
+
+    #[test]
+    fn open_sea_takes_the_forecast_swell() {
+        // 60 km of open water, a 10 kt breeze.
+        let sea_env = Lake { lo: Vec2::splat(-3e4), hi: Vec2::splat(3e4), wind: Vec3::new(5.0, 0.0, 0.0), ocean: Some(atlantic()) };
+        let (s, wind_open, swell_open) = sea_mix(&sea_env, Vec2::ZERO);
+        eprintln!("open sea: {s:?} open {wind_open:.2} / {swell_open:.2}");
+        assert!(wind_open > 0.99 && swell_open > 0.99);
+        assert!((s.swell_h - 1.54).abs() < 1e-3);
+        // λ = g T² / 2π ≈ 76 m for 7 s.
+        assert!((s.swell_len - 76.5).abs() < 1.0, "swell λ {}", s.swell_len);
+        assert!((s.wave_h - 0.26).abs() < 1e-3 && s.dir == atlantic().wind_sea.dir);
+        assert!(s.current.length() > 0.0);
+        // The swell moves the surface by about its height, and travels.
+        let hs: Vec<f32> = (0..200).map(|i| s.height(Vec2::new(i as f32 * 3.0, 0.0), 0.0)).collect();
+        let span = hs.iter().cloned().fold(f32::MIN, f32::max) - hs.iter().cloned().fold(f32::MAX, f32::min);
+        assert!(span > 0.8 && span < 2.5 * 1.54, "swell span {span}");
+        assert!((s.height(Vec2::ZERO, 0.0) - s.height(Vec2::ZERO, 2.0)).abs() > 1e-3);
+    }
+
+    #[test]
+    fn lakes_and_rivers_keep_the_wind_chop() {
+        // A 2 km lake with the same (ocean) forecast: sheltered, so no swell.
+        let wind = Vec3::new(5.0, 0.0, 0.0);
+        let lake = Lake { lo: Vec2::splat(-1e3), hi: Vec2::splat(1e3), wind, ocean: Some(atlantic()) };
+        let (s, wind_open, swell_open) = sea_mix(&lake, Vec2::ZERO);
+        assert_eq!((wind_open, swell_open), (0.0, 0.0));
+        assert_eq!(s, sea_at(&Lake { ocean: None, ..lake }, Vec2::ZERO));
+        assert_eq!(s.swell_h, 0.0);
+        assert_eq!(s.current, Vec2::ZERO);
+        // No forecast (inland / offline): exactly the wind-derived sea.
+        let none = Lake { lo: Vec2::splat(-3e4), hi: Vec2::splat(3e4), wind, ocean: None };
+        let (s0, a, b) = sea_mix(&none, Vec2::ZERO);
+        assert_eq!((a, b), (0.0, 0.0));
+        assert_eq!(s0.swell_h, 0.0);
+        assert_eq!(s0, SeaState::from_wind(wind, 20_000.0));
+    }
+
+    #[test]
+    fn swell_pitches_a_floating_otter_and_a_current_drags_it() {
+        let hulls = otter_floats();
+        let env = Lake { lo: Vec2::splat(-3e4), hi: Vec2::splat(3e4), wind: Vec3::ZERO, ocean: None };
+        let w = 3_500.0 * G;
+        let b = BodyState { pos: Vec3::new(0.0, 1.7, 0.0), vel: Vec3::ZERO, rot: Quat::IDENTITY, omega: Vec3::ZERO };
+        let calm = SeaState::default();
+        let swell = SeaState { swell_h: 1.5, swell_dir: Vec2::new(0.0, 1.0), swell_len: 76.0, ..Default::default() };
+        // Heave force swings with the passing swell (calm: steady).
+        let fy = |s: &SeaState, t: f32| water_contact(&hulls, &b, &env, s, t, 0.0, w).force.y;
+        let (lo, hi) = (0..40).map(|i| fy(&swell, i as f32 * 0.2)).fold((f32::MAX, f32::MIN), |(a, c), f| (a.min(f), c.max(f)));
+        assert!(fy(&calm, 0.0) == fy(&calm, 3.0));
+        assert!(hi - lo > 0.3 * w, "swell heave swing {:.0} N", hi - lo);
+        // A current enters as the velocity through the water (flight.rs):
+        // a hull held still in water moving +z at 1 m/s is dragged along +z.
+        let drift = BodyState { vel: Vec3::new(0.0, 0.0, -1.0), ..b };
+        let held = water_contact(&hulls, &drift, &env, &calm, 0.0, 0.0, w);
+        assert!(held.force.z > 0.0, "water moving +z past a held hull pushes it +z: {:?}", held.force);
+    }
+
     #[test]
     fn lane_finder_picks_the_long_axis() {
         // A 2.5 km × 300 m river running east–west.
-        let env = Lake { lo: Vec2::new(-1_250.0, -150.0), hi: Vec2::new(1_250.0, 150.0), wind: Vec3::ZERO };
+        let env = Lake { lo: Vec2::new(-1_250.0, -150.0), hi: Vec2::new(1_250.0, 150.0), wind: Vec3::ZERO, ocean: None };
         let (a, b) = find_lane(&env, Vec2::new(0.0, 500.0), 3_000.0, 800.0, 120.0).expect("lane");
         let d = b - a;
         eprintln!("lane {a:?} → {b:?} ({:.0} m)", d.length());

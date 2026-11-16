@@ -203,6 +203,12 @@ struct Globals {
     pre: [f32; 4],
     /// Quality (gfx/quality.rs): x soft shadows (1 = PCF), yzw unused.
     gq: [f32; 4],
+    /// Real sea state (Open-Meteo Marine, water.rs): swell travel direction
+    /// x, z, significant height (m, 0 = none), wavelength (m).
+    swell: [f32; 4],
+    /// Forecast wind sea: significant height (m), travel direction x, z,
+    /// weight 0..1 (0 = the waves follow the surface wind alone).
+    sea: [f32; 4],
 }
 
 #[repr(C)]
@@ -1837,6 +1843,8 @@ impl Renderer {
             // w: 1 = no MSAA — alpha-tested / translucent surfaces dither (TAA resolves it).
             pre: [pre, 1.0 / pre, plane_h, if msaa() > 1 { 0.0 } else { 1.0 + (self.post.frame % 64) as f32 }],
             gq: [if q.soft_shadows { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
+            swell: wx.swell,
+            sea: wx.sea,
         };
         let px_per_m = height as f32 * 0.5 / (fv.fov_y * 0.5).tan();
         let aou = AoU {
