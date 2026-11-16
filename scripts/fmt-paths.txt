@@ -190,3 +190,6 @@ src/landcover/mod.rs
 src/landcover/tiff.rs
 src/landcover/worldcover.rs
 src/landcover/canopy.rs
+src/bathy/mod.rs
+src/bathy/source.rs
+src/bathy/gpu.rs

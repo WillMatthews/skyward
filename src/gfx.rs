@@ -209,6 +209,8 @@ struct Globals {
     /// Forecast wind sea: significant height (m), travel direction x, z,
     /// weight 0..1 (0 = the waves follow the surface wind alone).
     sea: [f32; 4],
+    /// Bathymetry (bathy/gpu.rs): fine / coarse layer placement, clarity.
+    bathy: [[f32; 4]; 3],
 }
 
 #[repr(C)]
@@ -654,6 +656,8 @@ pub struct Renderer {
     wpass: WeatherPasses,
     /// Night lighting: light sprites, light map, stars, beams (lights.rs).
     lights: crate::lights::LightRenderer,
+    /// Sea depth for the water shader (bathy/).
+    bathy: crate::bathy::gpu::BathyGpu,
     /// Effects: particles, trails, vapour, heat haze (vfx/gpu.rs).
     vfx: crate::vfx::gpu::VfxRenderer,
     /// Lightning channels and the windscreen (wx/gpu.rs).
@@ -816,6 +820,7 @@ impl Renderer {
                 bgl_storage(9),
                 bgl_tex(10, Dim::D2),
                 bgl_tex(11, Dim::D2),
+                bgl_tex(14, Dim::D2Array),
             ],
         });
         let shadow_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -1164,6 +1169,7 @@ impl Renderer {
             wpass: WeatherPasses::new(device),
             vfx,
             lights,
+            bathy: crate::bathy::gpu::BathyGpu::new(device),
             wxg: crate::wx::gpu::WxGpu::new(device),
         }
     }
@@ -1472,6 +1478,7 @@ impl Renderer {
                     wgpu::BindGroupEntry { binding: 9, resource: self.atmos.out.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 10, resource: R::TextureView(ao_view) },
                     wgpu::BindGroupEntry { binding: 11, resource: R::TextureView(self.lights.map_view()) },
+                    wgpu::BindGroupEntry { binding: 14, resource: R::TextureView(self.bathy.view()) },
                 ],
             })
         };
@@ -1721,6 +1728,7 @@ impl Renderer {
         let field = self.clouds.field();
         let cover = field.sky_cover();
         let wx = self.wxr;
+        self.bathy.update(queue);
         let haze = if wx.haze > 0.0 { wx.haze } else { haze_for(cover) };
         let fog = (wx.fog_ext, wx.fog_top * 0.001);
         // Night: moon, stars, the city's rhythm. The *key* light (direct light,
@@ -1845,6 +1853,7 @@ impl Renderer {
             gq: [if q.soft_shadows { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
             swell: wx.swell,
             sea: wx.sea,
+            bathy: self.bathy.params(&self.proj, fv.eye),
         };
         let px_per_m = height as f32 * 0.5 / (fv.fov_y * 0.5).tan();
         let aou = AoU {

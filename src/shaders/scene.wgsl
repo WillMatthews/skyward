@@ -347,7 +347,58 @@ fn snowy(s0: Surf, np: vec2<f32>, n: vec3<f32>, hold: f32, fw: f32) -> Surf {
 
 // ---------------------------------------------------------------- water
 
-fn wave_grad(p: vec2<f32>, t: f32, fade: f32, open_sea: f32) -> vec2<f32> {
+// Sea depth (bathy/): layer 0 the fine region (≈ 94 m texels), 1 the coarse
+// one (≈ 500 m); texels hold (depth m × weight, weight), weight 1 = sea.
+@group(0) @binding(14) var bathy_tex: texture_2d_array<f32>;
+
+// No depth known (rivers, lakes, off the map, no data): deeper than any sea.
+const NO_DEPTH: f32 = 1.0e4;
+
+// One layer at eye-relative xz: its texel (depth × weight, weight) and how
+// far inside the layer the point is (0 outside .. 1 clear of its edges).
+fn bathy_layer(xz: vec2<f32>, p: vec4<f32>, layer: i32) -> vec3<f32> {
+    let uv = (xz - p.xy) * p.zw;
+    let edge = min(min(uv.x, uv.y), min(1.0 - uv.x, 1.0 - uv.y));
+    let s = textureSampleLevel(bathy_tex, lin_samp, clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)), layer, 0.0).rg;
+    return vec3<f32>(s, smoothstep(0.0, 0.04, edge) * step(1e-12, p.z));
+}
+
+// Depth (m) and how sure we are of it (0 = no data) at eye-relative xz: the
+// fine layer where it reaches (its "not sea" answers included), the coarse
+// one beyond it.
+fn bathy_at(xz: vec2<f32>) -> vec2<f32> {
+    let f = bathy_layer(xz, g.bathy0, 0);
+    let c = bathy_layer(xz, g.bathy1, 1);
+    let s = mix(c.xy * c.z, f.xy, f.z);
+    if (s.y < 1e-3) {
+        return vec2<f32>(NO_DEPTH, 0.0);
+    }
+    return vec2<f32>(s.x / s.y, s.y);
+}
+
+// Body colour (scattered back out of the water column, as an irradiance
+// reflectance) over `d` m of water of clarity `clar`: the deep-water colour
+// mixed with the lit bottom showing through (two-way attenuation, per
+// colour: red goes first, so clear shallows turn turquoise over sand;
+// turbid water hides the bottom below a metre).
+fn water_column(d: f32, clar: f32) -> vec3<f32> {
+    // Turbid: sediment stirred up over banks (lighter, browner) → estuary
+    // green-brown (the plain water colour) → darker in channels and out on
+    // the shelf.
+    var turbid = mix(vec3<f32>(0.032, 0.030, 0.019), vec3<f32>(0.020, 0.026, 0.018), smoothstep(1.5, 8.0, d));
+    turbid = mix(turbid, vec3<f32>(0.008, 0.016, 0.021), smoothstep(10.0, 40.0, d));
+    let clear = vec3<f32>(0.004, 0.013, 0.030);
+    var deep = mix(turbid, clear, clar);
+    deep = mix(deep, vec3<f32>(0.0025, 0.008, 0.024), smoothstep(150.0, 1500.0, d));
+    let k = mix(vec3<f32>(1.1, 0.75, 0.9), vec3<f32>(0.30, 0.055, 0.045), clar);
+    let tr = exp(-2.0 * k * d);
+    // Bottom: mud in turbid water, pale sand in clear seas (× the light lost
+    // crossing the surface twice).
+    let bottom = mix(vec3<f32>(0.095, 0.08, 0.055), vec3<f32>(0.36, 0.34, 0.27), clar) * 0.45;
+    return deep * (1.0 - tr) + bottom * tr;
+}
+
+fn wave_grad(p: vec2<f32>, t: f32, fade: f32, open_sea: f32, depth: f32) -> vec2<f32> {
     // Sum of directional sine waves (analytic slope) + fine noise ripples.
     var gsum = vec2<f32>(0.0);
     // Waves run with the surface wind; their height follows its speed.
@@ -362,6 +413,10 @@ fn wave_grad(p: vec2<f32>, t: f32, fade: f32, open_sea: f32) -> vec2<f32> {
         if (fk > 0.5 && g.sea.x > 0.0) { dir = g.sea.yz; }
     }
     var amp = 0.16 * clamp(0.35 + ws / 7.0, 0.35, 2.2);
+    // Very shallow water (sandbanks): the chop is limited by the depth.
+    if (depth < 3.0) {
+        amp *= mix(0.35, 1.0, clamp(depth / 3.0, 0.0, 1.0));
+    }
     var k = 0.11;
     var spd = 1.2;
     let rot = mat2x2<f32>(0.80, 0.60, -0.60, 0.80);
@@ -390,6 +445,14 @@ fn wave_grad(p: vec2<f32>, t: f32, fade: f32, open_sea: f32) -> vec2<f32> {
         var d2 = sd;
         var ks = TAU / max(g.swell.w, 10.0);
         var sa = 0.5 * sh * 1.6;
+        // Shoaling (bathy/): in water shallower than half a wavelength the
+        // swell slows and steepens (Green's law, height ~ depth^-1/4), and
+        // breaks once it is ~0.8 of the depth (its energy goes into surf).
+        let half_l = 0.5 * max(g.swell.w, 10.0);
+        if (depth < half_l) {
+            sa *= clamp(pow(max(depth, 0.5) / half_l, -0.25), 1.0, 1.7);
+            sa *= clamp(depth / (1.28 * sh), 0.15, 1.0);
+        }
         for (var j = 0; j < 2; j++) {
             let kv = round(d2 * (ks * NP / TAU)) * (TAU / NP);
             let ph = dot(kv, p) - t * sqrt(9.81 * length(kv)) + f32(j) * 2.3;
@@ -413,7 +476,14 @@ fn shade_water(in: VOut, px: vec2<f32>, fw: f32) -> vec3<f32> {
     let np = pat(rel);
     // Forecast sea state only on water near sea level (not on lakes / reservoirs above it).
     let open_sea = 1.0 - smoothstep(3.0, 8.0, abs(wp.y));
-    let gr = wave_grad(np, t, fw, open_sea) + rain_ripples(np, 2.2, t, fw * 0.05);
+    // Sea depth (bathy/): only for the sea (not lakes above sea level).
+    var bd = vec2<f32>(NO_DEPTH, 0.0);
+    if (open_sea > 0.0 && g.bathy0.z + g.bathy1.z > 0.0) {
+        bd = bathy_at(rel.xz);
+        bd.y *= open_sea;
+        if (bd.y <= 0.0) { bd.x = NO_DEPTH; }
+    }
+    let gr = wave_grad(np, t, fw, open_sea, bd.x) + rain_ripples(np, 2.2, t, fw * 0.05);
     // Slope variance lost to filtering widens the highlight instead (spec AA).
     let lost = clamp(fw * 0.35, 0.0, 1.0);
     var n = normalize(vec3<f32>(-gr.x, 1.0, -gr.y));
@@ -435,16 +505,36 @@ fn shade_water(in: VOut, px: vec2<f32>, fw: f32) -> vec3<f32> {
     let sh = shadow_factor(rel, vec3<f32>(0.0, 1.0, 0.0), dist);
     let E = sun_irradiance(wp) * sh;
     // Body colour: light scattered back up from the turbid (Thames-green) water column.
-    let scat = vec3<f32>(0.020, 0.026, 0.018);
+    var scat = vec3<f32>(0.020, 0.026, 0.018);
     let amb = sky_irradiance(vec3<f32>(0.0, 1.0, 0.0));
+    // Depth-coloured sea; surf where waves break over the shallows.
+    var foam = 0.0;
+    if (bd.y > 0.0) {
+        scat = mix(scat, water_column(bd.x, g.bathy2.x), bd.y);
+        // Breakers: wave height ≳ 0.8 × depth (swell, forecast wind sea, or
+        // a fetch-limited sea from the local wind).
+        let wind = length(g.wx2.xy);
+        let hs = max(max(g.swell.z, g.sea.x * g.sea.w), 0.006 * wind * wind) * open_sea;
+        let brk = bd.y * (1.0 - smoothstep(0.6 * hs, 1.3 * hs + 0.05, bd.x)) * smoothstep(0.05, 0.4, hs);
+        if (brk > 0.0) {
+            // Patchy, drifting white water (fades to its mean coverage far away).
+            let drift = g.swell.xy * t * 0.004;
+            let n1 = pna(np, 0.045, drift, fw * 0.045);
+            let n2 = pna(np, 0.17, drift * 2.7 + vec2<f32>(3.1, 7.9), fw * 0.17);
+            foam = brk * smoothstep(0.42, 0.75, n1 * 0.65 + n2 * 0.35 + 0.15 * brk);
+        }
+    }
     let body = scat * (E * max(L.y, 0.0) + amb) / PI * 3.0;
     var col = mix(body, refl, fres);
+    if (foam > 0.0) {
+        col = mix(col, vec3<f32>(0.62) * (E * max(L.y, 0.0) + amb) / PI, foam);
+    }
     // Sun glint (GGX, roughness grows with distance).
     let a = mix(0.035, 0.22, lost);
     let H = normalize(L + V);
     let nl = max(dot(n, L), 0.0);
     let spec = d_ggx(max(dot(n, H), 0.0), a) * v_smith(nv, nl, a) * f_schlick(vec3<f32>(f0), max(dot(V, H), 0.0));
-    col += spec * E * nl;
+    col += spec * E * nl * (1.0 - foam);
     return col;
 }
 

@@ -547,6 +547,9 @@ impl World {
     /// Integrate finished tiles, evict far ones, reschedule work. Cheap; call every frame.
     pub fn update(&mut self) {
         self.update_db_area(false);
+        // Sea depth around the view (bathy/: its own background job).
+        let (lat, lon) = self.proj.to_latlon(self.focus);
+        crate::bathy::set_focus(lat, lon);
         if self.runway_elev_pending && self.elev_retry.is_none_or(|t| t.elapsed() > Duration::from_millis(500)) {
             self.elev_retry = Some(Instant::now());
             self.update_runway_elevations();

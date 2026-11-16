@@ -59,6 +59,7 @@ mod sim;
 mod startpos;
 mod systems;
 mod terrain;
+mod bathy;
 mod landcover;
 mod landmarks;
 mod tiles;
@@ -1964,7 +1965,7 @@ fn headless(args: Args) -> Result<(), String> {
         // (The floating origin may have moved: follow the world's focus.)
         let focus = if ov.is_some() { focus } else { s.world.focus() };
         let (ready, total) = s.world.progress(focus, s.world.effective_radius() - 300.0);
-        if ready >= total && s.world.uploads.is_empty() && s.world.gpu_pending.is_empty() && s.world.far_ready() && s.world.airport_detail.idle() {
+        if ready >= total && s.world.uploads.is_empty() && s.world.gpu_pending.is_empty() && s.world.far_ready() && s.world.airport_detail.idle() && crate::bathy::idle() {
             break;
         }
         if tw.elapsed() > Duration::from_secs(120) {

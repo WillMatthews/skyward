@@ -87,6 +87,22 @@ others; per-item sources, authors and licences are listed in:
         (registry.opendata.aws/dataforgood-fb-forests). Skyward uses the
         1/4000-degree aggregate (95th-percentile height, canopy cover),
         resampled to its scenery grid.
+  * Sea depth (src/bathy/; read at run time, cached under cache/bathy/ or
+    the browser's cache, not redistributed):
+      - Europe: EMODnet Bathymetry DTM, CC BY 4.0
+        (https://creativecommons.org/licenses/by/4.0/): "EMODnet Bathymetry
+        Consortium (2024): EMODnet Digital Bathymetry (DTM 2024)",
+        doi:10.12770/cf51df64-56f9-4a99-b1aa-36b8d7b743a1, read from the
+        EMODnet Bathymetry WCS (ows.emodnet-bathymetry.eu);
+      - elsewhere and in its gaps: NOAA National Centers for Environmental
+        Information. 2022: ETOPO 2022 15 Arc-Second Global Relief Model,
+        doi:10.25921/fd45-gt74 (with NOAA coastal DEMs), from NOAA NCEI's
+        DEM_global_mosaic image service (gis.ngdc.noaa.gov). Its
+        bathymetry comes from the GEBCO Grid: "The GEBCO Grid is placed in
+        the public domain and may be used free of charge"; acknowledged as
+        GEBCO Compilation Group, The GEBCO Grid (www.gebco.net). Use does
+        not suggest any endorsement by GEBCO, the IHO or the IOC.
+    Resampled to depth textures; NOT for navigation.
   * Live traffic (src/adsb/): aircraft positions from the adsb.lol API,
     made available under the Open Database License (ODbL) 1.0
     (https://opendatacommons.org/licenses/odbl/1-0/) — © adsb.lol

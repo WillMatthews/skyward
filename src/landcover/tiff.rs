@@ -2,7 +2,8 @@
 //! to range-read Cloud-Optimised GeoTIFFs — the image file directories (one
 //! per overview), tile / strip offsets, the GeoTIFF pixel scale and tie point —
 //! and to decode one tile or strip (none / DEFLATE / LZW, horizontal
-//! predictor, 8- or 16-bit single-band samples).
+//! predictor, 8- or 16-bit single-band samples; 32-bit float samples for the
+//! bathymetry grids, [`decode_block_f32`]).
 //!
 //! Everything read here comes off the network: every offset, count and size is
 //! bounds-checked, decoded blocks are capped at their declared size, and
@@ -22,6 +23,8 @@ pub struct Ifd {
     pub bits: u16,
     pub compression: u16,
     pub predictor: u16,
+    /// SampleFormat (1 unsigned, 3 IEEE float; 0 = not given).
+    pub sample_format: u16,
     pub offsets: Vec<u64>,
     pub counts: Vec<u64>,
     /// GeoTIFF ModelPixelScale (x, y, z) and ModelTiepoint (i, j, k, x, y, z).
@@ -152,7 +155,7 @@ pub fn parse(b: &[u8]) -> Result<Parse, String> {
                 }
             };
             // Only the tags we use are read (and may require more bytes).
-            let wanted = matches!(tag, 256 | 257 | 258 | 259 | 273 | 278 | 279 | 317 | 322 | 323 | 324 | 325 | 33550 | 33922);
+            let wanted = matches!(tag, 256 | 257 | 258 | 259 | 273 | 278 | 279 | 317 | 339 | 322 | 323 | 324 | 325 | 33550 | 33922);
             if !wanted {
                 continue;
             }
@@ -170,6 +173,7 @@ pub fn parse(b: &[u8]) -> Result<Parse, String> {
                     259 => d.compression = one(vals())? as u16,
                     278 => rows_per_strip = Some(one(vals())? as u32),
                     317 => d.predictor = one(vals())? as u16,
+                    339 => d.sample_format = one(vals())? as u16,
                     322 => tw = Some(one(vals())? as u32),
                     323 => th = Some(one(vals())? as u32),
                     273 | 324 => d.offsets = vals()?,
@@ -208,7 +212,7 @@ pub fn parse(b: &[u8]) -> Result<Parse, String> {
         if d.offsets.len() as u64 != blocks || d.counts.len() as u64 != blocks {
             return Err(format!("TIFF block table: {} offsets, {} counts, {} blocks", d.offsets.len(), d.counts.len(), blocks));
         }
-        if !matches!(d.bits, 8 | 16) {
+        if !matches!(d.bits, 8 | 16 | 32) {
             return Err(format!("unsupported TIFF sample size {}", d.bits));
         }
         let pe = p + n * es;
@@ -229,21 +233,14 @@ pub fn parse(b: &[u8]) -> Result<Parse, String> {
 pub fn decode_block(ifd: &Ifd, big_endian: bool, data: &[u8], max_samples: Option<usize>) -> Result<Vec<u16>, String> {
     let full = ifd.block_samples();
     let want = max_samples.map_or(full, |m| m.min(full));
+    if !matches!(ifd.bits, 8 | 16) {
+        return Err(format!("unsupported TIFF sample size {} (integer)", ifd.bits));
+    }
     let bps = (ifd.bits / 8) as usize;
     // The predictor works on whole rows: decode whole rows.
     let row = ifd.block_w as usize;
     let want_rows = want.div_ceil(row);
-    let limit = want_rows * row * bps;
-    let raw = match ifd.compression {
-        1 => data[..data.len().min(limit)].to_vec(),
-        8 | 32946 => {
-            let mut out = Vec::with_capacity(limit);
-            flate2::read::ZlibDecoder::new(data).take(limit as u64).read_to_end(&mut out).map_err(|e| format!("deflate: {e}"))?;
-            out
-        }
-        5 => lzw(data, limit)?,
-        c => return Err(format!("unsupported TIFF compression {c}")),
-    };
+    let raw = decompress(ifd, data, want_rows * row * bps)?;
     // Short blocks (truncated data) are padded with zeros.
     let mut v: Vec<u16> = match bps {
         1 => raw.iter().map(|&b| b as u16).collect(),
@@ -262,6 +259,58 @@ pub fn decode_block(ifd: &Ifd, big_endian: bool, data: &[u8], max_samples: Optio
     }
     v.truncate(want);
     Ok(v)
+}
+
+/// A block's bytes, decompressed and capped at `limit`.
+fn decompress(ifd: &Ifd, data: &[u8], limit: usize) -> Result<Vec<u8>, String> {
+    Ok(match ifd.compression {
+        1 => data[..data.len().min(limit)].to_vec(),
+        8 | 32946 => {
+            let mut out = Vec::with_capacity(limit);
+            flate2::read::ZlibDecoder::new(data).take(limit as u64).read_to_end(&mut out).map_err(|e| format!("deflate: {e}"))?;
+            out
+        }
+        5 => lzw(data, limit)?,
+        c => return Err(format!("unsupported TIFF compression {c}")),
+    })
+}
+
+/// Decode one block of 32-bit IEEE float samples (no predictor; short data
+/// is padded with NaN).
+pub fn decode_block_f32(ifd: &Ifd, big_endian: bool, data: &[u8]) -> Result<Vec<f32>, String> {
+    if ifd.bits != 32 || ifd.sample_format != 3 {
+        return Err(format!("not a float TIFF ({} bits, format {})", ifd.bits, ifd.sample_format));
+    }
+    if ifd.predictor != 1 {
+        return Err(format!("unsupported TIFF predictor {} (float)", ifd.predictor));
+    }
+    let n = ifd.block_samples();
+    let raw = decompress(ifd, data, n * 4)?;
+    let mut v: Vec<f32> =
+        raw.chunks_exact(4).map(|c| if big_endian { f32::from_be_bytes([c[0], c[1], c[2], c[3]]) } else { f32::from_le_bytes([c[0], c[1], c[2], c[3]]) }).collect();
+    v.resize(n, f32::NAN);
+    Ok(v)
+}
+
+/// A whole single-band float image (all blocks of `ifd`, row-major).
+pub fn read_f32(bytes: &[u8], big_endian: bool, ifd: &Ifd) -> Result<Vec<f32>, String> {
+    let (w, h) = (ifd.width as usize, ifd.height as usize);
+    if w * h > 1 << 24 {
+        return Err("float TIFF too large".into());
+    }
+    let mut out = vec![f32::NAN; w * h];
+    let (bw, bh) = (ifd.block_w as usize, ifd.block_h as usize);
+    let across = ifd.blocks_across() as usize;
+    for (k, (&off, &cnt)) in ifd.offsets.iter().zip(&ifd.counts).enumerate() {
+        let end = off.checked_add(cnt).filter(|&e| e <= bytes.len() as u64).ok_or("TIFF block past the end")?;
+        let block = decode_block_f32(ifd, big_endian, &bytes[off as usize..end as usize])?;
+        let (bx, by) = ((k % across) * bw, (k / across) * bh);
+        for r in 0..bh.min(h.saturating_sub(by)) {
+            let n = bw.min(w - bx);
+            out[(by + r) * w + bx..][..n].copy_from_slice(&block[r * bw..][..n]);
+        }
+    }
+    Ok(out)
 }
 
 /// TIFF LZW (MSB-first codes, "early change"), output capped at `limit` bytes.
