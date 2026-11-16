@@ -59,7 +59,11 @@ const SPLITS_BY_COUNT: [[f32; 5]; 3] = [[0.3, 200.0, 4000.0, 4000.0, 4000.0], [0
 /// Fraction of each cascade over which it blends into the next.
 const CASCADE_BLEND: f32 = 0.15;
 const BLOOM_LEVELS: usize = 6;
-const NEAR: f32 = 0.25;
+/// Near plane (m). Reverse-Z into a float depth buffer: depth precision is
+/// relative and doesn't depend on it, so it can sit well inside the head —
+/// the canopy, roof and side panels a few cm from the cockpit eye aren't
+/// clipped away when looking up or around.
+pub const NEAR: f32 = 0.03;
 /// Bytes of immediate data (push constants) the pipelines declare: none —
 /// WebGPU has none, the per-draw transform is an [`Xforms`] uniform.
 const IMMEDIATE_SIZE: u32 = 0;
@@ -341,6 +345,8 @@ pub struct FrameView {
     pub eye: Vec3,
     pub view: Mat4,
     pub fov_y: f32,
+    /// Near plane, m ([`NEAR`] but for a camera mounted inside its own props).
+    pub near: f32,
     pub time: f32,
     pub sun_dir: Vec3,
     /// Manual exposure multiplier on top of the metered exposure.
@@ -1729,7 +1735,7 @@ impl Renderer {
             t.xf = [(m.sx - 1.0) as f32, (m.tx - ex) as f32, (m.tz - ez) as f32, -ey as f32];
         }
         let aspect = width as f32 / height.max(1) as f32;
-        let proj = glam::camera::rh::proj::directx::perspective_infinite_reverse(fv.fov_y, aspect, NEAR);
+        let proj = glam::camera::rh::proj::directx::perspective_infinite_reverse(fv.fov_y, aspect, fv.near);
         // TAA: the scene is drawn with a sub-pixel jitter (Halton); culling,
         // clouds, reprojection and the previous frame stay unjittered.
         let taa_on = q.aa == quality::AaMode::Taa;
@@ -2470,6 +2476,8 @@ impl Renderer {
                 pass.draw(0..6, 0..3 * RAIN_PER_LAYER);
             }
         }
+        // The player's canopy / windows over all of that (gfx_aircraft.rs).
+        self.aircraft.draw_glass(device, encoder, &t.main_bg, &t.hdr, &t.dist);
         // Rain on the windscreen, wipers, misting, frost (cockpit view, wx/).
         if let Some(w) = fv.wx.as_deref() {
             self.wxg.glass(device, queue, encoder, w, vp_rot.inverse(), px_per_m, &t.hdr, &t.dist, (width, height));

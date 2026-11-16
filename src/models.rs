@@ -127,6 +127,15 @@ pub fn ready(id: &str) -> bool {
     !PREFETCH_STARTED.load(std::sync::atomic::Ordering::Relaxed) || PREFETCHED.lock().unwrap_or_else(|e| e.into_inner()).contains(&id)
 }
 
+/// The cockpit eye point: the aircraft definition's (`AircraftDef::eye`,
+/// measured against the model: `src/cockpit/eye_tests.rs`), not the one
+/// the importer took from the FlightGear view / JSBSim EYEPOINT (often the
+/// head's centre or the canopy rail, i.e. too high); that one only when the
+/// definition has none.
+pub fn eye_point(a: &AircraftAsset, def_eye: Vec3) -> Vec3 {
+    if def_eye != Vec3::ZERO { def_eye } else { a.eye.unwrap_or(def_eye) }
+}
+
 /// Load the model for an aircraft id (see the table above).
 pub fn build(id: &str, def_eye: Vec3) -> AircraftModel {
     let cached = cached_asset(id);
@@ -156,7 +165,7 @@ pub fn build(id: &str, def_eye: Vec3) -> AircraftModel {
     };
     match loaded {
         Ok(a) => {
-            let eye = a.eye.unwrap_or(def_eye);
+            let eye = eye_point(&a, def_eye);
             let radius = a.radius.max(1.0);
             let n = a.channels.len();
             let bounds = exterior_bounds(&a);
@@ -395,7 +404,7 @@ impl AircraftModel {
             .filter(|(_, c)| (interior || !c.interior) && self.pose.visible[c.node])
             .map(|(i, c)| ChunkDraw { chunk: i as u32, model: body * self.pose.world[c.node], emit: self.pose.emit[i], uv: self.pose.uv.get(i).copied().unwrap_or(crate::aircraft_asset::UV_IDENTITY) })
             .collect();
-        Some(AircraftFrame { asset: a.clone(), draws, parts: self.parts.clone(), dynamics: None, displays: None })
+        Some(AircraftFrame { asset: a.clone(), draws, parts: self.parts.clone(), dynamics: None, displays: None, cockpit: false })
     }
 
     /// Light positions (body frame, current pose) by kind.

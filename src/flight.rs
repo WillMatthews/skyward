@@ -2061,7 +2061,8 @@ fn swift_base() -> AircraftDef {
         category: Category::Glider,
         engine_kind: EngineKind::None,
         engine_count: 0,
-        eye: Vec3::new(0.0, 0.30, 1.27),
+        // (FlightGear view 0.30: 12 cm under the canopy; eye_tests.rs.)
+        eye: Vec3::new(0.0, 0.25, 1.27),
         vr_kt: 45.0,
         vref_kt: 50.0,
         vle_kt: 150.0,
@@ -2659,7 +2660,8 @@ fn meridian320_base() -> AircraftDef {
         retractable_gear: true,
         has_spoilers: true,
         has_reverser: true,
-        eye: Vec3::new(0.55, 1.15, 13.55),
+        // (FlightGear view z 13.55: in the head rest; eye_tests.rs.)
+        eye: Vec3::new(0.55, 1.15, 13.65),
         vr_kt: 145.0,
         vref_kt: 142.0,
         vle_kt: 280.0,
@@ -3156,7 +3158,8 @@ fn vulcan_base() -> AircraftDef {
         engine_kind: EngineKind::Jet,
         engine_count: 4,
         retractable_gear: true,
-        eye: Vec3::new(0.34, 1.95, 11.85),
+        // (FlightGear view 1.95: 9 cm under the roof; eye_tests.rs.)
+        eye: Vec3::new(0.34, 1.87, 11.85),
         vr_kt: 145.0,
         vref_kt: 150.0,
         vle_kt: 230.0,
@@ -5427,11 +5430,12 @@ mod tests {
     fn model_and_flight_geometry_agree() {
         // The flight geometry (FDM contacts, eye, engines) and the imported
         // visual model must agree: wheels touch the runway, the cockpit eye is
-        // the model's.
+        // the model's view point (moved by at most a few cm where that sits in
+        // the canopy / roof / head rest: src/cockpit/eye_tests.rs checks it).
         for def in fixed_wing() {
             let Ok(asset) = crate::aircraft_asset::AircraftAsset::load(def.id) else { continue };
             let eye = asset.eye.expect("model eye");
-            assert!(eye.distance(def.eye) < 0.05, "{} eye {:?} vs model {:?}", def.id, def.eye, eye);
+            assert!(eye.distance(def.eye) < 0.12, "{} eye {:?} vs model {:?}", def.id, def.eye, eye);
             // Pose with the gear down; lowest exterior vertex near each wheel.
             let mut ch = vec![0.0f32; asset.channels.len()];
             for (i, c) in asset.channels.iter().enumerate() {

@@ -11,6 +11,7 @@ src/cockpit/mod.rs
 src/cockpit/channels.rs
 src/cockpit/displays.rs
 src/cockpit/tests.rs
+src/cockpit/eye_tests.rs
 src/airport/mod.rs
 src/airport/fleet.rs
 src/airport/font.rs

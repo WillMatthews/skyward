@@ -513,8 +513,47 @@ impl AircraftAsset {
             }
         }
         asset.textures = textures.iter().map(|f| load_texture(dir, f)).collect();
+        asset.settle_translucency();
         Ok(asset)
     }
+
+    /// The importer flags as translucent everything FlightGear blends or
+    /// alpha-tests (`blend` / `alpha-test` animations, transparent effects),
+    /// including panels and placards with cut-out labels. Drawn blended they
+    /// write no depth and show through each other in any order (see-through
+    /// panels, flicker in the cockpit). An opaque material colour over a
+    /// texture whose alpha is on / off is a cut-out: alpha-tested, depth
+    /// written. (Opaque or untextured "translucent" materials stay blended:
+    /// FlightGear's glass effects make those see-through in the shader.)
+    pub fn settle_translucency(&mut self) {
+        let kind: Vec<Option<bool>> = self.textures.iter().map(|t| alpha_kind(&t.rgba)).collect();
+        for m in self.materials.iter_mut().filter(|m| m.translucent && m.col.w >= 0.95) {
+            if m.tex.and_then(|t| kind.get(t).copied()) == Some(Some(false)) {
+                m.translucent = false;
+                m.alpha_tex = true;
+            }
+        }
+    }
+}
+
+/// A texture's alpha channel: None = opaque, Some(true) = a good part of the
+/// texels that aren't opaque are partly transparent (glass), Some(false) =
+/// on / off (cut-outs: labels, decals, frames).
+fn alpha_kind(rgba: &[u8]) -> Option<bool> {
+    let (mut holes, mut partial) = (0usize, 0usize);
+    for a in rgba.chunks_exact(4).map(|p| p[3]) {
+        if a < 250 {
+            holes += 1;
+            if (25..=230).contains(&a) {
+                partial += 1;
+            }
+        }
+    }
+    // (Cut-outs have a thin band of partial alpha along their edges.)
+    (holes > 0).then_some(partial * 3 > holes)
+}
+
+impl AircraftAsset {
 
     /// Index of a channel, if the model uses it.
     pub fn channel(&self, name: &str) -> Option<usize> {
@@ -803,6 +842,16 @@ mod tests {
 #[cfg(test)]
 mod sign_tests {
     use super::*;
+
+    #[test]
+    fn texture_alpha_kinds() {
+        let px = |a: &[u8]| a.iter().flat_map(|&x| [128, 128, 128, x]).collect::<Vec<u8>>();
+        assert_eq!(alpha_kind(&px(&[255, 255, 252])), None);
+        // Labels: on / off with a thin anti-aliased edge → cut-out.
+        assert_eq!(alpha_kind(&px(&[255, 255, 255, 0, 0, 0, 0, 0, 120, 255])), Some(false));
+        // A glass pane in the texture → blended.
+        assert_eq!(alpha_kind(&px(&[255, 255, 70, 70, 70, 80, 0])), Some(true));
+    }
 
     /// Mean height (body Y) of the exterior vertices under nodes whose name matches.
     fn mean_y(a: &AircraftAsset, ch: &[f32], pat: &str) -> Option<f32> {

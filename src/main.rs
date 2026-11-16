@@ -1232,6 +1232,7 @@ fn render_frame(
                 }
                 if let Some(af) = fv.aircraft.as_mut() {
                     af.shift(d);
+                    af.cockpit = false;
                 }
                 for af in &mut fv.others {
                     af.shift(d);

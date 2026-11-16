@@ -37,6 +37,8 @@ pub struct AircraftFrame {
     pub dynamics: Option<Box<AcDynamics>>,
     /// Glass cockpit display textures (`cockpit::displays`), when rendered.
     pub displays: Option<Arc<DisplaySet>>,
+    /// The camera is at the pilot's eye: the canopy / windows are seen from inside.
+    pub cockpit: bool,
 }
 
 /// The glass displays' textures for the screens of the current model.
@@ -116,6 +118,10 @@ struct GpuModel {
     /// Per chunk (first index, count) in `ib` (the parts copy re-tessellates the wings).
     ranges: Vec<(u32, u32)>,
     tex_bgs: Vec<wgpu::BindGroup>,
+    /// Per chunk: the centre of its vertices (node frame), for sorting glass.
+    centres: Vec<glam::Vec3>,
+    /// Per chunk: under a spinning node (prop disc / blur, rotor blur, fan).
+    spins: Vec<bool>,
     asset: Arc<AircraftAsset>,
     /// Frames since an aircraft last used it (evicted when unused for a while).
     idle: u32,
@@ -126,6 +132,8 @@ struct GpuModel {
 struct Prepared {
     opaque: Vec<(u32, u32)>,
     shadow: Vec<(u32, u32)>,
+    /// Blended glass drawn late ([`AircraftRenderer::draw_glass`]), far to near.
+    glass: Vec<(u32, u32)>,
 }
 
 /// One aircraft's per-frame GPU state: its instances, structural dynamics
@@ -156,6 +164,11 @@ pub struct AircraftRenderer {
     /// scene, no depth / distance writes — the eye distance (and so the
     /// motion vectors) stay the scenery's behind the canopy.
     main_blend: wgpu::RenderPipeline,
+    /// The player's glass, drawn after the clouds, fog, effects and
+    /// precipitation ([`AircraftRenderer::draw_glass`]): blended over them,
+    /// hidden by nearer surfaces through the scene's eye distance (group 3).
+    glass_late: wgpu::RenderPipeline,
+    glass_bgl: wgpu::BindGroupLayout,
     refl: wgpu::RenderPipeline,
     shadow: wgpu::RenderPipeline,
     inst_bgl: wgpu::BindGroupLayout,
@@ -299,6 +312,36 @@ impl AircraftRenderer {
         let main_cull = pipe("aircraft", Some(wgpu::Face::Back), crate::gfx::msaa(), false);
         let main_twosided = pipe("aircraft 2-sided", None, crate::gfx::msaa(), false);
         let main_blend = pipe("aircraft glass", None, crate::gfx::msaa(), true);
+        let glass_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("aircraft glass"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+                count: None,
+            }],
+        });
+        let glass_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("aircraft glass late"),
+            bind_group_layouts: &[Some(globals_bgl), Some(&inst_bgl), Some(&tex_bgl), Some(&glass_bgl)],
+            immediate_size,
+        });
+        let glass_late = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("aircraft glass late"),
+            layout: Some(&glass_layout),
+            vertex: wgpu::VertexState { module: &module, entry_point: Some("vs_aircraft"), compilation_options: Default::default(), buffers: &[Some(vertex_layout()), Some(part_layout(3))] },
+            primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some("fs_aircraft_glass"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState { format: crate::gfx::HDR, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         // The mirrored reflection flips the winding: draw both sides there.
         let refl = pipe("aircraft refl", None, 1, false);
         let shadow = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -415,6 +458,8 @@ impl AircraftRenderer {
             main_cull,
             main_twosided,
             main_blend,
+            glass_late,
+            glass_bgl,
             refl,
             shadow,
             inst_bgl,
@@ -446,7 +491,7 @@ impl AircraftRenderer {
         }
         let ph = Slot::placeholder(&self.main);
         let mut main = std::mem::replace(&mut self.main, ph);
-        self.prepare_slot(device, queue, &mut main, frame, true);
+        self.prepare_slot(device, queue, &mut main, frame, true, true);
         self.main = main;
     }
 
@@ -459,7 +504,7 @@ impl AircraftRenderer {
         }
         let mut slots = std::mem::take(&mut self.traffic);
         for (slot, f) in slots.iter_mut().zip(frames) {
-            self.prepare_slot(device, queue, slot, Some(f), false);
+            self.prepare_slot(device, queue, slot, Some(f), false, false);
         }
         self.traffic = slots;
         self.n_traffic = frames.len();
@@ -523,13 +568,39 @@ impl AircraftRenderer {
             Some(p) => p.ranges.clone(),
             None => a.chunks.iter().map(|c| (c.first, c.count)).collect(),
         };
-        self.models.push(GpuModel { key, pv, vb, ib, ranges, tex_bgs, asset: a.clone(), idle: 0 });
+        let centres = a
+            .chunks
+            .iter()
+            .map(|c| {
+                let n = c.count.max(1) as f32;
+                (c.first..c.first + c.count).map(|k| glam::Vec3::from(a.vertices[(a.indices[k as usize] + c.base_vertex) as usize].pos)).sum::<glam::Vec3>() / n
+            })
+            .collect();
+        // Spinning parts: prop discs / blur, rotor blur, fans.
+        let spins = a
+            .chunks
+            .iter()
+            .map(|c| {
+                let mut i = c.node as i32;
+                while i >= 0 {
+                    let n = &a.nodes[i as usize];
+                    if matches!(n.anim, Some(crate::aircraft_asset::Anim::Spin { .. })) {
+                        return true;
+                    }
+                    i = n.parent;
+                }
+                false
+            })
+            .collect();
+        self.models.push(GpuModel { key, pv, vb, ib, ranges, tex_bgs, centres, spins, asset: a.clone(), idle: 0 });
         Some(self.models.len() - 1)
     }
 
-    fn prepare_slot(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, slot: &mut Slot, frame: Option<&AircraftFrame>, displays: bool) {
+    /// `late_glass`: the blended glass goes to [`Self::draw_glass`] (the player's aircraft).
+    fn prepare_slot(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, slot: &mut Slot, frame: Option<&AircraftFrame>, displays: bool, late_glass: bool) {
         slot.prepared.opaque.clear();
         slot.prepared.shadow.clear();
+        slot.prepared.glass.clear();
         slot.disp_of.clear();
         let Some(f) = frame else {
             slot.hist.clear();
@@ -558,6 +629,8 @@ impl AircraftRenderer {
         let dynamics = f.dynamics.as_deref().copied().unwrap_or_default();
         queue.write_buffer(&slot.dyn_buf, 0, bytemuck::bytes_of(&dynamics));
         let mut insts = Vec::with_capacity(f.draws.len());
+        // Late glass, keyed by eye distance.
+        let mut glass: Vec<(f32, (u32, u32))> = Vec::new();
         // Opaque first, then cut-outs, then glass (alpha-to-coverage needs no sorting,
         // but drawing glass last lets the depth test skip what it hides).
         let mut order: Vec<(u8, usize)> = f
@@ -610,6 +683,10 @@ impl AircraftRenderer {
                 (Some(_), Some(lum)) => (3, [0.04, 0.12, 3.0, lum]),
                 _ => (mode, [f0, rough, mode as f32, if textured { 1.0 } else { 0.0 }]),
             };
+            // Exterior glass seen from the cockpit (shader: less opaque, no sky
+            // reflection) — not the prop discs / rotor blur.
+            let spins = slot.model.and_then(|g| self.models.get(g)).and_then(|g| g.spins.get(d.chunk as usize).copied()).unwrap_or(false);
+            let inside = f.cockpit && mode == 2 && !c.interior && !spins;
             let model = d.model.to_cols_array_2d();
             let mut occ = 0;
             while hist.contains_key(&(d.chunk, occ)) {
@@ -625,14 +702,21 @@ impl AircraftRenderer {
                 emis: [emis.x, emis.y, emis.z, if c.interior || c.backlight { 1.0 } else { 0.0 }],
                 params,
                 uvm: [uv[0], uv[1], uv[2], uv[3]],
-                uvo: [uv[4], uv[5], 0.0, 0.0],
+                uvo: [uv[4], uv[5], if inside { 1.0 } else { 0.0 }, 0.0],
             });
             let ii = (insts.len() - 1) as u32;
+            if late_glass && mode == 2 {
+                let centre = slot.model.and_then(|g| self.models.get(g)).and_then(|g| g.centres.get(d.chunk as usize)).copied().unwrap_or_default();
+                glass.push((d.model.transform_point3(centre).length(), (d.chunk, ii)));
+                continue;
+            }
             slot.prepared.opaque.push((d.chunk, ii));
             if mode != 2 && mode != 3 && !c.interior {
                 slot.prepared.shadow.push((d.chunk, ii));
             }
         }
+        glass.sort_by(|a, b| b.0.total_cmp(&a.0));
+        slot.prepared.glass = glass.into_iter().map(|g| g.1).collect();
         if !insts.is_empty() {
             queue.write_buffer(&slot.inst_buf, 0, bytemuck::cast_slice(&insts));
             queue.write_buffer(&slot.prev_buf, 0, bytemuck::cast_slice(&prevs));
@@ -663,8 +747,13 @@ impl AircraftRenderer {
             pass.set_vertex_buffer(0, gm.vb.slice(..));
             pass.set_vertex_buffer(1, gm.pv.slice(..));
             pass.set_index_buffer(gm.ib.slice(..), wgpu::IndexFormat::Uint32);
+            let blend_glass = crate::gfx::msaa() == 1;
             for &(ci, ii) in &s.prepared.opaque {
                 let c = &a.chunks[ci as usize];
+                // Blended glass: the eye distance (and the motion TAA uses) is what's behind it.
+                if blend_glass && a.materials[c.material].translucent && s.disp_of.get(ii as usize).copied().flatten().is_none() {
+                    continue;
+                }
                 let (first, count) = gm.ranges[ci as usize];
                 pass.draw_indexed(first..first + count, c.base_vertex as i32, ii..ii + 1);
             }
@@ -719,6 +808,52 @@ impl AircraftRenderer {
     pub fn draw_main(&self, pass: &mut wgpu::RenderPass<'_>) {
         for s in self.slots() {
             self.draw_list(pass, s, &s.prepared.opaque, false);
+        }
+    }
+
+    /// The player's glass (canopy, windows, instrument glass) over the
+    /// finished scene: after the clouds, ground fog, effects and rain, which
+    /// are behind it from the cockpit (and from a chase camera). Blended far
+    /// to near, no depth buffer: a fragment behind the scene's eye distance
+    /// (`dist`: the frame, the panel, the pilot's own aircraft) is discarded.
+    pub fn draw_glass(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, globals: &wgpu::BindGroup, hdr: &wgpu::TextureView, dist: &wgpu::TextureView) {
+        let s = &self.main;
+        let Some(gm) = s.model.and_then(|i| self.models.get(i)) else { return };
+        if s.prepared.glass.is_empty() {
+            return;
+        }
+        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("aircraft glass"),
+            layout: &self.glass_bgl,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(dist) }],
+        });
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("aircraft glass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: hdr,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&self.glass_late);
+        pass.set_bind_group(0, globals, &[]);
+        pass.set_bind_group(1, &s.inst_bg, &[]);
+        pass.set_bind_group(3, &bg, &[]);
+        pass.set_vertex_buffer(0, gm.vb.slice(..));
+        pass.set_vertex_buffer(1, gm.pv.slice(..));
+        pass.set_index_buffer(gm.ib.slice(..), wgpu::IndexFormat::Uint32);
+        let a = &gm.asset;
+        for &(ci, ii) in &s.prepared.glass {
+            let c = &a.chunks[ci as usize];
+            let m = &a.materials[c.material];
+            pass.set_bind_group(2, m.tex.and_then(|t| gm.tex_bgs.get(t)).unwrap_or(&self.white_bg), &[]);
+            let (first, count) = gm.ranges[ci as usize];
+            pass.draw_indexed(first..first + count, c.base_vertex as i32, ii..ii + 1);
         }
     }
 

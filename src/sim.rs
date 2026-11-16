@@ -2115,6 +2115,7 @@ impl Sim {
             _ => self.rpos,
         };
         let mut fov = self.prefs.chase_fov.clamp(20.0, 120.0).to_radians();
+        let mut near = crate::gfx::NEAR;
         let show_aircraft = true;
         let (eye, target, cam_up) = match self.cam {
             CamMode::Chase => {
@@ -2157,6 +2158,8 @@ impl Sim {
                     // FPV quad: the camera is bolted on, tilted up, wide-angle.
                     Some(q) => {
                         fov = 2.0 * ((q.cam_fov * 0.5).tan() / aspect.max(0.5)).atan();
+                        // (Its props turn a few cm from the camera: keep them out of the frustum.)
+                        near = 0.25;
                         let cam = self.rrot * Quat::from_rotation_x(-q.cam_tilt);
                         (e, e + cam * Vec3::Z * 100.0, cam * Vec3::Y)
                     }
@@ -2196,7 +2199,7 @@ impl Sim {
             acl.n_sprites = 0;
             acl.n_spots = 0;
         }
-        let mut fv = FrameView { eye, view, fov_y: fov, time: self.time, sun_dir: self.sun_dir(), exposure: 1.0, clock, acl, aircraft: None, vfx: None, others: Vec::new(), wx: None };
+        let mut fv = FrameView { eye, view, fov_y: fov, near, time: self.time, sun_dir: self.sun_dir(), exposure: 1.0, clock, acl, aircraft: None, vfx: None, others: Vec::new(), wx: None };
         let mut dynm = MeshData::default();
         // The fight: missiles, parachutes, holes; the other aircraft (weapons/).
         let mut others = Vec::new();
@@ -2304,6 +2307,7 @@ impl Sim {
         out.append(&local, m);
         let mut f = self.model.frame(m, interior)?;
         f.dynamics = Some(Box::new(self.structure_frame(m, eye)));
+        f.cockpit = self.cam == CamMode::Cockpit;
         Some(f)
     }
 
@@ -2351,6 +2355,11 @@ impl Sim {
 /// Load the model for an aircraft. Also returns the bounding radius.
 fn load_model(def: &AircraftDef) -> (AircraftModel, f32) {
     let mut model = models::build(def.id, def.eye);
+    // SKYWARD_EYE="dx,dy,dz": move the cockpit eye (body frame, m; x left,
+    // y up, z forward) — for tuning eye points with headless captures.
+    if let Some(v) = std::env::var("SKYWARD_EYE").ok().map(|s| s.split(',').filter_map(|x| x.trim().parse::<f32>().ok()).collect::<Vec<_>>()).filter(|v| v.len() == 3) {
+        model.eye += Vec3::new(v[0], v[1], v[2]);
+    }
     if let Some(a) = model.asset.clone() {
         model.parts = Some(models::classify(&a, def));
     }
