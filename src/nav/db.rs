@@ -657,6 +657,11 @@ pub fn db() -> Option<Arc<NavDb>> {
     }
 }
 
+/// Being read or downloaded (the menus' background indicator).
+pub fn loading() -> bool {
+    matches!(*STATE.lock().unwrap_or_else(|e| e.into_inner()), Load::Loading)
+}
+
 /// Status line for the credits / diagnostics.
 pub fn status() -> String {
     match &*STATE.lock().unwrap_or_else(|e| e.into_inner()) {
