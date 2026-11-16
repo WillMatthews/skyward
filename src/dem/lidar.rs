@@ -21,9 +21,11 @@
 //! flattening runs on the result.
 //!
 //! The terrain mesh is one vertex per DEM pixel (≈ 24 m at 51.5° N), so what
-//! the DTM brings at this level is bare-earth accuracy (no roofs or
-//! canopy, embankments, cuttings, river terraces, chalk escarpments placed
-//! to a few metres), not 1 m detail.
+//! the DTM brings at this level is bare-earth accuracy, not 1 m detail. In
+//! England, Terrain Tiles already carries an older EA LIDAR composite, so the
+//! two mostly agree (mean |Δ| 0.6 m over London City, 1.9 m on the Dunstable
+//! Downs): the gain is the current survey (new quarries, roads, cuttings,
+//! embankments), no Terrain Tiles seams or holes, and crisper escarpments.
 //!
 //! **Cache**: the server's GeoTIFFs under `cache/lidar/` (pruned to
 //! [`CACHE_LIMIT`]), decoded squares (4 MB each) in a small LRU.

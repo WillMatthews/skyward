@@ -51,29 +51,39 @@ for a in "${@:-london estuary chilterns downs}"; do
 	done
 done
 
+# The service stalls now and then (a request hangs; the next one answers):
+# squares that failed get a second pass at the end.
 got=0 skipped=0 failed=0
-for s in "${squares[@]}"; do
-	read -r sx sy <<<"$s"
-	out="$dir/${sx}_${sy}.tif"
+fetch() { # sx sy → 0 if cached / fetched
+	local sx=$1 sy=$2 out="$dir/${1}_${2}.tif" tmp code
 	if [[ -s $out ]]; then
 		skipped=$((skipped + 1))
-		continue
+		return 0
 	fi
 	tmp="$out.tmp$$"
-	code=$(curl -sS -m 40 -A "skyward-flightsim/0.2" -o "$tmp" -w '%{http_code} %{content_type}' "$(url "$sx" "$sy")" || echo "000 -")
+	code=$(curl -sS -m 30 -A "skyward-flightsim/0.2" -o "$tmp" -w '%{http_code} %{content_type}' "$(url "$sx" "$sy")" 2>/dev/null) || code="stalled"
+	sleep "$GAP"
 	if [[ $code == "200 image/tiff"* ]] && head -c 2 "$tmp" | grep -q '^II\|^MM'; then
 		mv "$tmp" "$out"
 		got=$((got + 1))
 		echo "$sx,$sy: $(stat -c %s "$out") bytes"
-	else
-		rm -f "$tmp"
-		failed=$((failed + 1))
-		echo "$sx,$sy: failed ($code)" >&2
-		if [[ $code == 429* ]]; then
-			echo "rate-limited: waiting 5 minutes" >&2
-			sleep 300
-		fi
+		return 0
 	fi
-	sleep "$GAP"
+	rm -f "$tmp"
+	echo "$sx,$sy: failed ($code)" >&2
+	if [[ $code == 429* ]]; then
+		echo "rate-limited: waiting 5 minutes" >&2
+		sleep 300
+	fi
+	return 1
+}
+retry=()
+for s in "${squares[@]}"; do
+	# shellcheck disable=SC2086
+	fetch $s || retry+=("$s")
 done
-echo "lidar: $got fetched, $skipped cached, $failed failed (into $dir/)"
+for s in "${retry[@]}"; do
+	# shellcheck disable=SC2086
+	fetch $s || failed=$((failed + 1))
+done
+echo "lidar: $got fetched, $skipped cached, $failed failed (into $dir/; run again for those)"
