@@ -48,6 +48,8 @@ item lands; keep entries one line.
 - [x] Rain/snow/fog, wet surfaces, sky-shake + precision fixes (H, I)
 - [x] Night: moon/stars/skyglow, street lights, lit windows, traffic, airport lighting, PAPI, landing lights (J)
 - [ ] **P2** Night follow-ups: light pools beyond 4 km, halos behind clouds, README/help for L key
+- [x] Far-field night lights: NASA Black Marble (GIBS `VIIRS_Night_Lights`, z8, public domain, CORS) around the flight → emissive far terrain, light domes and the lit ground past the terrain from altitude; faded out under resident map tiles; `SKYWARD_NO_NIGHTLIGHTS` (NL, issue #12)
+- [ ] **P2** Night-lights follow-ups: Black Marble radiance → per-tile street / building light density (`lights/place.rs`); point-like sparkle in the far band (it reads as a smooth glow); city light on cloud bases; 2016 composite only (GIBS has no newer annual layer); the web build re-fetches the tiles each visit if the Cache Storage is unavailable
 - [x] Supersonic + atmospheric VFX: vapour cone, shock diamonds, heat haze, Schmidt–Appleman contrails, vortex / wing condensation (L)
 - [x] Crash VFX: fireball, fuel fire + smoke column, dust, spray, sparks, tyre / engine smoke; GPU particles lit by sun/moon/fires (L)
 - [ ] **P1** VFX follow-ups: vapour cone ray-march costs ~1.2 ms at 1440p when it fills the screen (Effects quality Low / Medium now march 50 / 75 % of the steps, GFX; a half-res pass is still open); wing-surface fog low-contrast on white airliners; smoke at night only lit by fire ambient (no volumetric glow); fire streaks on still-sliding wrecks; particles drawn over clouds (no cloud depth); haze strength untuned for props
@@ -201,3 +203,4 @@ item lands; keep entries one line.
 | SS | Real sea state from the Open-Meteo Marine API: swell / wind sea / current → water shader, float + ditching hydrodynamics, spray; wind-chop fallback inland / offline (`weather.rs`, `water.rs`, `scene.wgsl`, issue #6) | ✅ |
 | LC | Land cover (ESA WorldCover) + canopy heights (Meta / WRI) on the ground and trees, native (`src/landcover/`, `scene.rs`) | ✅ |
 | GFX | TAA / TAAU, MSAA / FXAA, presets + Settings › Video, dynamic resolution, frame limiter, motion blur / DOF / lens effects, HDR output, performance overlay (`src/gfx/`, `src/ui/settings_video.rs`) | ✅ |
+| NL | Night lights: NASA Black Marble far-field glow, light domes, lit ground beyond the terrain (`lights/nightlights.rs`, `common.wgsl`, issue #12) | ✅ |

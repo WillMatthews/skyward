@@ -20,6 +20,7 @@
 pub mod place;
 pub mod gpu;
 pub mod sky;
+pub mod nightlights;
 
 pub use place::{AircraftLightRig, AircraftLights, TileLights};
 pub use gpu::LightRenderer;

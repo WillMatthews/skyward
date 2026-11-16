@@ -1964,7 +1964,8 @@ fn headless(args: Args) -> Result<(), String> {
         // (The floating origin may have moved: follow the world's focus.)
         let focus = if ov.is_some() { focus } else { s.world.focus() };
         let (ready, total) = s.world.progress(focus, s.world.effective_radius() - 300.0);
-        if ready >= total && s.world.uploads.is_empty() && s.world.gpu_pending.is_empty() && s.world.far_ready() && s.world.airport_detail.idle() {
+        let night_lights = renderer.night_lights_ready(&gpu.queue, vec3(focus.x, 0.0, focus.y));
+        if ready >= total && s.world.uploads.is_empty() && s.world.gpu_pending.is_empty() && s.world.far_ready() && s.world.airport_detail.idle() && night_lights {
             break;
         }
         if tw.elapsed() > Duration::from_secs(120) {

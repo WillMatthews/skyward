@@ -87,6 +87,15 @@ others; per-item sources, authors and licences are listed in:
         (registry.opendata.aws/dataforgood-fb-forests). Skyward uses the
         1/4000-degree aggregate (95th-percentile height, canopy cover),
         resampled to its scenery grid.
+  * Night lights (src/lights/nightlights.rs; read at run time, cached under
+    cache/nightlights/, not redistributed): NASA Black Marble 2016 (Suomi
+    NPP VIIRS day/night band; NASA Earth Observatory / Goddard Space Flight
+    Center), layer VIIRS_Night_Lights of NASA GIBS
+    (https://nasa-gibs.github.io/gibs-api-docs/). NASA imagery is not
+    subject to copyright in the United States (public domain); GIBS asks:
+    "We acknowledge the use of imagery provided by services from NASA's
+    Global Imagery Browse Services (GIBS), part of NASA's Earth Science Data
+    and Information System (ESDIS)." Use does not imply NASA endorsement.
   * Live traffic (src/adsb/): aircraft positions from the adsb.lol API,
     made available under the Open Database License (ODbL) 1.0
     (https://opendatacommons.org/licenses/odbl/1-0/) — © adsb.lol

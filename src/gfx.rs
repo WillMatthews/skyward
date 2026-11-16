@@ -209,6 +209,12 @@ struct Globals {
     /// Forecast wind sea: significant height (m), travel direction x, z,
     /// weight 0..1 (0 = the waves follow the surface wind alone).
     sea: [f32; 4],
+    /// Far-field night lights (lights/nightlights.rs): grid uv of the eye
+    /// (x, y) and per metre of eye-relative x / z (z, w).
+    nl0: [f32; 4],
+    /// x light-up strength (cd/m² → scene units x street lights on; 0 = off),
+    /// y grid texel size (m), zw unused.
+    nl1: [f32; 4],
 }
 
 #[repr(C)]
@@ -654,6 +660,8 @@ pub struct Renderer {
     wpass: WeatherPasses,
     /// Night lighting: light sprites, light map, stars, beams (lights.rs).
     lights: crate::lights::LightRenderer,
+    /// Far-field night lights (NASA Black Marble).
+    night: crate::lights::nightlights::NightLights,
     /// Effects: particles, trails, vapour, heat haze (vfx/gpu.rs).
     vfx: crate::vfx::gpu::VfxRenderer,
     /// Lightning channels and the windscreen (wx/gpu.rs).
@@ -816,6 +824,8 @@ impl Renderer {
                 bgl_storage(9),
                 bgl_tex(10, Dim::D2),
                 bgl_tex(11, Dim::D2),
+                bgl_tex(12, Dim::D2),
+                bgl_tex(13, Dim::D2),
             ],
         });
         let shadow_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -1164,6 +1174,7 @@ impl Renderer {
             wpass: WeatherPasses::new(device),
             vfx,
             lights,
+            night: crate::lights::nightlights::NightLights::new(device),
             wxg: crate::wx::gpu::WxGpu::new(device),
         }
     }
@@ -1323,6 +1334,13 @@ impl Renderer {
 
     /// The current floating-origin frame and its pattern space
     /// (`World::pattern_frame`). Call before rendering / queueing tiles.
+    /// Fetch the far-field night lights around `eye` (current frame) and
+    /// upload them when ready; true once nothing is pending (headless captures).
+    pub fn night_lights_ready(&mut self, queue: &wgpu::Queue, eye: Vec3) -> bool {
+        self.night.update(queue, &self.proj, eye);
+        self.night.idle()
+    }
+
     pub fn set_frame(&mut self, proj: Proj, pattern: [f32; 4], home: Proj) {
         self.pattern = pattern;
         // Shadow texel snapping is anchored at the start point: ground-fixed, so
@@ -1472,6 +1490,8 @@ impl Renderer {
                     wgpu::BindGroupEntry { binding: 9, resource: self.atmos.out.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 10, resource: R::TextureView(ao_view) },
                     wgpu::BindGroupEntry { binding: 11, resource: R::TextureView(self.lights.map_view()) },
+                    wgpu::BindGroupEntry { binding: 12, resource: R::TextureView(self.night.view()) },
+                    wgpu::BindGroupEntry { binding: 13, resource: R::TextureView(self.night.mask_view()) },
                 ],
             })
         };
@@ -1746,6 +1766,15 @@ impl Renderer {
         let glow_src: Vec<(Vec2, f32)> = self.tiles.values().filter_map(|t| t.lights.as_ref().map(|l| (t, l))).flat_map(|(t, l)| l.glow.iter().map(move |(p, lm)| (t.map.apply(*p), *lm))).collect();
         let (glow, city_up) = self.lights.skyglow(&glow_src, fv.eye, haze);
         let street = night.street;
+        // Far-field night lights: the Black Marble grid around the eye, faded
+        // out where resident map tiles light the ground themselves.
+        let nl_map = self.night.update(queue, &self.proj, fv.eye);
+        if nl_map.is_some() {
+            let own = |id: &TileId| crate::terrain::Level::of(*id) != crate::terrain::Level::Horizon;
+            let key = self.tiles.keys().filter(|id| own(id)).fold(0u64, |h, id| h.wrapping_add((((id.z as u64) << 48) ^ ((id.x as u64) << 24) ^ id.y as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15).rotate_left(17)));
+            let tiles = &self.tiles;
+            self.night.set_mask(queue, &self.proj, key, || tiles.values().filter(|t| own(&t.id)).map(|t| (t.lo, t.hi)).collect());
+        }
         if std::env::var_os("SKYWARD_NIGHT_DEBUG").is_some() {
             eprintln!(
                 "night: sun {:.3} moon {:?} e {:.3e} frac {:.2} street {:.2} office {:.2} homes {:.2} | glow src {} up {:.3e} zen {:.3e} hor {:?}",
@@ -1845,6 +1874,8 @@ impl Renderer {
             gq: [if q.soft_shadows { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
             swell: wx.swell,
             sea: wx.sea,
+            nl0: nl_map.unwrap_or_default(),
+            nl1: [if nl_map.is_some() { crate::lights::nightlights::PEAK_CD * atmosphere::LUX * street } else { 0.0 }, self.night.texel_m(), 0.0, 0.0],
         };
         let px_per_m = height as f32 * 0.5 / (fv.fov_y * 0.5).tan();
         let aou = AoU {
