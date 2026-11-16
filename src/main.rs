@@ -1886,14 +1886,21 @@ fn headless(args: Args) -> Result<(), String> {
         (Some(e), Some(l)) => Some((e, l)),
         _ => None,
     };
-    // Geographic camera (heights above the ground are resolved once the
-    // scenery under it has loaded, below).
-    if let (Some(e), Some(l)) = (args.eye_ll, args.look_ll) {
+    // Geographic camera: projected into the current frame (heights above
+    // the ground are resolved once the scenery under it has loaded, below).
+    // Projected again after the flight and the wait: an air start away from
+    // the airport moves the floating origin on its first step, and an eye
+    // projected before that lands kilometres from where it was asked for.
+    let geo_cam = |w: &World| {
+        let (e, l) = (args.eye_ll?, args.look_ll?);
         let geo = |g: (f64, f64, f32)| {
-            let p = s.world.proj.to_world(g.0, g.1);
+            let p = w.proj.to_world(g.0, g.1);
             vec3(p.x, g.2, p.y)
         };
-        ov = Some((geo(e), geo(l)));
+        Some((geo(e), geo(l)))
+    };
+    if let Some(c) = geo_cam(&s.world) {
+        ov = Some(c);
     }
     {
         let sim = s.sim.as_mut().unwrap();
@@ -2024,6 +2031,10 @@ fn headless(args: Args) -> Result<(), String> {
     }
     // Wait for the scenery around the final camera to finish streaming.
     s.follow();
+    sync_gpu(&mut s, &mut renderer, &mut ui, &gpu, None);
+    if let Some(c) = geo_cam(&s.world) {
+        ov = Some(c);
+    }
     let focus = match ov {
         Some((e, _)) => vec2(e.x, e.z),
         None => s.world.focus(),
@@ -2054,6 +2065,9 @@ fn headless(args: Args) -> Result<(), String> {
         std::thread::sleep(Duration::from_millis(5));
     }
     eprintln!("scenery around camera ready after {:.2}s more", tw.elapsed().as_secs_f32());
+    if let Some(c) = geo_cam(&s.world) {
+        ov = Some(c);
+    }
     if let (Some(e), Some(l), Some((eye, look))) = (args.eye_ll, args.look_ll, ov.as_mut()) {
         let gh = |p: Vec3| flight::Environment::ground_height(&s.world, vec2(p.x, p.z));
         eye.y = e.2 + gh(*eye);
