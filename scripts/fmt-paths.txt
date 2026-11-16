@@ -190,3 +190,5 @@ src/landcover/mod.rs
 src/landcover/tiff.rs
 src/landcover/worldcover.rs
 src/landcover/canopy.rs
+src/overture/mod.rs
+src/overture/pmtiles.rs

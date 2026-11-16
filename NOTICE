@@ -87,6 +87,20 @@ others; per-item sources, authors and licences are listed in:
         (registry.opendata.aws/dataforgood-fb-forests). Skyward uses the
         1/4000-degree aggregate (95th-percentile height, canopy cover),
         resampled to its scenery grid.
+  * Buildings where OpenStreetMap has none (src/overture/, desktop version;
+    read at run time from the Overture Maps Foundation buildings PMTiles
+    archive, reduced footprints cached under cache/overture/, not
+    redistributed). Overture Maps Foundation, overturemaps.org. The buildings
+    theme is licensed under the Open Database License (ODbL) 1.0; per
+    Overture's attribution page (docs.overturemaps.org/attribution) it
+    contains: © OpenStreetMap contributors (ODbL); Esri Community Maps
+    contributors (CC BY 4.0); Global ML Building Footprints, licensed by
+    Microsoft under the Open Database License; Google Open Buildings
+    (CC BY 4.0); USGS 3D Elevation Program; Qian Shi, et al. "A First
+    High-quality Vector Data of Buildings in East Asian Countries Based on a
+    Comprehensive Large-scale Mapping Framework", Zenodo, 2023,
+    doi:10.5281/zenodo.8174931 (CC BY 4.0); work derived from BTN 2024 ign.es
+    (CC BY 4.0).
   * Live traffic (src/adsb/): aircraft positions from the adsb.lol API,
     made available under the Open Database License (ODbL) 1.0
     (https://opendatacommons.org/licenses/odbl/1-0/) — © adsb.lol

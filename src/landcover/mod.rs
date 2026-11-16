@@ -348,9 +348,15 @@ pub(crate) mod net {
     }
 
     fn prune_cache() {
+        prune(&root(), CACHE_LIMIT);
+    }
+
+    /// Delete the oldest files under `dir` while it holds more than `limit`
+    /// bytes (down to 80 %).
+    pub fn prune(dir: &Path, limit: u64) {
         let mut files = Vec::new();
         let mut total = 0u64;
-        let mut stack = vec![root()];
+        let mut stack = vec![dir.to_path_buf()];
         while let Some(d) = stack.pop() {
             let Ok(rd) = std::fs::read_dir(&d) else { continue };
             for e in rd.flatten() {
@@ -363,12 +369,12 @@ pub(crate) mod net {
                 }
             }
         }
-        if total <= CACHE_LIMIT {
+        if total <= limit {
             return;
         }
         files.sort();
         for (_, len, p) in files {
-            if total <= CACHE_LIMIT * 8 / 10 {
+            if total <= limit * 8 / 10 {
                 break;
             }
             if std::fs::remove_file(&p).is_ok() {
@@ -385,6 +391,8 @@ pub(crate) struct Store<K, V> {
     map: std::sync::Mutex<(std::collections::HashMap<K, Slot<V>>, u64)>,
     cv: std::sync::Condvar,
     cap: usize,
+    /// Names the data in the one-off failure warning.
+    what: &'static str,
 }
 
 enum Slot<V> {
@@ -398,7 +406,12 @@ const RETRY: web_time::Duration = web_time::Duration::from_secs(60);
 
 impl<K: std::hash::Hash + Eq + Clone, V> Store<K, V> {
     pub fn new(cap: usize) -> Self {
-        Store { map: std::sync::Mutex::new((std::collections::HashMap::new(), 0)), cv: std::sync::Condvar::new(), cap }
+        Self::named(cap, "landcover")
+    }
+
+    /// As [`Store::new`], warning as `what` (another data set).
+    pub fn named(cap: usize, what: &'static str) -> Self {
+        Store { map: std::sync::Mutex::new((std::collections::HashMap::new(), 0)), cv: std::sync::Condvar::new(), cap, what }
     }
 
     /// The value for `k`, loading it with `load` if needed. `Ok(None)` from the
@@ -435,9 +448,14 @@ impl<K: std::hash::Hash + Eq + Clone, V> Store<K, V> {
                 v
             }
             Err(e) => {
-                static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-                if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                    eprintln!("landcover: {e} (ground falls back to OSM + procedural fields)");
+                static WARNED: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+                let mut w = WARNED.lock().unwrap();
+                if !w.contains(&self.what) {
+                    w.push(self.what);
+                    match self.what {
+                        "landcover" => eprintln!("landcover: {e} (ground falls back to OSM + procedural fields)"),
+                        what => eprintln!("{what}: {e}"),
+                    }
                 }
                 g.0.insert(k.clone(), Slot::Failed(web_time::Instant::now()));
                 None
