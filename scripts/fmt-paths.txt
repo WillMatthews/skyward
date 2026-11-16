@@ -191,6 +191,8 @@ src/cog/mod.rs
 src/cog/tiff.rs
 src/dem/mod.rs
 src/dem/copdem.rs
+src/dem/lidar.rs
+src/dem/osgb.rs
 src/landcover/worldcover.rs
 src/landcover/canopy.rs
 src/lights/nightlights.rs
