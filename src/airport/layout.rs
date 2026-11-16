@@ -701,7 +701,11 @@ fn pick_type(c: &Ctx, span: f32, k: u64) -> Option<u16> {
     if longest >= need {
         return Some(t);
     }
-    if longest >= 900.0 && span >= 27.5 {
+    if c.military && longest >= 900.0 && span >= 40.0 {
+        Some(types::C130)
+    } else if c.military && span >= 12.0 {
+        Some(types::C172)
+    } else if longest >= 900.0 && span >= 27.5 {
         Some(types::ATR)
     } else if span >= 12.0 {
         Some(light_type(c.rand(k ^ 0x9E37_79B9_7F4A_7C15)))
@@ -1979,6 +1983,8 @@ mod tests {
         let (mut ap, tiles, _) = synthetic();
         let civil: Vec<u16> = build(&ap, &tiles, None, None).parked.iter().map(|p| p.model).collect();
         assert!(!civil.iter().any(|&m| m == types::C130 || m == types::VULCAN), "{civil:?}");
+        // A 1200 m runway: no jet airliners parked, however big the stands.
+        assert!(!civil.is_empty() && !civil.iter().any(|m| [types::A320, types::E190, types::CRJ700, types::TRIPLE7].contains(m)), "{civil:?}");
         ap.name = "RAF Test".into();
         let mil: Vec<u16> = build(&ap, &tiles, None, None).parked.iter().map(|p| p.model).collect();
         assert!(!mil.is_empty());
