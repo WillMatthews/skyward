@@ -249,7 +249,10 @@ fn status_card(p: &egui::Painter, screen: Rect, sim: &Sim, st: &UiState, fps: f3
     let alt = s.alt.from_m(sim.ac.pos.y);
     let data = format!("{:>4.0} {}   {:>6} {}   {:+.1} g", ias, s.speed.label(), super::thousands(alt), s.alt.label(), sim.ac.g_load());
     let dg = p.layout_no_wrap(data, f_mono(12.5), pal::TEXT);
-    let w = name.size().x.max(subg.size().x).max(dg.size().x) + 28.0;
+    // The name and the camera label share the first line (10 px apart), and
+    // the fps readout sits at the top-right corner.
+    let fps_w = if fps >= 1.0 { 26.0 } else { 0.0 };
+    let w = (name.size().x + 10.0 + subg.size().x + fps_w).max(dg.size().x) + 28.0;
     let h = 64.0;
     let r = Rect::from_min_size(at, Vec2::new(w.max(230.0), h));
     panel(p, r, sp::R_PANEL);
