@@ -862,7 +862,7 @@ fn warnings(p: &egui::Painter, screen: Rect, sim: &Sim, assists: &super::setting
             Some(c) => (p.layout(cap(&c.text()), f_ui(13.5), pal::TEXT, 520.0), c.osm()),
             None => (p.layout(String::new(), f_ui(13.5), pal::TEXT, 520.0), false),
         };
-        let place_h = if sim.crash_site.is_some() { place.size().y + 10.0 + if osm { 15.0 } else { 0.0 } } else { 0.0 };
+        let place_h = if sim.crash_site.is_some() { place.size().y + 10.0 + if osm { 17.0 } else { 0.0 } } else { 0.0 };
         let h = if sub.is_empty() { 108.0 } else { 126.0 } + place_h;
         let r = Rect::from_center_size(Pos2::new(screen.center().x, y + place_h * 0.5), Vec2::new(560.0, h));
         super::panel_with(p, r, sp::R_CARD, fill);
@@ -879,7 +879,7 @@ fn warnings(p: &egui::Painter, screen: Rect, sim: &Sim, assists: &super::setting
             let ph = place.size().y;
             p.galley(Pos2::new(r.center().x - place.size().x * 0.5, py + 8.0), place, pal::TEXT);
             if osm {
-                p.text(Pos2::new(r.center().x, py + 10.0 + ph), Align2::CENTER_TOP, crate::geocode::ATTRIBUTION, f_ui(10.5), pal::TEXT3);
+                p.text(Pos2::new(r.center().x, py + 12.0 + ph), Align2::CENTER_TOP, crate::geocode::ATTRIBUTION, f_ui(10.5), pal::TEXT3);
             }
         }
         p.text(Pos2::new(r.center().x, r.max.y - 18.0), Align2::CENTER_CENTER, "R  Restart      Esc  Menu", f_inst(12.0), pal::TEXT3);

@@ -113,7 +113,13 @@ pub fn parse(text: &str) -> Result<Reply, String> {
             let mut parts: Vec<String> = Vec::new();
             // A named place on the street (a terminal, a farm), not the street itself.
             if let Some(n) = name.as_ref().filter(|n| *n != road && !matches!(cat.as_str(), "highway" | "boundary" | "place") && water.is_none()) {
-                parts.push(n.clone());
+                // Bare refs read better with what they are ("A24" → "Gate A24").
+                parts.push(match (cat.as_str(), typ.as_str()) {
+                    ("aeroway", "gate") => format!("Gate {n}"),
+                    ("aeroway", "parking_position") => format!("Stand {n}"),
+                    ("aeroway", "helipad") if !n.to_lowercase().contains("helipad") => format!("Helipad {n}"),
+                    _ => n.clone(),
+                });
             }
             parts.push(match s(a, "house_number") {
                 Some(h) => format!("{h} {road}"),
@@ -455,6 +461,7 @@ mod tests {
 
     const URBAN: &str = r#"{"place_id":278929166,"licence":"Data © OpenStreetMap contributors, ODbL 1.0. http://osm.org/copyright","osm_type":"node","osm_id":10052045215,"lat":"51.4704303","lon":"-0.4535904","category":"emergency","type":"designated","place_rank":30,"addresstype":"emergency","name":"","display_name":"Cosmopolitan Way, Harmondsworth, London Borough of Hillingdon, Greater London, England, TW6 1SL, United Kingdom","address":{"road":"Cosmopolitan Way","suburb":"Harmondsworth","city_district":"London Borough of Hillingdon","ISO3166-2-lvl8":"GB-HIL","city":"Greater London","state":"England","ISO3166-2-lvl4":"GB-ENG","postcode":"TW6 1SL","country":"United Kingdom","country_code":"gb"}}"#;
     const HOUSE: &str = r#"{"category":"building","type":"house","addresstype":"building","name":"","address":{"house_number":"14","road":"Helmsdale Walk","suburb":"Park South","town":"Swindon","county":"Swindon","state":"England","postcode":"SN3 2DG","country":"United Kingdom","country_code":"gb"}}"#;
+    const GATE: &str = r#"{"category":"aeroway","type":"gate","addresstype":"aeroway","name":"A24","address":{"aeroway":"A24","road":"Cayley Road","city_district":"London Borough of Hillingdon","city":"Greater London","state":"England","postcode":"TW6 1EF","country":"United Kingdom","country_code":"gb"}}"#;
     const RURAL: &str = r#"{"place_id":243070127,"category":"place","type":"hamlet","place_rank":20,"addresstype":"hamlet","name":"Syanjma","display_name":"Syanjma, Khumbupasanglahmu-02, Khumbu Pasang Lhamu, Solukhumbu, Koshi Province, Nepal","address":{"hamlet":"Syanjma","city_district":"Khumbupasanglahmu-02","town":"Khumbu Pasang Lhamu","municipality":"Khumbu Pasang Lhamu","county":"Solukhumbu","state":"Koshi Province","ISO3166-2-lvl4":"NP-P1","country":"Nepal","country_code":"np"}}"#;
     /// In territorial waters Nominatim answers with the state only.
     const COASTAL: &str = r#"{"category":"boundary","type":"administrative","place_rank":8,"addresstype":"state","name":"England","display_name":"England, United Kingdom","address":{"state":"England","ISO3166-2-lvl4":"GB-ENG","country":"United Kingdom","country_code":"gb"}}"#;
@@ -466,6 +473,8 @@ mod tests {
         let r = parse(URBAN).unwrap();
         assert_eq!(r.address.as_deref(), Some("Cosmopolitan Way, Harmondsworth, Greater London TW6 1SL, United Kingdom"));
         assert_eq!(describe(51.47, -0.45, false, Some(&r), &[]), "at Cosmopolitan Way, Harmondsworth, Greater London TW6 1SL, United Kingdom");
+        let g = parse(GATE).unwrap();
+        assert_eq!(g.address.as_deref(), Some("Gate A24, Cayley Road, Greater London TW6 1EF, United Kingdom"));
         let h = parse(HOUSE).unwrap();
         assert_eq!(h.address.as_deref(), Some("14 Helmsdale Walk, Park South, Swindon SN3 2DG, United Kingdom"));
     }
