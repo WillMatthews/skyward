@@ -205,3 +205,5 @@ src/bathy/source.rs
 src/bathy/gpu.rs
 src/sattint/mod.rs
 src/sattint/source.rs
+src/aircraft_fixups.rs
+src/aircraft_fixups/tests.rs

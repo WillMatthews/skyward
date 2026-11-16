@@ -7,6 +7,9 @@
 //!                     [--menu-screen main|aircraft|airport|conditions|settings|pause|loading|credits] [--map-view LAT,LON,ZOOM] [--map-style day|night] [--hud full|minimal|off] [--map corner|large|off]
 //!                     [--realtime [--warp N]]   (stream + render in real time, straight & level, report timings)
 //!                     [--gear up|down] [--flaps N] [--spoilers F] [--reverse] [--fail BITS] [--ap] [--fps HZ]   (setup / test knobs)
+//! Model checks: SKYWARD_SURFACES="elevator=1,aileron=1,rudder=1,flaps=1,spoilers=1,gear=0" poses the surfaces (models.rs);
+//!             --menu-screen aircraft with SKYWARD_THUMBS_OUT=dir SKYWARD_THUMB_VIEW="nose_deg,elev_deg,dist,aim" renders every
+//!             model from that view; SKYWARD_NO_FIXUPS=1 shows models without the animation fixes (aircraft_fixups.rs)
 //! Settings:   --menu-screen settings [--settings-category video|display|camera|flight|assists|weather|traffic|sound|controls|multiplayer|accessibility|interface|data|about] [--settings-search TEXT] [--settings-from pause] [--palette deuteranopia|protanopia|tritanopia] [--high-contrast]; SKYWARD_CONFIG_DIR=dir for the settings file
 //! Systems:    --fail pitot,vacuum,fire2@30,... (names, optional @seconds to arm) [--cold-dark] [--panel failures|armed|systems]
 //! Missions:   skyward --mission river|v1|decompression|... [--mission-bot]   (airline emergencies; --menu-screen missions|briefing|debrief)
@@ -28,6 +31,7 @@ mod airport;
 mod airports;
 mod atmosphere;
 mod aircraft_asset;
+mod aircraft_fixups;
 mod assets;
 mod atc;
 mod audio;
@@ -1461,16 +1465,24 @@ fn render_thumbs(gpu: &Gpu, renderer: &mut Renderer, ui: &mut Ui, s: &Session, f
         let sun = sim.sun_dir();
         let sh = vec2(sun.x, sun.z).normalize_or(vec2(0.0, -1.0));
         // Camera on the sun side; nose turned 50° towards it (front quarter).
+        // Model-inspection captures: SKYWARD_THUMB_VIEW="nose_deg,elev_deg,dist_scale[,aim]"
+        // (nose bearing from the camera, camera elevation, distance factor;
+        // default 50,12,1); with SKYWARD_SURFACES (models.rs) and SKYWARD_THUMBS_OUT.
+        let tv: Vec<f32> = std::env::var("SKYWARD_THUMB_VIEW").map(|v| v.split(',').filter_map(|x| x.trim().parse().ok()).collect()).unwrap_or_default();
+        let (tv_nose, tv_elev, tv_dist) = if tv.len() >= 3 { (tv[0], tv[1], tv[2]) } else { (50.0, 12.0, 1.0) };
+        // (Optional 4th value: aim ahead of the CG by that fraction of the size, + = nose.)
+        let tv_aim = tv.get(3).copied().unwrap_or(0.0);
         let cam_az = sh.x.atan2(-sh.y) + 0.5;
-        let hdg = cam_az + 50f32.to_radians();
+        let hdg = cam_az + tv_nose.to_radians();
         let home = s.world.home_pos();
         let alt = if def.category == flight::Category::Glider { 700.0 } else { 900.0 };
         sim.ac.pos = vec3(home.x + 1500.0, alt, home.y - 1500.0);
         sim.set_heading(hdg);
         let (fv, dynm) = sim.frame(w as f32 / h as f32);
-        let (pos, _) = sim.render_pose();
-        let dir = vec3(cam_az.sin(), 0.0, -cam_az.cos()) * 12f32.to_radians().cos() + Vec3::Y * 12f32.to_radians().sin();
-        let dist = if def.category == flight::Category::Drone { 0.62 } else { sim.size * 2.2 + 3.0 };
+        let (pos, rot) = sim.render_pose();
+        let pos = pos + rot * Vec3::Z * tv_aim * sim.size;
+        let dir = vec3(cam_az.sin(), 0.0, -cam_az.cos()) * tv_elev.to_radians().cos() + Vec3::Y * tv_elev.to_radians().sin();
+        let dist = tv_dist * if def.category == flight::Category::Drone { 0.62 } else { sim.size * 2.2 + 3.0 };
         let eye = pos + dir * dist;
         let mut dynm = dynm;
         let d = fv.eye - eye;
