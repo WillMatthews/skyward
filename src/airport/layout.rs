@@ -19,6 +19,7 @@
 //! (`Proj::new(lat, lon)` of its reference point), flat: [`bake`] places it
 //! on each tile's terrain.
 
+use super::aptdat::AptAirport;
 use super::mesh::{self, Panel, Vehicle};
 use super::overpass::OsmAirport;
 use super::tile::{AeroTile, BClass};
@@ -94,6 +95,9 @@ pub struct Layout {
     pub holds: Vec<Hold>,
     /// Taxiway centrelines and their refs (airport frame): ATC taxi routing (atc/taxi.rs).
     pub taxiways: Vec<(Vec<Vec2>, String)>,
+    /// The apt.dat taxi route network (airport frame), when the airport has
+    /// one: routing uses it instead of `taxiways` ([`Layout::taxi_graph`]).
+    pub net: Option<crate::atc::taxi::Net>,
     /// Taxiway width (m) and apron outlines (airport frame): the pavement the
     /// tyres roll on (src/ground/surface.rs).
     pub taxi_w: f32,
@@ -103,6 +107,29 @@ pub struct Layout {
     pub hi: Vec2,
     /// Tiles it was built from.
     pub tiles: Vec<TileId>,
+}
+
+impl Layout {
+    /// The taxi routing graph in the frame `proj`: the apt.dat network if
+    /// the airport has one, else the map's taxiway centrelines.
+    pub fn taxi_graph(&self, proj: &Proj) -> crate::atc::taxi::Graph {
+        let m = self.frame.map_to(proj);
+        match &self.net {
+            Some(n) => crate::atc::taxi::Graph::from_net(&n.mapped(|p| m.apply(p))),
+            None => {
+                let tw: Vec<(Vec<Vec2>, String)> = self.taxiways.iter().map(|(pl, n)| (pl.iter().map(|p| m.apply(*p)).collect(), n.clone())).collect();
+                crate::atc::taxi::Graph::build(&tw)
+            }
+        }
+    }
+
+    /// A key that changes when the routing input does (graph caches).
+    pub fn graph_key(&self) -> u64 {
+        match &self.net {
+            Some(n) => (1 << 63) ^ (n.nodes.len() as u64) ^ ((n.edges.len() as u64) << 24),
+            None => self.taxiways.len() as u64 ^ ((self.taxiways.iter().map(|t| t.0.len()).sum::<usize>() as u64) << 20),
+        }
+    }
 }
 
 // ---------------------------------------------------------------- inputs
@@ -256,8 +283,8 @@ fn hold_dist(rw: &Runway) -> f32 {
 
 // ---------------------------------------------------------------- build
 
-/// Build the layout of `ap` from its tiles (and Overpass data if any).
-pub fn build(ap: &Airport, tiles: &[(TileId, Arc<AeroTile>)], osm: Option<&OsmAirport>) -> Layout {
+/// Build the layout of `ap` from its tiles (and Overpass / apt.dat data if any).
+pub fn build(ap: &Airport, tiles: &[(TileId, Arc<AeroTile>)], osm: Option<&OsmAirport>, apt: Option<&AptAirport>) -> Layout {
     let frame = Proj::new(ap.lat, ap.lon);
     let seed = crate::scene::hash(ap.ident.bytes().fold(0u64, |h, b| h.wrapping_mul(131).wrapping_add(b as u64)));
     let runways: Vec<Runway> = ap.runways.iter().filter_map(|r| crate::airports::to_world(ap, r, &frame)).collect();
@@ -354,6 +381,20 @@ pub fn build(ap: &Airport, tiles: &[(TileId, Arc<AeroTile>)], osm: Option<&OsmAi
             eprintln!("  building {:?} at {:?} area {:.0} h {:.0}", b.class, frame.to_latlon((b.lo + b.hi) * 0.5), mesh::ring_area(&b.ring).abs(), b.height);
         }
     }
+    // apt.dat taxi route network (airport frame).
+    let net = apt.filter(|a| a.has_network()).map(|a| crate::atc::taxi::Net {
+        nodes: a.nodes.iter().map(|n| frame.to_world(n.lat, n.lon)).collect(),
+        edges: a.edges.iter().map(|e| crate::atc::taxi::NetEdge { a: e.a, b: e.b, oneway: e.oneway, runway: e.runway, name: e.name.clone() }).collect(),
+    });
+    // The map has no taxiways here: the network's links stand in for the
+    // centrelines (markings, lights, signs).
+    if c.taxis.is_empty() {
+        if let (Some(n), Some(a)) = (&net, apt) {
+            for e in a.edges.iter().filter(|e| !e.runway) {
+                c.taxis.push(Taxi { pts: vec![n.nodes[e.a as usize], n.nodes[e.b as usize]], name: e.name.clone() });
+            }
+        }
+    }
     for (ti, t) in c.taxis.iter().enumerate() {
         for si in 0..t.pts.len() - 1 {
             c.tgrid.insert(t.pts[si], t.pts[si + 1], (ti as u32, si as u32));
@@ -373,6 +414,7 @@ pub fn build(ap: &Airport, tiles: &[(TileId, Arc<AeroTile>)], osm: Option<&OsmAi
         stands: Vec::new(),
         holds: Vec::new(),
         taxiways: c.taxis.iter().map(|t| (t.pts.clone(), t.name.clone())).collect(),
+        net,
         taxi_w: c.taxi_w,
         aprons: c.aprons.iter().map(|a| a.outer.clone()).collect(),
         lo: Vec2::splat(f32::MAX),
@@ -380,8 +422,17 @@ pub fn build(ap: &Airport, tiles: &[(TileId, Arc<AeroTile>)], osm: Option<&OsmAi
         tiles: tiles.iter().map(|t| t.0).collect(),
     };
     let osm_xy = |ll: (f64, f64)| frame.to_world(ll.0, ll.1);
-    holds(&c, &mut l, osm);
-    let stands = stands(&c, osm, &osm_xy);
+    match apt.filter(|a| a.has_network()) {
+        Some(a) => apt_holds(&c, &mut l, a),
+        None => holds(&c, &mut l, osm),
+    }
+    if l.holds.is_empty() {
+        holds(&c, &mut l, osm);
+    }
+    let stands = match apt.map(|a| apt_stands(&c, a, &osm_xy)).filter(|s| s.len() >= 3) {
+        Some(s) => s,
+        None => stands(&c, osm, &osm_xy),
+    };
     occupy(&c, &mut l, stands);
     marks(&c, &mut l);
     signs(&c, &mut l);
@@ -451,6 +502,94 @@ fn holds(c: &Ctx, l: &mut Layout, _osm: Option<&OsmAirport>) {
             }
         }
     }
+}
+
+/// Runway-holding positions from the apt.dat network's hot zones: where a
+/// link outside a runway's departure / arrival zone meets one inside it,
+/// facing into the zone.
+fn apt_holds(c: &Ctx, l: &mut Layout, a: &AptAirport) {
+    let Some(net) = l.net.clone() else { return };
+    let rwy_of = |ids: &[String]| c.runways.iter().find(|r| ids.iter().any(|i| *i == r.ident_a || *i == r.ident_b)).map(|r| r.name.clone());
+    // Runways whose protected zone each link lies in.
+    let zone: Vec<Vec<String>> = a
+        .edges
+        .iter()
+        .map(|e| {
+            let mut v: Vec<String> = e.hot.iter().filter(|h| h.kind == "departure" || h.kind == "arrival").filter_map(|h| rwy_of(&h.runways)).collect();
+            v.sort();
+            v.dedup();
+            v
+        })
+        .collect();
+    let mut inc: Vec<Vec<usize>> = vec![Vec::new(); net.nodes.len()];
+    for (i, e) in a.edges.iter().enumerate() {
+        if !e.runway && (e.a as usize) < inc.len() && (e.b as usize) < inc.len() {
+            inc[e.a as usize].push(i);
+            inc[e.b as usize].push(i);
+        }
+    }
+    for (n, edges) in inc.iter().enumerate() {
+        for &h in edges {
+            for rw in &zone[h] {
+                let Some(&o) = edges.iter().find(|&&o| o != h && !zone[o].contains(rw)) else { continue };
+                let at = net.nodes[n];
+                let e = &a.edges[h];
+                let other = net.nodes[if e.a as usize == n { e.b } else { e.a } as usize];
+                let dir = (other - at).normalize_or_zero();
+                if dir == Vec2::ZERO || l.holds.iter().any(|x| x.runway == *rw && x.at.distance(at) < 20.0) {
+                    continue;
+                }
+                let width = match e.class.or(a.edges[o].class) {
+                    Some('A' | 'B') => 10.5,
+                    Some('C') => 15.0,
+                    Some('D') => 18.0,
+                    Some(_) => 23.0,
+                    None => c.taxi_w,
+                };
+                let name = if e.name.is_empty() { &a.edges[o].name } else { &e.name };
+                let clean = crate::atc::taxi::clean_name(name);
+                l.holds.push(Hold { at, dir, width, taxiway: if clean.is_empty() { name.clone() } else { clean }, runway: rw.clone() });
+            }
+        }
+    }
+}
+
+/// Stands from the apt.dat startup locations (row 1300 / 1301: nose-wheel
+/// position, heading, ICAO width code). Alternative overlapping stands
+/// (MARS "L" / "R" positions) are left out: the first, widest one stays.
+fn apt_stands(c: &Ctx, a: &AptAirport, xy: &dyn Fn((f64, f64)) -> Vec2) -> Vec<Stand> {
+    let bridge_ok = matches!(c.kind, AKind::Large | AKind::Medium);
+    let only_misc = a.starts.iter().all(|s| s.kind == "misc");
+    let mut cands: Vec<Stand> = Vec::new();
+    for s in &a.starts {
+        if s.helos_only() || (s.kind == "misc" && !only_misc) {
+            continue;
+        }
+        let stop = xy((s.lat, s.lon));
+        if c.runway_at(stop, 15.0).is_some() {
+            continue;
+        }
+        let hdg = s.hdg.to_radians();
+        let dir = mesh::heading_dir(hdg);
+        let gate = s.kind == "gate";
+        let contact = if gate && bridge_ok { facade(c, stop, 35.0, true).filter(|f| f.1.dot(-dir) > 0.5).map(|f| (f.0, f.1)) } else { None };
+        cands.push(Stand { name: s.name.trim().to_string(), stop, hdg, span: s.span(), contact });
+    }
+    // Widest first, so an alternative position yields to the main one.
+    cands.sort_by(|x, y| y.span.total_cmp(&x.span));
+    let mut out: Vec<Stand> = Vec::new();
+    for s in cands {
+        if out.iter().any(|o| o.stop.distance(s.stop) < 0.6 * o.span.min(s.span).max(10.0)) {
+            continue;
+        }
+        out.push(s);
+    }
+    let stops: Vec<Vec2> = out.iter().map(|s| s.stop).collect();
+    for (i, s) in out.iter_mut().enumerate() {
+        let nearest = stops.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, q)| q.distance(s.stop)).fold(f32::MAX, f32::min);
+        s.span = s.span.min(nearest * 0.98 + 2.0);
+    }
+    out
 }
 
 // ---------------------------------------------------------------- stands
@@ -1728,7 +1867,7 @@ mod tests {
     #[test]
     fn layout_places_holds_stands_signs_and_bakes() {
         let (ap, tiles, id) = synthetic();
-        let l = build(&ap, &tiles, None);
+        let l = build(&ap, &tiles, None, None);
         assert!(!l.holds.is_empty(), "no holding position");
         let h = &l.holds[0];
         assert_eq!(h.taxiway, "B");
@@ -1755,10 +1894,10 @@ mod tests {
     #[test]
     fn air_bases_park_transports() {
         let (mut ap, tiles, _) = synthetic();
-        let civil: Vec<u16> = build(&ap, &tiles, None).parked.iter().map(|p| p.model).collect();
+        let civil: Vec<u16> = build(&ap, &tiles, None, None).parked.iter().map(|p| p.model).collect();
         assert!(!civil.iter().any(|&m| m == types::C130 || m == types::VULCAN), "{civil:?}");
         ap.name = "RAF Test".into();
-        let mil: Vec<u16> = build(&ap, &tiles, None).parked.iter().map(|p| p.model).collect();
+        let mil: Vec<u16> = build(&ap, &tiles, None, None).parked.iter().map(|p| p.model).collect();
         assert!(!mil.is_empty());
         assert!(mil.iter().all(|m| [types::C130, types::VULCAN, types::C172].contains(m)), "{mil:?}");
     }

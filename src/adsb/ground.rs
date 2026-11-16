@@ -212,6 +212,7 @@ mod tests {
             stands: Vec::new(),
             holds: Vec::new(),
             taxiways: Vec::new(),
+            net: None,
             taxi_w: 23.0,
             aprons: Vec::new(),
             lo: Vec2::ZERO,

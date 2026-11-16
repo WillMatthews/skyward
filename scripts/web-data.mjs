@@ -53,3 +53,35 @@ for (const [out, kind, csvs] of lists) {
     console.error(`web-data: ${out} skipped (${e.message})`);
   }
 }
+
+// Airport layouts (taxi networks, stands): FlightGear fgdata's copy of the
+// X-Plane Scenery Gateway apt.dat (GPL), split into per-airport chunks
+// (data/aptdat/<IDENT>.dat.gz + index.tsv; airport/aptdat.rs). GitLab sends
+// no CORS headers, so the page can only use this pre-made copy.
+const APTDAT = "https://gitlab.com/flightgear/fgdata/-/raw/228ac3d1685f355638579e266b415cd9c10ca81a/Airports/apt.dat.ws3.gz";
+try {
+  const r = await fetch(APTDAT, { signal: AbortSignal.timeout(600_000) });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const gz = new Uint8Array(await r.arrayBuffer());
+  const ar = mod.skyward_compact_aptdat(gz);
+  if (!ar) throw new Error("archive failed");
+  const dir = join(dist, "data", "aptdat");
+  mkdirSync(dir, { recursive: true });
+  const dv = new DataView(ar.buffer, ar.byteOffset, ar.byteLength);
+  let at = 0, n = 0, bytes = 0;
+  while (at < ar.length) {
+    const nl = dv.getUint16(at, true);
+    const name = new TextDecoder().decode(ar.subarray(at + 2, at + 2 + nl));
+    const len = dv.getUint32(at + 2 + nl, true);
+    const data = ar.subarray(at + 6 + nl, at + 6 + nl + len);
+    at += 6 + nl + len;
+    if (!/^[A-Za-z0-9_-]+(\.dat\.gz|\.tsv)$/.test(name)) throw new Error(`bad name ${name}`);
+    writeFileSync(join(dir, name), data);
+    n++;
+    bytes += len;
+  }
+  console.error(`web-data: aptdat: ${(gz.length / 1e6).toFixed(0)} MB gz → ${n - 1} airports, ${(bytes / 1e6).toFixed(1)} MB`);
+  console.log("data/aptdat/index.tsv");
+} catch (e) {
+  console.error(`web-data: aptdat skipped (${e.message})`);
+}

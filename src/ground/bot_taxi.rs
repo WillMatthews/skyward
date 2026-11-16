@@ -304,7 +304,7 @@ impl BotGround {
     pub fn depart(def: &AircraftDef, ac: &Aircraft, world: &World, runway: &crate::scene::Runway, thr: Vec2, dir: Vec2) -> Option<BotGround> {
         let nose = guide::nose_xz(def, ac);
         let mut g = BotGround { stage: Stage::Parked(TURNAROUND_S), runway: runway.clone(), thr, dir, status: String::new(), tow: None, route: Vec::new() };
-        if guide::on_stand(world, nose, ac.heading()).is_some() && super::pushback::can_push(def) {
+        if guide::on_stand(world, nose, ac.heading()).is_some() && super::pushback::can_push(def) && !guide::taxilane_ahead(world, nose, ac.heading()) {
             g.stage = Stage::Push(Box::new(Pushback::onto_lane(def, ac, g.push_dir(def, ac, world), &lanes(world, ac))?));
             return Some(g);
         }
@@ -391,7 +391,7 @@ impl BotGround {
                 if *s > TURNAROUND_S {
                     ctl.parking_brake = false;
                     match Pushback::onto_lane(def, ac, self.push_dir(def, ac, world), &lanes(world, ac)) {
-                        Some(p) if super::pushback::can_push(def) => self.stage = Stage::Push(Box::new(p)),
+                        Some(p) if super::pushback::can_push(def) && !guide::taxilane_ahead(world, guide::nose_xz(def, ac), ac.heading()) => self.stage = Stage::Push(Box::new(p)),
                         _ => {
                             if !self.taxi_to_hold(def, ac, world) {
                                 return Step::Failed;

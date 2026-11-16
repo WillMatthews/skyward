@@ -1905,12 +1905,10 @@ impl Atc {
     /// The taxi graph of an airport, from its layout (world frame).
     fn graph_for(&mut self, ctx: &Ctx, airport: &str) -> Option<&taxi::Graph> {
         let l = ctx.world.airport_detail.layout(airport)?;
-        let key = l.taxiways.len() as u64 ^ (l.taxiways.iter().map(|t| t.0.len()).sum::<usize>() as u64) << 20;
+        let key = l.graph_key();
         let stale = !self.graph.as_ref().is_some_and(|g| g.0 == airport && g.1 == key);
         if stale {
-            let m = l.frame.map_to(&ctx.world.proj);
-            let tw: Vec<(Vec<Vec2>, String)> = l.taxiways.iter().map(|(pl, n)| (pl.iter().map(|p| m.apply(*p)).collect(), n.clone())).collect();
-            self.graph = Some((airport.to_string(), key, taxi::Graph::build(&tw)));
+            self.graph = Some((airport.to_string(), key, l.taxi_graph(&ctx.world.proj)));
         }
         self.graph.as_ref().map(|g| &g.2)
     }

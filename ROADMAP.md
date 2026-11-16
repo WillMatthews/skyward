@@ -92,7 +92,7 @@ models later.
   - Rain shafts under showers; droplets on the cockpit glass.
   - Field landings (land-outs) for the glider when no runway is in reach.
   - WASM / browser build.
-  - Proper taxiway routing; SRTM terrain elevation for hilly areas.
+  - Proper taxiway routing (apt.dat taxi networks where the Gateway has them: Track AD); SRTM terrain elevation for hilly areas.
 
 ## Ideas parking lot
 - Gamepad / joystick, multiplayer, more regions' landmark sets.

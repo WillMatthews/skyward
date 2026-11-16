@@ -1,0 +1,213 @@
+I
+1200 Version - trimmed extract of the X-Plane Scenery Gateway airport data (FlightGear fgdata 228ac3d, Airports/apt.dat.ws3.gz), GNU GPL; see NOTICE.
+
+1     19 0 0 EGLC London City
+1302 icao_code EGLC
+20  51.50468421  000.06502288 273.0 0 3 {@@,@Y}L{^r}M{^ru}
+20  51.50473718  000.06373606 273.0 0 3 {@Y,^l}K
+20  51.50475854  000.06271689 273.0 0 3 {@@,@Y}K{^r}
+20  51.50505478  000.05405619 273.0 0 3 {@Y,^l}E
+20  51.50507227  000.05285438 273.0 0 3 {@@,@Y}E{^r}
+20  51.50516081  000.05076941 273.0 0 3 {@Y,^l}D
+20  51.50519521  000.04962402 273.0 0 3 {@Y,^l}C{@@}D{^r}
+20  51.50522512  000.04869925 273.0 0 3 {@@,@Y}C{^r}
+20  51.50532576  000.04582672 273.0 0 3 {@Y,^l}B
+20  51.50536387  000.04493969 273.0 0 3 {@Y,^l}A
+20  51.50503579  000.04475798 0.0 0 2 {@L}A{@R}09-27{@@,@L}A
+20  51.50503594  000.04418941 0.4 0 2 {@L}A{@R}09-27{@@,@L}A
+20  51.50501766  000.04557191 0.0 0 2 {@L}B{@R}09-27{@@,@L}B
+20  51.50501737  000.04505822 0.6 0 2 {@L}B{@R}09-27{@@,@L}B
+20  51.50488940  000.04939066 359.9 0 2 {@L}C{@R}09-27{@@,@L}C
+20  51.50488902  000.04884506 -0.1 0 2 {@L}C{@R}09-27{@@,@L}C
+20  51.50459227  000.05304060 93.5 0 3 {@L}E{@R}09-27
+20  51.50479383  000.05273344 47.4 0 3 {@L}E{@R}09-27{@@,@L}E
+20  51.50481549  000.05087600 359.8 0 3 {@L}D{@R}09-27{@@,@L}D
+20  51.50481375  000.05009875 0.1 0 3 {@L}D{@R}09-27{@@,@L}D
+20  51.50445543  000.06375409 331.2 0 2 {@L}K{@R}09-27{@@,@L}K
+20  51.50444208  000.06476509 45.9 0 2 {@L}L{@R}09-27{@@,@L}L
+20  51.50423147  000.06610558 83.1 0 2 {@L}M{@R}27
+20  51.50437036  000.06568291 15.6 0 2 {@L}M{@R}27{@@,@L}M
+20  51.50524028  000.04208208 118.5 0 2 {@L}W{@@}W
+20  51.50508081  000.04362890 99.8 0 2 {@L}Y{@@}Y
+14  51.50405520  000.05008554 79 0 London City
+1300  51.50468667  000.04306275 -31.6 gate jets|turboprops Stand 16
+1301 B airline 
+1300  51.50463512  000.04364475 -13.0 gate jets|turboprops Stand 15
+1301 B airline 
+1300  51.50451812  000.04507940 -57.3 gate jets|turboprops Stand 13
+1301 B airline 
+1300  51.50447387  000.04634539 -57.3 gate jets|turboprops Stand 11
+1301 B airline 
+1300  51.50443206  000.04758994 -57.3 gate jets|turboprops Stand 9
+1301 B airline 
+1300  51.50461625  000.04440975 -53.5 gate jets|turboprops Stand 14
+1301 B airline 
+1300  51.50449552  000.04571883 -53.5 gate jets|turboprops Stand 12
+1301 B airline 
+1300  51.50445325  000.04698230 -53.5 gate jets|turboprops Stand 10
+1301 B airline 
+1300  51.50441586  000.04815203 -53.5 gate jets|turboprops Stand 8
+1301 B airline 
+1300  51.50439703  000.04875363 -57.3 gate jets|turboprops Stand 7
+1301 B airline 
+1300  51.50438474  000.04936622 -47.5 gate jets|turboprops Stand 6
+1301 B airline 
+1300  51.50418579  000.05249828 -38.6 gate jets|turboprops Stand 1
+1301 C airline 
+1300  51.50419958  000.05189028 -38.6 gate jets|turboprops Stand 2
+1301 C airline 
+1300  51.50422171  000.05125589 -38.6 gate jets|turboprops Stand 3
+1301 C airline 
+1300  51.50424464  000.05059888 -38.6 gate jets|turboprops Stand 4
+1301 C airline 
+1300  51.50436232  000.04999420 -47.5 gate jets|turboprops Stand 5
+1301 B airline 
+19  51.50594701  000.04989734 1 WS
+19  51.50553611  000.06120639 1 WS
+1201  51.50380300  000.05269702 both 0 _stop
+1201  51.50386814  000.05051442 both 1 _stop
+1201  51.50394304  000.05038023 both 2 _stop
+1201  51.50388469  000.05041908 both 3 _stop
+1201  51.50404413  000.05038419 both 4 _stop
+1201  51.50412199  000.05027282 both 5 _stop
+1201  51.50409926  000.05035573 both 6 _stop
+1201  51.50428304  000.04515638 both 7 _stop
+1201  51.50426947  000.04473871 both 8 _stop
+1201  51.50463928  000.04393285 both 9 _stop
+1201  51.50446643  000.04425870 both 10 _stop
+1201  51.50427367  000.04452390 both 11 _stop
+1201  51.50468594  000.04380791 both 12 _stop
+1201  51.50472742  000.04364013 both 13 _stop
+1201  51.50474075  000.04341285 both 14 _stop
+1201  51.50477275  000.04234167 both 15 _stop
+1201  51.50479141  000.04218746 both 16 _stop
+1201  51.50533984  000.04156995 both 17 _stop
+1201  51.50515883  000.04155748 both 18 _stop
+1201  51.50500734  000.04154231 both 19 _stop
+1201  51.50414900  000.06460564 both 20 unnamed entity(split)
+1201  51.50552268  000.04569286 both 21 unnamed entity(split)
+1201  51.50541532  000.04914009 both 22 unnamed entity(split)
+1201  51.50538430  000.05017245 both 23 unnamed entity(split)
+1201  51.50526943  000.05385912 both 24 unnamed entity(split)
+1201  51.50497395  000.06302143 both 25 unnamed entity(split)
+1201  51.50490234  000.06527216 both 26 unnamed entity(split)
+1201  51.50480940  000.05048340 both 27 D_stop
+1201  51.50519507  000.04052674 both 28 W_stop
+1201  51.50513105  000.04198700 both 29 Y_stop
+1201  51.50516777  000.04142824 both 30 Y_stop
+1201  51.50501627  000.04231002 both 31 Y_stop
+1201  51.50497953  000.04364599 both 32 Y_stop
+1201  51.50487202  000.04410015 both 33 Y_stop
+1201  51.50485831  000.04447700 both 34 B_stop
+1201  51.50477994  000.04498943 both 35 B_stop
+1201  51.50476328  000.04531090 both 36 C_stop
+1201  51.50464200  000.04911870 both 37 E_stop
+1201  51.50459981  000.05037398 both 38 E_stop
+1201  51.50451839  000.05070379 both 39 E_stop
+1201  51.50457115  000.05050767 both 40 E_stop
+1201  51.50447237  000.05246825 both 41 E_stop
+1201  51.50411564  000.06558412 both 42 K_stop
+1201  51.50417434  000.06381502 both 43 K_stop
+1201  51.50538883  000.04442660 both 44 A_stop
+1201  51.50502903  000.04446487 both 45 A_stop
+1201  51.50533462  000.04530779 both 46 B_stop
+1201  51.50501181  000.04530979 both 47 B_start
+1201  51.50488649  000.04912961 both 48 _start
+1201  51.50470049  000.05286972 both 49 _start
+1201  51.50438271  000.06354756 both 50 _start
+1201  51.50464237  000.06548365 both 51 _stop
+1201  51.50432707  000.06494737 both 52 _start
+1201  51.50433299  000.06588985 both 53 _stop
+1201  51.50488059  000.06592056 both 54 _stop
+1201  51.50556182  000.04445418 both 55 _start
+1202 27 40 twoway taxiway_C D
+1202 23 27 twoway taxiway_C D
+1204 departure 09,27
+1204 arrival 09,27
+1204 ils 09,27
+1202 29 18 twoway taxiway_C W
+1202 18 30 twoway taxiway_C W
+1202 30 28 twoway taxiway_C W
+1202 31 29 twoway taxiway_C Y
+1202 32 31 twoway taxiway_C Y
+1202 33 32 twoway taxiway_C Y
+1202 34 33 twoway taxiway_C Y
+1202 45 34 twoway taxiway_C A
+1202 35 34 twoway taxiway_C Y
+1202 36 35 twoway taxiway_C Y
+1202 47 36 twoway taxiway_C B
+1202 37 36 twoway taxiway_C Y
+1202 48 37 twoway taxiway_C C
+1202 38 37 twoway taxiway_C Y
+1202 39 40 twoway taxiway_C Y
+1202 40 38 twoway taxiway_C Y
+1202 41 39 twoway taxiway_C Y
+1202 49 41 twoway taxiway_C E
+1202 52 20 twoway taxiway_C L
+1202 42 53 twoway taxiway_C M
+1202 43 20 twoway taxiway_C K
+1202 20 42 twoway taxiway_C K
+1202 50 43 twoway taxiway_C K
+1202 44 55 twoway taxiway_C A
+1204 departure 09,27
+1204 arrival 09,27
+1202 45 44 twoway taxiway_C A
+1204 departure 09,27
+1204 arrival 09,27
+1202 46 21 twoway taxiway_C B
+1204 departure 09,27
+1204 arrival 09,27
+1202 47 46 twoway taxiway_C B
+1204 departure 09,27
+1204 arrival 09,27
+1202 48 22 twoway taxiway_C C
+1204 departure 09,27
+1204 arrival 09,27
+1202 49 24 twoway taxiway_C E
+1204 departure 09,27
+1204 arrival 09,27
+1202 50 25 twoway taxiway_C K
+1204 departure 09,27
+1204 arrival 09,27
+1202 51 26 twoway taxiway_C L
+1204 departure 09,27
+1204 arrival 09,27
+1202 52 51 twoway taxiway_C L
+1204 departure 09,27
+1204 arrival 09,27
+1202 54 53 twoway taxiway_C M
+1204 departure 09,27
+1204 arrival 09,27
+1202 55 21 twoway runway 09/27
+1204 departure 09,27
+1204 arrival 09,27
+1204 ils 09,27
+1202 21 22 twoway runway 09/27
+1204 departure 09,27
+1204 arrival 09,27
+1204 ils 09,27
+1202 22 23 twoway runway 09/27
+1204 departure 09,27
+1204 arrival 09,27
+1204 ils 09,27
+1202 23 24 twoway runway 09/27
+1204 departure 09,27
+1204 arrival 09,27
+1204 ils 09,27
+1202 24 25 twoway runway 09/27
+1204 departure 09,27
+1204 arrival 09,27
+1204 ils 09,27
+1202 25 26 twoway runway 09/27
+1204 departure 09,27
+1204 arrival 09,27
+1204 ils 09,27
+1202 26 54 twoway runway 09/27
+1204 departure 09,27
+1204 arrival 09,27
+1204 ils 09,27
+111  51.504358097 0.065750951 54
+111  51.504387297 0.064850983 54
+111  51.504337665 0.063407870 54
+110 2 0.25 0.0 Polygon from DSF lib/airport/pavement/concrete_1L.pol
+99
