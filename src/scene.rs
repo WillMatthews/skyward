@@ -614,6 +614,133 @@ fn tree_tint(rng: &mut Rng, conifer: bool) -> [f32; 3] {
     }
 }
 
+// ---------------------------------------------------------------- land cover
+
+/// Land-cover ground colours (landcover.rs): bare / sparse vegetation, old
+/// snow and ice, tundra moss and lichen.
+const BARE: [f32; 3] = [0.60, 0.56, 0.48];
+const SNOW: [f32; 3] = [0.86, 0.88, 0.92];
+const MOSS: [f32; 3] = [0.42, 0.43, 0.32];
+
+/// OSM landuse on an `n`² raster over the tile ([`crate::landcover::Osm`]):
+/// open ground, then woods, then hard ground (built-up, paved, water) on top.
+fn osm_cover(f: &TileFeatures, rect: (Vec2, Vec2), n: u32) -> Vec<crate::landcover::Osm> {
+    use crate::landcover::Osm;
+    let rx = RasterXf::new(rect, n);
+    let mut r = vec![Osm::None; (n * n) as usize];
+    let class = |k: &Kind| match k {
+        Kind::Wood => Some(Osm::Wood),
+        Kind::Grass | Kind::Park | Kind::Scrub | Kind::Wetland | Kind::Sand | Kind::Rock | Kind::Farmland | Kind::Aerodrome => Some(Osm::Open),
+        Kind::Urban(_) | Kind::Water | Kind::Apron | Kind::RunwayArea | Kind::Pier | Kind::Building { .. } => Some(Osm::Hard),
+        _ => None,
+    };
+    for pass in [Osm::Open, Osm::Wood, Osm::Hard] {
+        for a in f.areas.iter().filter(|a| class(&a.kind) == Some(pass)) {
+            rx.fill(&a.outer, &a.holes, |x, y| r[(y as u32 * n + x as u32) as usize] = pass);
+        }
+    }
+    r
+}
+
+/// Paint the land cover where OSM maps nothing: runs of equal cells per row
+/// as flat quads, under every OSM layer (painter's order: call first).
+fn landcover_ground(flat: &mut MeshData, cover: &crate::landcover::TileCover, osm: &[crate::landcover::Osm]) {
+    use crate::landcover::{surface, Surface};
+    let n = cover.n;
+    let cell = cover.size / n as f32;
+    let look = |s: Surface| -> Option<([f32; 3], f32, [f32; 2])> {
+        Some(match s {
+            Surface::Base => return None,
+            // Fields shader, pasture only (uv.y = 1: no crops).
+            Surface::Pasture => (LAND, mat::GROUND, [0.0, 1.0]),
+            Surface::Forest => (WOOD, mat::GRASS, [0.0, 0.0]),
+            Surface::Shrub => (SCRUB, mat::GRASS, [0.0, 0.0]),
+            Surface::Wetland => (WETLAND, mat::GRASS, [0.0, 0.0]),
+            Surface::Moss => (MOSS, mat::GRASS, [0.0, 0.0]),
+            Surface::Built => (URBAN[0], mat::GROUND, [1.0, 0.0]),
+            Surface::Bare => (BARE, mat::DIFFUSE, [0.0, 0.0]),
+            Surface::Snow => (SNOW, mat::DIFFUSE, [0.0, 0.0]),
+        })
+    };
+    let m0 = flat.mat;
+    for z in 0..n {
+        let mut x = 0;
+        while x < n {
+            let s = surface(osm[z * n + x], cover.class[z * n + x]);
+            let mut x1 = x + 1;
+            while x1 < n && surface(osm[z * n + x1], cover.class[z * n + x1]) == s {
+                x1 += 1;
+            }
+            if let Some((col, m, uv)) = look(s) {
+                let a = cover.lo + vec2(x as f32, z as f32) * cell;
+                let b = cover.lo + vec2(x1 as f32, z as f32 + 1.0) * cell;
+                flat.mat = m;
+                let i = flat.v_uv(vec3(a.x, 0.0, a.y), Vec3::Y, col, uv);
+                flat.v_uv(vec3(b.x, 0.0, a.y), Vec3::Y, col, uv);
+                flat.v_uv(vec3(b.x, 0.0, b.y), Vec3::Y, col, uv);
+                flat.v_uv(vec3(a.x, 0.0, b.y), Vec3::Y, col, uv);
+                flat.idx.extend([i, i + 1, i + 2, i, i + 2, i + 3]);
+            }
+            x = x1;
+        }
+    }
+    flat.mat = m0;
+}
+
+/// Trees from the land cover / canopy map outside the OSM woods (forest,
+/// hedgerows, lone field trees), at most about `budget`. `ok(p)`: the spot is
+/// free (no road, water, building, runway, landmark).
+fn landcover_trees(
+    cover: &crate::landcover::TileCover,
+    osm: &[crate::landcover::Osm],
+    osm_n: usize,
+    cold: bool,
+    budget: usize,
+    rng: &mut Rng,
+    ok: impl Fn(Vec2) -> bool,
+    mut put: impl FnMut(Vec2, f32, bool, &mut Rng),
+) {
+    use crate::landcover::stand;
+    // Stand per cell: the canopy grid's cells where there is one, else 64².
+    let g = cover.canopy.as_ref().map_or(64, |c| c.n);
+    let cell = cover.size / g as f32;
+    let osm_at = |p: Vec2| {
+        let t = ((p - cover.lo) / cover.size * osm_n as f32).floor();
+        let (x, z) = ((t.x.max(0.0) as usize).min(osm_n - 1), (t.y.max(0.0) as usize).min(osm_n - 1));
+        osm[z * osm_n + x]
+    };
+    let mut stands = Vec::with_capacity(g * g);
+    let mut total = 0.0;
+    for z in 0..g {
+        for x in 0..g {
+            let c = cover.lo + (vec2(x as f32, z as f32) + 0.5) * cell;
+            if let Some(s) = stand(osm_at(c), cover.class_at(c), cover.canopy_at(c), cold) {
+                total += s.density * cell.x * cell.y;
+                stands.push((x, z, s));
+            }
+        }
+    }
+    if total < 0.5 || budget == 0 {
+        return;
+    }
+    // Thin evenly when the tile is mostly forest.
+    let k = (budget as f32 * 0.95 / total).min(1.0);
+    for (x, z, s) in stands {
+        let want = s.density * cell.x * cell.y * k;
+        let count = want.floor() as usize + (rng.f() < want.fract()) as usize;
+        let c0 = cover.lo + vec2(x as f32, z as f32) * cell;
+        for _ in 0..count {
+            let p = c0 + vec2(rng.f(), rng.f()) * cell;
+            if !ok(p) {
+                continue;
+            }
+            let conifer = rng.f() < s.conifer;
+            let h = rng.range(s.h.0, s.h.1);
+            put(p, h, conifer, rng);
+        }
+    }
+}
+
 // ---------------------------------------------------------------- tile build
 
 /// Everything a worker builds for one map tile.
@@ -662,9 +789,16 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
         let zones = crate::terrain::zones_for(id);
         std::sync::Arc::new(crate::terrain::build_grid(id, &water, &zones))
     };
+    // Land cover / canopy height where available (landcover.rs; blocks on
+    // its downloads like the DEM above).
+    let cover = crate::landcover::for_tile(id, proj);
+    let osm = cover.as_ref().map(|c| osm_cover(&f, rect, c.n as u32));
     // Ground layers are built flat (y = 0) in painter's order, then draped
     // onto the terrain (terrain::assemble).
     let mut flat = MeshData::default();
+    if let (Some(c), Some(o)) = (&cover, &osm) {
+        landcover_ground(&mut flat, c, o);
+    }
     let mut bld = MeshData::default();
     let mut lights = crate::lights::place::CityGen::new(id, proj, rect);
     let rx_mask = RasterXf::new(rect, MASK_N);
@@ -1003,10 +1137,35 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
                 continue;
             }
             let conifer = rng.f() < conifer_frac;
-            let t = TreeInst { pos: [p.x, grid.height(p), p.y], height: rng.range(hmin, hmax), tint: tree_tint(&mut rng, conifer), rot: rng.range(0.0, std::f32::consts::TAU) };
+            let mut height = rng.range(hmin, hmax);
+            // Canopy map (landcover.rs): real heights in woods and scrub; clearings stay open.
+            if matches!(a.kind, Kind::Wood | Kind::Scrub) {
+                if let Some(c) = cover.as_ref().and_then(|c| c.canopy_at(p)) {
+                    let (u, v) = (rng.f(), rng.f());
+                    match crate::landcover::canopy_tree(c, u, v) {
+                        Some(h) => height = h,
+                        None => {
+                            placed += 1;
+                            continue;
+                        }
+                    }
+                }
+            }
+            let t = TreeInst { pos: [p.x, grid.height(p), p.y], height, tint: tree_tint(&mut rng, conifer), rot: rng.range(0.0, std::f32::consts::TAU) };
             if conifer { conif.push(t) } else { decid.push(t) }
             placed += 1;
         }
+    }
+    // Land cover / canopy trees in the gaps between the OSM woods.
+    if let (Some(c), Some(o)) = (&cover, &osm) {
+        let (lat, _) = proj.to_latlon((lo + hi) * 0.5);
+        let cold = lat.abs() > 56.0 || (grid.min + grid.max) * 0.5 > 1100.0;
+        let budget = MAX_TREES.saturating_sub(decid.len() + conif.len());
+        let ok = |p: Vec2| !mask_at(p) && !landmarks.iter().any(|l| l.suppress.iter().any(|r| point_in_ring(p, r)));
+        landcover_trees(c, o, c.n, cold, budget, &mut rng, ok, |p, h, conifer, rng| {
+            let t = TreeInst { pos: [p.x, grid.height(p), p.y], height: h, tint: tree_tint(rng, conifer), rot: rng.range(0.0, std::f32::consts::TAU) };
+            if conifer { conif.push(t) } else { decid.push(t) }
+        });
     }
     let conifers = conif.len();
     decid.extend(conif);
@@ -1080,6 +1239,11 @@ pub fn build_far_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
         std::sync::Arc::new(crate::terrain::build_grid(id, &water, &[]))
     };
     let mut flat = MeshData::default();
+    // Land cover under the generalised OSM layers (landcover.rs).
+    if let Some(c) = crate::landcover::for_tile(id, proj) {
+        let osm = osm_cover(&f, rect, c.n as u32);
+        landcover_ground(&mut flat, &c, &osm);
+    }
     let mut lights = crate::lights::place::CityGen::new(id, proj, rect);
     {
         // Lit roads only in and around built-up areas.
@@ -1603,5 +1767,65 @@ mod wire_impls {
                 roads: Wire::get(r)?,
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod landcover_tests {
+    use super::*;
+    use crate::landcover::{class, CanopyGrid, Osm, TileCover};
+
+    fn cover(n: usize, class: u8, canopy: Option<(u8, u8)>) -> TileCover {
+        TileCover {
+            n,
+            lo: vec2(0.0, 0.0),
+            size: vec2(1000.0, 1000.0),
+            class: vec![class; n * n],
+            canopy: canopy.map(|(h, c)| CanopyGrid { n: 8, height: vec![h; 64], cover: vec![c; 64] }),
+        }
+    }
+
+    #[test]
+    fn land_cover_ground_leaves_osm_areas_alone() {
+        let c = cover(4, class::TREE, None);
+        // OSM maps the left half: only the right half gets forest ground.
+        let osm: Vec<Osm> = (0..16).map(|i| if i % 4 < 2 { Osm::Open } else { Osm::None }).collect();
+        let mut m = MeshData::default();
+        landcover_ground(&mut m, &c, &osm);
+        assert_eq!(m.idx.len(), 4 * 6, "one run per row");
+        assert!(m.verts.iter().all(|v| v.pos[0] >= 500.0 - 1e-3 && v.mat == mat::GRASS && v.col == WOOD));
+        // Grassland: the fields shader with the pasture flag.
+        let mut m = MeshData::default();
+        landcover_ground(&mut m, &cover(2, class::GRASS, None), &[Osm::None; 4]);
+        assert!(!m.verts.is_empty() && m.verts.iter().all(|v| v.mat == mat::GROUND && v.uv == [0.0, 1.0]));
+        // Cropland and water: nothing (base fields, OSM water).
+        let mut m = MeshData::default();
+        landcover_ground(&mut m, &cover(2, class::CROP, None), &[Osm::None; 4]);
+        landcover_ground(&mut m, &cover(2, class::WATER, None), &[Osm::None; 4]);
+        assert!(m.idx.is_empty());
+    }
+
+    #[test]
+    fn land_cover_trees_follow_canopy_and_masks() {
+        let place = |c: &TileCover, osm: &[Osm], budget: usize, ok: &dyn Fn(Vec2) -> bool| {
+            let mut out = Vec::new();
+            let mut rng = Rng(7);
+            landcover_trees(c, osm, 2, false, budget, &mut rng, ok, |p, h, _, _| out.push((p, h)));
+            out
+        };
+        // Dense 20 m canopy over a square km: ~5000 trees, as tall as the canopy.
+        let forest = cover(4, class::TREE, Some((20, 254)));
+        let t = place(&forest, &[Osm::None; 4], 9000, &|_| true);
+        assert!(t.len() > 4000 && t.len() < 6000, "{}", t.len());
+        assert!(t.iter().all(|(_, h)| (12.0..=20.0).contains(h)));
+        // The budget caps it; masks (roads, water...) and OSM woods / hard ground keep clear.
+        assert!(place(&forest, &[Osm::None; 4], 1000, &|_| true).len() <= 1000);
+        assert!(place(&forest, &[Osm::None; 4], 9000, &|p| p.x > 500.0).iter().all(|(p, _)| p.x > 500.0));
+        assert!(place(&forest, &[Osm::Wood, Osm::Hard, Osm::Wood, Osm::Hard], 9000, &|_| true).is_empty());
+        // Sparse canopy (hedgerows) in OSM farmland: a few trees; none without canopy.
+        let hedges = cover(4, class::CROP, Some((9, 40)));
+        let n = place(&hedges, &[Osm::Open; 4], 9000, &|_| true).len();
+        assert!(n > 500 && n < 1500, "{n}");
+        assert!(place(&cover(4, class::CROP, Some((0, 0))), &[Osm::Open; 4], 9000, &|_| true).is_empty());
     }
 }

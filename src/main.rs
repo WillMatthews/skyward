@@ -59,6 +59,7 @@ mod sim;
 mod startpos;
 mod systems;
 mod terrain;
+mod landcover;
 mod landmarks;
 mod tiles;
 mod traffic;
