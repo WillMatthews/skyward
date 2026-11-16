@@ -7,6 +7,7 @@
 //!                     [--menu-screen main|aircraft|airport|conditions|settings|pause|loading|credits] [--map-view LAT,LON,ZOOM] [--map-style day|night] [--hud full|minimal|off] [--map corner|large|off]
 //!                     [--realtime [--warp N]]   (stream + render in real time, straight & level, report timings)
 //!                     [--gear up|down] [--flaps N] [--spoilers F] [--reverse] [--fail BITS] [--ap] [--fps HZ]   (setup / test knobs)
+//!                     [--crash-at S [--geocode]]   (crash at S seconds; the crash site's address comes from Nominatim only with --geocode)
 //! Settings:   --menu-screen settings [--settings-category video|display|camera|flight|assists|weather|traffic|sound|controls|multiplayer|accessibility|interface|data|about] [--settings-search TEXT] [--settings-from pause] [--palette deuteranopia|protanopia|tritanopia] [--high-contrast]; SKYWARD_CONFIG_DIR=dir for the settings file
 //! Systems:    --fail pitot,vacuum,fire2@30,... (names, optional @seconds to arm) [--cold-dark] [--panel failures|armed|systems]
 //! Missions:   skyward --mission river|v1|decompression|... [--mission-bot]   (airline emergencies; --menu-screen missions|briefing|debrief)
@@ -39,6 +40,7 @@ mod cockpit;
 mod damage;
 mod debris;
 mod flight;
+mod geocode;
 mod gfx;
 mod ground;
 mod gfx_aircraft;
@@ -213,6 +215,10 @@ struct Args {
     shot_when: Option<String>,
     /// Headless: eject / bail out at this many seconds.
     eject_at: Option<f32>,
+    /// Crash the aircraft at this many seconds (crash-site captures, geocode.rs).
+    crash_at: Option<f32>,
+    /// Headless: look the crash site up on Nominatim (off by default: captures never hit the network).
+    geocode: bool,
     /// Chase camera on the (first) opponent.
     view_bandit: bool,
 }
@@ -342,6 +348,8 @@ fn parse_args_from(argv: Vec<String>) -> Args {
         dogfight: None,
         shot_when: None,
         eject_at: None,
+        crash_at: None,
+        geocode: false,
         view_bandit: false,
     };
     let mut i = 0;
@@ -391,6 +399,8 @@ fn parse_args_from(argv: Vec<String>) -> Args {
             "--dogfight-ai" => a.dogfight.get_or_insert_with(Default::default).autopilot = true,
             "--shot-when" => a.shot_when = Some(next(&mut i)),
             "--eject-at" => a.eject_at = next(&mut i).parse().ok(),
+            "--crash-at" => a.crash_at = next(&mut i).parse().ok(),
+            "--geocode" => a.geocode = true,
             "--view-bandit" => a.view_bandit = true,
             "--width" => a.width = next(&mut i).parse().unwrap_or(1920),
             "--height" => a.height = next(&mut i).parse().unwrap_or(1080),
@@ -1661,6 +1671,8 @@ fn setup_adsb(args: &Args, ui: &mut Ui, headless: bool) -> Result<(), String> {
 fn headless(args: Args) -> Result<(), String> {
     let mut args = args;
     let path = args.shot.clone().unwrap();
+    // Captures never ask Nominatim (crash sites: the offline description) unless --geocode.
+    geocode::set_disabled(!args.geocode);
     // Airports (OurAirports): runways, --airport and the menus.
     let mut loader = airports::Loader::start();
     let db = loader.wait(Duration::from_secs(120));
@@ -1990,6 +2002,9 @@ fn headless(args: Args) -> Result<(), String> {
                     input.pressed.push(Key::Eject);
                 }
             }
+            if args.crash_at.is_some_and(|t| i as f32 / 60.0 >= t) && sim.ac.crashed.is_none() {
+                sim.ac.force_crash("Flew into terrain");
+            }
             sim.update(&s.world, &mut input, if steps == 0 { 0.0 } else { 1.0 / 60.0 });
             if let (Some(t), None) = (args.throttle, &sim.bot) {
                 sim.ctl.throttle = t;
@@ -2054,6 +2069,14 @@ fn headless(args: Args) -> Result<(), String> {
         std::thread::sleep(Duration::from_millis(5));
     }
     eprintln!("scenery around camera ready after {:.2}s more", tw.elapsed().as_secs_f32());
+    // A crash: wait for its address (geocode.rs gives up by itself after a few seconds).
+    if let Some(c) = s.sim.as_mut().and_then(|x| x.crash_site.as_mut()) {
+        let t0 = Instant::now();
+        while c.locating() && t0.elapsed() < Duration::from_secs(20) {
+            c.poll();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
     if let (Some(e), Some(l), Some((eye, look))) = (args.eye_ll, args.look_ll, ov.as_mut()) {
         let gh = |p: Vec3| flight::Environment::ground_height(&s.world, vec2(p.x, p.z));
         eye.y = e.2 + gh(*eye);

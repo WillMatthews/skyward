@@ -492,6 +492,8 @@ pub struct Sim {
     pub debris: Option<crate::debris::Debris>,
     /// How bad the accident was (set when the aircraft crashes).
     pub severity: Option<crate::damage::Severity>,
+    /// Where the crash happened, in words (geocode.rs; set with `severity`).
+    pub crash_site: Option<crate::geocode::CrashSite>,
     /// Sounds raised this frame by the wreckage (the audio director reads them).
     pub audio_events: Vec<crate::audio::params::Event>,
     /// Parts already handed to the debris simulation.
@@ -647,6 +649,7 @@ impl Sim {
             pilot: Default::default(),
             debris: None,
             severity: None,
+            crash_site: None,
             audio_events: Vec::new(),
             known_lost: 0,
             crash_clock: 0.0,
@@ -737,6 +740,7 @@ impl Sim {
         self.ctl.throttle = if self.def().has_afterburner { 0.88 } else { 0.9 };
         self.debris = None;
         self.severity = None;
+        self.crash_site = None;
         self.known_lost = 0;
         self.vfx.clear();
         self.snap_pose();
@@ -766,6 +770,7 @@ impl Sim {
         self.flap_idx = 0;
         self.debris = None;
         self.severity = None;
+        self.crash_site = None;
         self.known_lost = 0;
         self.crash_clock = 0.0;
         self.ap = Autopilot::new();
@@ -911,6 +916,7 @@ impl Sim {
         self.acc = 0.0;
         self.debris = None;
         self.severity = None;
+        self.crash_site = None;
         self.known_lost = 0;
         self.crash_clock = 0.0;
         self.audio_events.clear();
@@ -1774,6 +1780,11 @@ impl Sim {
             let sev = crate::missions::ditching::classify(&def, &reason, &imp, self.ac.dmg.failure.is_some());
             self.severity = Some(sev);
             self.crash_clock = 0.0;
+            // The address of the crash site (asked for now, shown when it arrives).
+            let xz = glam::vec2(imp.pos.x, imp.pos.z);
+            let (lat, lon) = world.proj.to_latlon(xz);
+            let water = self.ac.water.last.wet || world.water_level_near(xz, 40.0).is_some();
+            self.crash_site = Some(crate::geocode::CrashSite::new(lat, lon, water));
             let geom = self.part_geom(&def);
             let d = self.debris.get_or_insert_with(|| crate::debris::Debris::new(&def, geom));
             // Parts that exist (with geometry, or gear legs the flight model has).

@@ -205,3 +205,4 @@ src/bathy/source.rs
 src/bathy/gpu.rs
 src/sattint/mod.rs
 src/sattint/source.rs
+src/geocode.rs

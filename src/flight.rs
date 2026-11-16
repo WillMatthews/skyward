@@ -3685,6 +3685,11 @@ impl Aircraft {
         self.crash_now(reason);
     }
 
+    /// End the flight here and now (headless `--crash-at`, the crash-site captures).
+    pub fn force_crash(&mut self, reason: &str) {
+        self.crash_now(reason.to_string());
+    }
+
     fn crash_now(&mut self, reason: String) {
         if self.crashed.is_none() {
             self.impact = Some(Impact { pos: self.pos, vel: self.vel, rot: self.rot, omega: self.omega, on_ground: self.on_ground });
