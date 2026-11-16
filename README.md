@@ -101,7 +101,7 @@ painted over or composited.
   crisp cockpit displays — plus MSAA and FXAA options, dynamic resolution and a frame limiter.
 - **Quality presets.** Low / Medium / High / Ultra (auto-detected from the GPU) drive every option
   in Settings › Video, each with a one-line explanation and its GPU cost; HDR output, motion blur,
-  depth of field, lens flare and a performance overlay (Ctrl+F3).
+  depth of field and a performance overlay (Ctrl+F3).
 - **Volumetric clouds.** Ray-marched cumulus, stratus and cirrus with temporal reprojection and
   cloud shadows on the ground.
 - **Weather and seasons.** Rain, snow, fog and wet ground; leaf fall, autumn colours and crop
@@ -895,7 +895,7 @@ before it existed migrate from their scenery-detail level.
 | AO / clouds / fog | off / low / low | low / medium / medium | medium / high / high | high / ultra / ultra |
 | Water reflections, scenery detail | quarter, Low | quarter, Medium | half, High | half, Ultra |
 | Trees (density × distance) | 50 % × 60 % | 75 % × 80 % | 100 % × 100 % | 100 % × 120 % |
-| Anisotropic filtering, effects | 2×, low | 4×, medium | 8×, high | 16×, high, lens flare |
+| Anisotropic filtering, effects | 2×, low | 4×, medium | 8×, high | 16×, high |
 
 Motion blur (camera, or camera + objects), depth of field (cockpit auto-focus / external on the
 aircraft), lens dirt, chromatic aberration and film grain are off in every preset.

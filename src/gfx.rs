@@ -59,6 +59,8 @@ const SPLITS_BY_COUNT: [[f32; 5]; 3] = [[0.3, 200.0, 4000.0, 4000.0, 4000.0], [0
 /// Fraction of each cascade over which it blends into the next.
 const CASCADE_BLEND: f32 = 0.15;
 const BLOOM_LEVELS: usize = 6;
+/// Brightest exposed luminance that feeds the bloom at full night (post.wgsl glare_cap).
+const NIGHT_GLARE_CAP: f32 = 16.0;
 const NEAR: f32 = 0.25;
 /// Bytes of immediate data (push constants) the pipelines declare: none —
 /// WebGPU has none, the per-draw transform is an [`Xforms`] uniform.
@@ -237,7 +239,7 @@ const AO_STRENGTH: f32 = 1.4;
 struct PostU {
     params: [f32; 4],
     texel: [f32; 4],
-    /// Tonemap: x sharpen (CAS), y lens flare, z lens dirt, w chromatic aberration.
+    /// Tonemap: x sharpen (CAS), y unused, z lens dirt, w chromatic aberration.
     fx: [f32; 4],
     /// Tonemap: x film grain, y frame time (s), z brightness, w display gamma.
     fx2: [f32; 4],
@@ -2546,9 +2548,12 @@ impl Renderer {
         // 5. Bloom chain (at the post-processing size).
         let bloom = self.bloom.as_ref().unwrap();
         // Post uniforms: [0..L) down, [L..2L) up, 2L tonemap.
+        // Night: cap what feeds the glare (post.wgsl glare_cap), harder the
+        // darker it gets; none by day (the sun keeps its bloom).
+        let glare_cap = if night_k > 0.0 { NIGHT_GLARE_CAP / night_k } else { 0.0 };
         for i in 0..BLOOM_LEVELS {
             let (sw, sh) = if i == 0 { (post_w, post_h) } else { (bloom.levels[i - 1].1, bloom.levels[i - 1].2) };
-            let u = PostU { params: [0.0, 0.0, if i == 0 { 1.0 } else { 0.0 }, 0.0], texel: [1.0 / sw as f32, 1.0 / sh as f32, 0.0, 0.0], ..bytemuck::Zeroable::zeroed() };
+            let u = PostU { params: [0.0, 0.0, if i == 0 { 1.0 } else { 0.0 }, if i == 0 { glare_cap } else { 0.0 }], texel: [1.0 / sw as f32, 1.0 / sh as f32, 0.0, 0.0], ..bytemuck::Zeroable::zeroed() };
             queue.write_buffer(&self.post_buf, UNIFORM_STRIDE * i as u64, bytemuck::bytes_of(&u));
         }
         for (k, i) in (1..BLOOM_LEVELS).rev().enumerate() {
@@ -2566,7 +2571,7 @@ impl Renderer {
         let tone = PostU {
             params: [fv.exposure * 2f32.powf(v.exposure_ev), (0.04 + 0.035 * night_k) * q.bloom, 1.22, 1.18],
             texel: [1.0 / post_w as f32, 1.0 / post_h as f32, 1.0 / pre, 0.0],
-            fx: [sharpen, if q.lens_flare { 1.0 } else { 0.0 }, if q.lens_dirt { 1.0 } else { 0.0 }, q.chroma as f32],
+            fx: [sharpen, 0.0, if q.lens_dirt { 1.0 } else { 0.0 }, q.chroma as f32],
             fx2: [q.grain, fv.time, v.brightness, v.gamma],
             hdr: [if hdr_out { 1.0 } else { 0.0 }, v.paper_white / 80.0, 1000.0 / v.paper_white, 0.0],
         };
@@ -2597,7 +2602,7 @@ impl Renderer {
         };
         let clear = wgpu::LoadOp::Clear(wgpu::Color::BLACK);
         let src_view = self.post.view(src);
-        let bloom_on = q.bloom > 0.0 || q.lens_flare || q.lens_dirt;
+        let bloom_on = q.bloom > 0.0 || q.lens_dirt;
         if bloom_on {
             let down0 = self.post_bg(device, src_view, &self.dummy_refl);
             for i in 0..BLOOM_LEVELS {

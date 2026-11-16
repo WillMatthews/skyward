@@ -107,6 +107,8 @@ fn fs_aircraft(in: AcOut) -> FOut {
         s.f0 = mix(s.f0, vec3<f32>(0.02), m);
         s.rough = mix(s.rough, 0.75, m);
     }
+    // The cockpit / cabin is not lit by the aircraft's own exterior lights.
+    s.own_lit = select(1.0, 0.0, inst.emis.w > 0.5);
     // Cockpit backlighting lights the painted markings, not the black panel.
     s.emit = select(inst.emis.rgb, inst.emis.rgb * albedo, inst.emis.w > 0.5);
     s.alpha = select(1.0, alpha, mode > 0.5);
