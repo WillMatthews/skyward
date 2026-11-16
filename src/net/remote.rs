@@ -217,17 +217,14 @@ impl Remote {
         }
         // Lights: the switches from the network, flashing on the shared clock.
         if let Some(rig) = &self.rig {
-            let mut r = rig.clone();
-            if st.lights & lights::NAV == 0 {
-                r.nav.clear();
-            }
-            if st.lights & lights::BEACON == 0 {
-                r.beacons.clear();
-            }
-            if st.lights & lights::STROBE == 0 {
-                r.strobes.clear();
-            }
-            let l = crate::lights::AircraftLights::build(&r, self.pos - eye, self.rot, time, st.lights & lights::LANDING != 0, st.lights & lights::TAXI != 0);
+            let on = crate::lights::ExtLights {
+                nav: st.lights & lights::NAV != 0,
+                beacon: st.lights & lights::BEACON != 0,
+                strobe: st.lights & lights::STROBE != 0,
+                landing: st.lights & lights::LANDING != 0,
+                taxi: st.lights & lights::TAXI != 0,
+            };
+            let l = crate::lights::AircraftLights::build(rig, self.pos - eye, self.rot, time, &on);
             lights_out.extend_from_slice(&l.sprites[..l.n_sprites]);
         }
         // Afterburner flame (as the player's, sim.rs).

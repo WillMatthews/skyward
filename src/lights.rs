@@ -21,8 +21,10 @@ pub mod place;
 pub mod gpu;
 pub mod sky;
 pub mod nightlights;
+pub mod switches;
 
 pub use place::{AircraftLightRig, AircraftLights, TileLights};
+pub use switches::{ExtLights, LightSwitches};
 pub use gpu::LightRenderer;
 
 use glam::Vec3;

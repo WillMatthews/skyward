@@ -198,6 +198,7 @@ src/dem/osgb.rs
 src/landcover/worldcover.rs
 src/landcover/canopy.rs
 src/lights/nightlights.rs
+src/lights/switches.rs
 src/overture/mod.rs
 src/overture/pmtiles.rs
 src/ui/boot.rs
