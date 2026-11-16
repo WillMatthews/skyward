@@ -95,8 +95,8 @@ fn emission(k: u32, l: LIn, tv: vec3<f32>) -> vec3<f32> {
         case 1u: { // street lamp: bright from below / the side, cut-off optics hide it from above
             return c * mix(1.0, 0.28, smoothstep(-0.25, 0.75, tv.y)) * g.city.x;
         }
-        case 8u: { // floodlight mast: aimed down
-            return c * mix(1.0, 0.35, smoothstep(-0.1, 0.8, tv.y)) * g.city.x;
+        case 8u: { // floodlight mast: aimed down (from above: the back of the housing)
+            return c * mix(1.0, 0.02, smoothstep(-0.1, 0.45, tv.y)) * g.city.x;
         }
         case 12u: { // aggregated far-city lights (hidden where detailed tiles exist)
             let code = u32(bitcast<f32>(l.b));

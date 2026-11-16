@@ -361,7 +361,6 @@ pub fn items() -> Vec<Item> {
         // ---------------------------------------------------------- effects
         level!("video_vfx", "Effects", "Effects quality", "Vapour, heat haze and smoke detail", "effects vfx particles vapour haze smoke", &["Low", "Medium", "High"], vfx),
         knob_f!("video_bloom", "Effects", "Bloom", "Glow around bright lights", "bloom glow glare", 0.0, 1.5, 0.05, pct_off, bloom),
-        knob_b!("video_lens_flare", "Effects", "Lens flare", "Ghosts and a halo from the sun", "lens flare sun ghosts", lens_flare),
         knob_b!("video_lens_dirt", "Effects", "Lens dirt", "Smudges lit by bright light", "lens dirt smudges", lens_dirt),
         level!("video_chroma", "Effects", "Chromatic aberration", "Colour fringes toward the edges", "chromatic aberration fringe", &["Off", "Subtle"], chroma),
         level!("video_motion_blur", "Effects", "Motion blur", "Camera only keeps your aircraft sharp", "motion blur", &["Off", "Camera", "Camera + objects"], motion_blur),
@@ -458,7 +457,6 @@ fn knob_of(id: &str) -> Option<Knob> {
         "video_building_dist" => Knob::Buildings,
         "video_vfx" => Knob::Vfx,
         "video_bloom" => Knob::Bloom,
-        "video_lens_flare" => Knob::LensFlare,
         "video_motion_blur" => Knob::MotionBlur,
         "video_dof" => Knob::Dof,
         _ => return None,

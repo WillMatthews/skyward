@@ -137,14 +137,53 @@ fn heading_of(d: Vec2) -> f32 {
     d.x.atan2(-d.y)
 }
 
-/// Approach speed (m/s) at `d` metres from the threshold.
-fn approach_ias(def: &AircraftDef, d: f32) -> f32 {
+/// Glidepath angle of a final-approach start (degrees).
+const GLIDEPATH_DEG: f32 = 3.0;
+
+/// Flap detent and gear for a final-approach start `nm` out: landing flap
+/// and gear down from ~3.5 NM (airliners: approach flap and gear from 6 NM,
+/// a first stage further out); light aircraft a first stage until short
+/// final; gliders and helicopters as they are.
+fn approach_config(def: &AircraftDef, nm: f32) -> (usize, bool) {
+    if !def.has_engine || def.rotor.is_some() {
+        return (0, !def.retractable_gear);
+    }
+    let last = def.flap_detents.len().saturating_sub(1);
+    let flap = match def.category {
+        Category::Airliner => {
+            if nm <= 3.5 {
+                last
+            } else if nm <= 6.0 {
+                (last * 2 / 3).max(1).min(last)
+            } else {
+                1.min(last)
+            }
+        }
+        Category::Trainer | Category::Warbird | Category::FastJet => {
+            if nm <= 3.5 {
+                last
+            } else {
+                1.min(last)
+            }
+        }
+        _ => 0,
+    };
+    let gear_down = !def.retractable_gear || nm <= 6.0;
+    (flap, gear_down)
+}
+
+/// Approach speed (m/s) at `d` metres from the threshold with flap surface
+/// `flap` (0..1) out: airliners and jets Vref + 5 kt on short final (more
+/// further out), light aircraft and warbirds 1.3 x the stall speed in that
+/// configuration + 5 kt (never below their old 1.45 Vs1 rule clean).
+fn approach_ias(def: &AircraftDef, d: f32, flap: f32) -> f32 {
     let far = d > 8000.0;
+    let vref_light = || (1.3 * def.stall_speed(flap) / KT + 5.0).max(if flap > 0.0 { 0.0 } else { def.vs1_kt * 1.45 });
     KT * match def.category {
-        Category::Airliner => def.vref_kt + if far { 35.0 } else { 8.0 },
+        Category::Airliner => def.vref_kt + if far { 35.0 } else { 5.0 },
         Category::FastJet => def.vref_kt + if far { 25.0 } else { 10.0 },
-        Category::Warbird => def.vref_kt * 1.15,
-        Category::Trainer | Category::Glider => def.vs1_kt * 1.45,
+        Category::Warbird | Category::Trainer => vref_light() + if far { 15.0 } else { 0.0 },
+        Category::Glider => def.vs1_kt * 1.45,
         Category::Helicopter | Category::Drone => def.vref_kt,
     }
 }
@@ -203,34 +242,11 @@ pub fn spawn(def: &AircraftDef, world: &World, cs: &CustomStart) -> Option<(Airc
             // (Mountain fields: never inside the hill — 150 m over the ground around.)
             let ground = (0..9).map(|k| world.ground_height(p + glam::vec2((k % 3) as f32 - 1.0, (k / 3) as f32 - 1.0) * 400.0)).fold(f32::MIN, f32::max);
             let alt = alt.max(ground + 150.0);
-            let v = approach_ias(def, dist);
-            let (mut ac, mut ctl) = air(vec3(p.x, alt, p.y), heading_of(d), v);
-            let last = def.flap_detents.len().saturating_sub(1);
-            let flap = match def.category {
-                Category::Airliner => {
-                    if *nm <= 3.5 {
-                        last
-                    } else if *nm <= 6.0 {
-                        (last * 2 / 3).max(1).min(last)
-                    } else {
-                        1.min(last)
-                    }
-                }
-                Category::Trainer => 1.min(last),
-                _ => 0,
-            };
-            if def.has_engine {
-                ctl.throttle *= 0.75;
-                ctl.flaps = def.flap_detents.get(flap).copied().unwrap_or(0.0) / def.flap_detents.last().copied().unwrap_or(1.0).max(1e-3);
-                if def.retractable_gear && *nm <= 6.0 {
-                    ctl.gear_down = true;
-                }
-            }
-            // Established: the flaps and gear already where the levers are (not still travelling).
-            ac.set_flaps_now(ctl.flaps);
-            if ctl.gear_down {
-                ac.extend_gear_now();
-            }
+            let (flap, gear_down) = approach_config(def, *nm);
+            let flap_frac = def.flap_detents.get(flap).copied().unwrap_or(0.0) / def.flap_detents.last().copied().unwrap_or(1.0).max(1e-3);
+            let v = approach_ias(def, dist, flap_frac);
+            // Established on the glidepath: configured, on speed, trimmed for a 3° descent.
+            let (ac, ctl) = Aircraft::airborne_configured(def, vec3(p.x, alt, p.y), heading_of(d), v, flap_frac, gear_down, -GLIDEPATH_DEG.to_radians());
             Some((ac, ctl, flap, Some(rw)))
         }
         Spec::Apron => {
@@ -360,5 +376,73 @@ mod tests {
         ] {
             assert_eq!(Spec::decode(&s.encode()), Some(s.clone()));
         }
+    }
+
+    struct Flat;
+    impl flight::Environment for Flat {
+        fn ground_height(&self, _xz: Vec2) -> f32 {
+            0.0
+        }
+        fn obstacle_top(&self, _xz: Vec2) -> Option<f32> {
+            None
+        }
+        fn is_water(&self, _xz: Vec2) -> bool {
+            false
+        }
+        fn updraft(&self, _p: glam::Vec3) -> f32 {
+            0.0
+        }
+    }
+
+    /// Every powered fixed-wing type on a 3 NM final: landing flap and gear
+    /// out, on speed, near level attitude (deltas nose high, draggy full-flap
+    /// singles a little nose down) on a ~3° path
+    /// with power on, and
+    /// no stall warning while it settles hands off.
+    #[test]
+    fn final_approach_start_is_trimmed() {
+        let mut bad = Vec::new();
+        for def in flight::catalogue().into_iter().filter(|d| d.rotor.is_none() && d.category != Category::Drone) {
+            let nm = 3.0;
+            let dist = nm * 1852.0;
+            let (flap, gear) = approach_config(&def, nm);
+            let ff = def.flap_detents.get(flap).copied().unwrap_or(0.0) / def.flap_detents.last().copied().unwrap_or(1.0).max(1e-3);
+            let v = approach_ias(&def, dist, ff);
+            let alt = dist * GLIDEPATH_DEG.to_radians().tan() + 15.0;
+            let (mut ac, ctl) = Aircraft::airborne_configured(&def, vec3(0.0, alt, 0.0), 0.0, v, ff, gear, -GLIDEPATH_DEG.to_radians());
+            let pitch0 = ac.pitch().to_degrees();
+            let mut warned = false;
+            let dt = 1.0 / 120.0;
+            for _ in 0..(8.0 / dt) as usize {
+                ac.step(&def, &ctl, &Flat, dt);
+                warned |= ac.stall_warning();
+            }
+            let path = (ac.vertical_speed() / ac.vel.length().max(1.0)).asin().to_degrees();
+            let ias = ac.airspeed() / KT;
+            eprintln!(
+                "{:12} flap {flap} ({:.2}) gear {gear} v {:.0} kt -> {ias:.0} kt pitch {pitch0:.1} -> {:.1} path {path:.1} thr {:.2} stall {warned}",
+                def.id,
+                ff,
+                v / KT,
+                ac.pitch().to_degrees(),
+                ctl.throttle
+            );
+            if def.retractable_gear && !gear {
+                bad.push(format!("{}: gear up", def.id));
+            }
+            if warned {
+                bad.push(format!("{}: stall warning", def.id));
+            }
+            if !(-5.0..=12.0).contains(&pitch0) {
+                bad.push(format!("{}: pitch {pitch0:.1}", def.id));
+            }
+            if def.has_engine && !(-5.0..=-1.0).contains(&path) {
+                bad.push(format!("{}: path {path:.1}", def.id));
+            }
+            if (ias - v / KT).abs() > 12.0 {
+                bad.push(format!("{}: {ias:.0} kt after 8 s (wanted {:.0})", def.id, v / KT));
+            }
+        }
+        assert!(bad.is_empty(), "{bad:#?}");
     }
 }

@@ -127,6 +127,11 @@ impl Ctx {
         self.pieces.iter().any(|pc| pc.apt_paved && pc.near(p, 60.0))
     }
 
+    /// On an OSM apron (aeroway=apron).
+    pub fn on_apron(&self, p: Vec2) -> bool {
+        self.aprons.iter().any(|(r, lo, hi)| p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y && point_in_ring(p, r))
+    }
+
     pub fn class_at(&self, p: Vec2) -> Option<AKind> {
         self.pieces.iter().find(|pc| pc.near(p, 60.0)).and_then(|pc| pc.owner.as_ref().map(|o| o.1))
     }

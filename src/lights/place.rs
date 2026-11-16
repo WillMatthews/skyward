@@ -147,7 +147,10 @@ impl<'a> CityGen<'a> {
     }
 
     /// Street lights (and, on major roads, traffic) along a road centreline.
-    pub fn road(&mut self, pts: &[Vec2], width: f32, major: bool) {
+    /// No lamp where `unlit` says so (airside roads across an apron: the
+    /// apron floodlight masts light those, and a street lamp there is a
+    /// pole-less orb floating over the concrete).
+    pub fn road(&mut self, pts: &[Vec2], width: f32, major: bool, unlit: impl Fn(Vec2) -> bool) {
         // Lamp spacing, mounting height, intensity seen from the side (cd),
         // illuminance under the lamp (lux), both sides?
         let (spacing, h, cd, lux, both) = if major && width > 15.0 {
@@ -182,6 +185,9 @@ impl<'a> CityGen<'a> {
                     let side: &[f32] = if both { &[-1.0, 1.0] } else if k % 2 == 0 { &[1.0] } else { &[-1.0] };
                     for &s in side {
                         let q = p + n * s * (width * 0.5 + 0.6);
+                        if unlit(q) {
+                            continue;
+                        }
                         let jitter = 0.85 + 0.3 * h01(k as u64 ^ (q.x.to_bits() as u64) << 7);
                         self.out.lights.push(LightInst::new(vec3(q.x, h, q.y), cd * jitter, col, kind::STREET).with_ab(ground_cd * jitter, h));
                     }
@@ -717,14 +723,17 @@ impl AircraftLights {
     }
 
     /// The lights of an aircraft at `pos` (eye-relative) / `rot` at sim time
-    /// `time`. `landing` / `taxi`: switches.
-    pub fn build(rig: &AircraftLightRig, pos: Vec3, rot: Quat, time: f32, landing: bool, taxi: bool) -> Self {
+    /// `time`, with the lights `on` switched on.
+    pub fn build(rig: &AircraftLightRig, pos: Vec3, rot: Quat, time: f32, on: &super::ExtLights) -> Self {
+        let (landing, taxi) = (on.landing, on.taxi);
         let mut a = AircraftLights::default();
         let at = |p: Vec3| pos + rot * p;
-        for (p, c) in &rig.nav {
-            a.sprite(LightInst::new(at(*p), 60.0, *c, kind::OMNI));
+        if on.nav {
+            for (p, c) in &rig.nav {
+                a.sprite(LightInst::new(at(*p), 60.0, *c, kind::OMNI));
+            }
         }
-        if strobe_on(time) {
+        if on.strobe && strobe_on(time) {
             for p in &rig.strobes {
                 a.sprite(LightInst::new(at(*p), 2500.0, [1.0, 1.0, 1.0], kind::OMNI));
             }
@@ -732,7 +741,7 @@ impl AircraftLights {
                 a.spot(SpotLight { pos: at(*p), dir: Vec3::Y, cd: Vec3::splat(2500.0 * rig.strobes.len() as f32), cos_inner: -1.0, cos_outer: -1.0, range: 120.0 });
             }
         }
-        if beacon_on(time) {
+        if on.beacon && beacon_on(time) {
             for p in &rig.beacons {
                 a.sprite(LightInst::new(at(*p), 900.0, [1.0, 0.05, 0.02], kind::OMNI));
             }
