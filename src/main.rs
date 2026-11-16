@@ -62,6 +62,7 @@ mod terrain;
 mod landcover;
 mod cog;
 mod dem;
+mod overture;
 mod landmarks;
 mod tiles;
 mod traffic;

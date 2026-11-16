@@ -904,7 +904,7 @@ fn build() -> Vec<Item> {
             group: "Cache",
             label: "Map tiles",
             desc: "Roads, buildings and airport layouts download again as you fly",
-            keywords: "clear delete cache tiles map",
+            keywords: "clear delete cache tiles map overture buildings",
             kind: Kind::Action { act: Act::ClearTiles, button: "Clear", confirm: true },
             native_only: true,
             ..BASE

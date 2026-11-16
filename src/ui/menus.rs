@@ -354,6 +354,7 @@ pub fn credits(ui: &mut Ui, st: &mut UiState) {
         ("Elevation detail", crate::dem::copdem::CREDIT),
         ("Land cover", crate::landcover::WORLDCOVER_CREDIT),
         ("Tree heights", crate::landcover::CANOPY_CREDIT),
+        ("More buildings", crate::overture::CREDIT),
         ("Aircraft & sounds", "FlightGear aircraft and recordings — GPL v2 / v2+ (per-aircraft credits in the source)"),
         ("Fonts", "Inter (Rasmus Andersson), JetBrains Mono, B612 (Airbus / Intactile / ENAC) — SIL Open Font License 1.1"),
         ("Licence", "Skyward is free software: GNU GPL v2 · github.com/WillMatthews/skyward"),

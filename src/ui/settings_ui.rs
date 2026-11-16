@@ -980,7 +980,7 @@ fn clear_cache(st: &mut UiState, act: Act) {
     }
     let dirs: &[&str] = match act {
         Act::ClearTerrain => &["terrain", "landcover"],
-        _ => &["tiles", "airports"],
+        _ => &["tiles", "airports", "overture"],
     };
     let root = cache_dir();
     let dirs: Vec<std::path::PathBuf> = dirs.iter().map(|d| root.join(d)).collect();
@@ -1025,7 +1025,7 @@ pub fn prune_cache(limit_mb: u32) {
                 }
             }
         }
-        for d in ["tiles", "terrain", "landcover"] {
+        for d in ["tiles", "terrain", "landcover", "overture"] {
             walk(&root.join(d), &mut files);
         }
         let mut total: u64 = files.iter().map(|f| f.1).sum();

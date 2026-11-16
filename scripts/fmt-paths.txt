@@ -193,3 +193,5 @@ src/dem/mod.rs
 src/dem/copdem.rs
 src/landcover/worldcover.rs
 src/landcover/canopy.rs
+src/overture/mod.rs
+src/overture/pmtiles.rs

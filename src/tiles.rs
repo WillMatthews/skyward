@@ -158,7 +158,10 @@ fn build(id: TileId, bytes: &[u8]) -> (Result<TileBuild, String>, Option<std::sy
         // Built in the tile's own frame (small coordinates); the
         // world places it with an exact transform (osm::Xform2).
         let proj = Proj::tile_frame(id);
-        let feats = crate::osm::extract(&layers, id, &proj);
+        let mut feats = crate::osm::extract(&layers, id, &proj);
+        // Overture buildings where OSM has none (overture/; blocks on its
+        // downloads, detail tiles only).
+        crate::overture::add_to_tile(&mut feats, id, &proj);
         map = Some(std::sync::Arc::new(crate::ui::mapdata::build(id, &proj, &feats, &layers)));
         if id.is_far() {
             scene::build_far_tile(id, &proj, feats)
