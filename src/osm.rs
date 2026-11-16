@@ -241,7 +241,7 @@ pub struct AeroFeatures {
     pub service: Vec<(Vec<Vec2>, [bool; 2])>,
 }
 
-fn hash(mut x: u64) -> u64 {
+pub(crate) fn hash(mut x: u64) -> u64 {
     x ^= x >> 33;
     x = x.wrapping_mul(0xff51afd7ed558ccd);
     x ^= x >> 33;
@@ -364,7 +364,7 @@ fn clip_line(pts: &[[f32; 2]], e: f32) -> Vec<(Vec<[f32; 2]>, [bool; 2])> {
 
 // ---------------------------------------------------------------- extraction
 
-fn synth_height(area_m2: f32, key: u64) -> f32 {
+pub(crate) fn synth_height(area_m2: f32, key: u64) -> f32 {
     let r = (hash(key ^ 0x5bd1e995) >> 40) as f32 / (1u64 << 24) as f32;
     let (lo, hi) = if area_m2 < 40.0 {
         (2.6, 3.6) // sheds, garages
@@ -583,6 +583,19 @@ fn push_area(out: &mut TileFeatures, xf: &Xf, e: f32, kind: Kind, outer: &[[f32;
         hole_border: hb,
         key,
     });
+}
+
+/// Tile units (`extent` per side) → this tile's world frame.
+pub(crate) fn tile_point(id: TileId, proj: &Proj, extent: f32, p: [f32; 2]) -> Vec2 {
+    Xf { proj: *proj, id, extent: extent as f64 }.world(p)
+}
+
+/// Add a building from another source (Overture, overture/) given in tile
+/// units: clipped to the tile like the OSM ones.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn push_building(out: &mut TileFeatures, id: TileId, proj: &Proj, extent: f32, outer: &[[f32; 2]], holes: &[Vec<[f32; 2]>], height: f32, min_height: f32, key: u64) {
+    let xf = Xf { proj: *proj, id, extent: extent as f64 };
+    push_area(out, &xf, extent, Kind::Building { height, min_height, colour: None }, outer, holes, key);
 }
 
 pub fn point_in_ring(pt: Vec2, ring: &[Vec2]) -> bool {

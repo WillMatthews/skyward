@@ -8,6 +8,7 @@
 
 #![allow(deprecated)]
 
+pub mod boot;
 pub mod browser;
 pub mod canvas;
 pub mod chrome;
@@ -558,6 +559,8 @@ pub struct UiState {
     pub browser: crate::net::browse::Browser,
     /// Missions: selection, records, the active one, the last result.
     pub missions: missions::MissionUi,
+    /// Start-up progress and background downloads (ui/boot.rs; main.rs fills it).
+    pub boot: boot::Boot,
     /// Seconds since the last frame / since start, frame counter.
     pub dt: f32,
     pub time: f32,
@@ -603,6 +606,7 @@ impl UiState {
             adsb: crate::adsb::LiveTraffic::new(),
             browser: Default::default(),
             missions: Default::default(),
+            boot: Default::default(),
             dt: 1.0 / 60.0,
             time: 0.0,
             frame_no: 0,
@@ -629,7 +633,11 @@ pub fn draw_menus(ctx: &egui::Context, st: &mut UiState, in_flight: bool, loadin
     egui::Area::new(egui::Id::new("menu_root")).fixed_pos(screen.min).order(egui::Order::Middle).show(ctx, |ui| {
         ui.set_min_size(screen.size());
         match st.screen {
-            Screen::Main => menus::main_menu(ui, st),
+            Screen::Main => {
+                menus::main_menu(ui, st);
+                // First-run downloads that don't hold up flying: a quiet pill.
+                boot::background_pill(ui.painter(), screen, &st.boot.background, st.time);
+            }
             Screen::Aircraft => menus::aircraft(ui, st),
             Screen::Departure => menus::departure(ui, st),
             Screen::Conditions => menus::conditions(ui, st),
