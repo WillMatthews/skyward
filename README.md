@@ -166,7 +166,7 @@ painted over or composited.
   bird strikes. Each brings master warning or caution, an ECAM / EICAS procedure that ticks off as
   you fly it, and the aural alerts. Fail anything now, arm it, or set random failures by MTBF.
 - **Navigation.** VOR, DME and NDB from OurAirports; real ILS from FlightGear's nav.dat, and a
-  synthetic one for any other instrument runway. NAV, COM and ADF radios have range, radio horizon and terrain line of sight, and Morse idents. There is
+  synthetic one at airports it has no ILS for. NAV, COM and ADF radios have range, radio horizon and terrain line of sight, and Morse idents. There is
   an FMS-lite flight plan with an MCDU page, and PFD and ND in ROSE / ARC / PLAN.
 - **Autopilot and autoland.** HDG, ALT, V/S, SPD, LOC, VOR, LNAV, VNAV and APPR with no-overshoot
   captures. The airliners flare, retard and roll out on the localizer.
@@ -1031,7 +1031,7 @@ liveries are neutral, with no operator markings.
 | Land cover (desktop) | © ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium — [ESA WorldCover 10 m 2021 v200](https://esa-worldcover.org/) ([doi:10.5281/zenodo.7254221](https://doi.org/10.5281/zenodo.7254221)), read from the [AWS Open Data registry](https://registry.opendata.aws/esa-worldcover-vito/) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
 | Tree heights (desktop) | Meta and World Resources Institute (WRI) - 2024. High Resolution Canopy Height Maps (CHM). Source imagery for CHM © 2016 Maxar. Read from the [AWS Open Data registry](https://registry.opendata.aws/dataforgood-fb-forests/) (the 1/4000° aggregate: 95th-percentile height and cover) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
 | Airports, runways, frequencies, navaids | [OurAirports](https://ourairports.com/data/) | Public domain |
-| ILS (localizers, glideslopes, ILS DMEs, marker beacons) | [FlightGear](https://www.flightgear.org/) `fgdata` `Navaids/nav.dat.gz` (AIRAC 2013.10, © Robin A. Peel / X-Plane), compacted at build / first run; synthetic from OurAirports runway data where it has none; a few London ILS frequencies / idents / glidepaths from public charts | GPL-2.0-or-later |
+| ILS (localizers, glideslopes, ILS DMEs, marker beacons) | [FlightGear](https://www.flightgear.org/) `fgdata` `Navaids/nav.dat.gz` (AIRAC 2013.10, © Robin A. Peel / X-Plane), compacted at build / first run; synthetic from OurAirports runway data at airports it has none for; a few London ILS frequencies / idents / glidepaths from public charts | GPL-2.0-or-later |
 | Weather | METARs from [aviationweather.gov](https://aviationweather.gov/) (NOAA); forecasts and upper air (winds / temperatures aloft, CAPE, boundary layer, freezing level) from [Open-Meteo](https://open-meteo.com/) | Public / CC BY 4.0 |
 | Sea state | Waves, swell and currents from the [Open-Meteo Marine API](https://open-meteo.com/en/docs/marine-weather-api) ([Weather data by Open-Meteo.com](https://open-meteo.com/)), whose models are MeteoFrance MFWAM / SMOC (generated using E.U. Copernicus Marine Service Information), ECMWF WAM (European Centre for Medium-Range Weather Forecasts), DWD EWAM / GWAM (German Weather Service) and GFS Wave (NOAA NCEP); one request per place, no key, generic User-Agent | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
 | Place search fallback | [Nominatim](https://nominatim.org/) | ODbL |

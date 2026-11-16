@@ -10,9 +10,9 @@
 //!   facilities from FlightGear's `nav.dat` ([`super::navdat`]; real
 //!   frequencies, idents, front courses, localizer / glideslope / DME antenna
 //!   sites, glidepath angles), the threshold from the OurAirports runway.
-//!   Every instrument runway end (paved, lit, ≥ 1200 m, surveyed ends, at an
-//!   airport / major airport) without a nav.dat entry — or every one, before
-//!   / without the list — gets a **synthetic** ILS derived from its
+//!   At an airport nav.dat has no ILS for (or every airport, before /
+//!   without the list), every instrument runway end (paved, lit, ≥ 1200 m,
+//!   surveyed ends, at an airport / major airport) gets a **synthetic** ILS derived from its
 //!   OurAirports geometry: localizer 300 m beyond the stop end on the runway
 //!   course, glideslope abeam the touchdown zone for a 50 ft threshold
 //!   crossing height, DME at the glideslope, a frequency from the 40 ILS
@@ -603,15 +603,22 @@ pub fn ils_at(ap: &Airport) -> Vec<Navaid> {
 }
 
 /// [`ils_at`] with a given real-ILS list (None = synthetic only). Real ILS
-/// come first (ILS before localizer-only), then a synthetic one for each
-/// instrument runway end that has none.
+/// come first (ILS before localizer-only). An airport nav.dat covers keeps
+/// only its real ILS (plus the chart table's runway ends): the runway ends it
+/// lists none for have none in the world. Airports it does not cover get a
+/// synthetic ILS on each instrument runway end.
 pub fn ils_at_with(ap: &Airport, real: Option<&IlsDb>) -> Vec<Navaid> {
     let mut out: Vec<Navaid> = real.map_or(&[][..], |d| d.at(ap)).iter().map(|r| real_ils(ap, r)).collect();
     out.sort_by_key(|n| n.kind != Kind::Ils);
+    let covered = !out.is_empty();
+    let code = ap.code();
     let used: Vec<u32> = out.iter().map(|n| n.freq_khz).collect();
     for rw in &ap.runways {
         for e in 0..2 {
             let id = &rw.ends[e].ident;
+            if covered && !PUBLISHED.iter().any(|p| p.0 == code && p.1 == *id) {
+                continue;
+            }
             if !out.iter().any(|n| n.ils.as_ref().is_some_and(|i| navdat::rwy_eq(&i.runway, id))) {
                 out.extend(synthetic_ils(ap, rw, e, &used));
             }

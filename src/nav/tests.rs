@@ -702,8 +702,8 @@ fn real_ils_matches_published_egll() {
     assert!(geo::wrap_pi(geo::heading_of(dir) - ils.course).abs() < 0.1f32.to_radians());
 }
 
-/// The chart table beats nav.dat's stale facts; runway ends nav.dat lacks
-/// get a synthetic ILS clear of the real channels; an ILS whose runway
+/// The chart table beats nav.dat's stale facts; at an airport nav.dat covers,
+/// runway ends it lists none for get none (unless charted); an ILS whose runway
 /// OurAirports does not know still works (threshold from the localizer).
 #[test]
 fn real_ils_overrides_and_fallback() {
@@ -723,10 +723,16 @@ fn real_ils_overrides_and_fallback() {
     ap.runways[0].ends[0].ident = "34R".into();
     ap.runways[0].ends[1].ident = "16L".into();
     let s = db::ils_at_with(&ap, Some(&real));
-    assert_eq!(s.len(), 2);
-    let (r, f) = (&s[0], &s[1]);
+    // nav.dat covers the airport: the end it lists no ILS for gets none.
+    assert_eq!(s.len(), 1);
+    let r = &s[0];
     assert_eq!((r.ident.as_str(), r.ils.as_ref().unwrap().synthetic, r.ils.as_ref().unwrap().markers.len()), ("ISNQ", false, 1));
-    assert!(f.ils.as_ref().unwrap().synthetic && f.ils.as_ref().unwrap().runway == "34R" && f.freq_khz != r.freq_khz);
+    // An airport nav.dat does not cover: synthetic on both ends.
+    let mut un = ap.clone();
+    un.icao = "KXYZ".into();
+    un.ident = "KXYZ".into();
+    let u = db::ils_at_with(&un, Some(&real));
+    assert!(u.len() == 2 && u.iter().all(|n| n.ils.as_ref().unwrap().synthetic));
     // No OurAirports runway at BIAR: the LDA still works (localizer only).
     let mut biar = ap.clone();
     biar.icao = "BIAR".into();
