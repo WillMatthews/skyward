@@ -618,7 +618,7 @@ skyward --shot m.png --aircraft meridian320 --bot --soak --seconds 4200 --warp 8
 | `SKYWARD_ORBIT=yaw,pitch,dist` | chase-camera angle for captures |
 | `SKYWARD_LOOK=yaw,pitch` | cockpit head-look for captures |
 | `SKYWARD_COCKPIT_FOV=deg` | cockpit field of view for captures |
-| `SKYWARD_NO_VFX`, `SKYWARD_NO_AIRPORTS`, `SKYWARD_NO_OVERPASS`, `SKYWARD_NO_APTDAT`, `SKYWARD_NO_LANDMARKS`, `SKYWARD_NO_TRAFFIC`, `SKYWARD_FLAT_TERRAIN` | switch layers off |
+| `SKYWARD_NO_VFX`, `SKYWARD_NO_AIRPORTS`, `SKYWARD_NO_OVERPASS`, `SKYWARD_NO_APTDAT`, `SKYWARD_NO_LANDMARKS`, `SKYWARD_NO_TRAFFIC`, `SKYWARD_NO_LANDCOVER`, `SKYWARD_FLAT_TERRAIN` | switch layers off |
 | `SKYWARD_APTDAT=path/apt.dat[.gz]` | build `cache/aptdat/` (airport layouts) from a local apt.dat instead of the one-time download |
 | `SKYWARD_GPU_TIMING`, `SKYWARD_UI_TIMING`, `SKYWARD_VFX_STATS` | per-pass GPU timing, UI CPU cost, effect counts |
 | `SKYWARD_BENCH_FRAMES=N` | headless GPU benchmark: N more frames, per-pass medians (timestamp queries) |
@@ -627,7 +627,7 @@ skyward --shot m.png --aircraft meridian320 --bot --soak --seconds 4200 --warp 8
 | `SKYWARD_QUALITY="clouds=0,ao=3,aa=fxaa"` | any Settings › Video knob (its `settings.json` key) for captures / benchmarks |
 | `SKYWARD_TRAFFIC_INLINE`, `SKYWARD_TRAFFIC_GPU_REPEAT=N` | road traffic: simulate in the render thread (as in the browser); draw it N times (GPU cost measurement) |
 | `SKYWARD_FRAME_LOG=file`, `SKYWARD_SOAK_LOG=10`, `SKYWARD_REBASE_LOG` | frame times, soak log interval, origin shifts |
-| `SKYWARD_AIRPORT_DEBUG`, `SKYWARD_TERRAIN_DEBUG`, `SKYWARD_DEBUG_DEBRIS`, `BOT_TRACE=Final,Flare`, `SKYWARD_PROC_DEBUG` | debug logging (the last: the bot's procedure planner and holds) |
+| `SKYWARD_AIRPORT_DEBUG`, `SKYWARD_TERRAIN_DEBUG`, `SKYWARD_LANDCOVER_DEBUG`, `SKYWARD_DEBUG_DEBRIS`, `BOT_TRACE=Final,Flare`, `SKYWARD_PROC_DEBUG` | debug logging (the last: the bot's procedure planner and holds) |
 | `SKYWARD_UI_SCRIPT="4:aircraft,7:departure,10:airport=EGKK,12:fly"` | drive the menus for tests |
 
 </details>
@@ -1028,6 +1028,8 @@ liveries are neutral, with no operator markings.
 | Airport detail | OpenStreetMap via the [Overpass API](https://overpass-api.de/) | ODbL |
 | Airport layouts (taxi networks, stands, holding points) | [X-Plane Scenery Gateway](https://gateway.x-plane.com/) community airports (Robin A. Peel, Laminar Research, Gateway artists) as shipped in FlightGear's [fgdata](https://gitlab.com/flightgear/fgdata) `Airports/apt.dat.ws3.gz` (pinned commit; ≈156 MB, downloaded once and split into `cache/aptdat/`; the web build ships the per-airport extracts). Not the Gateway API, whose terms reserve it for X-Plane products | GNU GPL |
 | Elevation | [Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) on AWS (Mapzen / Tilezen); sources below | see below |
+| Land cover (desktop) | © ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium — [ESA WorldCover 10 m 2021 v200](https://esa-worldcover.org/) ([doi:10.5281/zenodo.7254221](https://doi.org/10.5281/zenodo.7254221)), read from the [AWS Open Data registry](https://registry.opendata.aws/esa-worldcover-vito/) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
+| Tree heights (desktop) | Meta and World Resources Institute (WRI) - 2024. High Resolution Canopy Height Maps (CHM). Source imagery for CHM © 2016 Maxar. Read from the [AWS Open Data registry](https://registry.opendata.aws/dataforgood-fb-forests/) (the 1/4000° aggregate: 95th-percentile height and cover) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
 | Airports, runways, frequencies, navaids | [OurAirports](https://ourairports.com/data/) | Public domain |
 | ILS (localizers, glideslopes, ILS DMEs, marker beacons) | [FlightGear](https://www.flightgear.org/) `fgdata` `Navaids/nav.dat.gz` (AIRAC 2013.10, © Robin A. Peel / X-Plane), compacted at build / first run; synthetic from OurAirports runway data where it has none; a few London ILS frequencies / idents / glidepaths from public charts | GPL-2.0-or-later |
 | Weather | METARs from [aviationweather.gov](https://aviationweather.gov/) (NOAA); forecasts and upper air (winds / temperatures aloft, CAPE, boundary layer, freezing level) from [Open-Meteo](https://open-meteo.com/) | Public / CC BY 4.0 |

@@ -657,13 +657,15 @@ fn grass_season(c0: vec3<f32>) -> vec3<f32> {
     return c;
 }
 
-fn field_surface(wp: vec3<f32>, np: vec2<f32>, n: vec3<f32>, fw: f32, dist: f32) -> vec3<f32> {
+fn field_surface(wp: vec3<f32>, np: vec2<f32>, n: vec3<f32>, fw: f32, dist: f32, pasture: bool) -> vec3<f32> {
     // Warped patchwork of ~256 m fields with hedgerow edges.
     let w = vec2<f32>(pfbm(np, 0.0011, vec2<f32>(0.0)), pfbm(np, 0.0011, vec2<f32>(31.0))) * 260.0;
     let q = (np + w) / 256.0;
     let cell = wrapc(floor(q), NP / 256.0);
     let f = fract(q);
-    let h = hash12(cell);
+    let h0 = hash12(cell);
+    // Grassland (land cover): pasture and hay meadows, no crops.
+    let h = select(h0, select(h0 * 0.4, 0.95, h0 > 0.75), pasture);
     let h2 = hash12(cell + 17.0);
     // Crop calendar (year phase y; each field a few weeks off its neighbours).
     let y = fract(g.season2.y + (h2 - 0.5) * 0.06);
@@ -854,7 +856,7 @@ fn fs_main(in: VOut) -> FOut {
                 s = wet_paving(s, wp, px, fwp, 0.6);
                 s = snowy(s, np, ngeo, 0.8, fwp);
             } else {
-                s.albedo = srgb_to_lin(mountain(field_surface(wp, np, ngeo, fwp, dist), wp, np, ngeo0, fwp, true)) * 0.95;
+                s.albedo = srgb_to_lin(mountain(field_surface(wp, np, ngeo, fwp, dist, in.uv.y > 0.5), wp, np, ngeo0, fwp, true)) * 0.95;
                 s.albedo *= 1.0 - 0.22 * g.wx.x;
                 s.rough = 0.92;
                 s = snowy(s, np, ngeo, 1.0, fwp);

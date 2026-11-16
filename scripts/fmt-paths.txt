@@ -186,3 +186,7 @@ src/gfx/quality.rs
 src/gfx/taa.rs
 src/gfx/perf.rs
 src/gfx/hdr_ui.rs
+src/landcover/mod.rs
+src/landcover/tiff.rs
+src/landcover/worldcover.rs
+src/landcover/canopy.rs

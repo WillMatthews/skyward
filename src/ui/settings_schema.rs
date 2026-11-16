@@ -914,8 +914,8 @@ fn build() -> Vec<Item> {
             cats: DATA,
             group: "Cache",
             label: "Terrain",
-            desc: "Elevation data downloads again as you fly",
-            keywords: "clear delete cache terrain elevation dem",
+            desc: "Elevation and land-cover data download again as you fly",
+            keywords: "clear delete cache terrain elevation dem land cover trees canopy",
             kind: Kind::Action { act: Act::ClearTerrain, button: "Clear", confirm: true },
             native_only: true,
             ..BASE

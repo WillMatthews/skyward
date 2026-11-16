@@ -351,6 +351,8 @@ pub fn credits(ui: &mut Ui, st: &mut UiState) {
         ("Weather", WEATHER_CREDIT),
         ("Live traffic", "ADS-B data: adsb.lol contributors — ODbL 1.0 (desktop version)"),
         ("Elevation", "Terrain Tiles on AWS (Mapzen / Tilezen: SRTM, GMTED2010, 3DEP, ETOPO1, EU-DEM and more)"),
+        ("Land cover", crate::landcover::WORLDCOVER_CREDIT),
+        ("Tree heights", crate::landcover::CANOPY_CREDIT),
         ("Aircraft & sounds", "FlightGear aircraft and recordings — GPL v2 / v2+ (per-aircraft credits in the source)"),
         ("Fonts", "Inter (Rasmus Andersson), JetBrains Mono, B612 (Airbus / Intactile / ENAC) — SIL Open Font License 1.1"),
         ("Licence", "Skyward is free software: GNU GPL v2 · github.com/WillMatthews/skyward"),
