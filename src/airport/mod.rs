@@ -390,8 +390,14 @@ impl AirportScene {
         if g != self.apt_gen {
             self.apt_gen = g;
             for (ident, s) in self.sites.iter_mut() {
-                if matches!(s.apt, None | Some(None)) {
-                    if let aptdat::Lookup::Done(a) = aptdat::lookup(ident) {
+                // (Cached lookups hand back the same layout: only new data rebuilds.)
+                if let aptdat::Lookup::Done(a) = aptdat::lookup(ident) {
+                    let same = match (&s.apt, &a) {
+                        (Some(Some(x)), Some(y)) => Arc::ptr_eq(x, y),
+                        (Some(None), None) => true,
+                        _ => false,
+                    };
+                    if !same {
                         s.dirty |= a.is_some() || s.apt.is_none();
                         s.apt = Some(a);
                     }

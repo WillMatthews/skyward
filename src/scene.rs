@@ -228,6 +228,8 @@ impl MeshData {
 
 // ---------------------------------------------------------------- colours
 
+/// Base ground (procedural fields). scene.wgsl divides the fields' vertex
+/// colour by this to recover the satellite tint: keep the two in step.
 pub const LAND: [f32; 3] = [0.56, 0.55, 0.50];
 const GRASS: [f32; 3] = [0.34, 0.43, 0.25];
 const PARK: [f32; 3] = [0.31, 0.41, 0.22];
@@ -621,6 +623,34 @@ fn tree_tint(rng: &mut Rng, conifer: bool) -> [f32; 3] {
 const BARE: [f32; 3] = [0.60, 0.56, 0.48];
 const SNOW: [f32; 3] = [0.86, 0.88, 0.92];
 const MOSS: [f32; 3] = [0.42, 0.43, 0.32];
+
+// ---------------------------------------------------------------- satellite tint
+
+/// Multiply the colours of the natural ground in a tile's draped ground mesh
+/// by the satellite tint (sattint.rs): grass / vegetation, the procedural
+/// fields (whose shader reads the tint as `col / LAND`) and — hue only, they
+/// are bright already — bare ground, sand and rock. Never roads, buildings,
+/// water, runways, paving, urban ground or land-cover snow.
+pub fn sat_tint(id: TileId, rect: (Vec2, Vec2), flat: &mut MeshData) {
+    let Some(g) = crate::sattint::for_tile(id, rect) else { return };
+    apply_tint(&g, &mut flat.verts);
+}
+
+fn apply_tint(g: &crate::sattint::TintGrid, verts: &mut [Vert]) {
+    let natural = |c: [f32; 3]| [BARE, SAND, ROCK].iter().any(|n| (0..3).all(|i| (c[i] - n[i]).abs() < 1e-3));
+    for v in verts {
+        let t = if v.mat == mat::GRASS || (v.mat == mat::GROUND && v.uv[0] < 0.5) {
+            g.at(vec2(v.pos[0], v.pos[2]))
+        } else if v.mat == mat::DIFFUSE && natural(v.col) {
+            crate::sattint::hue_only(g.at(vec2(v.pos[0], v.pos[2])))
+        } else {
+            continue;
+        };
+        for i in 0..3 {
+            v.col[i] *= t[i];
+        }
+    }
+}
 
 /// OSM landuse on an `n`² raster over the tile ([`crate::landcover::Osm`]):
 /// open ground, then woods, then hard ground (built-up, paved, water) on top.
@@ -1178,7 +1208,8 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
     }
     let conifers = conif.len();
     decid.extend(conif);
-    let (flat, ranges) = crate::terrain::assemble(id, &grid, &flat, LAND);
+    let (mut flat, ranges) = crate::terrain::assemble(id, &grid, &flat, LAND);
+    sat_tint(id, rect, &mut flat);
     let min_y = flat.verts.iter().fold(grid.min, |m, v| m.min(v.pos[1]));
     let mut lights = lights.finish();
     drape_lights(&mut lights, &grid);
@@ -1302,7 +1333,8 @@ pub fn build_far_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
         flat.mat = m;
         flat.strip_cut(&l.pts, w, 0.0, col, l.cut);
     }
-    let (flat, ranges) = crate::terrain::assemble(id, &grid, &flat, LAND);
+    let (mut flat, ranges) = crate::terrain::assemble(id, &grid, &flat, LAND);
+    sat_tint(id, rect, &mut flat);
     let min_y = flat.verts.iter().fold(grid.min, |m, v| m.min(v.pos[1]));
     let mut lights = lights.finish();
     drape_lights(&mut lights, &grid);
@@ -1836,5 +1868,41 @@ mod landcover_tests {
         let n = place(&hedges, &[Osm::Open; 4], 9000, &|_| true).len();
         assert!(n > 500 && n < 1500, "{n}");
         assert!(place(&cover(4, class::CROP, Some((0, 0))), &[Osm::Open; 4], 9000, &|_| true).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod sattint_tests {
+    use super::*;
+    use crate::sattint::{TintGrid, GRID_N};
+
+    #[test]
+    fn tint_reaches_natural_ground_only() {
+        let red = [1.2, 0.95, 0.8];
+        let g = TintGrid { lo: vec2(0.0, 0.0), size: vec2(100.0, 100.0), nodes: vec![red; (GRID_N + 1) * (GRID_N + 1)] };
+        let mut m = MeshData::default();
+        let p = vec3(50.0, 0.0, 50.0);
+        let cases: [(f32, [f32; 3], [f32; 2], bool); 9] = [
+            (mat::GRASS, WOOD, [0.0, 0.0], true),
+            (mat::GROUND, LAND, [0.0, 1.0], true),
+            (mat::DIFFUSE, BARE, [0.0, 0.0], true),
+            (mat::DIFFUSE, SAND, [0.0, 0.0], true),
+            // Urban ground, land-cover snow, paint, water, roads.
+            (mat::GROUND, URBAN[0], [1.0, 0.0], false),
+            (mat::DIFFUSE, SNOW, [0.0, 0.0], false),
+            (mat::DIFFUSE, PAINT, [0.0, 0.0], false),
+            (mat::WATER, WATER, [0.0, 0.0], false),
+            (mat::ASPHALT, ROAD, [0.0, 0.0], false),
+        ];
+        for (mt, col, uv, _) in cases {
+            m.mat = mt;
+            m.v_uv(p, Vec3::Y, col, uv);
+        }
+        apply_tint(&g, &mut m.verts);
+        for (v, (mt, col, _, tinted)) in m.verts.iter().zip(cases) {
+            let t = if mt == mat::DIFFUSE { crate::sattint::hue_only(red) } else { red };
+            let want = if tinted { [col[0] * t[0], col[1] * t[1], col[2] * t[2]] } else { col };
+            assert_eq!(v.col, want, "mat {}", v.mat);
+        }
     }
 }

@@ -59,7 +59,12 @@ mod sim;
 mod startpos;
 mod systems;
 mod terrain;
+mod bathy;
 mod landcover;
+mod sattint;
+mod cog;
+mod dem;
+mod overture;
 mod landmarks;
 mod tiles;
 mod traffic;
@@ -718,6 +723,11 @@ impl Session {
                     if let Some(m) = aircraft_assets(args.aircraft) {
                         return Some(m);
                     }
+                    // Native: its model decodes on the prefetch thread (models::prefetch).
+                    let cat = flight::catalogue();
+                    if !models::ready(cat[args.aircraft.min(cat.len() - 1)].id) {
+                        return Some(format!("Loading aircraft\n{}", cat[args.aircraft.min(cat.len() - 1)].name));
+                    }
                     let mut sim = Sim::new(w, args.aircraft, args.start);
                     if let Some(c) = &self.custom {
                         sim.custom_start = Some(c.clone());
@@ -1045,6 +1055,50 @@ fn loading_info(msg: &str) -> (String, String, Option<f32>) {
     (title, rest.join(" · "), frac)
 }
 
+/// What the departure still waits for (the loading screen's steps, the main
+/// menu's "preparing" card) and the first-run downloads carrying on in the
+/// background (ui/boot.rs). `notice`: this frame's loading line, if any.
+fn update_boot(r: &mut Running, notice: Option<&str>) {
+    use ui::boot::{Preparing, Step};
+    let st = &mut r.ui.st;
+    let mut bg = Vec::new();
+    if let Some(n) = airport::aptdat::importing() {
+        let what = if airport::aptdat::import_is_update() { "Airport layouts (update, 156 MB)" } else { "Airport layouts (first run, 156 MB)" };
+        bg.push(if n > 0 { format!("{what}: {} airports", ui::thousands(n as f32)) } else { what.into() });
+    }
+    if nav::navdat::loading() {
+        bg.push("ILS data (nav.dat)".into());
+    }
+    if nav::db::loading() {
+        bg.push("Navaids".into());
+    }
+    st.boot.background = bg;
+    st.boot.preparing = r.session.as_ref().and_then(|s| {
+        if s.sim.is_some() && s.catch_up.is_none() {
+            return None;
+        }
+        let done = |d: bool| if d { Step::Done } else { Step::Active };
+        let airports = st.db.is_some() || matches!(r.loader.status, airports::Status::Failed(_));
+        let cat = &st.defs;
+        let def = &cat[s.args.aircraft.min(cat.len() - 1)];
+        let web_dl = if s.sim.is_none() { aircraft_assets(s.args.aircraft) } else { None };
+        let aircraft = s.sim.is_some() || (models::ready(def.id) && web_dl.is_none());
+        let (_, detail, tiles) = notice.map(loading_info).unwrap_or_default();
+        let scenery_line = if tiles.is_some() { format!("Scenery · {detail}") } else { "Scenery".to_string() };
+        let (status, frac) = if !airports {
+            ("Airport database".to_string(), None)
+        } else if !aircraft {
+            match web_dl.as_deref().map(loading_info) {
+                Some((_, d, f)) => (format!("Aircraft · {d}"), f),
+                None => (format!("Aircraft · {}", def.name), None),
+            }
+        } else {
+            (scenery_line, tiles)
+        };
+        Some(Preparing::new(vec![("Airports", done(airports), 1.0), ("Aircraft", done(aircraft), 1.0), ("Scenery", Step::Active, 4.0)], status, frac))
+    });
+}
+
 /// Headless departure-map benchmark (SKYWARD_MAP_BENCH): frame times while
 /// the view zooms in from 4 to 17 over the departure airport, then pans.
 #[cfg(not(target_arch = "wasm32"))]
@@ -1353,10 +1407,26 @@ fn render_frame(
     }
 }
 
+/// UI-thread time per frame for menu thumbnails (one is always rendered).
+const THUMB_BUDGET: Duration = Duration::from_millis(12);
+
 /// Render every aircraft once over the current scenery (a front-quarter
-/// air-to-air shot, lit by the sun) for the aircraft cards.
-fn render_thumbs(gpu: &Gpu, renderer: &mut Renderer, ui: &mut Ui, s: &Session, format: wgpu::TextureFormat) {
-    if !ui.thumbs.is_empty() || s.sim.is_none() {
+/// air-to-air shot, lit by the sun) for the aircraft cards. With a `budget`
+/// (the menus): only aircraft whose model the background prefetch has
+/// decoded, the planned one first, until the budget is spent (at least one
+/// a call) — so the menus keep drawing while the cards fill in. Without
+/// (headless captures): all of them now.
+fn render_thumbs(gpu: &Gpu, renderer: &mut Renderer, ui: &mut Ui, s: &Session, format: wgpu::TextureFormat, budget: Option<Duration>) {
+    let defs = flight::catalogue();
+    if ui.thumbs.len() >= defs.len() || s.sim.is_none() {
+        return;
+    }
+    let first = ui.st.plan.aircraft.min(defs.len() - 1);
+    let todo: Vec<usize> = std::iter::once(first)
+        .chain((0..defs.len()).filter(|&i| i != first))
+        .filter(|&i| !ui.st.thumbs.contains_key(defs[i].id) && (budget.is_none() || models::ready(defs[i].id)))
+        .collect();
+    if todo.is_empty() {
         return;
     }
     // (HDR output: the thumbnails are sRGB images all the same.)
@@ -1376,9 +1446,14 @@ fn render_thumbs(gpu: &Gpu, renderer: &mut Renderer, ui: &mut Ui, s: &Session, f
     });
     let view = tex.create_view(&Default::default());
     let t0 = Instant::now();
-    let defs = flight::catalogue();
     let base = s.sim.as_ref().unwrap();
-    for (i, def) in defs.iter().enumerate() {
+    let mut done = 0;
+    for i in todo {
+        if budget.is_some_and(|b| done > 0 && t0.elapsed() > b) {
+            break;
+        }
+        done += 1;
+        let def = &defs[i];
         let mut sim = Sim::new(&s.world, i, Start::City);
         sim.hours = base.hours;
         sim.day_of_year = base.day_of_year;
@@ -1442,7 +1517,11 @@ fn render_thumbs(gpu: &Gpu, renderer: &mut Renderer, ui: &mut Ui, s: &Session, f
     }
     renderer.reset_history();
     renderer.ldr = false;
-    eprintln!("aircraft thumbnails: {} in {:.0} ms", defs.len(), t0.elapsed().as_secs_f32() * 1000.0);
+    if budget.is_none() {
+        eprintln!("aircraft thumbnails: {} in {:.0} ms", defs.len(), t0.elapsed().as_secs_f32() * 1000.0);
+    } else if std::env::var_os("SKYWARD_UI_TIMING").is_some() {
+        eprintln!("aircraft thumbnails: {done} more ({} / {}) in {:.0} ms", ui.thumbs.len(), defs.len(), t0.elapsed().as_secs_f32() * 1000.0);
+    }
 }
 
 /// The plan (aircraft, airport, start) implied by the command line.
@@ -1964,7 +2043,8 @@ fn headless(args: Args) -> Result<(), String> {
         // (The floating origin may have moved: follow the world's focus.)
         let focus = if ov.is_some() { focus } else { s.world.focus() };
         let (ready, total) = s.world.progress(focus, s.world.effective_radius() - 300.0);
-        if ready >= total && s.world.uploads.is_empty() && s.world.gpu_pending.is_empty() && s.world.far_ready() && s.world.airport_detail.idle() {
+        let night_lights = renderer.night_lights_ready(&gpu.queue, vec3(focus.x, 0.0, focus.y));
+        if ready >= total && s.world.uploads.is_empty() && s.world.gpu_pending.is_empty() && s.world.far_ready() && s.world.airport_detail.idle() && night_lights && crate::bathy::idle() {
             break;
         }
         if tw.elapsed() > Duration::from_secs(120) {
@@ -2014,7 +2094,30 @@ fn headless(args: Args) -> Result<(), String> {
     }
     // Menu screens: thumbnails, the departure map's tiles and METAR.
     if matches!(ui.st.screen, Screen::Aircraft | Screen::Main | Screen::Missions | Screen::Briefing) {
-        render_thumbs(&gpu, &mut renderer, &mut ui, &s, format);
+        // SKYWARD_UI_TIMING: the windowed menus' path first (models decoded in the
+        // background, a budgeted few thumbnails a frame) — frame times reported.
+        if std::env::var_os("SKYWARD_UI_TIMING").is_some() {
+            let mut defs = flight::catalogue();
+            let first = ui.st.plan.aircraft.min(defs.len() - 1);
+            defs.swap(0, first);
+            models::prefetch(defs);
+            let t0 = Instant::now();
+            let (mut worst, mut n) = (0f32, 0);
+            while ui.thumbs.len() < flight::catalogue().len() && t0.elapsed() < Duration::from_secs(120) {
+                let tf = Instant::now();
+                render_thumbs(&gpu, &mut renderer, &mut ui, &s, format, Some(THUMB_BUDGET));
+                render_frame(&gpu, &mut renderer, &mut ui, Some(&mut s), &view, w, h, raw(), 1.0, 0.0, None, ov);
+                let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+                let ms = tf.elapsed().as_secs_f32() * 1000.0;
+                if ms > 100.0 {
+                    eprintln!("menu frame {n}: {ms:.0} ms ({} cards)", ui.thumbs.len());
+                }
+                worst = worst.max(ms);
+                n += 1;
+            }
+            eprintln!("menu frames: {n} while the cards filled in over {:.1} s, worst {worst:.0} ms", t0.elapsed().as_secs_f32());
+        }
+        render_thumbs(&gpu, &mut renderer, &mut ui, &s, format, None);
     }
     // The server browser: let LAN discovery run (broadcast + mDNS + pings), then
     // select the first server so its details show.
@@ -2086,6 +2189,16 @@ fn headless(args: Args) -> Result<(), String> {
     // Two frames: the first lets egui load fonts + map textures.
     let t0 = Instant::now();
     let note_s = loading_text(&ui.st, "Loading scenery\n37 / 52 tiles");
+    // (The loading screen — or, with SKYWARD_SHOT_BOOT=1, the menus — mid-load.)
+    if ui.st.screen == Screen::Loading || std::env::var_os("SKYWARD_SHOT_BOOT").is_some() {
+        use ui::boot::{Preparing, Step};
+        ui.st.boot.preparing = Some(Preparing::new(
+            vec![("Airports", Step::Done, 1.0), ("Aircraft", Step::Done, 1.0), ("Scenery", Step::Active, 4.0)],
+            "Scenery · 37 / 52 tiles".into(),
+            Some(37.0 / 52.0),
+        ));
+        ui.st.boot.background = vec!["Airport layouts (first run, 156 MB): 4,210 airports".into()];
+    }
     let note = (ui.st.screen == Screen::Loading).then_some(note_s.as_str());
     for _ in 0..3 {
         render_frame(&gpu, &mut renderer, &mut ui, Some(&mut s), &view, w, h, raw(), 1.0, 0.0, note, ov);
@@ -3284,6 +3397,14 @@ impl App {
             }
             None => (args2, custom),
         };
+        // Decode the aircraft models off the UI thread: the departure's first,
+        // then the rest for the menu cards (render_thumbs).
+        {
+            let mut defs = flight::catalogue();
+            let first = args2.aircraft.min(defs.len() - 1);
+            defs.swap(0, first);
+            models::prefetch(defs);
+        }
         ui.st.screen = if self.args.no_menu || self.args.mission.is_some() { Screen::Loading } else { Screen::Main };
         // Settings that live elsewhere or act once at start-up (ui/settings.rs).
         ui.st.settings.player_name = ui.st.mp.prefs.name.clone();
@@ -3798,13 +3919,15 @@ impl App {
                 notice = Some(m);
             }
         }
+        update_boot(r, notice.as_deref());
         // Loading screen title: the destination.
         let notice = notice.map(|n| if r.ui.st.screen == Screen::Loading { loading_text(&r.ui.st, &n) } else { n });
-        // Thumbnails for the aircraft cards, once there is scenery to render them over.
+        // Thumbnails for the aircraft cards, once there is scenery to render them
+        // over: a few a frame as their models finish decoding in the background.
         // (Not in the browser: it would download every aircraft.)
-        if !platform::WEB && matches!(r.ui.st.screen, Screen::Aircraft | Screen::Main | Screen::Missions | Screen::Briefing) && r.ui.thumbs.is_empty() {
+        if !platform::WEB && matches!(r.ui.st.screen, Screen::Aircraft | Screen::Main | Screen::Missions | Screen::Briefing) {
             if let Some(s) = r.session.as_ref().filter(|s| s.sim.is_some()) {
-                render_thumbs(&r.gpu, &mut r.renderer, &mut r.ui, s, r.format);
+                render_thumbs(&r.gpu, &mut r.renderer, &mut r.ui, s, r.format, Some(THUMB_BUDGET));
             }
         }
         // (The browser loads pre-rendered ones: platform::web::thumbs_start.)

@@ -101,9 +101,9 @@ pub fn unpack(b: Vec<u8>) -> Option<Band> {
     (pos == b.len()).then_some(Band { data: b, rows })
 }
 
-static HEADERS: LazyLock<super::Store<(String, Param), Header>> = LazyLock::new(|| super::Store::new(16));
+static HEADERS: LazyLock<super::Store<(String, Param), Header>> = LazyLock::new(|| super::Store::new(16, super::FAIL));
 /// Compressed bands (≈ 1–3 MB each).
-static BANDS: LazyLock<super::Store<(String, Param, u32), Band>> = LazyLock::new(|| super::Store::new(12));
+static BANDS: LazyLock<super::Store<(String, Param, u32), Band>> = LazyLock::new(|| super::Store::new(12, super::FAIL));
 
 #[cfg(not(target_arch = "wasm32"))]
 fn load_header(stem: &str, p: Param) -> Result<Option<Header>, String> {
@@ -206,7 +206,7 @@ pub fn quantise(p: Param, v: u16) -> u8 {
 /// Decoded row chunks, quantised (4 kB each): rows are LZW strips that only
 /// decode from their start, so every chunk a tile reads is kept for its
 /// neighbours along the same rows.
-static CHUNKS: LazyLock<super::Store<(String, Param, u32, u32), Vec<u8>>> = LazyLock::new(|| super::Store::new(3000));
+static CHUNKS: LazyLock<super::Store<(String, Param, u32, u32), Vec<u8>>> = LazyLock::new(|| super::Store::new(3000, super::FAIL));
 
 /// Canopy lookups for one tile build (keeps the row chunks it touched).
 #[derive(Default)]

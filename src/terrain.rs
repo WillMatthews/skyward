@@ -6,7 +6,9 @@
 //! `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png`
 //! and cached under `cache/terrain/` (pruned to [`CACHE_LIMIT`]). Sources:
 //! SRTM, GMTED2010, 3DEP (USGS), ETOPO1 (NOAA), EU-DEM (Copernicus), UK
-//! Environment Agency LIDAR, and others — see the README credits.
+//! Environment Agency LIDAR, and others — see the README credits. On native
+//! builds the detail-zoom tiles are refined by [`crate::dem`]'s sources
+//! (Copernicus DEM GLO-30) as they load, before anything samples them.
 //!
 //! **Surfaces** (one per level of detail, each a regular grid over a map
 //! tile, every cell split along the same diagonal):
@@ -106,8 +108,51 @@ fn decode(bytes: &[u8]) -> Result<DemTile, String> {
     Ok(DemTile { h })
 }
 
+/// A DEM tile: Terrain Tiles, then (detail zoom, native) refined by the
+/// detail sources ([`crate::dem`]: Copernicus GLO-30, ...).
 #[cfg(not(target_arch = "wasm32"))]
 fn load(z: u32, x: u32, y: u32) -> Result<DemTile, String> {
+    let mut t = load_terrarium(z, x, y)?;
+    if z == DEM_NEAR && !*FLAT && crate::dem::active() {
+        let base = std::mem::take(&mut t.h);
+        let mut h = base.clone();
+        // Neighbouring Terrain Tiles pixels (the sources' filters reach a
+        // few pixels past the tile edge).
+        let near: Mutex<Vec<((u32, u32), Option<Arc<DemTile>>)>> = Mutex::new(Vec::new());
+        let around = |px: i64, py: i64| -> Option<f32> {
+            let n = 1i64 << z;
+            let (px, py) = (px.rem_euclid(n * 256), py);
+            if !(0..n * 256).contains(&py) {
+                return None;
+            }
+            let k = ((px / 256) as u32, (py / 256) as u32);
+            let i = ((py % 256) * 256 + px % 256) as usize;
+            if k == (x, y) {
+                return base.get(i).copied();
+            }
+            let mut g = near.lock().unwrap();
+            let t = match g.iter().find(|e| e.0 == k) {
+                Some(e) => e.1.clone(),
+                None => {
+                    let t = NEIGHBOURS.get(&(z, k.0, k.1), || load_terrarium(z, k.0, k.1).map(Some));
+                    g.push((k, t.clone()));
+                    t
+                }
+            };
+            t.and_then(|t| t.h.get(i).copied())
+        };
+        crate::dem::refine(&crate::dem::DetailTile { z, x, y, base: &around }, &mut h);
+        t.h = h;
+    }
+    Ok(t)
+}
+
+/// Raw Terrain Tiles of detail tiles' neighbours (for the detail sources' filters).
+#[cfg(not(target_arch = "wasm32"))]
+static NEIGHBOURS: LazyLock<crate::cog::Store<(u32, u32, u32), DemTile>> = LazyLock::new(|| crate::cog::Store::new(48, "terrain: Terrain Tiles neighbour"));
+
+#[cfg(not(target_arch = "wasm32"))]
+fn load_terrarium(z: u32, x: u32, y: u32) -> Result<DemTile, String> {
     let path = tile_path(z, x, y);
     if let Ok(b) = std::fs::read(&path) {
         if let Ok(t) = decode(&b) {
@@ -1245,9 +1290,10 @@ pub fn drape(src: &MeshData, grid: &Grid, out: &mut MeshData, mut push: impl FnM
 /// A terrain-only horizon tile (z9): base surface + skirts, bucketed by z10 cells.
 pub fn build_horizon_tile(id: TileId) -> crate::scene::TileBuild {
     let grid = build_grid(id, &[], &[]);
-    let (flat, ranges) = assemble(id, &grid, &MeshData::default(), crate::scene::LAND);
+    let (mut flat, ranges) = assemble(id, &grid, &MeshData::default(), crate::scene::LAND);
     let proj = Proj::tile_frame(id);
     let rect = id.rect(&proj);
+    crate::scene::sat_tint(id, rect, &mut flat);
     crate::scene::TileBuild::terrain_only(id, rect, flat, ranges, Arc::new(grid))
 }
 

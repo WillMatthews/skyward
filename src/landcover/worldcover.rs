@@ -52,9 +52,9 @@ pub fn pixel(lat: f64, lon: f64, la: i32, lo: i32, w: u32, h: u32) -> Option<(u3
     (fx >= 0.0 && fy >= 0.0 && fx < w as f64 && fy < h as f64).then_some((fx as u32, fy as u32))
 }
 
-static HEADERS: LazyLock<super::Store<String, Header>> = LazyLock::new(|| super::Store::new(64));
+static HEADERS: LazyLock<super::Store<String, Header>> = LazyLock::new(|| super::Store::new(64, super::FAIL));
 /// Decoded 1024² blocks (1 MB each).
-static BLOCKS: LazyLock<super::Store<(String, u8, u32), Vec<u8>>> = LazyLock::new(|| super::Store::new(48));
+static BLOCKS: LazyLock<super::Store<(String, u8, u32), Vec<u8>>> = LazyLock::new(|| super::Store::new(48, super::FAIL));
 
 #[cfg(not(target_arch = "wasm32"))]
 fn load_header(name: &str) -> Result<Option<Header>, String> {

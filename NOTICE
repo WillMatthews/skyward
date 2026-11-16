@@ -87,6 +87,75 @@ others; per-item sources, authors and licences are listed in:
         (registry.opendata.aws/dataforgood-fb-forests). Skyward uses the
         1/4000-degree aggregate (95th-percentile height, canopy cover),
         resampled to its scenery grid.
+  * Satellite ground tint (src/sattint/; read at run time, cached under
+    cache/sattint/, not redistributed; only a blurred, reduced colour ratio
+    per ~100 m is derived from it):
+      - Sentinel-2 cloudless 2016 by EOX, CC BY 4.0
+        (https://creativecommons.org/licenses/by/4.0/): "EOxCloudless
+        https://cloudless.eox.at by EOX IT Services GmbH (Contains modified
+        Copernicus Sentinel data 2016)". Later EOxCloudless years are
+        CC BY-NC-SA 4.0 and are not used.
+      - Fallback: NASA Blue Marble: Next Generation (NASA Earth Observatory),
+        served by NASA's Global Imagery Browse Services (GIBS), part of
+        NASA's Earth Science Data and Information System (ESDIS); public
+        domain.
+  * Elevation detail (src/dem/, desktop version; read at run time, cached
+    under cache/copdem/, not redistributed): Copernicus DEM GLO-30 Public,
+    free under the Copernicus DEM licence
+    (https://dataspace.copernicus.eu/explore-data/data-collections/copernicus-contributing-missions/collections-description/COP-DEM).
+    Skyward resamples and blends it with Terrain Tiles, so the notice for
+    adapted data applies: "produced using Copernicus WorldDEM-30 © DLR e.V.
+    2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under
+    COPERNICUS by the European Union and ESA; all rights reserved"
+    (doi:10.5270/ESA-c5d3d65; registry.opendata.aws/copernicus-dem).
+  * Elevation detail over England (src/dem/lidar.rs, desktop version; read
+    at run time from the Defra Data Services Platform WCS, cached under
+    cache/lidar/, not redistributed): Environment Agency LIDAR Composite
+    Digital Terrain Model (DTM) 1m, licensed under the Open Government
+    Licence v3.0
+    (https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/).
+    "© Environment Agency copyright and/or database right 2022. All rights
+    reserved." Contains public sector information licensed under the Open
+    Government Licence v3.0. Skyward resamples it to its terrain grid.
+  * Buildings where OpenStreetMap has none (src/overture/, desktop version;
+    read at run time from the Overture Maps Foundation buildings PMTiles
+    archive, reduced footprints cached under cache/overture/, not
+    redistributed). Overture Maps Foundation, overturemaps.org. The buildings
+    theme is licensed under the Open Database License (ODbL) 1.0; per
+    Overture's attribution page (docs.overturemaps.org/attribution) it
+    contains: © OpenStreetMap contributors (ODbL); Esri Community Maps
+    contributors (CC BY 4.0); Global ML Building Footprints, licensed by
+    Microsoft under the Open Database License; Google Open Buildings
+    (CC BY 4.0); USGS 3D Elevation Program; Qian Shi, et al. "A First
+    High-quality Vector Data of Buildings in East Asian Countries Based on a
+    Comprehensive Large-scale Mapping Framework", Zenodo, 2023,
+    doi:10.5281/zenodo.8174931 (CC BY 4.0); work derived from BTN 2024 ign.es
+    (CC BY 4.0).
+  * Night lights (src/lights/nightlights.rs; read at run time, cached under
+    cache/nightlights/, not redistributed): NASA Black Marble 2016 (Suomi
+    NPP VIIRS day/night band; NASA Earth Observatory / Goddard Space Flight
+    Center), layer VIIRS_Night_Lights of NASA GIBS
+    (https://nasa-gibs.github.io/gibs-api-docs/). NASA imagery is not
+    subject to copyright in the United States (public domain); GIBS asks:
+    "We acknowledge the use of imagery provided by services from NASA's
+    Global Imagery Browse Services (GIBS), part of NASA's Earth Science Data
+    and Information System (ESDIS)." Use does not imply NASA endorsement.
+  * Sea depth (src/bathy/; read at run time, cached under cache/bathy/ or
+    the browser's cache, not redistributed):
+      - Europe: EMODnet Bathymetry DTM, CC BY 4.0
+        (https://creativecommons.org/licenses/by/4.0/): "EMODnet Bathymetry
+        Consortium (2024): EMODnet Digital Bathymetry (DTM 2024)",
+        doi:10.12770/cf51df64-56f9-4a99-b1aa-36b8d7b743a1, read from the
+        EMODnet Bathymetry WCS (ows.emodnet-bathymetry.eu);
+      - elsewhere and in its gaps: NOAA National Centers for Environmental
+        Information. 2022: ETOPO 2022 15 Arc-Second Global Relief Model,
+        doi:10.25921/fd45-gt74 (with NOAA coastal DEMs), from NOAA NCEI's
+        DEM_global_mosaic image service (gis.ngdc.noaa.gov). Its
+        bathymetry comes from the GEBCO Grid: "The GEBCO Grid is placed in
+        the public domain and may be used free of charge"; acknowledged as
+        GEBCO Compilation Group, The GEBCO Grid (www.gebco.net). Use does
+        not suggest any endorsement by GEBCO, the IHO or the IOC.
+    Resampled to depth textures; NOT for navigation.
   * Live traffic (src/adsb/): aircraft positions from the adsb.lol API,
     made available under the Open Database License (ODbL) 1.0
     (https://opendatacommons.org/licenses/odbl/1-0/) — © adsb.lol

@@ -23,7 +23,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, Read, Write};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// fgdata commit "latest airports" (2023-11-03) of `Airports/apt.dat.ws3.gz`.
@@ -33,6 +33,9 @@ pub const SOURCE_URL: &str = "https://gitlab.com/flightgear/fgdata/-/raw/228ac3d
 pub const CREDIT: &str = "X-Plane Scenery Gateway airports (Robin A. Peel, Laminar Research, Gateway artists) via FlightGear fgdata — GNU GPL";
 /// Index header: bump when the chunk selection changes.
 const INDEX_VERSION: &str = "skyward-aptdat-2";
+/// The previous header (no pavement rows): still read while the cache is
+/// re-imported in the background (taxi networks and stands meanwhile).
+const INDEX_VERSION_OLD: &str = "skyward-aptdat-1";
 /// Rows kept in a chunk (the rest — runways, frequencies, boundaries, light
 /// objects — is dropped until something uses it).
 const KEEP: [&str; 21] = ["1", "16", "17", "14", "15", "19", "20", "110", "111", "112", "113", "114", "115", "116", "120", "1201", "1202", "1204", "1300", "1301", "1302"];
@@ -528,8 +531,12 @@ impl Index {
 }
 
 fn parse_index(text: &str) -> Option<Index> {
+    parse_index_as(text, INDEX_VERSION)
+}
+
+fn parse_index_as(text: &str, version: &str) -> Option<Index> {
     let mut lines = text.lines();
-    if !lines.next()?.starts_with(INDEX_VERSION) {
+    if !lines.next()?.starts_with(version) {
         return None;
     }
     let mut ix = Index::default();
@@ -615,6 +622,23 @@ pub fn generation() -> u64 {
     GENERATION.load(Ordering::Relaxed)
 }
 
+/// The one-time download / import (native) in progress: airports split so
+/// far. (It doesn't hold anything up: layouts fall back to OSM meanwhile.)
+static IMPORTING: AtomicBool = AtomicBool::new(false);
+static SPLIT: AtomicU64 = AtomicU64::new(0);
+/// The import replaces an older cache format (not the first run).
+static UPDATING: AtomicBool = AtomicBool::new(false);
+
+/// The running import updates an older cache (loading-screen wording).
+pub fn import_is_update() -> bool {
+    UPDATING.load(Ordering::Relaxed)
+}
+
+/// Airports split so far while the first-run import runs; None when idle.
+pub fn importing() -> Option<u64> {
+    IMPORTING.load(Ordering::Relaxed).then(|| SPLIT.load(Ordering::Relaxed))
+}
+
 pub fn disabled() -> bool {
     std::env::var_os("SKYWARD_NO_APTDAT").is_some()
 }
@@ -667,9 +691,17 @@ mod imp {
         with_store(|s| {
             if s.index.is_none() && !s.started {
                 s.started = true;
-                match std::fs::read_to_string(dir().join("index.tsv")).ok().and_then(|t| parse_index(&t)) {
+                let text = std::fs::read_to_string(dir().join("index.tsv")).ok();
+                match text.as_deref().and_then(parse_index) {
                     Some(ix) => s.index = Some(Arc::new(ix)),
-                    None => start_import(),
+                    None => {
+                        // An older cache: use it until the re-import swaps in the new one.
+                        if let Some(old) = text.as_deref().and_then(|t| parse_index_as(t, INDEX_VERSION_OLD)) {
+                            s.index = Some(Arc::new(old));
+                            UPDATING.store(true, Ordering::Relaxed);
+                        }
+                        start_import();
+                    }
                 }
             }
             s.index.clone()
@@ -700,9 +732,11 @@ mod imp {
                 return;
             }
         }
-        let _ = std::thread::Builder::new().name("aptdat".into()).spawn(move || {
+        IMPORTING.store(true, Ordering::Relaxed);
+        let ok = std::thread::Builder::new().name("aptdat".into()).spawn(move || {
             let t0 = web_time::Instant::now();
             let r = import(local.as_deref());
+            IMPORTING.store(false, Ordering::Relaxed);
             match r {
                 Ok((n, bytes)) => {
                     let _ = std::fs::remove_file(&fail);
@@ -710,7 +744,8 @@ mod imp {
                     if let Some(ix) = std::fs::read_to_string(dir().join("index.tsv")).ok().and_then(|t| parse_index(&t)) {
                         with_store(|s| {
                             s.index = Some(Arc::new(ix));
-                            s.parsed.retain(|_, v| v.is_some());
+                            // Everything again from the new chunks (an update adds pavement).
+                            s.parsed.clear();
                         });
                         GENERATION.fetch_add(1, Ordering::Relaxed);
                     }
@@ -724,6 +759,9 @@ mod imp {
                 }
             }
         });
+        if ok.is_err() {
+            IMPORTING.store(false, Ordering::Relaxed);
+        }
     }
 
     /// Import a local apt.dat (plain or .gz), else download, into `cache/aptdat/`
@@ -767,7 +805,10 @@ mod imp {
                 bytes += b.len() as u64;
                 std::fs::write(tmp.join(format!("{}.dat.gz", stem(&c.ident))), b)
             }) {
-                Ok(()) => entries.push((c.ident, c.icao, c.paved)),
+                Ok(()) => {
+                    entries.push((c.ident, c.icao, c.paved));
+                    SPLIT.store(entries.len() as u64, Ordering::Relaxed);
+                }
                 Err(e) => err = Some(e.to_string()),
             }
         })
@@ -1048,6 +1089,10 @@ pub(crate) mod tests {
         assert_eq!(ix.get("EGXX").map(String::as_str), Some("XGA"));
         assert_eq!(ix.get("XGA").map(String::as_str), Some("XGA"));
         assert!(ix.paved.contains("EGLC") && !ix.paved.contains("XGA"));
+        // An older cache's index: refused as current, read as a stand-in during the re-import.
+        let v1 = format!("{INDEX_VERSION_OLD}\t{SOURCE_COMMIT}\nXGA\tEGXX\n");
+        assert!(parse_index(&v1).is_none());
+        assert_eq!(parse_index_as(&v1, INDEX_VERSION_OLD).unwrap().get("EGXX").map(String::as_str), Some("XGA"));
         assert_eq!(stem("k/../x"), "KX");
     }
 }

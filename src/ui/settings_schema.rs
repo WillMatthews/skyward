@@ -904,7 +904,7 @@ fn build() -> Vec<Item> {
             group: "Cache",
             label: "Map tiles",
             desc: "Roads, buildings and airport layouts download again as you fly",
-            keywords: "clear delete cache tiles map",
+            keywords: "clear delete cache tiles map overture buildings",
             kind: Kind::Action { act: Act::ClearTiles, button: "Clear", confirm: true },
             native_only: true,
             ..BASE
@@ -914,8 +914,8 @@ fn build() -> Vec<Item> {
             cats: DATA,
             group: "Cache",
             label: "Terrain",
-            desc: "Elevation and land-cover data download again as you fly",
-            keywords: "clear delete cache terrain elevation dem land cover trees canopy",
+            desc: "Elevation, land-cover and night-lights data download again as you fly",
+            keywords: "clear delete cache terrain elevation dem land cover trees canopy night lights black marble",
             kind: Kind::Action { act: Act::ClearTerrain, button: "Clear", confirm: true },
             native_only: true,
             ..BASE

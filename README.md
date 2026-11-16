@@ -76,7 +76,8 @@ painted over or composited.
 - **Anywhere on Earth, endlessly.** OpenMapTiles vector tiles from OpenFreeMap (no API key) stream in
   around you: extruded buildings with facades and lit windows, trees, roads, rivers, parks and
   airfields out to ~7.5 km, a generalised far field to ~30 km, terrain to ~95 km.
-- **Real terrain.** DEM elevation (AWS Terrain Tiles) under every level of detail, with map layers
+- **Real terrain.** DEM elevation (AWS Terrain Tiles; Copernicus DEM GLO-30 on mountains and north
+  of 60° N, and the Environment Agency's LIDAR bare-earth DTM over England, in the desktop version) under every level of detail, with map layers
   draped exactly onto it, levelled lakes and runways, ridge shadows, rock and a seasonal snow line.
 - **Landmarks.** Procedural models built to real dimensions replace the OSM boxes: the Shard, Tower
   Bridge, the London Eye (its wheel turns), St Paul's, Big Ben, the Gherkin, Battersea and more.
@@ -147,6 +148,9 @@ painted over or composited.
   Over the sea, the Open-Meteo Marine forecast sets the sea state: real swell (height, direction,
   period) and wind sea on the water and under floats and ditching hulls, plus the surface current;
   lakes, rivers, inland places and offline keep the wind-driven chop.
+  Bathymetry colours the sea by its depth: turquoise over sand in clear tropical shallows,
+  stirred-up brown over estuary banks, darker channels, deep blue offshore, surf where the swell
+  breaks over the shallows (which also steepen it); rivers and lakes inland keep their plain look.
   Real local time and date, re-fetched along long flights.
 - **Turbulence that feels real.** The Dryden model of MIL-F-8785C as a frozen 3D field (low,
   medium and high-altitude intensities and scale lengths; light to extreme) with rotational gusts
@@ -346,6 +350,8 @@ scenery, terrain, live weather and sound in a tab.
 - **Differences from native.**
   - No live METARs: aviationweather.gov sends no CORS headers, so weather comes from Open-Meteo.
     (Open-Meteo's forecast and Marine APIs both send `Access-Control-Allow-Origin: *`.)
+  - Sea-depth regions are smaller (512² texels instead of 1024²) and built on the main thread
+    (EMODnet's WCS and NOAA's image service both send `Access-Control-Allow-Origin: *`).
   - Settings are kept in `localStorage`.
   - Lighter defaults: low scenery detail, 2048² shadow cascades, and the 3D view drawn at
     ≤ 1.6 Mpixel and scaled up.
@@ -618,7 +624,7 @@ skyward --shot m.png --aircraft meridian320 --bot --soak --seconds 4200 --warp 8
 | `SKYWARD_ORBIT=yaw,pitch,dist` | chase-camera angle for captures |
 | `SKYWARD_LOOK=yaw,pitch` | cockpit head-look for captures |
 | `SKYWARD_COCKPIT_FOV=deg` | cockpit field of view for captures |
-| `SKYWARD_NO_VFX`, `SKYWARD_NO_AIRPORTS`, `SKYWARD_NO_OVERPASS`, `SKYWARD_NO_APTDAT`, `SKYWARD_NO_LANDMARKS`, `SKYWARD_NO_TRAFFIC`, `SKYWARD_NO_LANDCOVER`, `SKYWARD_FLAT_TERRAIN` | switch layers off |
+| `SKYWARD_NO_VFX`, `SKYWARD_NO_AIRPORTS`, `SKYWARD_NO_OVERPASS`, `SKYWARD_NO_APTDAT`, `SKYWARD_NO_LANDMARKS`, `SKYWARD_NO_TRAFFIC`, `SKYWARD_NO_LANDCOVER`, `SKYWARD_NO_COPDEM`, `SKYWARD_NO_LIDAR`, `SKYWARD_NO_OVERTURE`, `SKYWARD_NO_NIGHTLIGHTS`, `SKYWARD_NO_BATHY`, `SKYWARD_FLAT_TERRAIN` | switch layers off |
 | `SKYWARD_APTDAT=path/apt.dat[.gz]` | build `cache/aptdat/` (airport layouts) from a local apt.dat instead of the one-time download |
 | `SKYWARD_APTDAT_GEO=0` | keep the apt.dat taxi network / stands but draw the procedural pavement, markings, taxiway lights and signs (comparisons) |
 | `SKYWARD_GPU_TIMING`, `SKYWARD_UI_TIMING`, `SKYWARD_VFX_STATS` | per-pass GPU timing, UI CPU cost, effect counts |
@@ -628,7 +634,7 @@ skyward --shot m.png --aircraft meridian320 --bot --soak --seconds 4200 --warp 8
 | `SKYWARD_QUALITY="clouds=0,ao=3,aa=fxaa"` | any Settings › Video knob (its `settings.json` key) for captures / benchmarks |
 | `SKYWARD_TRAFFIC_INLINE`, `SKYWARD_TRAFFIC_GPU_REPEAT=N` | road traffic: simulate in the render thread (as in the browser); draw it N times (GPU cost measurement) |
 | `SKYWARD_FRAME_LOG=file`, `SKYWARD_SOAK_LOG=10`, `SKYWARD_REBASE_LOG` | frame times, soak log interval, origin shifts |
-| `SKYWARD_AIRPORT_DEBUG`, `SKYWARD_TERRAIN_DEBUG`, `SKYWARD_LANDCOVER_DEBUG`, `SKYWARD_DEBUG_DEBRIS`, `BOT_TRACE=Final,Flare`, `SKYWARD_PROC_DEBUG` | debug logging (the last: the bot's procedure planner and holds) |
+| `SKYWARD_AIRPORT_DEBUG`, `SKYWARD_TERRAIN_DEBUG`, `SKYWARD_LANDCOVER_DEBUG`, `SKYWARD_BATHY_DEBUG` (also writes the depth images to `cache/bathy/`), `SKYWARD_DEBUG_DEBRIS`, `BOT_TRACE=Final,Flare`, `SKYWARD_PROC_DEBUG` | debug logging (the last: the bot's procedure planner and holds) |
 | `SKYWARD_UI_SCRIPT="4:aircraft,7:departure,10:airport=EGKK,12:fly"` | drive the menus for tests |
 
 </details>
@@ -1029,11 +1035,17 @@ liveries are neutral, with no operator markings.
 | Airport detail | OpenStreetMap via the [Overpass API](https://overpass-api.de/) | ODbL |
 | Airport layouts (taxi networks, stands, holding points, pavement, painted lines, taxiway lights, signs) | [X-Plane Scenery Gateway](https://gateway.x-plane.com/) community airports (Robin A. Peel, Laminar Research, Gateway artists) as shipped in FlightGear's [fgdata](https://gitlab.com/flightgear/fgdata) `Airports/apt.dat.ws3.gz` (pinned commit; ≈156 MB, downloaded once and split into `cache/aptdat/`; the web build ships the per-airport extracts). Not the Gateway API, whose terms reserve it for X-Plane products | GNU GPL |
 | Elevation | [Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) on AWS (Mapzen / Tilezen); sources below | see below |
+| Elevation detail (desktop) | Produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved — [Copernicus DEM GLO-30 Public](https://dataspace.copernicus.eu/explore-data/data-collections/copernicus-contributing-missions/collections-description/COP-DEM) ([doi:10.5270/ESA-c5d3d65](https://doi.org/10.5270/ESA-c5d3d65)), read from the [AWS Open Data registry](https://registry.opendata.aws/copernicus-dem/) (`copernicus-dem-30m`), blended into the terrain on rough ground and north of 60° N | [Copernicus DEM licence](https://dataspace.copernicus.eu/sites/default/files/media/files/2025-06/copernicus_contributing_mission_data_access_v2_cop_dem_licenses.pdf) (free, with attribution) |
+| Elevation detail, England (desktop) | © Environment Agency copyright and/or database right 2022. All rights reserved. — [LIDAR Composite Digital Terrain Model (DTM) 1m](https://environment.data.gov.uk/dataset/13787b9a-26a4-4775-8523-806d13af58fc) (National LIDAR Programme composite, bare earth), read on demand from the Defra Data Services Platform WCS as 10 m-resampled 10 km National Grid squares (cached under `cache/lidar/`; the service rate-limits, so `scripts/lidar-fetch.sh` pre-fetches London, the Thames estuary, the Chilterns and the South Downs), over the other elevation wherever it has data | [Open Government Licence v3.0](https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/) |
 | Land cover (desktop) | © ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium — [ESA WorldCover 10 m 2021 v200](https://esa-worldcover.org/) ([doi:10.5281/zenodo.7254221](https://doi.org/10.5281/zenodo.7254221)), read from the [AWS Open Data registry](https://registry.opendata.aws/esa-worldcover-vito/) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
 | Tree heights (desktop) | Meta and World Resources Institute (WRI) - 2024. High Resolution Canopy Height Maps (CHM). Source imagery for CHM © 2016 Maxar. Read from the [AWS Open Data registry](https://registry.opendata.aws/dataforgood-fb-forests/) (the 1/4000° aggregate: 95th-percentile height and cover) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
+| Night lights (far towns and cities at night) | NASA Black Marble 2016 (Suomi NPP VIIRS day/night band; NASA Earth Observatory / Goddard Space Flight Center), layer `VIIRS_Night_Lights` read from [NASA GIBS](https://nasa-gibs.github.io/gibs-api-docs/) WMTS (zoom 8, ≈ 25–80 tiles of ≈ 30–60 kB around the flight, cached under `cache/nightlights/`; sends CORS, so the browser build uses it too). "We acknowledge the use of imagery provided by services from NASA's Global Imagery Browse Services (GIBS), part of NASA's Earth Science Data and Information System (ESDIS)." | Public domain (NASA) |
+| Ground colour tint | EOxCloudless 2016 https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2016) — [Sentinel-2 cloudless 2016](https://cloudless.eox.at/) from EOX's public WMTS (`s2cloudless_3857`; only a heavily reduced, blurred colour ratio is used, cached under `cache/sattint/`); fallback: NASA Blue Marble: Next Generation (NASA Earth Observatory) via [NASA GIBS](https://www.earthdata.nasa.gov/engage/open-data-services-software/earthdata-developer-portal/gibs-api) (ESDIS) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) (the 2016 vintage; later years are CC BY-NC-SA and not used) / public domain |
+| Buildings where OSM has none (desktop) | [Overture Maps Foundation](https://overturemaps.org/) buildings theme, from the [PMTiles archive](https://docs.overturemaps.org/examples/overture-tiles/) published with each release (range reads, cached under `cache/overture/`; Overture's OSM-sourced buildings are skipped, the rest are added only where they overlap no OSM building). Per [Overture's attribution](https://docs.overturemaps.org/attribution/): © OpenStreetMap contributors (ODbL); Global ML Building Footprints, licensed by Microsoft under the Open Database License; Google Open Buildings (CC BY 4.0); Esri Community Maps contributors (CC BY 4.0); USGS 3D Elevation Program; Qian Shi et al., A First High-quality Vector Data of Buildings in East Asian Countries, doi:10.5281/zenodo.8174931 (CC BY 4.0); work derived from BTN 2024 ign.es (CC BY 4.0) | [ODbL](https://opendatacommons.org/licenses/odbl/1-0/) / [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
 | Airports, runways, frequencies, navaids | [OurAirports](https://ourairports.com/data/) | Public domain |
 | ILS (localizers, glideslopes, ILS DMEs, marker beacons) | [FlightGear](https://www.flightgear.org/) `fgdata` `Navaids/nav.dat.gz` (AIRAC 2013.10, © Robin A. Peel / X-Plane), compacted at build / first run; synthetic from OurAirports runway data at airports it has none for; a few London ILS frequencies / idents / glidepaths from public charts | GPL-2.0-or-later |
 | Weather | METARs from [aviationweather.gov](https://aviationweather.gov/) (NOAA); forecasts and upper air (winds / temperatures aloft, CAPE, boundary layer, freezing level) from [Open-Meteo](https://open-meteo.com/) | Public / CC BY 4.0 |
+| Sea depth | Europe: [EMODnet Bathymetry](https://emodnet.ec.europa.eu/en/bathymetry) DTM 2024 (EMODnet Bathymetry Consortium (2024): EMODnet Digital Bathymetry (DTM 2024), [doi:10.12770/cf51df64-56f9-4a99-b1aa-36b8d7b743a1](https://doi.org/10.12770/cf51df64-56f9-4a99-b1aa-36b8d7b743a1)) from its WCS; elsewhere and in its gaps NOAA NCEI's global DEM mosaic image service: [ETOPO 2022](https://www.ncei.noaa.gov/products/etopo-global-relief-model) 15″ ([doi:10.25921/fd45-gt74](https://doi.org/10.25921/fd45-gt74)), whose bathymetry is the [GEBCO Grid](https://www.gebco.net/data-products/gridded-bathymetry-data) (GEBCO Compilation Group), plus NOAA coastal DEMs. One GET per 0.25° / 2° tile, no key; both send `Access-Control-Allow-Origin: *`. Not for navigation | EMODnet: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); ETOPO: US government work; GEBCO: public domain, attribution |
 | Sea state | Waves, swell and currents from the [Open-Meteo Marine API](https://open-meteo.com/en/docs/marine-weather-api) ([Weather data by Open-Meteo.com](https://open-meteo.com/)), whose models are MeteoFrance MFWAM / SMOC (generated using E.U. Copernicus Marine Service Information), ECMWF WAM (European Centre for Medium-Range Weather Forecasts), DWD EWAM / GWAM (German Weather Service) and GFS Wave (NOAA NCEP); one request per place, no key, generic User-Agent | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
 | Place search fallback | [Nominatim](https://nominatim.org/) | ODbL |
 | Live traffic | ADS-B positions from the [adsb.lol](https://adsb.lol/) API (volunteer receivers; no API key, requests carry only a position, a radius and a generic `skyward-flightsim/0.x` User-Agent) | [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/) |

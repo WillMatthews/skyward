@@ -48,6 +48,19 @@ INEGI, Continental relief, 2016; New Zealand terrain data Copyright 2011 Crown c
 New Zealand and the New Zealand Government (All rights reserved); Norway terrain data © Kartverket;
 United Kingdom terrain data © Environment Agency copyright and/or database right 2015. All rights reserved;
 United States 3DEP (formerly NED) and global GMTED2010 and SRTM terrain data courtesy of the U.S. Geological Survey.</p>
+<p>The desktop version also blends in the
+<a href="https://dataspace.copernicus.eu/explore-data/data-collections/copernicus-contributing-missions/collections-description/COP-DEM">Copernicus DEM GLO-30</a>
+on rough terrain and north of 60° N (the browser cannot read it: the bucket sends no CORS headers):
+produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018
+provided under COPERNICUS by the European Union and ESA; all rights reserved
+(<a href="https://doi.org/10.5270/ESA-c5d3d65">doi:10.5270/ESA-c5d3d65</a>), via the
+<a href="https://registry.opendata.aws/copernicus-dem/">AWS Open Data registry</a>.</p>
+<p>Over England the desktop version also reads the Environment Agency's
+<a href="https://environment.data.gov.uk/dataset/13787b9a-26a4-4775-8523-806d13af58fc">LIDAR Composite Digital Terrain Model (DTM) 1m</a>
+(bare earth) from the Defra Data Services Platform:
+© Environment Agency copyright and/or database right 2022. All rights reserved.
+Contains public sector information licensed under the
+<a href="https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/">Open Government Licence v3.0</a>.</p>
 
 <h2>Land cover and tree heights</h2>
 <p>The desktop version reads these at run time (the browser cannot: the buckets send no CORS headers).
@@ -59,6 +72,43 @@ Land cover: © ESA WorldCover project 2021 / Contains modified Copernicus Sentin
 Tree heights: Meta and World Resources Institute (WRI) - 2024. High Resolution Canopy Height Maps (CHM).
 Source imagery for CHM © 2016 Maxar. <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>, via the
 <a href="https://registry.opendata.aws/dataforgood-fb-forests/">AWS Open Data registry</a>.</p>
+
+<h2>Night lights</h2>
+<p>Distant towns and cities at night: NASA Black Marble 2016 (Suomi NPP VIIRS day/night band; NASA Earth Observatory /
+Goddard Space Flight Center), layer <code>VIIRS_Night_Lights</code> from
+<a href="https://nasa-gibs.github.io/gibs-api-docs/">NASA GIBS</a>, public domain.
+We acknowledge the use of imagery provided by services from NASA's Global Imagery Browse Services (GIBS), part of
+NASA's Earth Science Data and Information System (ESDIS). Use does not imply NASA endorsement.</p>
+<h2>Ground colour tint</h2>
+<p>The ground's colours are tinted, region by region, toward satellite imagery (a blurred colour ratio only, no imagery is shown):
+EOxCloudless <a href="https://cloudless.eox.at">https://cloudless.eox.at</a> by EOX IT Services GmbH
+(Contains modified Copernicus Sentinel data 2016) — Sentinel-2 cloudless 2016,
+<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.
+Fallback: NASA Blue Marble: Next Generation (NASA Earth Observatory), served by NASA's
+<a href="https://www.earthdata.nasa.gov/engage/open-data-services-software/earthdata-developer-portal/gibs-api">Global Imagery Browse Services (GIBS)</a>,
+part of NASA's Earth Science Data and Information System (ESDIS) — public domain.</p>
+
+<h2>Buildings where OpenStreetMap has none</h2>
+<p>The desktop version reads these at run time from the
+<a href="https://docs.overturemaps.org/examples/overture-tiles/">Overture Maps buildings tiles</a>.
+<a href="https://overturemaps.org/">Overture Maps Foundation</a>, licensed under the
+<a href="https://opendatacommons.org/licenses/odbl/1-0/">ODbL</a>
+(<a href="https://docs.overturemaps.org/attribution/">attribution</a>): © OpenStreetMap contributors;
+Global ML Building Footprints, licensed by Microsoft under the Open Database License;
+Google Open Buildings (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>);
+Esri Community Maps contributors (CC BY 4.0); USGS 3D Elevation Program;
+Qian Shi et al., <i>A First High-quality Vector Data of Buildings in East Asian Countries</i>
+(<a href="https://doi.org/10.5281/zenodo.8174931">doi:10.5281/zenodo.8174931</a>, CC BY 4.0);
+work derived from BTN 2024 ign.es (CC BY 4.0).</p>
+<h2>Sea depth</h2>
+<p>Europe: EMODnet Bathymetry Consortium (2024): EMODnet Digital Bathymetry (DTM 2024),
+<a href="https://doi.org/10.12770/cf51df64-56f9-4a99-b1aa-36b8d7b743a1">doi:10.12770/cf51df64-56f9-4a99-b1aa-36b8d7b743a1</a>,
+<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>, via the EMODnet Bathymetry WCS.
+Elsewhere: NOAA National Centers for Environmental Information (2022):
+<a href="https://www.ncei.noaa.gov/products/etopo-global-relief-model">ETOPO 2022 15 Arc-Second Global Relief Model</a>
+(<a href="https://doi.org/10.25921/fd45-gt74">doi:10.25921/fd45-gt74</a>), with bathymetry from the
+<a href="https://www.gebco.net/data-products/gridded-bathymetry-data">GEBCO Grid</a> (GEBCO Compilation Group, public domain)
+and NOAA coastal DEMs, via NOAA NCEI's DEM mosaic image service. Not for navigation.</p>
 
 <h2>Airports and weather</h2>
 <p>Airports and runways: <a href="https://ourairports.com/data/">OurAirports</a> (public domain).
