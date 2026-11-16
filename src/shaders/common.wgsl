@@ -36,6 +36,8 @@ struct Globals {
                           // (sun_e, sky.x and the SH ambient already include it), y 1 / x,
                           // z mirror plane height, w = 0 with MSAA, else 1 + frame index (alpha dither)
     gq: vec4<f32>,        // quality (gfx/quality.rs): x soft shadows (1 = PCF)
+    swell: vec4<f32>,     // real swell (Open-Meteo Marine): travel dir x, z, Hs (m, 0 = none), wavelength (m)
+    sea: vec4<f32>,       // forecast wind sea: Hs (m), travel dir x, z, weight 0..1 (0 = surface wind only)
 };
 
 // Absolute radiance (scene units) → what the HDR targets hold.

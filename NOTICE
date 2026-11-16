@@ -52,7 +52,11 @@ others; per-item sources, authors and licences are listed in:
     with Kokoro-82M (Apache-2.0 model; the clips are original output,
     released with the project — see assets/audio/CREDITS.md).
   * assets/fonts/ — fonts (SIL Open Font License 1.1).
-  * README.md, "Credits" — map, weather and airport data services. Navaids
+  * README.md, "Credits" — map, weather and airport data services. Sea
+    state (waves, swell, currents) from the Open-Meteo Marine API, CC BY 4.0
+    ("Weather data by Open-Meteo.com", https://open-meteo.com/), from
+    MeteoFrance MFWAM / SMOC (generated using E.U. Copernicus Marine Service
+    Information), ECMWF WAM, DWD EWAM / GWAM and NOAA NCEP GFS Wave. Navaids
     (VOR, DME, NDB) come from OurAirports' navaids.csv (public domain,
     https://ourairports.com/data/). ILS localizer / glideslope / DME / marker
     records come from FlightGear's fgdata Navaids/nav.dat.gz

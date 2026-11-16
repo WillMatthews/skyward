@@ -347,13 +347,20 @@ fn snowy(s0: Surf, np: vec2<f32>, n: vec3<f32>, hold: f32, fw: f32) -> Surf {
 
 // ---------------------------------------------------------------- water
 
-fn wave_grad(p: vec2<f32>, t: f32, fade: f32) -> vec2<f32> {
+fn wave_grad(p: vec2<f32>, t: f32, fade: f32, open_sea: f32) -> vec2<f32> {
     // Sum of directional sine waves (analytic slope) + fine noise ripples.
     var gsum = vec2<f32>(0.0);
     // Waves run with the surface wind; their height follows its speed.
     let wv = g.wx2.xy;
-    let ws = length(wv);
+    var ws = length(wv);
     var dir = select(vec2<f32>(0.80, 0.60), wv / max(ws, 1e-3), ws > 0.5);
+    // On the open sea with a marine forecast: its wind sea instead (the
+    // wind speed of a fully developed sea of that height, Hs = 0.0246 U²).
+    let fk = g.sea.w * open_sea;
+    if (fk > 0.0) {
+        ws = mix(ws, sqrt(g.sea.x / 0.0246), fk);
+        if (fk > 0.5 && g.sea.x > 0.0) { dir = g.sea.yz; }
+    }
     var amp = 0.16 * clamp(0.35 + ws / 7.0, 0.35, 2.2);
     var k = 0.11;
     var spd = 1.2;
@@ -373,6 +380,26 @@ fn wave_grad(p: vec2<f32>, t: f32, fade: f32) -> vec2<f32> {
         amp *= 0.62;
         spd *= 0.9;
     }
+    // Swell: long, low, long-crested waves from far away (two close trains
+    // beat into sets). Slope k A with A ~ Hs / 2; the (weak) slope is
+    // exaggerated a little so a metre of swell reads at a distance.
+    let sh = g.swell.z * open_sea;
+    if (sh > 0.0) {
+        let sd = g.swell.xy;
+        let sr = mat2x2<f32>(0.993, 0.120, -0.120, 0.993);
+        var d2 = sd;
+        var ks = TAU / max(g.swell.w, 10.0);
+        var sa = 0.5 * sh * 1.6;
+        for (var j = 0; j < 2; j++) {
+            let kv = round(d2 * (ks * NP / TAU)) * (TAU / NP);
+            let ph = dot(kv, p) - t * sqrt(9.81 * length(kv)) + f32(j) * 2.3;
+            let atten = 1.0 - smoothstep(0.5, 2.0, fade * ks * 2.0);
+            gsum += kv * (sa * cos(ph) * atten);
+            d2 = sr * d2;
+            ks *= 1.16;
+            sa *= 0.45;
+        }
+    }
     return gsum;
 }
 
@@ -384,7 +411,9 @@ fn shade_water(in: VOut, px: vec2<f32>, fw: f32) -> vec3<f32> {
     let dist = length(to_cam);
     let V = to_cam / dist;
     let np = pat(rel);
-    let gr = wave_grad(np, t, fw) + rain_ripples(np, 2.2, t, fw * 0.05);
+    // Forecast sea state only on water near sea level (not on lakes / reservoirs above it).
+    let open_sea = 1.0 - smoothstep(3.0, 8.0, abs(wp.y));
+    let gr = wave_grad(np, t, fw, open_sea) + rain_ripples(np, 2.2, t, fw * 0.05);
     // Slope variance lost to filtering widens the highlight instead (spec AA).
     let lost = clamp(fw * 0.35, 0.0, 1.0);
     var n = normalize(vec3<f32>(-gr.x, 1.0, -gr.y));

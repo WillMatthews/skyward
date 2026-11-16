@@ -113,6 +113,9 @@ impl Environment for AirEnv<'_> {
     fn surface(&self, xz: Vec2) -> crate::ground::Surface {
         self.inner.surface(xz)
     }
+    fn ocean(&self) -> Option<crate::water::Ocean> {
+        self.inner.ocean()
+    }
     fn updraft(&self, p: Vec3) -> f32 {
         let base = self.inner.updraft(p);
         match self.run {

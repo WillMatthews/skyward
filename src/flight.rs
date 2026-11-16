@@ -209,6 +209,12 @@ pub trait Environment {
     fn surface(&self, _xz: Vec2) -> crate::ground::Surface {
         crate::ground::Surface::DRY
     }
+    /// The open-ocean sea state of the forecast here (Open-Meteo Marine:
+    /// swell, wind sea, current), if there is one. Default: none (the sea
+    /// state is the wind's alone).
+    fn ocean(&self) -> Option<crate::water::Ocean> {
+        None
+    }
 }
 
 /// Rotational gusts (body frame: pitch, yaw, roll rates in rad/s) from the
@@ -4627,7 +4633,8 @@ impl Aircraft {
         out.moment_body = inv * torque_world;
         // Floats on the water (src/water.rs).
         if def.on_water() {
-            let body = crate::water::BodyState { pos: self.pos, vel: self.vel, rot: self.rot, omega: self.omega };
+            // Hydrodynamics see the velocity through the water (a current carries the aircraft).
+            let body = crate::water::BodyState { pos: self.pos, vel: self.vel - Vec3::new(self.water.sea.current.x, 0.0, self.water.sea.current.y), rot: self.rot, omega: self.omega };
             let wc = crate::water::water_contact(def.hulls, &body, env, &self.water.sea, self.water.time, self.surf.rudder, def.mass * GRAVITY);
             if wc.wet {
                 out.contact = true;
