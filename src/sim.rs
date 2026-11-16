@@ -474,6 +474,8 @@ pub struct Sim {
     real_time: f32,
     /// Ground height under the aircraft (terrain.rs), for heights above the ground.
     pub ground_y: f32,
+    /// Ground height under the tower camera (`tower_xz`), kept by `update`.
+    tower_ground: f32,
     /// Altimeter setting for the cockpit instruments (the app copies the weather's QNH), hPa.
     pub qnh_hpa: f32,
     /// Physics state one fixed step back, for render interpolation.
@@ -637,6 +639,7 @@ impl Sim {
             cine: Cine::default(),
             real_time: 0.0,
             ground_y: 0.0,
+            tower_ground: 0.0,
             qnh_hpa: 1013.25,
             prev_pos: Vec3::ZERO,
             prev_rot: Quat::IDENTITY,
@@ -1196,6 +1199,12 @@ impl Sim {
         let dt = dt.min(0.1);
         self.real_time += dt;
         self.ground_y = crate::flight::Environment::ground_height(world, vec2(self.ac.pos.x, self.ac.pos.z));
+        // Ground under the fixed cameras (tower, fly-by): their eyes stay above it.
+        let t = self.tower_xz();
+        self.tower_ground = crate::flight::Environment::ground_height(world, t);
+        if let Some(p) = &mut self.flyby_pos {
+            p.y = p.y.max(crate::flight::Environment::ground_height(world, vec2(p.x, p.z)) + 2.0);
+        }
         if let Some((_, t)) = &mut self.note {
             *t -= dt;
             if *t <= 0.0 {
@@ -2006,12 +2015,22 @@ impl Sim {
         MAP_RANGES[self.map_zoom.min(MAP_RANGES.len() - 1)]
     }
 
-    fn tower_eye(&self) -> Vec3 {
+    /// Ground point of the tower camera: beside the runway's midpoint.
+    fn tower_xz(&self) -> Vec2 {
         let (a, b, w) = self.runway.as_ref().map(|r| (r.a, r.b, r.width)).unwrap_or((Vec2::ZERO, vec2(0.0, -1000.0), 45.0));
         let d = (b - a).normalize_or(vec2(0.0, -1.0));
         let side = vec2(-d.y, d.x);
-        let mid = (a + b) * 0.5 + side * (w * 0.5 + 140.0 + self.size * 2.0);
-        vec3(mid.x, 38.0, mid.y)
+        (a + b) * 0.5 + side * (w * 0.5 + 140.0 + self.size * 2.0)
+    }
+
+    fn tower_eye(&self) -> Vec3 {
+        let mid = self.tower_xz();
+        // A 38 m cab above the ground there (`tower_ground`, kept by `update`)
+        // or the runway, whichever is higher. Heights are above sea level: a
+        // fixed 38 m put the eye a few metres up at Heathrow and underground
+        // at any field much above the sea.
+        let field = self.runway.as_ref().filter(|r| r.elev_known).map(|r| r.elev[0].max(r.elev[1])).unwrap_or(self.ground_y);
+        vec3(mid.x, field.max(self.tower_ground) + 38.0, mid.y)
     }
 
     fn flyby_eye(&mut self) -> Vec3 {
@@ -2031,7 +2050,9 @@ impl Sim {
         if need_new {
             let side = vel.cross(Vec3::Y).normalize_or_zero();
             let mut p = pos + vel * lead + side * (30.0 + self.size * 1.6 + speed * 0.08);
-            p.y = (p.y - 6.0 - self.size * 0.3).max(2.0);
+            // (At least 2 m over the ground under the aircraft; `update`
+            // lifts it over the ground under the eye itself.)
+            p.y = (p.y - 6.0 - self.size * 0.3).max(self.ground_y + 2.0);
             self.flyby_pos = Some(p);
         }
         self.flyby_pos.unwrap()
@@ -2094,7 +2115,7 @@ impl Sim {
                 let back = vec3(-yaw.sin(), 0.0, yaw.cos());
                 let p = self.cine.pitch;
                 let mut eye = pos + (back * p.cos() + Vec3::Y * p.sin()) * self.cine.dist;
-                eye.y = eye.y.max(2.0);
+                eye.y = eye.y.max(self.ground_y + 2.0);
                 (eye, pos + Vec3::Y * r * 0.1, Vec3::Y, 55f32.to_radians())
             }
         }
@@ -2125,7 +2146,7 @@ impl Sim {
                 let mut eye = pos + off;
                 // (A small drone is framed from just above the ground.)
                 let small = self.defs[self.sel].category == Category::Drone;
-                eye.y = if small { eye.y.max(self.ground_y + 0.12) } else { eye.y.max(1.0) };
+                eye.y = if small { eye.y.max(self.ground_y + 0.12) } else { eye.y.max(self.ground_y + 1.0) };
                 let target = pos + Vec3::Y * if small { 0.02 } else { 0.5 + self.size * 0.08 };
                 match self.crash_camera() {
                     // Destroyed: a slow orbit framing the whole wreckage (blended in).
