@@ -1,0 +1,13 @@
+{"latitude":51.5,"longitude":-0.125,"generationtime_ms":0.41,"utc_offset_seconds":3600,"timezone":"Europe/London","timezone_abbreviation":"GMT+1","elevation":23.0,
+"current_units":{"time":"iso8601","interval":"seconds","temperature_2m":"°C","wind_speed_10m":"kn"},
+"current":{"time":"2026-07-14T14:00","interval":900,"temperature_2m":27.4,"dew_point_2m":17.1,"precipitation":0.0,"rain":0.0,"showers":0.0,"snowfall":0.0,"weather_code":2,"cloud_cover":45,"cloud_cover_low":30,"cloud_cover_mid":20,"cloud_cover_high":40,"pressure_msl":1012.3,"wind_speed_10m":8.2,"wind_direction_10m":210,"wind_gusts_10m":18.5,"visibility":24000.0},
+"hourly_units":{"time":"iso8601","wind_speed_925hPa":"kn","cape":"J/kg","boundary_layer_height":"m","freezing_level_height":"m"},
+"hourly":{"time":["2026-07-14T14:00"],
+"wind_speed_925hPa":[14.0],"wind_direction_925hPa":[215],"temperature_925hPa":[21.0],
+"wind_speed_850hPa":[18.0],"wind_direction_850hPa":[220],"temperature_850hPa":[15.2],
+"wind_speed_700hPa":[24.0],"wind_direction_700hPa":[230],"temperature_700hPa":[4.1],
+"wind_speed_500hPa":[38.0],"wind_direction_500hPa":[240],"temperature_500hPa":[-12.5],
+"wind_speed_300hPa":[62.0],"wind_direction_300hPa":[250],"temperature_300hPa":[-38.0],
+"wind_speed_250hPa":[75.0],"wind_direction_250hPa":[252],"temperature_250hPa":[-47.5],
+"wind_speed_200hPa":[60.0],"wind_direction_200hPa":[255],"temperature_200hPa":[-49.0],
+"cape":[1850.0],"lifted_index":[-4.2],"convective_inhibition":[-12.0],"boundary_layer_height":[1650.0],"freezing_level_height":[3850.0],"snow_depth":[0.0]}}

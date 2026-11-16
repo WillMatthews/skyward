@@ -43,7 +43,9 @@ impl StormSpec {
     }
 
     /// Storms from the decoded weather: METAR TS / CB / TCU / +TSRA / VCTS / GR,
-    /// Open-Meteo thunderstorm codes and CAPE.
+    /// Open-Meteo thunderstorm codes and CAPE — and, with the forecast's
+    /// upper air, its CAPE / lifted index / CIN where nothing is reported:
+    /// how many cells, how strong, how tall (capped by the tropopause), hail.
     pub fn from_wx(wx: &crate::weather::Wx) -> StormSpec {
         use crate::weather::Cover;
         let mut s = StormSpec::NONE;
@@ -56,6 +58,13 @@ impl StormSpec {
         let cb_tcu = |tcu: bool| metar.is_some_and(|m| m.raw.split_whitespace().any(|t| (t.ends_with("TCU") == tcu) && (t.ends_with("CB") || t.ends_with("TCU"))));
         let om_ts = wx.om.as_ref().is_some_and(|o| o.code >= 95);
         let thunder = wx.thunder || vcts || om_ts;
+        // Forecast-only convection: unstable air (CAPE / LI, not capped by
+        // CIN) with moisture to feed it, and no storm reported. A nearby
+        // METAR that reports none keeps them sparse (it is the authority there).
+        let pot = if wx.lifted_index.is_some() || !wx.aloft.is_empty() { wx.instability() } else { 0.0 };
+        let moist = wx.temp_c - wx.dew_c < 14.0 && (wx.showers || wx.om.as_ref().is_some_and(|o| o.cloud_low > 0.15 || o.code >= 80));
+        let metar_near = metar.is_some() && wx.station_km <= crate::weather::METAR_NEAR_KM;
+        let mut forecast_only = false;
         if thunder {
             s.strength = if heavy_ts {
                 1.0
@@ -71,13 +80,17 @@ impl StormSpec {
             } else {
                 3.0
             };
-        } else if cb.is_some() {
+        } else if cb.is_some() && (cb_tcu(true) || cb_tcu(false) || pot <= 0.4) {
             // CB without thunder reported (yet): mature storm cells about.
             s.strength = if cb_tcu(false) { 0.65 } else { 0.38 };
             s.flash_rate = if cb_tcu(false) { 1.5 } else { 0.0 };
         } else if wx.showers && wx.cape > 1200.0 {
             s.strength = 0.45;
             s.flash_rate = 0.0;
+        } else if pot > 0.4 && (moist || cb.is_some()) {
+            forecast_only = true;
+            s.strength = 0.3 + 0.45 * pot;
+            s.flash_rate = if pot > 0.65 { 1.0 + 3.0 * (pot - 0.65) / 0.35 } else { 0.0 };
         } else {
             return s;
         }
@@ -94,12 +107,25 @@ impl StormSpec {
         if thunder && s.amount < 0.3 {
             s.amount = 0.3;
         }
+        if forecast_only {
+            s.amount = (0.1 + 0.3 * pot) * if metar_near { 0.5 } else { 1.0 };
+        }
+        // A strong cap (CIN) keeps storms isolated unless they are reported.
+        if !thunder && cb.is_none() {
+            s.amount *= 1.0 - 0.5 * smooth(50.0, 250.0, wx.cin);
+        }
         s.base = cb.or(wx.layers.first()).map(|l| (l.base_ft * 0.3048).max(250.0)).unwrap_or(1200.0);
         s.top = (s.base + 4500.0 + 7500.0 * s.strength + 2000.0 * cape).min(16_000.0);
+        // Anvils spread at the tropopause (the overshooting tops go above it).
+        if let Some(tp) = wx.tropopause_agl() {
+            s.top = s.top.min(tp + 800.0).max(s.base + 3500.0);
+        }
         s.upper = wx.wind_aloft() * 2.2 + crate::weather::wind_vec(wx.aloft_from + 20.0, 25.0);
         s.dry = ((wx.temp_c - wx.dew_c - 6.0) / 14.0).clamp(0.0, 1.0);
-        s.hail = has("GR") || has("GS") || (heavy_ts && cape > 0.6);
-        s.home_km = if !thunder && cb.is_none() {
+        // Hail survives the fall through a low freezing level.
+        let low_fz = wx.freezing_agl_m.is_some_and(|f| f < 3500.0);
+        s.hail = has("GR") || has("GS") || (heavy_ts && cape > 0.6) || (pot > 0.75 && low_fz && s.strength > 0.6);
+        s.home_km = if forecast_only || (!thunder && cb.is_none()) {
             0.0
         } else if vcts && !wx.thunder {
             13.0

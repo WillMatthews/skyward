@@ -1711,5 +1711,6 @@ pub fn ambient(world: &crate::world::World, ac: &Aircraft, ground_y: f32) -> Amb
     let c = &world.clouds;
     let in_cloud = if ac.pos.y > c.cu_base() - 50.0 && ac.pos.y < c.top() { c.coverage(xz) } else { 0.0 };
     let precip = if wx.precip != crate::weather::Precip::None { wx.intensity.clamp(0.2, 1.0) } else { 0.0 };
-    Ambient { oat_c: Some(wx.temp_c - 0.0065 * agl), spread_c: (wx.temp_c - wx.dew_c).max(0.0), moisture: in_cloud.max(precip) }
+    // Through the forecast temperatures aloft / freezing level (ISA lapse without).
+    Ambient { oat_c: Some(wx.temp_at(agl)), spread_c: (wx.temp_c - wx.dew_c).max(0.0), moisture: in_cloud.max(precip) }
 }

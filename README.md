@@ -106,7 +106,7 @@ painted over or composited.
 - **Weather and seasons.** Rain, snow, fog and wet ground; leaf fall, autumn colours and crop
   calendars.
 - **Thunderstorms.** Cumulonimbus towers with anvils, overshooting tops and dark bases, driven by
-  the METAR (TS, CB, TCU, +TSRA, VCTS, GR) and the forecast's CAPE; rain shafts and virga under
+  the METAR (TS, CB, TCU, +TSRA, VCTS, GR) and the forecast's CAPE / lifted index / CIN; rain shafts and virga under
   them, visible from far away; lightning that lights the cloud from inside, branching
   cloud-to-ground bolts, a flash over the whole scene and thunder arriving distance / c later.
   Lenticular clouds stack over mountain waves.
@@ -142,6 +142,8 @@ painted over or composited.
   bot that pushes back and taxis the taxiway network to the holding point and back to a stand.
 - **Live weather and wind.** The nearest METAR plus Open-Meteo drive clouds, visibility,
   precipitation, the wind gradient and winds aloft up to the jet, gusts and drifting thermals.
+  The forecast's upper air (winds and temperatures at seven pressure levels, the boundary layer,
+  the freezing level) fills in between METAR stations and aloft.
   Real local time and date, re-fetched along long flights.
 - **Turbulence that feels real.** The Dryden model of MIL-F-8785C as a frozen 3D field (low,
   medium and high-altitude intensities and scale lengths; light to extreme) with rotational gusts
@@ -1022,7 +1024,7 @@ liveries are neutral, with no operator markings.
 | Elevation | [Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) on AWS (Mapzen / Tilezen); sources below | see below |
 | Airports, runways, frequencies, navaids | [OurAirports](https://ourairports.com/data/) | Public domain |
 | ILS | Synthetic, from OurAirports runway data; a few London ILS frequencies / idents / glidepaths from public charts | — |
-| Weather | METARs from [aviationweather.gov](https://aviationweather.gov/) (NOAA); forecasts from [Open-Meteo](https://open-meteo.com/) | Public / CC BY 4.0 |
+| Weather | METARs from [aviationweather.gov](https://aviationweather.gov/) (NOAA); forecasts and upper air (winds / temperatures aloft, CAPE, boundary layer, freezing level) from [Open-Meteo](https://open-meteo.com/) | Public / CC BY 4.0 |
 | Place search fallback | [Nominatim](https://nominatim.org/) | ODbL |
 | Live traffic | ADS-B positions from the [adsb.lol](https://adsb.lol/) API (volunteer receivers; no API key, requests carry only a position, a radius and a generic `skyward-flightsim/0.x` User-Agent) | [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/) |
 

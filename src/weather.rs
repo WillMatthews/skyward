@@ -2,8 +2,12 @@
 //!
 //! * **Data**: the nearest METAR (aviationweather.gov data API, JSON) for
 //!   cloud layers, visibility, wind, temperature, QNH and present weather, and
-//!   Open-Meteo (no key) for the local UTC offset, the wind aloft (850 hPa),
-//!   low / mid / high cloud cover, precipitation, visibility and snow depth.
+//!   Open-Meteo (no key) for the local UTC offset, low / mid / high cloud
+//!   cover, precipitation, visibility, snow depth and the upper air: winds and
+//!   temperatures at 925–200 hPa, CAPE / lifted index / CIN, the
+//!   boundary-layer height and the freezing level (one request per place).
+//!   Near a METAR station the METAR rules; the forecast fills in between
+//!   stations and aloft. Missing fields fall back to the old estimates.
 //!   A background thread refreshes both every ~10 minutes; the last good
 //!   result is cached in `cache/weather.json` and used offline.
 //! * **Decoding**: [`Metar::parse`] decodes a raw METAR; [`Wx`] merges the
@@ -352,6 +356,46 @@ pub struct OpenMeteo {
     pub jet_dir: Option<f32>,
     pub cape: f32,
     pub snow_depth_m: f32,
+    /// Lifted index (K: negative = unstable) and convective inhibition (J/kg, ≥ 0).
+    pub lifted_index: Option<f32>,
+    pub cin: f32,
+    /// Boundary-layer height above the ground (m): the top of the mixed layer.
+    pub blh_m: Option<f32>,
+    /// Height of the 0 °C level above sea level (m).
+    pub freezing_msl: Option<f32>,
+    /// Model ground height of the grid cell (m above sea level).
+    pub elevation_m: Option<f32>,
+    /// Pressure-level winds / temperatures, lowest (highest pressure) first.
+    pub levels: Vec<PressureLevel>,
+}
+
+/// One pressure level of the forecast (winds and temperature aloft).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PressureLevel {
+    pub hpa: f32,
+    pub kt: f32,
+    /// Direction the wind blows from (degrees true).
+    pub dir: f32,
+    pub temp_c: Option<f32>,
+}
+
+/// Pressure levels asked for (hPa). 1000 hPa is left out: it is within a few
+/// hundred metres of sea level, where the 10 m wind and the log-law gradient
+/// already describe the air (and the request stays smaller).
+pub const OM_LEVELS: [u32; 7] = [925, 850, 700, 500, 300, 250, 200];
+
+/// The `hourly=` variables of the Open-Meteo request: the upper air.
+fn om_hourly() -> String {
+    let mut v: Vec<String> = Vec::new();
+    for l in OM_LEVELS {
+        v.push(format!("wind_speed_{l}hPa"));
+        v.push(format!("wind_direction_{l}hPa"));
+        v.push(format!("temperature_{l}hPa"));
+    }
+    for k in ["cape", "lifted_index", "convective_inhibition", "boundary_layer_height", "freezing_level_height", "snow_depth"] {
+        v.push(k.into());
+    }
+    v.join(",")
 }
 
 impl OpenMeteo {
@@ -386,8 +430,21 @@ impl OpenMeteo {
             mid_dir: h("wind_direction_500hPa"),
             jet_kt: h("wind_speed_250hPa"),
             jet_dir: h("wind_direction_250hPa"),
-            cape: h("cape").unwrap_or(0.0),
+            cape: h("cape").unwrap_or(0.0).max(0.0),
             snow_depth_m: h("snow_depth").unwrap_or(0.0),
+            lifted_index: h("lifted_index"),
+            cin: h("convective_inhibition").unwrap_or(0.0).abs(),
+            blh_m: h("boundary_layer_height").filter(|x| *x > 0.0),
+            freezing_msl: h("freezing_level_height"),
+            elevation_m: v.get("elevation").and_then(|x| x.as_f64()).map(|x| x as f32),
+            levels: OM_LEVELS
+                .iter()
+                .filter_map(|&l| {
+                    let kt = h(&format!("wind_speed_{l}hPa"))?;
+                    let dir = h(&format!("wind_direction_{l}hPa"))?;
+                    Some(PressureLevel { hpa: l as f32, kt, dir, temp_c: h(&format!("temperature_{l}hPa")) })
+                })
+                .collect(),
         })
     }
 }
@@ -434,6 +491,17 @@ pub struct Wx {
     pub snow_depth_m: f32,
     /// Convective potential (J/kg).
     pub cape: f32,
+    /// Lifted index (K, negative = unstable) and convective inhibition (J/kg)
+    /// from the forecast (None / 0 without Open-Meteo upper-air data).
+    pub lifted_index: Option<f32>,
+    pub cin: f32,
+    /// Top of the convective boundary layer (m above the ground): where
+    /// thermals stop on a blue day.
+    pub bl_top_m: Option<f32>,
+    /// Height of the 0 °C level (m above the ground; negative: freezing at the surface).
+    pub freezing_agl_m: Option<f32>,
+    /// Forecast winds / temperatures aloft (pressure levels), lowest first.
+    pub aloft: Vec<AloftLevel>,
     /// Seconds east of UTC at the location.
     pub utc_offset_s: Option<i64>,
     pub tz: String,
@@ -441,10 +509,79 @@ pub struct Wx {
     pub obs_unix: u64,
 }
 
+/// One level of the upper-air profile (from a forecast pressure level).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AloftLevel {
+    pub hpa: f32,
+    /// Height above the ground (m), from the hypsometric equation.
+    pub h_m: f32,
+    pub from: f32,
+    pub kt: f32,
+    pub temp_c: Option<f32>,
+}
+
+/// A METAR this close (km) is the authority for the cloud; farther away the
+/// forecast's low / mid / high cover fills in between the stations.
+pub const METAR_NEAR_KM: f32 = 40.0;
+
+/// Heights above the ground (m) of forecast pressure levels: the hypsometric
+/// equation layer by layer up from sea level (pressure `qnh`, temperature
+/// `t_sfc_c` at the ground `elev_m` above sea level), with the levels' own
+/// temperatures where given (ISA lapse otherwise).
+pub fn level_heights(qnh: f32, t_sfc_c: f32, elev_m: f32, levels: &[PressureLevel]) -> Vec<f32> {
+    let (mut p0, mut z0, mut t0) = (qnh.clamp(900.0, 1090.0), 0.0f32, t_sfc_c + 273.15 + 0.0065 * elev_m.max(0.0));
+    let mut out = Vec::with_capacity(levels.len());
+    for l in levels {
+        let p = l.hpa.clamp(10.0, p0 - 0.1);
+        // ISA guess for the layer, refined with the level's temperature.
+        let guess = 29.27 * t0 * (p0 / p).ln();
+        let t1 = l.temp_c.map_or(t0 - 0.0065 * guess, |t| t + 273.15).max(180.0);
+        z0 += 29.27 * 0.5 * (t0 + t1) * (p0 / p).ln();
+        out.push(z0 - elev_m);
+        (p0, t0) = (p, t1);
+    }
+    out
+}
+
+/// How readily deep convection goes (0 stable .. 1 explosive): CAPE, the
+/// lifted index (when known) and the cap a large CIN puts on it.
+pub fn convective_potential(cape: f32, li: Option<f32>, cin: f32) -> f32 {
+    let c = smooth(150.0, 2500.0, cape);
+    let p = li.map_or(c, |li| 0.6 * c + 0.4 * smooth(1.0, -7.0, li));
+    p * (1.0 - 0.85 * smooth(15.0, 250.0, cin.abs()))
+}
+
 impl Default for Wx {
     fn default() -> Self {
         Wx::preset(Weather::Scattered)
     }
+}
+
+/// Cloud layers from the forecast's low / mid / high cover: the low layer at
+/// the cumulus base of the temperature / dew-point spread (~400 ft per °C),
+/// convective (CB / TCU) when the air is unstable enough (`instab`, see
+/// [`convective_potential`]; CAPE alone without upper-air data).
+fn om_layers(o: &OpenMeteo, temp_c: f32, dew_c: f32, instab: f32) -> Vec<Layer> {
+    let cov = |c: f32| match c {
+        c if c < 0.1 => None,
+        c if c < 0.3 => Some(Cover::Few),
+        c if c < 0.6 => Some(Cover::Sct),
+        c if c < 0.92 => Some(Cover::Bkn),
+        _ => Some(Cover::Ovc),
+    };
+    let lcl = ((temp_c - dew_c).max(1.0) * 400.0).clamp(800.0, 7000.0);
+    let convective = if o.lifted_index.is_some() { instab > 0.45 } else { o.cape > 600.0 };
+    let mut v = Vec::new();
+    if let Some(c) = cov(o.cloud_low) {
+        v.push(Layer { cover: c, base_ft: lcl, convective });
+    }
+    if let Some(c) = cov(o.cloud_mid) {
+        v.push(Layer { cover: c, base_ft: 11_000.0, convective: false });
+    }
+    if let Some(c) = cov(o.cloud_high) {
+        v.push(Layer { cover: c, base_ft: 26_000.0, convective: false });
+    }
+    v
 }
 
 /// Wind as a world-space velocity (m/s, +X east, -Z north) from "from" degrees + knots.
@@ -492,6 +629,11 @@ impl Wx {
             recent_rain: false,
             snow_depth_m: 0.0,
             cape: 200.0,
+            lifted_index: None,
+            cin: 0.0,
+            bl_top_m: None,
+            freezing_agl_m: None,
+            aloft: Vec::new(),
             utc_offset_s: None,
             tz: String::new(),
             obs_unix: 0,
@@ -527,6 +669,10 @@ impl Wx {
                 w.vis_m = v.clamp(50.0, 60_000.0);
             }
             w.cape = o.cape;
+            w.lifted_index = o.lifted_index;
+            w.cin = o.cin;
+            w.bl_top_m = o.blh_m;
+            w.freezing_agl_m = o.freezing_msl.map(|f| f - o.elevation_m.unwrap_or(0.0));
             w.snow_depth_m = o.snow_depth_m;
             // WMO weather code → precipitation (used when no METAR says otherwise).
             let (p, i) = match o.code {
@@ -537,6 +683,13 @@ impl Wx {
                 85 | 86 => (Precip::Snow, if o.code == 85 { 0.4 } else { 0.9 }),
                 95..=99 => (Precip::Rain, 0.9),
                 _ => (Precip::None, 0.0),
+            };
+            // Rain falling through a 0 °C level just above the ground arrives
+            // as snow / sleet.
+            let p = match (p, w.freezing_agl_m) {
+                (Precip::Rain | Precip::Drizzle, Some(f)) if f < 0.0 => Precip::Snow,
+                (Precip::Rain, Some(f)) if f < 300.0 && w.temp_c < 3.0 => Precip::Sleet,
+                (p, _) => p,
             };
             w.precip = p;
             w.intensity = i;
@@ -603,28 +756,23 @@ impl Wx {
             w.metar = Some(m.clone());
         }
         // No cloud information from a METAR (or only an AUTO "none detected"):
-        // fill in from Open-Meteo's low / mid / high cover.
+        // fill in from Open-Meteo's low / mid / high cover. Between stations
+        // (the nearest one far away) the forecast is the better guess; near
+        // one the METAR rules below ~10 000 ft and the forecast adds the mid /
+        // high cloud it does not report (AUTO stations see to 12 000 ft at most).
         let metar_says_clear = metar.as_ref().is_some_and(|(m, _)| m.no_cloud && !m.ncd);
-        if w.layers.is_empty() && !metar_says_clear {
-            if let Some(o) = &om {
-                let cov = |c: f32| match c {
-                    c if c < 0.1 => None,
-                    c if c < 0.3 => Some(Cover::Few),
-                    c if c < 0.6 => Some(Cover::Sct),
-                    c if c < 0.92 => Some(Cover::Bkn),
-                    _ => Some(Cover::Ovc),
-                };
-                // Cumulus base from the temperature / dew-point spread (~400 ft per °C).
-                let lcl = ((w.temp_c - w.dew_c).max(1.0) * 400.0).clamp(800.0, 7000.0);
-                if let Some(c) = cov(o.cloud_low) {
-                    w.layers.push(Layer { cover: c, base_ft: lcl, convective: o.cape > 600.0 });
+        if let Some(o) = &om {
+            let fc = om_layers(o, w.temp_c, w.dew_c, convective_potential(w.cape, w.lifted_index, w.cin));
+            let far = metar.as_ref().is_some_and(|(_, km)| *km > METAR_NEAR_KM);
+            let skc = metar.as_ref().is_some_and(|(m, _)| m.raw.split_whitespace().any(|t| t == "SKC"));
+            if (w.layers.is_empty() && !metar_says_clear) || (far && !fc.is_empty()) {
+                if !w.layers.is_empty() {
+                    src.push("cloud from Open-Meteo".into());
                 }
-                if let Some(c) = cov(o.cloud_mid) {
-                    w.layers.push(Layer { cover: c, base_ft: 11_000.0, convective: false });
-                }
-                if let Some(c) = cov(o.cloud_high) {
-                    w.layers.push(Layer { cover: c, base_ft: 26_000.0, convective: false });
-                }
+                w.layers = fc;
+            } else if metar.is_some() && !skc {
+                let top = w.layers.iter().map(|l| l.base_ft).fold(if metar_says_clear { 12_000.0 } else { 0.0 }, f32::max);
+                w.layers.extend(fc.into_iter().filter(|l| l.base_ft >= 10_000.0 && l.base_ft > top + 3000.0));
             }
         }
         w.layers.sort_by(|a, b| a.base_ft.total_cmp(&b.base_ft));
@@ -643,6 +791,11 @@ impl Wx {
                 w.jet_from = d;
             }
         }
+        // The upper-air profile: pressure-level heights above the ground.
+        if let Some(o) = &om {
+            let hs = level_heights(w.qnh_hpa, w.temp_c, o.elevation_m.unwrap_or(0.0), &o.levels);
+            w.aloft = o.levels.iter().zip(hs).filter(|(_, h)| *h > 100.0).map(|(l, h)| AloftLevel { hpa: l.hpa, h_m: h, from: l.dir, kt: l.kt, temp_c: l.temp_c }).collect();
+        }
         w.om = om;
         w.source = if src.is_empty() { "no data".into() } else { src.join(" + ") };
         w
@@ -658,6 +811,58 @@ impl Wx {
 
     pub fn wind(&self) -> Vec2 {
         wind_vec(self.wind_from, self.wind_kt)
+    }
+
+    /// Short text of the forecast upper air ("FZL 7500 ft  CAPE 850 LI -2  BL 1400 m"), if any.
+    pub fn upper_air_text(&self) -> Option<String> {
+        let mut v = Vec::new();
+        if let Some(f) = self.freezing_agl_m {
+            v.push(if f <= 0.0 { "FZL sfc".to_string() } else { format!("FZL {:.0} ft", (f / FT / 100.0).round() * 100.0) });
+        }
+        if let Some(li) = self.lifted_index {
+            v.push(format!("CAPE {:.0} LI {li:+.0}{}", self.cape, if self.cin > 50.0 { format!(" CIN {:.0}", self.cin) } else { String::new() }));
+        }
+        if let Some(b) = self.bl_top_m {
+            v.push(format!("BL {:.0} m", (b / 50.0).round() * 50.0));
+        }
+        (!v.is_empty()).then(|| v.join("  "))
+    }
+
+    /// 0..1 readiness for deep convection (see [`convective_potential`]).
+    pub fn instability(&self) -> f32 {
+        convective_potential(self.cape, self.lifted_index, self.cin)
+    }
+
+    /// Air temperature (°C) at `h` m above the ground: through the forecast
+    /// pressure-level temperatures, else a lapse rate that puts 0 °C at the
+    /// forecast freezing level, else the standard 6.5 K/km.
+    pub fn temp_at(&self, h: f32) -> f32 {
+        let h = h.max(0.0);
+        let (mut ph, mut pt, mut any) = (0.0f32, self.temp_c, false);
+        for l in self.aloft.iter().filter(|l| l.h_m > 0.0) {
+            let Some(t) = l.temp_c else { continue };
+            any = true;
+            if h <= l.h_m {
+                return pt + (t - pt) * (h - ph) / (l.h_m - ph).max(1.0);
+            }
+            (ph, pt) = (l.h_m, t);
+        }
+        if any {
+            // Above the top level (~12 km): near isothermal (stratosphere).
+            return pt;
+        }
+        if let Some(f) = self.freezing_agl_m.filter(|f| *f > 200.0 && self.temp_c > 0.5) {
+            return self.temp_c - (self.temp_c / f).clamp(0.003, 0.0098) * h;
+        }
+        self.temp_c - 0.0065 * h
+    }
+
+    /// Tropopause height above the ground (m) from the forecast temperatures:
+    /// the first layer above 7 km where the cooling with height stops (< 2 K/km).
+    /// None when it lies above the top level (tropics) or there is no profile.
+    pub fn tropopause_agl(&self) -> Option<f32> {
+        let t: Vec<(f32, f32)> = self.aloft.iter().filter_map(|l| Some((l.h_m, l.temp_c?))).collect();
+        t.windows(2).find(|w| w[1].0 > 7000.0 && (w[0].1 - w[1].1) / ((w[1].0 - w[0].0) * 0.001).max(0.1) < 2.0).map(|w| 0.5 * (w[0].0 + w[1].0))
     }
     pub fn wind_aloft(&self) -> Vec2 {
         wind_vec(self.aloft_from, self.aloft_kt)
@@ -701,10 +906,22 @@ impl Wx {
         let mut s = CloudSpec::clear();
         // Convection: sunshine (season + time of day), instability and showers.
         let insol = (sun_up / 0.75).clamp(0.0, 1.0) * (0.45 + 0.55 * season.summer);
-        let unstable = (self.cape / 800.0).clamp(0.0, 1.0);
+        // With the forecast's lifted index and CIN: a capped airmass builds
+        // less, a negative LI more (CAPE alone otherwise).
+        let unstable = match self.lifted_index {
+            Some(li) => (0.5 * (self.cape / 800.0).clamp(0.0, 1.0) + 0.5 * smooth(2.0, -3.0, li)) * (1.0 - 0.7 * smooth(15.0, 250.0, self.cin)),
+            None => (self.cape / 800.0).clamp(0.0, 1.0),
+        };
         let conv = (0.25 + 0.75 * insol + 0.5 * unstable + if self.showers { 0.4 } else { 0.0 }).min(1.3);
         s.cu_depth = 500.0 + 1300.0 * conv;
         s.thermal = conv * 0.9 + 0.1;
+        if let Some(bl) = self.bl_top_m {
+            // The forecast boundary-layer top: blue thermals stop there (a
+            // low cloud layer below replaces it), and thermals are stronger in
+            // a deep mixed layer (the convective velocity w* ~ zi^(1/3)).
+            s.cu_base = bl.clamp(250.0, 4000.0);
+            s.thermal *= (bl / 1200.0).clamp(0.15, 3.0).cbrt();
+        }
         let mut low_used = false;
         let mut strato_used = false;
         for l in &self.layers {
@@ -1054,7 +1271,8 @@ fn metar_url(lat: f64, lon: f64, box_i: usize) -> String {
 
 fn open_meteo_url(lat: f64, lon: f64) -> String {
     format!(
-        "https://api.open-meteo.com/v1/forecast?latitude={lat:.4}&longitude={lon:.4}&current=temperature_2m,dew_point_2m,precipitation,rain,showers,snowfall,weather_code,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,pressure_msl,wind_speed_10m,wind_direction_10m,wind_gusts_10m,visibility&hourly=wind_speed_850hPa,wind_direction_850hPa,wind_speed_500hPa,wind_direction_500hPa,wind_speed_250hPa,wind_direction_250hPa,cape,snow_depth&forecast_hours=1&wind_speed_unit=kn&timezone=auto"
+        "https://api.open-meteo.com/v1/forecast?latitude={lat:.4}&longitude={lon:.4}&current=temperature_2m,dew_point_2m,precipitation,rain,showers,snowfall,weather_code,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,pressure_msl,wind_speed_10m,wind_direction_10m,wind_gusts_10m,visibility&hourly={}&forecast_hours=1&wind_speed_unit=kn&timezone=auto",
+        om_hourly()
     )
 }
 
@@ -1523,11 +1741,19 @@ pub struct WindField {
     pub cat: f32,
     /// The player's turbulence setting (wx::turbulence::Mode::scale).
     pub scale: f32,
+    /// Forecast winds at the pressure levels (height above the ground m,
+    /// wind m/s world xz), lowest first; the first `levels` entries are used.
+    /// Empty: the surface → 850 → 500 → 250 hPa profile at standard heights.
+    pub profile: [(f32, Vec2); PROFILE_MAX],
+    pub levels: usize,
 }
+
+/// Most pressure levels a [`WindField`] profile holds.
+pub const PROFILE_MAX: usize = 8;
 
 impl Default for WindField {
     fn default() -> Self {
-        WindField { surface: Vec2::ZERO, aloft: Vec2::ZERO, mid: Vec2::ZERO, jet: Vec2::ZERO, gust: 0.0, severity: 0.0, cat: 0.0, scale: 1.0 }
+        WindField { surface: Vec2::ZERO, aloft: Vec2::ZERO, mid: Vec2::ZERO, jet: Vec2::ZERO, gust: 0.0, severity: 0.0, cat: 0.0, scale: 1.0, profile: [(0.0, Vec2::ZERO); PROFILE_MAX], levels: 0 }
     }
 }
 
@@ -1596,7 +1822,16 @@ impl WindField {
             };
             severity = severity.max(reported);
         }
-        WindField { surface, aloft: wx.wind_aloft(), mid, jet, gust, severity, cat: cat_severity(mid, jet), scale: 1.0 }
+        // The forecast's pressure levels (strictly rising, clear of the surface layer).
+        let mut profile = [(0.0, Vec2::ZERO); PROFILE_MAX];
+        let mut levels = 0;
+        for l in &wx.aloft {
+            if levels < PROFILE_MAX && l.h_m > 100.0 && l.h_m.is_finite() && l.kt.is_finite() && (levels == 0 || l.h_m > profile[levels - 1].0 + 50.0) {
+                profile[levels] = (l.h_m, wind_vec(l.from, l.kt));
+                levels += 1;
+            }
+        }
+        WindField { surface, aloft: wx.wind_aloft(), mid, jet, gust, severity, cat: cat_severity(mid, jet), scale: 1.0, profile, levels }
     }
 
     /// Mean wind at height `h` (m) over ground of roughness `rough` (0 open .. 1 city).
@@ -1607,6 +1842,23 @@ impl WindField {
         if h < ref_h {
             let f = ((h.max(z0 * 1.2) / z0).ln() / (ref_h / z0).ln()).clamp(0.0, 1.0);
             return self.surface * f;
+        }
+        // Forecast pressure levels: the boundary-layer gradient up to the
+        // lowest, straight lines between them, easing off above the top (~12 km).
+        if self.levels > 0 {
+            let pts = &self.profile[..self.levels.min(PROFILE_MAX)];
+            let (h0, w0) = pts[0];
+            if h <= h0 {
+                let t = ((h - ref_h) / (h0 - ref_h).max(1.0)).clamp(0.0, 1.0);
+                return self.surface.lerp(w0, t.powf(0.6));
+            }
+            for w in pts.windows(2) {
+                if h <= w[1].0 {
+                    return w[0].1.lerp(w[1].1, (h - w[0].0) / (w[1].0 - w[0].0));
+                }
+            }
+            let (ht, wt) = pts[pts.len() - 1];
+            return wt * (1.0 - 0.5 * smooth(ht, ht + 5600.0, h));
         }
         // Boundary layer: stronger and veering with height up to ~1500 m.
         if h <= 1500.0 {
@@ -1906,6 +2158,9 @@ pub fn hud(ctx: &egui::Context, sim: &crate::sim::Sim, world: &crate::world::Wor
             };
             row(ui, "Wx", pw);
             row(ui, "Temp", format!("{:.0}°C  dew {:.0}°C   QNH {:.0} hPa", w.temp_c, w.dew_c, w.qnh_hpa));
+            if let Some(t) = w.upper_air_text() {
+                row(ui, "Air", t);
+            }
             let sun = sim.sun_dir().y.asin().to_degrees();
             let time = match &world.real_time {
                 Some(rt) => format!("{} live", rt.text),
@@ -1940,6 +2195,9 @@ pub fn save_report(shot: &str, world: &crate::world::World) {
     }
     let _ = writeln!(s, "wind {}  aloft {}  vis {}  cloud {}  {}", dir_text(w.wind_from, w.wind_kt, w.gust_kt), dir_text(w.aloft_from, w.aloft_kt, 0.0), vis_text(w.vis_m), w.cloud_text(), w.category());
     let _ = writeln!(s, "temp {:.1} dew {:.1} QNH {:.1}  precip {} {:.2} showers {} thunder {} fog {} mist {} haze {}", w.temp_c, w.dew_c, w.qnh_hpa, w.precip.name(), w.intensity, w.showers, w.thunder, w.fog, w.mist, w.haze);
+    if let Some(t) = w.upper_air_text() {
+        let _ = writeln!(s, "upper air: {t}  ({} levels)", w.aloft.len());
+    }
     let _ = writeln!(s, "season: {:?}", world.season);
     let _ = writeln!(s, "clouds: {:?}  (sky cover {:.2}, lowest base {:.0} m)", spec, world.clouds.sky_cover(), world.clouds.base());
     let _ = writeln!(s, "render: {r:?}");
@@ -1963,4 +2221,208 @@ pub fn save_report(shot: &str, world: &crate::world::World) {
         let _ = writeln!(s, "mountain waves: λ {:.1} km, max displacement {:.0} m, wind {:?}", wxs.waves.wavelength / 1000.0, wxs.waves.max_eta, wxs.waves.spec.wind);
     }
     let _ = std::fs::write(format!("{shot}.weather.txt"), s);
+}
+
+#[cfg(test)]
+mod upper_air_tests {
+    use super::*;
+    use crate::wx::storm::StormSpec;
+
+    /// A real-shaped Open-Meteo answer: a hot, unstable July afternoon in London.
+    const FIXTURE: &str = include_str!("../tests/weather/open_meteo_upper_air.json");
+
+    fn om() -> OpenMeteo {
+        OpenMeteo::parse(FIXTURE).expect("fixture parses")
+    }
+
+    #[test]
+    fn parses_upper_air_fixture() {
+        let o = om();
+        assert_eq!(o.levels.len(), OM_LEVELS.len());
+        assert_eq!(o.levels[0], PressureLevel { hpa: 925.0, kt: 14.0, dir: 215.0, temp_c: Some(21.0) });
+        assert_eq!(o.levels[6].hpa, 200.0);
+        assert_eq!((o.cape, o.lifted_index, o.cin), (1850.0, Some(-4.2), 12.0));
+        assert_eq!((o.blh_m, o.freezing_msl, o.elevation_m), (Some(1650.0), Some(3850.0), Some(23.0)));
+        // The old fields still come from the same levels.
+        assert_eq!((o.aloft_kt, o.mid_kt, o.jet_kt), (Some(18.0), Some(38.0), Some(75.0)));
+        assert_eq!((o.cloud_low, o.utc_offset_s), (0.3, 3600));
+        // The request asks for every level and field the parser reads, once.
+        let url = open_meteo_url(51.5, -0.125);
+        for k in ["temperature_925hPa", "wind_speed_200hPa", "lifted_index", "convective_inhibition", "boundary_layer_height", "freezing_level_height", "cape"] {
+            assert_eq!(url.matches(&format!("{k},")).count() + url.matches(&format!("{k}&")).count(), 1, "{k} in {url}");
+        }
+        // Request size: Open-Meteo counts every 10 variables as one call.
+        let vars = url.split(['=', '&']).filter(|p| p.contains(',')).map(|p| p.split(',').count()).sum::<usize>();
+        assert!(vars <= 45, "{vars} variables");
+    }
+
+    #[test]
+    fn parses_real_answer() {
+        // Recorded from the API (London, a cold November morning: lifted index null, stable).
+        let o = OpenMeteo::parse(include_str!("../tests/weather/open_meteo_london_nov.json")).unwrap();
+        assert_eq!(o.levels.len(), OM_LEVELS.len());
+        assert!(o.levels.iter().all(|l| l.temp_c.is_some()));
+        assert_eq!((o.lifted_index, o.blh_m, o.freezing_msl), (None, Some(375.0), Some(810.0)));
+        let w = Wx::from_sources(None, None, Some(o), 0);
+        assert_eq!(w.aloft.len(), OM_LEVELS.len());
+        assert!(w.temp_at(w.freezing_agl_m.unwrap()).abs() < 2.5);
+        assert!(!StormSpec::from_wx(&w).active());
+        assert!(WindField::from_wx(&w).levels == OM_LEVELS.len());
+    }
+
+    #[test]
+    fn missing_fields_degrade_gracefully() {
+        // An older / partial answer: only three wind levels, no temperatures, no upper-air indices.
+        let body = r#"{"utc_offset_seconds":0,"current":{"temperature_2m":12.0,"dew_point_2m":6.0,"cloud_cover_low":20},
+            "hourly":{"wind_speed_850hPa":[20.0],"wind_direction_850hPa":[250],"wind_speed_500hPa":[40],"wind_direction_500hPa":[260],"cape":[null]}}"#;
+        let o = OpenMeteo::parse(body).unwrap();
+        assert_eq!(o.levels.len(), 2);
+        assert!(o.levels.iter().all(|l| l.temp_c.is_none()));
+        assert_eq!((o.lifted_index, o.blh_m, o.freezing_msl, o.cape, o.cin), (None, None, None, 0.0, 0.0));
+        let w = Wx::from_sources(None, None, Some(o), 0);
+        assert_eq!(w.aloft.len(), 2);
+        assert!((w.temp_at(1000.0) - (12.0 - 6.5)).abs() < 1e-3, "ISA lapse without temperatures");
+        assert_eq!(w.tropopause_agl(), None);
+        assert_eq!(w.upper_air_text(), None);
+        assert!(w.aloft.iter().all(|l| l.h_m.is_finite() && l.h_m > 0.0));
+        // No hourly block at all.
+        let o = OpenMeteo::parse(r#"{"current":{"temperature_2m":5.0}}"#).unwrap();
+        assert!(o.levels.is_empty() && o.lifted_index.is_none());
+        let w = Wx::from_sources(None, None, Some(o), 0);
+        assert!(w.aloft.is_empty() && WindField::from_wx(&w).levels == 0);
+        // Nothing forecast: the METAR-only weather is unchanged by the new fields.
+        let m = Wx::from_metar_str("EGLC 121450Z 22012KT 9999 FEW030 10/04 Q1012").unwrap();
+        assert!(m.aloft.is_empty() && m.lifted_index.is_none() && m.bl_top_m.is_none() && m.freezing_agl_m.is_none());
+        assert!((m.temp_at(2000.0) - (10.0 - 13.0)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn level_heights_and_temperature_profile() {
+        let w = Wx::from_sources(None, None, Some(om()), 0);
+        let h: Vec<f32> = w.aloft.iter().map(|l| l.h_m).collect();
+        assert_eq!(h.len(), 7);
+        assert!(h.windows(2).all(|p| p[1] > p[0] + 500.0), "{h:?}");
+        // Standard-ish heights for a warm day (above the 23 m ground).
+        assert!((h[1] - 1530.0).abs() < 120.0, "850 hPa at {}", h[1]);
+        assert!((h[3] - 5850.0).abs() < 200.0, "500 hPa at {}", h[3]);
+        assert!((h[6] - 12_000.0).abs() < 400.0, "200 hPa at {}", h[6]);
+        // Freezing level: given as MSL, stored above the ground; the profile agrees.
+        assert_eq!(w.freezing_agl_m, Some(3827.0));
+        assert!(w.temp_at(3827.0).abs() < 1.5, "0 °C near the freezing level: {}", w.temp_at(3827.0));
+        assert_eq!(w.temp_at(0.0), 27.4);
+        assert!((w.temp_at(h[3]) + 12.5).abs() < 1e-3);
+        assert_eq!(w.temp_at(20_000.0), -49.0);
+        // The cooling stops between 250 and 200 hPa: the tropopause.
+        let tp = w.tropopause_agl().unwrap();
+        assert!(tp > h[5] && tp < h[6], "tropopause {tp}");
+        // Freezing level alone (no level temperatures): a lapse through 0 °C there.
+        let fz = Wx { aloft: Vec::new(), freezing_agl_m: Some(2000.0), temp_c: 10.0, ..Wx::default() };
+        assert!(fz.temp_at(2000.0).abs() < 1e-3 && (fz.temp_at(1000.0) - 5.0).abs() < 1e-3);
+        assert!(w.upper_air_text().unwrap().contains("FZL 12600 ft"));
+    }
+
+    #[test]
+    fn winds_aloft_follow_the_pressure_levels() {
+        let w = Wx::from_sources(None, None, Some(om()), 0);
+        let wf = WindField::from_wx(&w);
+        assert_eq!(wf.levels, 7);
+        for l in &w.aloft {
+            let m = wf.mean(l.h_m, 0.0);
+            assert!((m - wind_vec(l.from, l.kt)).length() < 0.01, "{} hPa", l.hpa);
+        }
+        // Between levels: in between; near the ground: the surface wind.
+        let mid = wf.mean(0.5 * (w.aloft[3].h_m + w.aloft[4].h_m), 0.0).length() / KT;
+        assert!(mid > 38.0 && mid < 62.0, "{mid}");
+        assert!((wf.mean(10.0, 0.0).length() / KT - 8.2).abs() < 0.3);
+        // Above the top level it eases off, and stays finite everywhere.
+        assert!(wf.mean(20_000.0, 0.0).length() < wf.mean(w.aloft[6].h_m, 0.0).length());
+        for i in 0..400 {
+            assert!(wf.mean(i as f32 * 60.0, 0.5).is_finite());
+        }
+        // The jet is the 250 hPa level: clear-air turbulence uses it.
+        assert!((wf.jet.length() / KT - 75.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn convection_from_cape_li_cin() {
+        assert!(convective_potential(0.0, Some(3.0), 0.0) < 0.01);
+        let hot = convective_potential(1850.0, Some(-4.2), 12.0);
+        assert!(hot > 0.6, "{hot}");
+        assert!(convective_potential(1850.0, Some(-4.2), 300.0) < 0.3 * hot, "a strong cap");
+        assert!(convective_potential(1000.0, Some(-6.0), 0.0) > convective_potential(1000.0, Some(0.0), 0.0));
+        // The fixture: unstable → the forecast's low cloud is convective and
+        // storms spawn although nothing reports them.
+        let w = Wx::from_sources(None, None, Some(om()), 0);
+        assert!(w.layers[0].convective, "{:?}", w.layers);
+        let s = StormSpec::from_wx(&w);
+        assert!(s.active() && s.strength > 0.6 && s.flash_rate > 1.0, "{s:?}");
+        assert_eq!(s.home_km, 0.0, "no cell forced at the start without a report");
+        let tp = w.tropopause_agl().unwrap();
+        assert!(s.top <= tp + 800.0 + 1.0, "anvils at the tropopause: {} vs {tp}", s.top);
+        // The lifted index is often null in real answers: CAPE (with the upper air) still spawns them.
+        let no_li = Wx::from_sources(None, None, Some(OpenMeteo { lifted_index: None, ..om() }), 0);
+        assert!(StormSpec::from_wx(&no_li).active());
+        // Capped: fewer cells.
+        let capped = Wx::from_sources(None, None, Some(OpenMeteo { cin: 300.0, ..om() }), 0);
+        let sc = StormSpec::from_wx(&capped);
+        assert!(!sc.active() || sc.amount < s.amount, "{sc:?}");
+        // Stable air: none.
+        let stable = Wx::from_sources(None, None, Some(OpenMeteo { cape: 50.0, lifted_index: Some(4.0), ..om() }), 0);
+        assert!(!StormSpec::from_wx(&stable).active());
+        // A nearby METAR without storms keeps them sparse; one far away doesn't.
+        let m = Metar::parse("EGLC 141420Z 21008KT 9999 SCT045 27/17 Q1012").unwrap();
+        let near = StormSpec::from_wx(&Wx::from_sources(Some((m.clone(), 5.0)), None, Some(om()), 0));
+        let far = StormSpec::from_wx(&Wx::from_sources(Some((m, 90.0)), None, Some(om()), 0));
+        assert!(near.amount < far.amount && near.active(), "{near:?} {far:?}");
+        // Cumulus: CAPE / LI drive the depth and thermals, the cap shrinks them.
+        let season = Season::at(195, 51.5);
+        let a = w.cloud_spec(0.9, &season);
+        let b = capped.cloud_spec(0.9, &season);
+        assert!(a.thermal >= b.thermal);
+    }
+
+    #[test]
+    fn boundary_layer_sets_the_thermal_top() {
+        let season = Season::at(195, 51.5);
+        // A blue day (no low cloud): thermals stop at the boundary-layer top.
+        let blue = |blh: f32| Wx::from_sources(None, None, Some(OpenMeteo { cloud_low: 0.0, cloud_mid: 0.0, cloud_high: 0.0, blh_m: Some(blh), cape: 300.0, lifted_index: Some(1.0), ..om() }), 0);
+        let deep = blue(2200.0).cloud_spec(0.9, &season);
+        let shallow = blue(600.0).cloud_spec(0.9, &season);
+        assert!((deep.cu_base - 2200.0).abs() < 1.0 && (shallow.cu_base - 600.0).abs() < 1.0);
+        assert!(deep.thermal > shallow.thermal, "deeper mixed layer, stronger thermals");
+        assert_eq!(deep.cumulus, 0.0);
+        // With cumulus the cloud base wins (and the glider bot stops there: CloudField::cu_base).
+        let cu = Wx::from_sources(None, None, Some(OpenMeteo { cape: 300.0, lifted_index: Some(1.0), ..om() }), 0);
+        let c = cu.cloud_spec(0.9, &season);
+        assert!((c.cu_base - cu.layers[0].base_ft * FT).abs() < 1.0);
+    }
+
+    #[test]
+    fn forecast_cloud_between_stations_metar_near_them() {
+        let o = OpenMeteo { cloud_low: 0.7, ..om() };
+        let m = Metar::parse("EGLC 141420Z 21008KT 9999 FEW040 27/17 Q1012").unwrap();
+        // Near the station: its layer stays, the forecast adds mid / high cloud above it.
+        let near = Wx::from_sources(Some((m.clone(), 5.0)), None, Some(o.clone()), 0);
+        assert_eq!(near.layers[0], Layer { cover: Cover::Few, base_ft: 4000.0, convective: false });
+        assert_eq!(near.cloud_text(), "FEW040 FEW110 SCT260");
+        // Far from any station: the forecast's layers.
+        let far = Wx::from_sources(Some((m, 90.0)), None, Some(o.clone()), 0);
+        assert_eq!(far.layers[0].cover, Cover::Bkn);
+        assert!(far.source.contains("cloud from Open-Meteo"), "{}", far.source);
+        // A manned "sky clear" is believed.
+        let skc = Metar::parse("EGLC 141420Z 21008KT 9999 SKC 27/17 Q1012").unwrap();
+        assert!(Wx::from_sources(Some((skc, 5.0)), None, Some(o), 0).layers.is_empty());
+    }
+
+    #[test]
+    fn freezing_level_sets_precip_type() {
+        let rain = |fz: f32, t: f32| Wx::from_sources(None, None, Some(OpenMeteo { code: 63, temp_c: Some(t), dew_c: Some(t - 1.0), freezing_msl: Some(fz), elevation_m: Some(0.0), ..Default::default() }), 0).precip;
+        assert_eq!(rain(2500.0, 8.0), Precip::Rain);
+        assert_eq!(rain(150.0, 1.5), Precip::Sleet);
+        assert_eq!(rain(-80.0, -0.5), Precip::Snow);
+        // A METAR near the station is the truth for what is falling.
+        let m = Metar::parse("EGLC 141420Z 21008KT 4000 RA BKN010 02/01 Q1012").unwrap();
+        let w = Wx::from_sources(Some((m, 3.0)), None, Some(OpenMeteo { code: 63, freezing_msl: Some(100.0), ..Default::default() }), 0);
+        assert_eq!(w.precip, Precip::Rain);
+    }
 }
