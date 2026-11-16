@@ -96,6 +96,15 @@ others; per-item sources, authors and licences are listed in:
     2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under
     COPERNICUS by the European Union and ESA; all rights reserved"
     (doi:10.5270/ESA-c5d3d65; registry.opendata.aws/copernicus-dem).
+  * Elevation detail over England (src/dem/lidar.rs, desktop version; read
+    at run time from the Defra Data Services Platform WCS, cached under
+    cache/lidar/, not redistributed): Environment Agency LIDAR Composite
+    Digital Terrain Model (DTM) 1m, licensed under the Open Government
+    Licence v3.0
+    (https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/).
+    "© Environment Agency copyright and/or database right 2022. All rights
+    reserved." Contains public sector information licensed under the Open
+    Government Licence v3.0. Skyward resamples it to its terrain grid.
   * Buildings where OpenStreetMap has none (src/overture/, desktop version;
     read at run time from the Overture Maps Foundation buildings PMTiles
     archive, reduced footprints cached under cache/overture/, not

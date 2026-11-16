@@ -352,6 +352,7 @@ pub fn credits(ui: &mut Ui, st: &mut UiState) {
         ("Live traffic", "ADS-B data: adsb.lol contributors — ODbL 1.0 (desktop version)"),
         ("Elevation", "Terrain Tiles on AWS (Mapzen / Tilezen: SRTM, GMTED2010, 3DEP, ETOPO1, EU-DEM and more)"),
         ("Elevation detail", crate::dem::copdem::CREDIT),
+        ("Elevation, England", crate::dem::lidar::CREDIT),
         ("Land cover", crate::landcover::WORLDCOVER_CREDIT),
         ("Tree heights", crate::landcover::CANOPY_CREDIT),
         ("More buildings", crate::overture::CREDIT),

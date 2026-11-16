@@ -1,7 +1,8 @@
 //! Minimal (Big)TIFF reader for the raster layers (land cover, canopy
 //! height, Copernicus DEM): enough of the format to range-read
 //! Cloud-Optimised GeoTIFFs — the image file directories (one per overview),
-//! tile / strip offsets, the GeoTIFF pixel scale, tie point and raster type —
+//! tile / strip offsets, the GeoTIFF pixel scale and tie point (or a plain
+//! scale + offset ModelTransformation), raster type —
 //! and to decode one tile or strip (none / DEFLATE / LZW; horizontal or
 //! floating-point predictor; 8- or 16-bit integer or 32-bit float
 //! single-band samples).
@@ -159,7 +160,7 @@ pub fn parse(b: &[u8]) -> Result<Parse, String> {
                 }
             };
             // Only the tags we use are read (and may require more bytes).
-            let wanted = matches!(tag, 256 | 257 | 258 | 259 | 273 | 278 | 279 | 317 | 322 | 323 | 324 | 325 | 339 | 33550 | 33922 | 34735);
+            let wanted = matches!(tag, 256 | 257 | 258 | 259 | 273 | 278 | 279 | 317 | 322 | 323 | 324 | 325 | 339 | 33550 | 33922 | 34264 | 34735);
             if !wanted {
                 continue;
             }
@@ -194,6 +195,15 @@ pub fn parse(b: &[u8]) -> Result<Parse, String> {
                     33922 if typ == 12 && cnt >= 6 => {
                         let v = dbl()?;
                         d.tie = Some([v[0], v[1], v[2], v[3], v[4], v[5]]);
+                    }
+                    // ModelTransformation (a 4×4 matrix; e.g. GeoServer's WCS
+                    // output): read when it is a plain scale + offset.
+                    34264 if typ == 12 && cnt == 16 => {
+                        let v = dbl()?;
+                        if v[1] == 0.0 && v[4] == 0.0 && v[0] > 0.0 && v[5] < 0.0 && d.scale.is_none() && d.tie.is_none() {
+                            d.scale = Some([v[0], -v[5], 0.0]);
+                            d.tie = Some([0.0, 0.0, 0.0, v[3], v[7], 0.0]);
+                        }
                     }
                     _ => {}
                 }

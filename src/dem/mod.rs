@@ -10,15 +10,19 @@
 //! Sources ([`SOURCES`]):
 //! * [`copdem`]: Copernicus DEM GLO-30 (30 m TanDEM-X surface model), blended
 //!   in on rough terrain and north of 60° N.
+//! * [`lidar`]: the Environment Agency's LIDAR composite DTM (England, bare
+//!   earth), over everything else where it has data, ramped in at its edges.
 //!
-//! A per-area source (a national LIDAR DTM, say) is one more [`Source`]
-//! appended after `copdem`: it overwrites the pixels it covers and leaves the
-//! rest alone.
+//! A per-area source is one more [`Source`] appended after the global ones:
+//! it overwrites the pixels it covers and leaves the rest alone.
 //!
-//! **Off**: the browser build (the bucket sends no CORS headers), unit tests,
-//! a flat world, or `SKYWARD_NO_COPDEM=1` (Copernicus only).
+//! **Off**: the browser build (the Copernicus bucket sends no CORS headers;
+//! the browser has no detail-source hook), unit tests, a flat world, or
+//! `SKYWARD_NO_COPDEM=1` / `SKYWARD_NO_LIDAR=1` (that source only).
 
 pub mod copdem;
+pub mod lidar;
+pub mod osgb;
 
 /// A detail DEM tile being refined.
 pub struct DetailTile<'a> {
@@ -64,6 +68,9 @@ static SOURCES: std::sync::LazyLock<Vec<Box<dyn Source>>> = std::sync::LazyLock:
     let mut v: Vec<Box<dyn Source>> = Vec::new();
     if copdem::enabled() {
         v.push(Box::new(copdem::CopDem));
+    }
+    if lidar::enabled() {
+        v.push(Box::new(lidar::Lidar));
     }
     v
 });
