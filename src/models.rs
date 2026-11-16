@@ -238,13 +238,46 @@ const DOORS_PARKED_S: f32 = 8.0;
 const DOORS_OPEN_S: f32 = 10.0;
 const DOORS_CLOSE_S: f32 = 5.0;
 
+/// Capture / debug knob: `SKYWARD_SURFACES="elevator=1,aileron=-0.5,rudder=1,flaps=1,spoilers=1,gear=0"`
+/// poses the exterior control surfaces as given (Skyward signs, see
+/// [`crate::flight::Surfaces`]: + = elevator TE up, right aileron up, rudder TE
+/// right; gear 0 = down, 1 = up), whatever the flight model does. Only the
+/// model animation sees it (captures: `--shot`, `SKYWARD_THUMB_VIEW` in main.rs).
+fn forced_surfaces(mut s: crate::flight::Surfaces) -> crate::flight::Surfaces {
+    static FORCED: std::sync::OnceLock<Vec<(String, f32)>> = std::sync::OnceLock::new();
+    let f = FORCED.get_or_init(|| {
+        std::env::var("SKYWARD_SURFACES")
+            .map(|v| {
+                v.split(',')
+                    .filter_map(|kv| {
+                        let (k, x) = kv.split_once('=')?;
+                        Some((k.trim().to_string(), x.trim().parse().ok()?))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    });
+    for (k, v) in f {
+        match k.as_str() {
+            "elevator" => s.elevator = *v,
+            "aileron" => s.aileron = *v,
+            "rudder" => s.rudder = *v,
+            "flaps" => s.flaps = *v,
+            "spoilers" => s.spoilers = *v,
+            "gear" => s.gear = *v,
+            _ => {}
+        }
+    }
+    s
+}
+
 /// Value of one animation channel (FlightGear semantics, see `aircraft_asset.rs`).
 /// The stateful `doors*` channels (cargo doors / ramps, open 0..1; the C-5's
 /// `doors_level` / `doors_kneeled` ramps for the normal / kneeling stance)
 /// and `kneel` read 0 here: [`AircraftModel::update`] drives the doors and
 /// the parked fleet (`airport/fleet.rs`) poses them open.
 pub fn channel_value(name: &str, i: &ModelInputs) -> f32 {
-    let s = i.ac.surfaces();
+    let s = forced_surfaces(i.ac.surfaces());
     let ac = i.ac;
     let idx = |pre: &str, suf: &str| -> Option<usize> { name.strip_prefix(pre)?.strip_suffix(suf)?.parse().ok() };
     let b = |x: bool| if x { 1.0 } else { 0.0 };

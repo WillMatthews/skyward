@@ -111,5 +111,15 @@ of `src/cockpit/channels.rs` (rules in `src/expr.rs`; powered buses,
 `serviceable` etc. fold to constants). FlightGear's rotation sense is right-handed about the
 axis (verified by `aircraft_asset::sign_tests`).
 
+The game corrects the imported animations at load (`src/aircraft_fixups.rs`):
+surface channels whose FDM sign convention differs from Skyward's are
+negated (measured from the geometry), and parts whose animation folded
+away here because their property is unmapped (the F-16's right stabilator
+and flaperons read `sim/multiplay/generic/float[4..6]`, `-set.xml` aliases
+of FCS outputs) are cut back out of the static geometry and animated. A
+re-import keeps working with those fixes; `SKYWARD_NO_FIXUPS=1` shows a
+model as imported. `fetch.py` takes `svn:<Name>@<rev>` to pin an FGAddon
+revision (the shipped imports are r21799).
+
 Model frame (FG): x aft, y right, z up. Body frame (Skyward): +Z nose,
 +Y up, +X left, origin = loaded CG.
