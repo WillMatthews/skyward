@@ -54,12 +54,22 @@ others; per-item sources, authors and licences are listed in:
   * assets/fonts/ — fonts (SIL Open Font License 1.1).
   * README.md, "Credits" — map, weather and airport data services. Navaids
     (VOR, DME, NDB) come from OurAirports' navaids.csv (public domain,
-    https://ourairports.com/data/); ILS localizer / glideslope records are
-    synthetic, derived from the OurAirports runway data (src/nav/db.rs), with
-    the frequencies, idents and glidepath angles of a few London ILS taken as
-    facts from public charts. Airport radio frequencies (ATIS, delivery,
-    ground, tower, approach) come from OurAirports' airport-frequencies.csv
-    (public domain). No licence-restricted navigation data is used.
+    https://ourairports.com/data/). ILS localizer / glideslope / DME / marker
+    records come from FlightGear's fgdata Navaids/nav.dat.gz
+    (https://gitlab.com/flightgear/fgdata, commit d0db413d, data cycle
+    2013.10), "Copyright (c) 2013, Robin A. Peel (robin@x-plane.com). This
+    data is free software; you can redistribute it and/or modify it under
+    the terms of the GNU General Public License as published by the Free
+    Software Foundation; either version 2 of the License, or (at your
+    option) any later version." It is downloaded at the first native run /
+    in the web build and kept as a compact derived list (cache/ils.tsv.gz,
+    data/ils.tsv.gz; src/nav/navdat.rs), not stored in the repository.
+    Runway ends without a nav.dat entry get a synthetic ILS derived from the
+    OurAirports runway data (src/nav/db.rs); the frequencies, idents and
+    glidepath angles of a few London ILS are taken as facts from public
+    charts. Airport radio frequencies (ATIS, delivery, ground, tower,
+    approach) come from OurAirports' airport-frequencies.csv (public
+    domain). No other licence-restricted navigation data is used.
   * Live traffic (src/adsb/): aircraft positions from the adsb.lol API,
     made available under the Open Database License (ODbL) 1.0
     (https://opendatacommons.org/licenses/odbl/1-0/) — © adsb.lol

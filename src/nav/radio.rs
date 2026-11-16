@@ -359,12 +359,14 @@ fn scan_nav(rx: &mut NavRx, env: &dyn RadioEnv, stations: &[Navaid], ac: Vec3) {
 
 /// Localizer antenna and front-course direction in the world frame: along
 /// the runway as the world draws it (threshold → antenna), so the beam lies
-/// exactly on the painted centreline.
+/// exactly on the painted centreline — unless a published course is offset
+/// from the runway (LDA / offset localizer, > 2°): then the course itself.
 pub fn loc_frame(env: &dyn RadioEnv, ils: &Ils) -> (Vec2, Vec2) {
     let ant = env.to_world(ils.loc);
     let thr = env.to_world(ils.thr);
     let d = ant - thr;
-    (ant, if d.length() > 100.0 { d / d.length() } else { geo::dir_of(ils.course) })
+    let along = d.length() > 100.0 && (ils.synthetic || geo::wrap_pi(geo::heading_of(d) - ils.course).abs() < 2f32.to_radians());
+    (ant, if along { d / d.length() } else { geo::dir_of(ils.course) })
 }
 
 fn nav_outputs(rx: &mut NavRx, env: &dyn RadioEnv, ac: Vec3, gs_failed: bool) {

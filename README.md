@@ -162,8 +162,8 @@ painted over or composited.
   the ASI into an altimeter, toppling gyros, gear that needs the alternate extension, tyre bursts,
   bird strikes. Each brings master warning or caution, an ECAM / EICAS procedure that ticks off as
   you fly it, and the aural alerts. Fail anything now, arm it, or set random failures by MTBF.
-- **Navigation.** VOR, DME and NDB from OurAirports, plus an ILS for every instrument runway. NAV,
-  COM and ADF radios have range, radio horizon and terrain line of sight, and Morse idents. There is
+- **Navigation.** VOR, DME and NDB from OurAirports; real ILS from FlightGear's nav.dat, and a
+  synthetic one for any other instrument runway. NAV, COM and ADF radios have range, radio horizon and terrain line of sight, and Morse idents. There is
   an FMS-lite flight plan with an MCDU page, and PFD and ND in ROSE / ARC / PLAN.
 - **Autopilot and autoland.** HDG, ALT, V/S, SPD, LOC, VOR, LNAV, VNAV and APPR with no-overshoot
   captures. The airliners flare, retard and roll out on the localizer.
@@ -1023,7 +1023,7 @@ liveries are neutral, with no operator markings.
 | Airport detail | OpenStreetMap via the [Overpass API](https://overpass-api.de/) | ODbL |
 | Elevation | [Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) on AWS (Mapzen / Tilezen); sources below | see below |
 | Airports, runways, frequencies, navaids | [OurAirports](https://ourairports.com/data/) | Public domain |
-| ILS | Synthetic, from OurAirports runway data; a few London ILS frequencies / idents / glidepaths from public charts | — |
+| ILS (localizers, glideslopes, ILS DMEs, marker beacons) | [FlightGear](https://www.flightgear.org/) `fgdata` `Navaids/nav.dat.gz` (AIRAC 2013.10, © Robin A. Peel / X-Plane), compacted at build / first run; synthetic from OurAirports runway data where it has none; a few London ILS frequencies / idents / glidepaths from public charts | GPL-2.0-or-later |
 | Weather | METARs from [aviationweather.gov](https://aviationweather.gov/) (NOAA); forecasts and upper air (winds / temperatures aloft, CAPE, boundary layer, freezing level) from [Open-Meteo](https://open-meteo.com/) | Public / CC BY 4.0 |
 | Place search fallback | [Nominatim](https://nominatim.org/) | ODbL |
 | Live traffic | ADS-B positions from the [adsb.lol](https://adsb.lol/) API (volunteer receivers; no API key, requests carry only a position, a radius and a generic `skyward-flightsim/0.x` User-Agent) | [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/) |

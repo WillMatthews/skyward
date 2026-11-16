@@ -577,3 +577,221 @@ fn synthetic_glidepath_terrain_check() {
     env.ridge = Some((c - side, c + side, 600.0));
     assert!(!super::state::glidepath_clear(&env, &n));
 }
+
+// ---------------------------------------------------------------- nav.dat
+
+/// Rows from FlightGear's nav.dat (810, AIRAC 2013.10; Robin A. Peel,
+/// GPL-2.0-or-later), and a malformed row.
+const NAV_DAT: &str = "I
+810 Version - data cycle 2013.10, build 20131334, metadata NavXP810.  Copyright (c) 2013, Robin A. Peel (robin@x-plane.com).   GPL.
+
+2  51.50435000  000.06750300      0   322  10    0.0 LCY  CITY NDB
+3  51.33089800  000.03481100    590 11510 130   -3.0 BIG  BIGGIN VOR-DME
+12  51.33087500  000.03481100    590 11510 125    0.0 BIG  BIGGIN VOR-DME
+4  51.47769700 -000.42708100     83 11030  18      89.691 IAA  EGLL 09L ILS-cat-I
+4  51.46496100 -000.42837500     83 10950  18      89.729 IBB  EGLL 09R ILS-cat-I
+4  51.46476100 -000.49111900     83 10950  18     269.670 ILL  EGLL 27L ILS-cat-I
+4  51.47746700 -000.49373900     83 11030  18     269.660 IRR  EGLL 27R ILS-cat-I
+6  51.47873900 -000.48065800     51 11030  10  300089.666 IAA  EGLL 09L GS
+6  51.46361100 -000.47791100     52 10950  10  300089.690 IBB  EGLL 09R GS
+6  51.46363300 -000.43876700     56 10950  10  300269.690 ILL  EGLL 27L GS
+6  51.47883100 -000.43820600     60 11030  10  300269.666 IRR  EGLL 27R GS
+12  51.47882800 -000.45912800     89 11030  18       1.000 IAA  EGLL 09L DME-ILS
+12  51.46376700 -000.45854700     84 10950  18       0.900 IBB  EGLL 09R DME-ILS
+12  51.46376700 -000.45854700     84 10950  18       0.900 ILL  EGLL 27L DME-ILS
+12  51.47882800 -000.45912800     89 11030  18       1.000 IRR  EGLL 27R DME-ILS
+4  51.50564200  000.04212500     19 11115  18     272.892 ILSR EGLC 27  ILS-cat-I
+6  51.50551400  000.06335000     35 11115  10  550272.903 ILSR EGLC 27  GS
+12  51.50579400  000.05442500     48 11115  18       0.400 ILSR EGLC 27  DME-ILS
+5  65.63144444 -018.01119444    200 11190  18      24.000 IEY  BIAR 01  LDA
+7  54.69264700 -006.08535800    268     0   0     245.030 ---- EGAA 25  OM
+8  47.47223300 -122.31102500    433     0   0     180.343 ---- KSEA 16L MM
+4  47.42939200 -122.30805600    338 11030  18     180.343 ISNQ KSEA 16L ILS-cat-I
+6  47.46081700 -122.30939400    425 11030  10  300180.343 ISNQ KSEA 16L GS
+13  49.20933100  007.39577800   1201 10910  25    0.0 ZND  ZWEIBRUCKEN DME
+4  bad row
+99
+";
+
+fn ils_fixture() -> super::navdat::IlsDb {
+    super::navdat::IlsDb::new(super::navdat::ils_records(&super::navdat::parse(NAV_DAT)))
+}
+
+#[test]
+fn navdat_parse_rows() {
+    use super::navdat;
+    let recs = navdat::parse(NAV_DAT);
+    assert_eq!(recs.len(), 24, "the malformed row and the 99 end are skipped");
+    let ndb = &recs[0];
+    assert_eq!((ndb.code, ndb.ident.as_str(), ndb.freq_khz(), ndb.name.as_str()), (2, "LCY", 322, "CITY NDB"));
+    let gs = recs.iter().find(|r| r.code == 6 && r.ident == "ILSR").unwrap();
+    let (a, c) = gs.gs_angle_course();
+    assert!((a - 5.5).abs() < 1e-4 && (c - 272.903).abs() < 1e-3, "{a} {c}");
+    let dme = recs.iter().find(|r| r.code == 12 && r.ident == "IRR").unwrap();
+    assert_eq!((dme.airport.as_str(), dme.runway.as_str(), dme.freq_khz()), ("EGLL", "27R", 110_300));
+    let vor_dme = recs.iter().find(|r| r.code == 12 && r.ident == "BIG").unwrap();
+    assert!(vor_dme.airport.is_empty() && vor_dme.name == "BIGGIN VOR-DME");
+    // VOR / NDB / DME rows as navaids (the VOR-DME's DME row folds into it).
+    let n = navdat::navaids(&recs);
+    let kinds: Vec<(&str, Kind, u32)> = n.iter().map(|n| (n.ident.as_str(), n.kind, n.freq_khz)).collect();
+    assert_eq!(kinds, vec![("LCY", Kind::Ndb, 322), ("BIG", Kind::VorDme, 115_100), ("ZND", Kind::Dme, 109_100)]);
+    // The 1100 layout: a region column after the airport.
+    let xp11 = "I\n1100 Version - data cycle 1802\n\n4  47.42939200 -122.30805600    338 11030  18     180.343 ISNQ KSEA K1 16L ILS-cat-I\n\
+                3  47.43538889 -122.30961111    356 11680 130   19.000 SEA  ENRT K1 SEATTLE VORTAC\n99\n";
+    let r = navdat::parse(xp11);
+    assert_eq!(r.len(), 2);
+    assert_eq!((r[0].airport.as_str(), r[0].runway.as_str(), r[0].name.as_str()), ("KSEA", "16L", "ILS-cat-I"));
+    assert_eq!(r[1].name, "SEATTLE VORTAC");
+}
+
+#[test]
+fn navdat_ils_records_and_compact_roundtrip() {
+    use super::navdat::{self, MarkerKind};
+    let list = navdat::ils_records(&navdat::parse(NAV_DAT));
+    assert_eq!(list.len(), 7);
+    let irr = list.iter().find(|r| r.ident == "IRR").unwrap();
+    assert_eq!((irr.airport.as_str(), irr.runway.as_str(), irr.freq_khz), ("EGLL", "27R", 110_300));
+    assert!((irr.course_deg - 269.66).abs() < 1e-3 && irr.gs.is_some_and(|g| (g.1 - 3.0).abs() < 1e-4));
+    assert_eq!(irr.dme, Some((51.478828, -0.459128)));
+    // A code-5 row has no glideslope; markers join their runway end.
+    let lda = list.iter().find(|r| r.ident == "IEY").unwrap();
+    assert!(lda.gs.is_none() && lda.facility == "LDA");
+    let sea = list.iter().find(|r| r.ident == "ISNQ").unwrap();
+    assert_eq!(sea.markers.len(), 1);
+    assert_eq!(sea.markers[0].kind, MarkerKind::Middle);
+    let back = navdat::decode(&navdat::encode(&list)).unwrap();
+    assert_eq!(back.len(), list.len());
+    for (a, b) in back.iter().zip(&list) {
+        assert_eq!((&a.airport, &a.runway, &a.ident, a.freq_khz, &a.facility, a.markers.len()), (&b.airport, &b.runway, &b.ident, b.freq_khz, &b.facility, b.markers.len()));
+        assert!((a.loc.0 - b.loc.0).abs() < 1e-6 && (a.course_deg - b.course_deg).abs() < 1e-3);
+        assert_eq!(a.gs.is_some(), b.gs.is_some());
+    }
+    assert!(navdat::decode("skyward-ils-0\n").is_none());
+    assert!(navdat::rwy_eq("09L", "9L") && !navdat::rwy_eq("09L", "09R"));
+}
+
+/// nav.dat's EGLL ILS carry the published facts the hand table had, on the
+/// real antenna sites; the threshold stays the OurAirports one.
+#[test]
+fn real_ils_matches_published_egll() {
+    let a = adb();
+    let real = ils_fixture();
+    let egll = a.get("EGLL").unwrap();
+    let list = db::ils_at_with(egll, Some(&real));
+    assert_eq!(list.len(), 4);
+    let synth = db::ils_at_with(egll, None);
+    for (rwy, ident, freq) in [("27R", "IRR", 110_300), ("09L", "IAA", 110_300), ("27L", "ILL", 109_500), ("09R", "IBB", 109_500)] {
+        let n = list.iter().find(|n| n.ils.as_ref().unwrap().runway == rwy).unwrap();
+        let s = synth.iter().find(|n| n.ils.as_ref().unwrap().runway == rwy).unwrap();
+        let (i, si) = (n.ils.as_ref().unwrap(), s.ils.as_ref().unwrap());
+        assert_eq!((n.ident.as_str(), n.freq_khz, n.kind, i.synthetic), (ident, freq, Kind::Ils, false), "{rwy}");
+        assert_eq!((n.ident.as_str(), n.freq_khz), (s.ident.as_str(), s.freq_khz), "{rwy}: as the hand table");
+        assert!((i.gs_angle.to_degrees() - 3.0).abs() < 1e-3);
+        // Same threshold; the course within 0.1° of the runway's; the
+        // localizer within 200 m of where the synthetic one put it.
+        assert!(geo::gc_dist(i.thr, si.thr) < 0.5);
+        assert!(geo::wrap_pi(i.course - si.course).abs() < 0.1f32.to_radians(), "{rwy}: {} vs {}", i.course.to_degrees(), si.course.to_degrees());
+        assert!(geo::gc_dist(i.loc, si.loc) < 200.0, "{rwy}: {}", geo::gc_dist(i.loc, si.loc));
+        assert!(n.dme.is_some() && i.gs.is_some());
+    }
+    // The radios fly the real 27R as the synthetic one: beam along the runway.
+    let n = list.iter().find(|n| n.ident == "IRR").unwrap();
+    let ils = n.ils.as_ref().unwrap();
+    let env = Env::at(ils.thr);
+    let (_, dir) = super::radio::loc_frame(&env, ils);
+    assert!(geo::wrap_pi(geo::heading_of(dir) - ils.course).abs() < 0.1f32.to_radians());
+}
+
+/// The chart table beats nav.dat's stale facts; runway ends nav.dat lacks
+/// get a synthetic ILS clear of the real channels; an ILS whose runway
+/// OurAirports does not know still works (threshold from the localizer).
+#[test]
+fn real_ils_overrides_and_fallback() {
+    let a = adb();
+    let real = ils_fixture();
+    let lc = db::ils_at_with(a.get("EGLC").unwrap(), Some(&real));
+    assert_eq!(lc.len(), 2);
+    let r27 = lc.iter().find(|n| n.ils.as_ref().unwrap().runway == "27").unwrap();
+    assert!(!r27.ils.as_ref().unwrap().synthetic && r27.ident == "LST" && r27.freq_khz == 111_150);
+    // The fixture has no EGLC 09: the chart table makes it on the runway geometry.
+    let r09 = lc.iter().find(|n| n.ils.as_ref().unwrap().runway == "09").unwrap();
+    assert!(r09.ident == "LSR" && (r09.ils.as_ref().unwrap().gs_angle.to_degrees() - 5.5).abs() < 1e-3);
+    // An airport whose one runway has a real ILS at one end only.
+    let mut ap = a.get("EGLC").unwrap().clone();
+    ap.icao = "KSEA".into();
+    ap.ident = "KSEA".into();
+    ap.runways[0].ends[0].ident = "34R".into();
+    ap.runways[0].ends[1].ident = "16L".into();
+    let s = db::ils_at_with(&ap, Some(&real));
+    assert_eq!(s.len(), 2);
+    let (r, f) = (&s[0], &s[1]);
+    assert_eq!((r.ident.as_str(), r.ils.as_ref().unwrap().synthetic, r.ils.as_ref().unwrap().markers.len()), ("ISNQ", false, 1));
+    assert!(f.ils.as_ref().unwrap().synthetic && f.ils.as_ref().unwrap().runway == "34R" && f.freq_khz != r.freq_khz);
+    // No OurAirports runway at BIAR: the LDA still works (localizer only).
+    let mut biar = ap.clone();
+    biar.icao = "BIAR".into();
+    biar.ident = "BIAR".into();
+    biar.runways.clear();
+    let l = db::ils_at_with(&biar, Some(&real));
+    assert_eq!(l.len(), 1);
+    assert_eq!((l[0].kind, l[0].ident.as_str()), (Kind::Loc, "IEY"));
+    let i = l[0].ils.as_ref().unwrap();
+    assert!((geo::gc_dist(i.thr, i.loc) - 2800.0).abs() < 1.0 && i.gs.is_none());
+}
+
+/// The whole nav.dat (not in the repo): `SKYWARD_NAVDAT=/path/nav.dat.gz
+/// cargo test navdat_full_file -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn navdat_full_file() {
+    use super::navdat;
+    let raw = std::fs::read(std::env::var("SKYWARD_NAVDAT").expect("SKYWARD_NAVDAT")).unwrap();
+    let recs = navdat::parse(&navdat::text_of(&raw));
+    let list = navdat::ils_records(&recs);
+    let (gz, n) = navdat::compact_from_navdat(&raw).unwrap();
+    let gs = list.iter().filter(|r| r.gs.is_some()).count();
+    let dme = list.iter().filter(|r| r.dme.is_some()).count();
+    let mk: usize = list.iter().map(|r| r.markers.len()).sum();
+    eprintln!(
+        "{} rows, {} ILS / LOC ({gs} with GS, {dme} with DME, {mk} markers, {n} compact), {} navaids, compact {:.0} kB",
+        recs.len(),
+        list.len(),
+        navdat::navaids(&recs).len(),
+        gz.len() as f64 / 1e3
+    );
+    assert!(n > 3000);
+    let real = navdat::IlsDb::new(list);
+    let egll = db::ils_at_with(adb().get("EGLL").unwrap(), Some(&real));
+    assert!(egll.iter().any(|n| n.ident == "IRR" && n.freq_khz == 110_300 && !n.ils.as_ref().unwrap().synthetic));
+    // With SKYWARD_OURAIRPORTS=cache/ourairports.tsv.gz: how the real ILS sit
+    // on the OurAirports runways worldwide.
+    let Ok(p) = std::env::var("SKYWARD_OURAIRPORTS") else { return };
+    let aps = crate::airports::decode(&navdat::text_of(&std::fs::read(p).unwrap())).unwrap();
+    let (mut real_n, mut synth_n, mut on_rwy, mut offset) = (0, 0, 0, 0);
+    let mut errs = Vec::new();
+    for ap in &aps {
+        for n in db::ils_at_with(ap, Some(&real)) {
+            let i = n.ils.as_ref().unwrap();
+            if i.synthetic {
+                synth_n += 1;
+                continue;
+            }
+            real_n += 1;
+            if ap.runways.iter().any(|r| r.surveyed() && r.ends.iter().any(|e| e.ident == i.runway)) {
+                on_rwy += 1;
+                let d = geo::wrap_pi(geo::gc_bearing(i.thr, i.loc) - i.course).abs().to_degrees();
+                if d > 2.0 {
+                    offset += 1;
+                }
+                errs.push(d);
+            }
+        }
+    }
+    errs.sort_by(|a, b| a.total_cmp(b));
+    let q = |f: f64| errs.get((errs.len() as f64 * f) as usize).copied().unwrap_or(0.0);
+    eprintln!(
+        "{real_n} real ILS at OurAirports airports ({on_rwy} on a surveyed runway end; threshold → localizer vs course: median {:.2}°, 95 % {:.2}°, {offset} offset > 2°), {synth_n} synthetic",
+        q(0.5),
+        q(0.95)
+    );
+}

@@ -8,7 +8,7 @@
 #   dist/assets/           aircraft models + textures (downloaded when chosen),
 #                          sound samples and ATC voices (downloaded when needed),
 #                          manifest.json listing them; per-aircraft CREDITS.md
-#   dist/data/             compact airport / frequency / navaid lists (web-data.mjs)
+#   dist/data/             compact airport / frequency / navaid / ILS lists (web-data.mjs)
 #   dist/thumbs/           aircraft-card thumbnails (web/thumbs/, pre-rendered)
 #   dist/LICENSE, NOTICE   the GPL and third-party notices
 #
@@ -67,7 +67,7 @@ cp web/index.html web/credits.html web/worker.js LICENSE NOTICE "$OUT/"
 # Compact data lists: built from OurAirports with this very module (Node),
 # else whatever a native run left in cache/.
 if [[ $WEB_DATA == download ]] && command -v node >/dev/null; then
-    echo "== data lists (OurAirports → data/*.tsv.gz)"
+    echo "== data lists (OurAirports, nav.dat → data/*.tsv.gz)"
     node scripts/web-data.mjs "$OUT" >/dev/null || echo "(web-data failed: the page falls back to the CSVs)"
 fi
 python3 - "$OUT" <<'EOF'
@@ -109,7 +109,7 @@ for f in os.listdir("assets/fonts"):
 # from a native run's cache/ (the page falls back to OurAirports' CSVs,
 # which GitHub Pages serves with CORS).
 extras = []
-for name in ["ourairports.tsv.gz", "frequencies.tsv.gz", "navaids.tsv.gz"]:
+for name in ["ourairports.tsv.gz", "frequencies.tsv.gz", "navaids.tsv.gz", "ils.tsv.gz"]:
     dst = os.path.join(out, "data", name)
     if not os.path.isfile(dst) and os.path.isfile(os.path.join("cache", name)):
         os.makedirs(os.path.join(out, "data"), exist_ok=True)
