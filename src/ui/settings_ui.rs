@@ -544,7 +544,7 @@ fn confirm_text(c: Confirm) -> (String, String) {
             "Reset all settings?".into(),
             "Every setting, key binding and controller profile goes back to its default. Your recent airports, favourites and player name are kept.".into(),
         ),
-        Confirm::Clear(Act::ClearTerrain) => ("Clear the terrain cache?".into(), "Elevation and land-cover data will download again as you fly. This cannot be undone.".into()),
+        Confirm::Clear(Act::ClearTerrain) => ("Clear the terrain cache?".into(), "Elevation, land cover and night lights download again as you fly. This cannot be undone.".into()),
         Confirm::Clear(_) => ("Clear the map tile cache?".into(), "Roads, buildings and airport layouts will download again as you fly. This cannot be undone.".into()),
         Confirm::Leave(_) => ("Apply your changes?".into(), "Some settings have changed but are not applied yet.".into()),
     }
@@ -979,8 +979,8 @@ fn clear_cache(st: &mut UiState, act: Act) {
         return;
     }
     let dirs: &[&str] = match act {
-        Act::ClearTerrain => &["terrain", "landcover"],
-        _ => &["tiles", "airports"],
+        Act::ClearTerrain => &["terrain", "copdem", "landcover", "nightlights", "bathy"],
+        _ => &["tiles", "airports", "overture"],
     };
     let root = cache_dir();
     let dirs: Vec<std::path::PathBuf> = dirs.iter().map(|d| root.join(d)).collect();
@@ -1025,7 +1025,7 @@ pub fn prune_cache(limit_mb: u32) {
                 }
             }
         }
-        for d in ["tiles", "terrain", "landcover"] {
+        for d in ["tiles", "terrain", "copdem", "landcover", "nightlights", "bathy", "overture"] {
             walk(&root.join(d), &mut files);
         }
         let mut total: u64 = files.iter().map(|f| f.1).sum();

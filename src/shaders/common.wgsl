@@ -38,6 +38,8 @@ struct Globals {
     gq: vec4<f32>,        // quality (gfx/quality.rs): x soft shadows (1 = PCF)
     swell: vec4<f32>,     // real swell (Open-Meteo Marine): travel dir x, z, Hs (m, 0 = none), wavelength (m)
     sea: vec4<f32>,       // forecast wind sea: Hs (m), travel dir x, z, weight 0..1 (0 = surface wind only)
+    nl0: vec4<f32>,       // far-field night lights grid (lights/nightlights.rs): uv of the eye, uv per eye-relative metre x, z
+    nl1: vec4<f32>,       // x strength (cd/m² → scene units x street lights on; 0 = off), y grid texel size (m)
     // Bathymetry (bathy/): per layer (fine, coarse) the north-west corner
     // relative to the eye (x, z) and 1 / size (x, z; 0 = none); then
     // x = water clarity 0 (turbid) .. 1 (clear tropical sea).
@@ -68,6 +70,8 @@ struct AtmosOut {
 @group(0) @binding(9) var<storage, read> atmos: AtmosOut;
 @group(0) @binding(10) var ao_tex: texture_2d<f32>;
 @group(0) @binding(11) var light_map: texture_2d<f32>;
+@group(0) @binding(12) var night_tex: texture_2d<f32>;
+@group(0) @binding(13) var night_mask: texture_2d<f32>;
 
 // Scene irradiance per lux (and scene radiance per cd/m²): sun_e (2.5) ≈ 128 klx.
 const LUX: f32 = 1.953125e-5;
@@ -295,6 +299,79 @@ fn street_light(rel: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
     let ground = up * (1.0 - smoothstep(2.0, 9.0, y));
     let wall = (1.0 - up) * 0.55 * exp(-max(y - 3.0, 0.0) / 7.0) * step(-0.2, n.y);
     return e * (ground + wall) * edge * g.pre.x;
+}
+
+// ---------------------------------------------------------------- far-field night lights
+
+// Colour of the Black Marble light (sodium and LED street lighting mixed).
+const NL_TINT: vec3<f32> = vec3<f32>(1.0, 0.70, 0.44);
+
+// Relative upward radiance (0..1, x g.nl1.x for scene units) of the ground
+// at an eye-relative x, z (NASA Black Marble, lights/nightlights.rs),
+// averaged over ~`size` metres; zero where a resident map tile lights the
+// ground itself (its street / far-city lights and skyglow).
+fn night_lights(rel_xz: vec2<f32>, size: f32) -> f32 {
+    let uv = g.nl0.xy + rel_xz * g.nl0.zw;
+    if (any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0))) {
+        return 0.0;
+    }
+    // (The shared sampler has no mip filtering: blend two levels.)
+    let lod = log2(max(size / g.nl1.y, 1.0));
+    let l0 = floor(lod);
+    let a = textureSampleLevel(night_tex, lin_samp, uv, l0).r;
+    let b = textureSampleLevel(night_tex, lin_samp, uv, l0 + 1.0).r;
+    let own = textureSampleLevel(night_mask, lin_samp, uv, 0.0).r;
+    let edge = 1.0 - smoothstep(0.44, 0.5, max(abs(uv.x - 0.5), abs(uv.y - 0.5)));
+    return mix(a, b, lod - l0) * (1.0 - own) * edge;
+}
+
+// Light domes over the lit areas beyond the map tiles and, from altitude,
+// the lit ground past the terrain's reach: the upward light scattered once
+// by air and haze along a sky ray, marched out to ~240 km (pre-exposed).
+fn night_dome(d: vec3<f32>) -> vec3<f32> {
+    let R = 6371000.0;
+    let h0 = max(abs(g.cam_pos.y), 1.0);
+    let r0 = R + h0;
+    let b = r0 * d.y;
+    let disc = b * b - (r0 * r0 - R * R);
+    var t_hit = 1e9;
+    if (d.y < 0.0 && disc > 0.0) {
+        t_hit = -b - sqrt(disc);
+    }
+    let t_max = min(t_hit, 240000.0);
+    let haze = max(g.sun_e.w, 0.0);
+    let mie0 = 4.0e-6 * max(1.0, 3.0 * haze);
+    // Extinction of the light on its way up from the ground (lowest ~1.5 km).
+    let up_t = exp(-(1.2e-5 + mie0 * 1.1) * 1500.0);
+    var l = 0.0;
+    var tau = 0.0;
+    var t = 0.0;
+    let n = 12;
+    for (var i = 0; i < n; i++) {
+        let t1 = 300.0 * pow(t_max / 300.0, f32(i + 1) / f32(n));
+        let dt = t1 - t;
+        let tm = 0.5 * (t + t1);
+        t = t1;
+        let p = d * tm;
+        // Height above the (curved) ground.
+        let h = max(h0 + p.y + tm * tm / (2.0 * R), 5.0);
+        let sr = 1.2e-5 * exp(-h / 8000.0);
+        let sm = mie0 * exp(-h / 1200.0);
+        let ext = sr + sm * 1.1;
+        if (sr + sm > 1e-9) {
+            // Irradiance from the lit ground below (a Lambertian plane: π L
+            // averaged over a disc ~ the height), scattered sideways.
+            let e = PI * night_lights(p.xz, 2.0 * h) * up_t;
+            l += (sr * 0.06 + sm * 0.03) * e * exp(-tau - 0.5 * ext * dt) * dt;
+        }
+        tau += ext * dt;
+    }
+    // The ground itself where the ray reaches it (no terrain drawn there).
+    if (t_hit <= t_max) {
+        let foot = t_hit / max(g.sky.w, 1.0) / max(-d.y, 0.03);
+        l += night_lights((d * t_hit).xz, foot) * exp(-tau);
+    }
+    return pre_exposed(NL_TINT * l * g.nl1.x);
 }
 
 // Irradiance-weighted direction + colour of the aircraft's lights at a point

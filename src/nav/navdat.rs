@@ -403,6 +403,11 @@ pub fn ils_db() -> Option<Arc<IlsDb>> {
     }
 }
 
+/// Being read or downloaded (the menus' background indicator).
+pub fn loading() -> bool {
+    matches!(*STATE.lock().unwrap_or_else(|e| e.into_inner()), Load::Loading)
+}
+
 /// Finished loading (ready or failed): headless runs wait for this.
 pub fn settled() -> bool {
     matches!(*STATE.lock().unwrap_or_else(|e| e.into_inner()), Load::Ready(_) | Load::Failed(_))

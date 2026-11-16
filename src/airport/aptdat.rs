@@ -22,7 +22,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, Read, Write};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// fgdata commit "latest airports" (2023-11-03) of `Airports/apt.dat.ws3.gz`.
@@ -473,6 +473,16 @@ pub fn generation() -> u64 {
     GENERATION.load(Ordering::Relaxed)
 }
 
+/// The one-time download / import (native) in progress: airports split so
+/// far. (It doesn't hold anything up: layouts fall back to OSM meanwhile.)
+static IMPORTING: AtomicBool = AtomicBool::new(false);
+static SPLIT: AtomicU64 = AtomicU64::new(0);
+
+/// Airports split so far while the first-run import runs; None when idle.
+pub fn importing() -> Option<u64> {
+    IMPORTING.load(Ordering::Relaxed).then(|| SPLIT.load(Ordering::Relaxed))
+}
+
 pub fn disabled() -> bool {
     std::env::var_os("SKYWARD_NO_APTDAT").is_some()
 }
@@ -541,9 +551,11 @@ mod imp {
                 return;
             }
         }
-        let _ = std::thread::Builder::new().name("aptdat".into()).spawn(move || {
+        IMPORTING.store(true, Ordering::Relaxed);
+        let ok = std::thread::Builder::new().name("aptdat".into()).spawn(move || {
             let t0 = web_time::Instant::now();
             let r = import(local.as_deref());
+            IMPORTING.store(false, Ordering::Relaxed);
             match r {
                 Ok((n, bytes)) => {
                     let _ = std::fs::remove_file(&fail);
@@ -565,6 +577,9 @@ mod imp {
                 }
             }
         });
+        if ok.is_err() {
+            IMPORTING.store(false, Ordering::Relaxed);
+        }
     }
 
     /// Import a local apt.dat (plain or .gz), else download, into `cache/aptdat/`
@@ -608,7 +623,10 @@ mod imp {
                 bytes += b.len() as u64;
                 std::fs::write(tmp.join(format!("{}.dat.gz", stem(&c.ident))), b)
             }) {
-                Ok(()) => entries.push((c.ident, c.icao)),
+                Ok(()) => {
+                    entries.push((c.ident, c.icao));
+                    SPLIT.store(entries.len() as u64, Ordering::Relaxed);
+                }
                 Err(e) => err = Some(e.to_string()),
             }
         })

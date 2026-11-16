@@ -1157,6 +1157,13 @@ fn fs_main(in: VOut) -> FOut {
     }
     s.rough = spec_aa(s.rough, dndx, dndy);
     var col = light(s, rel, V, dist, px, ngeo);
+    // Far-field night lights (Black Marble) on ground the map tiles don't
+    // light. The satellite sees the lamps from above; seen at a grazing angle
+    // the same lamps crowd into less of the view: radiance ~ 1 / cos(view zenith).
+    if (g.nl1.x > 0.0 && s.moving < 0.5 && ngeo.y > 0.6) {
+        let graze = 1.0 / max(dot(ngeo, V), 0.12);
+        col += pre_exposed(NL_TINT * night_lights(rel.xz, fwp) * g.nl1.x * graze) * ngeo.y;
+    }
     // Wet paving: glossy reflections smeared toward the viewer (the long
     // streaks of street lights and headlights on a wet road at night).
     let paved = m == 7 || m == 15 || m == 16 || m == 18 || (m == 12 && in.uv.x > 0.5) || (m == 5 && ngeo.y > 0.95);
@@ -1327,6 +1334,11 @@ fn fs_sky(in: SkyOut) -> FOut {
     // inv_view_proj is eye-relative (rotation only): no large-coordinate cancellation.
     let d = normalize(p.xyz / p.w);
     var c = sky_radiance(d);
+    // Light domes over distant towns and cities (Black Marble), low in the
+    // sky (not in the water reflection: too faint there for the cost).
+    if (g.nl1.x > 0.0 && d.y < 0.3 && !is_refl()) {
+        c += night_dome(d) * smoothstep(0.3, 0.18, d.y);
+    }
     // Sun disc with limb darkening (radiance clamped to fit fp16).
     let sun = g.sun_true.xyz;
     let mu = dot(d, sun);

@@ -12,7 +12,7 @@
 //! everything, sizes must match the request, values are range-checked.
 
 use super::{Grid, TileKey};
-use crate::landcover::tiff;
+use crate::cog::tiff;
 use std::sync::{Arc, LazyLock};
 
 /// The WCS's coverage envelope (west, south, east, north); outside it only NOAA.
@@ -58,7 +58,7 @@ pub fn decode(bytes: &[u8], px: u32, svc: Svc) -> Result<Vec<f32>, String> {
     if ifd.width != px || ifd.height != px {
         return Err(format!("unexpected size {}×{} (asked {px}²)", ifd.width, ifd.height));
     }
-    let mut v = tiff::read_f32(bytes, big_endian, ifd)?;
+    let mut v = read_f32(bytes, big_endian, ifd)?;
     for e in &mut v {
         // Deeper than the Challenger Deep / higher than Everest: no data
         // (ArcGIS uses ±3.4e38); EMODnet's gaps are exactly 0.
@@ -67,6 +67,27 @@ pub fn decode(bytes: &[u8], px: u32, svc: Svc) -> Result<Vec<f32>, String> {
         }
     }
     Ok(v)
+}
+
+/// A whole single-band float image (all blocks of `ifd`, row-major).
+fn read_f32(bytes: &[u8], big_endian: bool, ifd: &tiff::Ifd) -> Result<Vec<f32>, String> {
+    let (w, h) = (ifd.width as usize, ifd.height as usize);
+    if w * h > 1 << 24 {
+        return Err("float TIFF too large".into());
+    }
+    let mut out = vec![f32::NAN; w * h];
+    let (bw, bh) = (ifd.block_w as usize, ifd.block_h as usize);
+    let across = ifd.blocks_across() as usize;
+    for (k, (&off, &cnt)) in ifd.offsets.iter().zip(&ifd.counts).enumerate() {
+        let end = off.checked_add(cnt).filter(|&e| e <= bytes.len() as u64).ok_or("TIFF block past the end")?;
+        let block = tiff::decode_block_f32(ifd, big_endian, &bytes[off as usize..end as usize])?;
+        let (bx, by) = ((k % across) * bw, (k / across) * bh);
+        for r in 0..bh.min(h.saturating_sub(by)) {
+            let n = bw.min(w - bx);
+            out[(by + r) * w + bx..][..n].copy_from_slice(&block[r * bw..][..n]);
+        }
+    }
+    Ok(out)
 }
 
 /// Fill `a`'s gaps from `b` (same grid).
@@ -208,34 +229,13 @@ mod native {
         }
         let g = Grid { n: px, elev: elev.unwrap_or_default() };
         if whole {
-            crate::landcover::net::write(&p, &encode_cache(&g));
+            crate::cog::net::write(&p, &encode_cache(&g));
         }
         Ok(g)
     }
 
     fn prune_cache() {
-        let mut files = Vec::new();
-        let mut total = 0u64;
-        for l in 0..crate::bathy::LEVELS.len() {
-            let Ok(rd) = std::fs::read_dir(root().join(l.to_string())) else { continue };
-            for e in rd.flatten() {
-                let Ok(md) = e.metadata() else { continue };
-                total += md.len();
-                files.push((md.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH), md.len(), e.path()));
-            }
-        }
-        if total <= CACHE_LIMIT {
-            return;
-        }
-        files.sort();
-        for (_, len, p) in files {
-            if total <= CACHE_LIMIT * 8 / 10 {
-                break;
-            }
-            if std::fs::remove_file(&p).is_ok() {
-                total -= len;
-            }
-        }
+        crate::cog::net::prune(root(), CACHE_LIMIT);
     }
 }
 

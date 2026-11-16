@@ -187,9 +187,16 @@ src/gfx/taa.rs
 src/gfx/perf.rs
 src/gfx/hdr_ui.rs
 src/landcover/mod.rs
-src/landcover/tiff.rs
+src/cog/mod.rs
+src/cog/tiff.rs
+src/dem/mod.rs
+src/dem/copdem.rs
 src/landcover/worldcover.rs
 src/landcover/canopy.rs
+src/lights/nightlights.rs
+src/overture/mod.rs
+src/overture/pmtiles.rs
+src/ui/boot.rs
 src/bathy/mod.rs
 src/bathy/source.rs
 src/bathy/gpu.rs
