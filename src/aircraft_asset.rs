@@ -537,7 +537,11 @@ fn load_texture(dir: &str, file: &str) -> Texture {
     match image::load_from_memory(&bytes) {
         Ok(img) => {
             let img = img.to_rgba8();
-            Texture { width: img.width(), height: img.height(), rgba: img.into_raw(), mips: Vec::new() }
+            let (width, height) = (img.width(), img.height());
+            let rgba = img.into_raw();
+            // The mip chain here (a loading thread), not at the first draw on the UI thread.
+            let mips = crate::gfx_aircraft::mip_chain(width, height, &rgba);
+            Texture { width, height, rgba, mips }
         }
         Err(e) => {
             eprintln!("aircraft texture {dir}/{file}: {e}");

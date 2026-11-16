@@ -91,6 +91,42 @@ pub fn cached_asset(id: &str) -> Option<Arc<AircraftAsset>> {
     CACHE.lock().unwrap().iter().find(|(k, _)| k == id).map(|(_, a)| a.clone())
 }
 
+/// Aircraft ids [`prefetch`] has decoded (or found nothing to decode for).
+static PREFETCHED: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+static PREFETCH_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Native: decode the aircraft (asset + structural part map) into the caches
+/// on a background thread, in the given order, so neither the first flight
+/// nor the menu thumbnails decode them on the UI thread. Once per process.
+/// (Browser: assets download on demand; nothing to do.)
+pub fn prefetch(defs: Vec<AircraftDef>) {
+    if crate::platform::WEB || cfg!(test) || defs.is_empty() {
+        return;
+    }
+    if PREFETCH_STARTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    let _ = std::thread::Builder::new().name("aircraft-prefetch".into()).spawn(move || {
+        let t0 = web_time::Instant::now();
+        for def in &defs {
+            let m = build(def.id, def.eye);
+            if let Some(a) = &m.asset {
+                classify(a, def);
+            }
+            PREFETCHED.lock().unwrap_or_else(|e| e.into_inner()).push(def.id);
+        }
+        if std::env::var_os("SKYWARD_UI_TIMING").is_some() {
+            eprintln!("aircraft: {} models decoded in the background in {:.0} ms", defs.len(), t0.elapsed().as_secs_f32() * 1000.0);
+        }
+    });
+}
+
+/// Is this aircraft's model decoded, so building it is cheap? (True when no
+/// prefetch runs: the browser, headless captures — they build it inline.)
+pub fn ready(id: &str) -> bool {
+    !PREFETCH_STARTED.load(std::sync::atomic::Ordering::Relaxed) || PREFETCHED.lock().unwrap_or_else(|e| e.into_inner()).contains(&id)
+}
+
 /// Load the model for an aircraft id (see the table above).
 pub fn build(id: &str, def_eye: Vec3) -> AircraftModel {
     let cached = cached_asset(id);

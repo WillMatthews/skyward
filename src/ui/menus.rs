@@ -263,7 +263,20 @@ pub fn main_menu(ui: &mut Ui, st: &mut UiState) {
         gradient_rect(&p, img, Color32::from_rgb(70, 120, 180), Color32::from_rgb(170, 200, 230));
     }
     let tx = img.max.x + 18.0;
-    p.text(Pos2::new(tx, card.min.y + 18.0), Align2::LEFT_TOP, "READY TO FLY", f_inst_b(11.0), pal::ACCENT);
+    // Still loading behind the menu: what it's doing, and how far (Fly then
+    // shows the loading screen until it's done).
+    match st.boot.preparing.clone() {
+        Some(pr) => {
+            let r = p.text(Pos2::new(tx, card.min.y + 18.0), Align2::LEFT_TOP, "PREPARING", f_inst_b(11.0), pal::TEXT2);
+            p.text(Pos2::new(r.max.x + 8.0, r.center().y), Align2::LEFT_CENTER, clip_text(&pr.status, 26), f_ui(11.5), pal::TEXT3);
+            let bar = Rect::from_min_size(Pos2::new(tx, card.min.y + 33.0), Vec2::new(card.max.x - tx - 16.0, 2.0));
+            p.rect_filled(bar, 1, Color32::from_white_alpha(18));
+            p.rect_filled(Rect::from_min_size(bar.min, Vec2::new(bar.width() * pr.frac.unwrap_or(0.0).clamp(0.0, 1.0), bar.height())), 1, pal::ACCENT);
+        }
+        None => {
+            p.text(Pos2::new(tx, card.min.y + 18.0), Align2::LEFT_TOP, "READY TO FLY", f_inst_b(11.0), pal::ACCENT);
+        }
+    }
     p.text(Pos2::new(tx, card.min.y + 38.0), Align2::LEFT_TOP, def.name, f_semi(17.0), pal::TEXT);
     let ap = st.db.as_ref().and_then(|d| d.get(&st.plan.airport)).map(|a| format!("{} · {}", a.code(), clip_text(&a.name, 22))).unwrap_or_else(|| st.plan.airport.clone());
     p.text(Pos2::new(tx, card.min.y + 64.0), Align2::LEFT_TOP, ap, f_ui(13.0), pal::TEXT2);
@@ -2175,12 +2188,34 @@ pub fn loading(ui: &mut Ui, st: &mut UiState, title: &str, detail: &str, frac: O
         p.circle_stroke(q, 10.0 + pulse * 10.0, Stroke::new(2.0, alpha(pal::ACCENT, 1.0 - pulse * 0.7)));
         p.circle_filled(q, 5.0, pal::ACCENT);
     }
-    let w = 520.0;
-    let card = Rect::from_center_size(Pos2::new(screen.center().x, screen.max.y - 190.0), Vec2::new(w, 150.0));
+    // The card: destination, aircraft and start; the steps that have to finish
+    // before flying (main.rs fills st.boot), one bar for all of them, the
+    // current step in words; first-run downloads that carry on regardless.
+    let prep = st.boot.preparing.clone();
+    let bg = st.boot.background.clone();
+    let (status, frac) = match &prep {
+        Some(pr) => (pr.status.clone(), pr.frac),
+        None => (detail.to_string(), frac),
+    };
+    let def = st.defs[st.plan.aircraft.min(st.defs.len() - 1)].name;
+    let sub = if prep.is_some() { format!("{def} · {}", st.plan.spec.label()) } else { String::new() };
+    let w = 560.0;
+    let h = 150.0 + if prep.is_some() { 48.0 } else { 0.0 } + if bg.is_empty() { 0.0 } else { 26.0 };
+    let card = Rect::from_min_size(Pos2::new(screen.center().x - w / 2.0, screen.max.y - 110.0 - h), Vec2::new(w, h));
     panel_with(&p, card, sp::R_CARD, pal::PANEL_SOLID);
-    p.text(card.min + Vec2::new(28.0, 22.0), Align2::LEFT_TOP, title, f_display(22.0), pal::TEXT);
-    p.text(card.min + Vec2::new(28.0, 56.0), Align2::LEFT_TOP, detail, f_ui(13.5), pal::TEXT2);
-    let bar = Rect::from_min_size(card.min + Vec2::new(28.0, 96.0), Vec2::new(w - 56.0, 6.0));
+    let x = card.min.x + 28.0;
+    let mut y = card.min.y + 22.0;
+    p.text(Pos2::new(x, y), Align2::LEFT_TOP, title, f_display(22.0), pal::TEXT);
+    y += 34.0;
+    if prep.is_some() {
+        p.text(Pos2::new(x, y), Align2::LEFT_TOP, sub, f_ui(13.5), pal::TEXT2);
+        y += 32.0;
+    }
+    if let Some(pr) = &prep {
+        super::boot::steps_row(&p, Pos2::new(x, y), &pr.steps, st.time);
+        y += 32.0;
+    }
+    let bar = Rect::from_min_size(Pos2::new(x, y + 8.0), Vec2::new(w - 56.0, 6.0));
     p.rect_filled(bar, 3, Color32::from_white_alpha(18));
     match frac {
         Some(f) => {
@@ -2194,9 +2229,16 @@ pub fn loading(ui: &mut Ui, st: &mut UiState, title: &str, detail: &str, frac: O
             p.rect_filled(Rect::from_min_max(Pos2::new(x0, bar.min.y), Pos2::new(x1, bar.max.y)), 3, pal::ACCENT);
         }
     }
+    y = bar.max.y + 12.0;
     let pct = frac.map(|f| format!("{:.0} %", f.clamp(0.0, 1.0) * 100.0)).unwrap_or_default();
-    p.text(card.min + Vec2::new(28.0, 116.0), Align2::LEFT_TOP, crate::hud::ATTRIBUTION, f_ui(11.0), pal::TEXT3);
-    p.text(Pos2::new(card.max.x - 28.0, card.min.y + 116.0), Align2::RIGHT_TOP, pct, f_ui(11.0), pal::TEXT2);
+    p.text(Pos2::new(x, y), Align2::LEFT_TOP, status, f_ui(13.0), if prep.is_some() { pal::TEXT } else { pal::TEXT2 });
+    p.text(Pos2::new(card.max.x - 28.0, y), Align2::RIGHT_TOP, pct, f_ui(12.0), pal::TEXT2);
+    y += 28.0;
+    if !bg.is_empty() {
+        super::boot::spinner(&p, Pos2::new(x + 6.0, y + 7.0), 5.0, st.time, pal::TEXT3);
+        p.text(Pos2::new(x + 20.0, y), Align2::LEFT_TOP, clip_text(&super::boot::background_line(&bg), 78), f_ui(12.0), pal::TEXT3);
+    }
+    p.text(Pos2::new(screen.center().x, card.max.y + 18.0), Align2::CENTER_TOP, crate::hud::ATTRIBUTION, f_ui(11.0), pal::TEXT3);
     let _ = (CornerRadius::ZERO, Id::NULL);
 }
 

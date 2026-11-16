@@ -1144,7 +1144,9 @@ impl Sim {
         let ha = bot::heading_of(rw.b - rw.a);
         let ident = if bot::wrap_pi(ha - self.ac.heading()).abs() < PI / 2.0 { rw.ident_a.clone() } else { rw.ident_b.clone() };
         if let Ok(msg) = self.nav.plan_approach(&adb, &rw.airport, &ident, ApprKind::Ils) {
-            if self.def().category == Category::Airliner || self.nav.equipped {
+            // (Every Sim built logs it — the menu thumbnails build one per type —
+            // so only on request.)
+            if (self.def().category == Category::Airliner || self.nav.equipped) && std::env::var_os("SKYWARD_NAV_LOG").is_some() {
                 eprintln!("nav: {msg}");
             }
         }
