@@ -1241,6 +1241,14 @@ fn render_frame(
                 for af in &mut fv.others {
                     af.shift(d);
                 }
+                // (So are its lights: unshifted, they hung in the air at
+                // the sim camera's view of them.)
+                for l in &mut fv.acl.sprites[..fv.acl.n_sprites] {
+                    l.pos = (Vec3::from(l.pos) + d).into();
+                }
+                for sp in &mut fv.acl.spots[..fv.acl.n_spots] {
+                    sp.pos += d;
+                }
                 fv = FrameView { eye, view: glam::camera::rh::view::look_at_mat4(eye, look, Vec3::Y), ..fv };
             }
             // Other players' aircraft (net/): real models, lights, afterburners — eye-relative.
