@@ -1140,13 +1140,19 @@ impl Sim {
                 self.nav.plan.set_origin(Some(Wpt::new(a.code(), (a.lat, a.lon), WptKind::Airport)));
             }
         }
-        if self.ac.on_ground || self.nav.plan.approach.is_some() {
+        if self.ac.on_ground {
             return;
         }
         let Some(rw) = self.runway.clone().filter(|r| !r.airport.is_empty()) else { return };
         // The end being flown to: the one the aircraft points along.
         let ha = bot::heading_of(rw.b - rw.a);
         let ident = if bot::wrap_pi(ha - self.ac.heading()).abs() < PI / 2.0 { rw.ident_a.clone() } else { rw.ident_b.clone() };
+        // An approach already planned stays (the player's, across restarts),
+        // unless it is to another runway of this field: a final start on
+        // 27L kept the into-wind 27R of the spawn before it.
+        if self.nav.plan.approach.as_ref().is_some_and(|a| a.airport != rw.airport || a.runway == ident) {
+            return;
+        }
         if let Ok(msg) = self.nav.plan_approach(&adb, &rw.airport, &ident, ApprKind::Ils) {
             // (Every Sim built logs it — the menu thumbnails build one per type —
             // so only on request.)
