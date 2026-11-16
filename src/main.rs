@@ -1239,11 +1239,10 @@ fn render_frame(
                 fv = FrameView { eye, view: glam::camera::rh::view::look_at_mat4(eye, look, Vec3::Y), ..fv };
             }
             // Other players' aircraft (net/): real models, lights, afterburners — eye-relative.
-            let (mut frames, mut lights) = (Vec::new(), Vec::new());
+            let (mut frames, mut lights, mut plumes) = (Vec::new(), Vec::new(), Vec::new());
             if ui.st.mp.connected() {
-                let (f, l, flames) = ui.st.mp.render_traffic(fv.eye);
-                dynm.append(&flames, glam::Mat4::IDENTITY);
-                (frames, lights) = (f, l);
+                let (f, l, p) = ui.st.mp.render_traffic(fv.eye);
+                (frames, lights, plumes) = (f, l, p);
                 ui.st.mp.cam = Some((fv.eye, fv.view, fv.fov_y));
             } else {
                 ui.st.mp.cam = None;
@@ -1252,14 +1251,21 @@ fn render_frame(
             {
                 let lt_settings = ui.st.settings.live_traffic.clone();
                 ui.st.adsb.update(sim, &s.world, ui.st.dt, &lt_settings);
-                let mut flames = scene::MeshData::default();
                 let slots = 96usize.saturating_sub(frames.len());
                 let t = sim.time % 3600.0;
-                frames.extend(ui.st.adsb.render(fv.eye, t, slots, &mut lights, &mut flames));
-                dynm.append(&flames, glam::Mat4::IDENTITY);
+                frames.extend(ui.st.adsb.render(fv.eye, t, slots, &mut lights, &mut plumes));
                 ui.st.adsb.cam = Some((fv.eye, fv.view, fv.fov_y));
             }
             renderer.set_traffic(frames, lights);
+            // Their afterburners join our effects (vfx/, relative to its origin).
+            if !plumes.is_empty() {
+                let eye = fv.eye;
+                let vf = fv.vfx.get_or_insert_with(|| std::sync::Arc::new(vfx::VfxFrame { origin: eye, ..Default::default() }));
+                let vf = std::sync::Arc::make_mut(vf);
+                for p in &plumes {
+                    vfx::plume(vf, &vfx::Plume { nozzle: p.nozzle + eye - vf.origin, ..*p });
+                }
+            }
             // Browser: the scene renders within a pixel budget (upscaled by the AA / tonemap pass).
             #[cfg(target_arch = "wasm32")]
             renderer.set_scale_cap(platform::web::scene_size(w, h).0 as f32 / w.max(1) as f32);

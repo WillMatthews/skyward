@@ -27,15 +27,16 @@
 //! Body frame: metres, +Z nose, +Y up, +X left wing, origin = CG (as
 //! `flight.rs`). The model is a node tree with FlightGear animations mapped
 //! onto Skyward state through named channels ([`channel_value`]). The app
-//! renders it with `gfx_aircraft.rs`; nav / beacon / strobe glows and the
-//! afterburner flame are generated here as small emissive meshes.
+//! renders it with `gfx_aircraft.rs`; nav / beacon / strobe glows are
+//! generated here as small emissive meshes (the afterburner plume is an
+//! effect, `vfx::plume`).
 
 use crate::aircraft_asset::{AircraftAsset, AnimState, Pose};
 use crate::flight::{Aircraft, AircraftDef, Controls, EngineKind};
 use glam::Vec2;
 use crate::gfx_aircraft::{AircraftFrame, ChunkDraw};
 use crate::scene::{mat, MeshData};
-use glam::{vec3, Mat4, Vec3};
+use glam::{Mat4, Vec3};
 use std::sync::Arc;
 
 pub struct AircraftModel {
@@ -447,33 +448,6 @@ fn octahedron(out: &mut MeshData, c: Vec3, r: f32, col: [f32; 3], k: f32) {
         }
         out.idx.extend([base, base + 1, base + 2]);
     }
-}
-
-/// Afterburner flame cone at `nozzle` (body frame), pointing aft (−Z), 1 m long
-/// at scale 1; EMISSIVE flame verts (uv.y = 1), intensity in uv.x.
-pub fn flame_mesh(nozzle: Vec3, radius: f32) -> MeshData {
-    let mut m = MeshData { mat: mat::EMISSIVE, ..Default::default() };
-    let seg = 16;
-    let rings = [(0.0, 1.0, [1.0, 0.75, 0.45], 3.0), (0.25, 0.85, [1.0, 0.55, 0.25], 2.4), (0.7, 0.45, [0.9, 0.35, 0.6], 1.4), (1.0, 0.05, [0.5, 0.25, 0.9], 0.6)];
-    let len = radius * 9.0;
-    let mut ring_idx = Vec::new();
-    for (z, r, col, k) in rings {
-        let base = m.verts.len() as u32;
-        for s in 0..seg {
-            let a = s as f32 / seg as f32 * std::f32::consts::TAU;
-            let p = nozzle + vec3(a.cos() * r * radius, a.sin() * r * radius, -z * len);
-            m.v_uv(p, vec3(a.cos(), a.sin(), 0.0), col, [k, 1.0]);
-        }
-        ring_idx.push(base);
-    }
-    for w in ring_idx.windows(2) {
-        for s in 0..seg as u32 {
-            let (a0, a1) = (w[0] + s, w[0] + (s + 1) % seg as u32);
-            let (b0, b1) = (w[1] + s, w[1] + (s + 1) % seg as u32);
-            m.idx.extend([a0, b0, a1, a1, b0, b1]);
-        }
-    }
-    m
 }
 
 /// Exterior bounding box in the static pose with the gear down.

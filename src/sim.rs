@@ -2282,19 +2282,7 @@ impl Sim {
         let mut local = MeshData::default();
         // (Navigation / beacon / strobe lights: crate::lights, from the model's light positions.)
         let _ = (beacon_flash, strobe_flash);
-        // Afterburner flame (brightness and length follow the reheat level, with a little flicker).
-        let ab = ac.surfaces().afterburner;
-        if def.has_afterburner && ab > 0.02 {
-            let flick = 1.0 + 0.06 * (self.time * 37.0).sin() * (self.time * 23.0).cos();
-            for &p in def.engine_pos {
-                let mut flame = models::flame_mesh(Vec3::ZERO, 0.42);
-                for v in &mut flame.verts {
-                    v.uv[0] *= ab * flick;
-                }
-                let len = 0.55 + 0.45 * ab;
-                local.append(&flame, Mat4::from_translation(p) * Mat4::from_scale(vec3(1.0, 1.0, len * flick)));
-            }
-        }
+        // (The afterburner plume is an effect: vfx::plume, ray-marched and additive.)
         // Linear vertex colours → the sRGB-encoded colours the scene shader expects.
         for v in &mut local.verts {
             for c in &mut v.col {
