@@ -345,6 +345,7 @@ pub fn credits(ui: &mut Ui, st: &mut UiState) {
         ("Map data", "© OpenMapTiles · © OpenStreetMap contributors (ODbL)"),
         ("Vector tiles", "OpenFreeMap · airport detail: OSM via the Overpass API"),
         ("Airports & runways", "OurAirports — public domain (ourairports.com/data)"),
+        ("Airport layouts", crate::airport::aptdat::CREDIT),
         ("Navaids", "VOR / DME / NDB: OurAirports — public domain · ILS: FlightGear nav.dat (Robin A. Peel) — GPL-2.0-or-later; synthetic from the runway data where it has none"),
         ("ATC", "Frequencies: OurAirports — public domain · voices: Kokoro-82M (Apache-2.0), generated for Skyward"),
         ("Weather", WEATHER_CREDIT),

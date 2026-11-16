@@ -651,3 +651,12 @@ pub fn skyward_compact_data(kind: &str, a: &[u8], b: &[u8]) -> Option<Vec<u8>> {
         _ => None,
     }
 }
+
+/// Build step (scripts/web-data.mjs): FlightGear's `apt.dat.ws3.gz` → the
+/// per-airport apt.dat chunks the page loads (`data/aptdat/`, what native
+/// runs keep in `cache/aptdat/`; airport/aptdat.rs), as one archive the
+/// script unpacks. None if the file looks wrong.
+#[wasm_bindgen]
+pub fn skyward_compact_aptdat(gz: &[u8]) -> Option<Vec<u8>> {
+    crate::airport::aptdat::compact_archive(gz).map_err(|e| log(&format!("aptdat: {e}"))).ok()
+}

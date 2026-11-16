@@ -3,6 +3,10 @@
 //! centreline nodes joined where taxiways meet or cross, Dijkstra from the
 //! aircraft to a runway-holding point, and the clearance's "via" list (the
 //! taxiway refs along the route) plus any runways it crosses.
+//!
+//! Where the airport has an apt.dat taxi route network (rows 1201 / 1202,
+//! `airport/aptdat.rs`) the graph is built from that instead ([`Net`],
+//! [`Graph::from_net`]): the real junctions, one-way links and names.
 
 use glam::Vec2;
 use std::cmp::Ordering;
@@ -14,6 +18,30 @@ const STEP: f32 = 12.0;
 const JOIN: f32 = 9.0;
 /// A taxiway end within this of another taxiway is joined to it (m).
 const SNAP: f32 = 30.0;
+
+/// An explicit taxi route network (an airport's apt.dat rows 1201 / 1202).
+#[derive(Clone, Debug, Default)]
+pub struct Net {
+    pub nodes: Vec<Vec2>,
+    pub edges: Vec<NetEdge>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NetEdge {
+    pub a: u32,
+    pub b: u32,
+    /// Only from `a` to `b`.
+    pub oneway: bool,
+    pub runway: bool,
+    pub name: String,
+}
+
+impl Net {
+    /// The same network through a map (airport frame → world frame).
+    pub fn mapped(&self, f: impl Fn(Vec2) -> Vec2) -> Net {
+        Net { nodes: self.nodes.iter().map(|p| f(*p)).collect(), edges: self.edges.clone() }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct Graph {
@@ -165,6 +193,57 @@ impl Graph {
         g
     }
 
+    /// Build from an explicit network: each edge resampled like a
+    /// centreline (its own nodes, carrying its name), the copies of a network
+    /// node joined at zero cost; one-way edges only forward. Runway edges
+    /// stay unnamed (the router's runway cost and crossings apply).
+    pub fn from_net(net: &Net) -> Graph {
+        let mut g = Graph { pts: Vec::new(), name: Vec::new(), names: vec![String::new()], adj: Vec::new() };
+        let mut name_ix: HashMap<String, u16> = HashMap::new();
+        let mut copies: Vec<Vec<u32>> = vec![Vec::new(); net.nodes.len()];
+        let n = net.nodes.len() as u32;
+        for e in net.edges.iter().filter(|e| e.a < n && e.b < n && e.a != e.b) {
+            let nm = if e.runway { String::new() } else { clean_name(&e.name) };
+            let ni = if nm.is_empty() {
+                0
+            } else {
+                *name_ix.entry(nm.clone()).or_insert_with(|| {
+                    g.names.push(nm.clone());
+                    (g.names.len() - 1) as u16
+                })
+            };
+            let (a, b) = (net.nodes[e.a as usize], net.nodes[e.b as usize]);
+            let k = (a.distance(b) / STEP).ceil().max(1.0) as usize;
+            let first = g.pts.len() as u32;
+            for i in 0..=k {
+                let p = a + (b - a) * (i as f32 / k as f32);
+                let id = g.pts.len() as u32;
+                g.pts.push(p);
+                g.name.push(ni);
+                g.adj.push(Vec::new());
+                if i > 0 {
+                    let d = g.pts[id as usize - 1].distance(p);
+                    g.adj[id as usize - 1].push((id, d));
+                    if !e.oneway {
+                        g.adj[id as usize].push((id - 1, d));
+                    }
+                }
+            }
+            copies[e.a as usize].push(first);
+            copies[e.b as usize].push(first + k as u32);
+        }
+        for c in &copies {
+            for &x in c {
+                for &y in c {
+                    if x != y {
+                        g.adj[x as usize].push((y, 0.0));
+                    }
+                }
+            }
+        }
+        g
+    }
+
     pub fn len(&self) -> usize {
         self.pts.len()
     }
@@ -274,6 +353,10 @@ pub fn clean_name(s: &str) -> String {
     let up = up.strip_prefix("TAXIWAY ").or_else(|| up.strip_prefix("TAXILANE ")).unwrap_or(&up).trim().to_string();
     if let Some(r) = up.strip_prefix("LINK ") {
         return format!("L{}", r.trim());
+    }
+    // apt.dat spellings: "LINK56", "LINK_56".
+    if let Some(r) = up.strip_prefix("LINK").map(|r| r.trim_start_matches('_')).filter(|r| !r.is_empty() && r.len() <= 3 && r.chars().all(|c| c.is_ascii_digit())) {
+        return format!("L{r}");
     }
     let compact: String = up.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
     if compact.len() <= 4 && compact.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) { compact } else { String::new() }

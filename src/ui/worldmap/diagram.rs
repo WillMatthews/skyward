@@ -176,7 +176,11 @@ pub fn build(ap: &Airport, osm: Option<&crate::airport::overpass::OsmAirport>, f
     }
     let mut d = Diagram { ident: ap.ident.clone(), osm: osm.is_some(), buildings: blds, ..Default::default() };
     if !tiles.is_empty() {
-        let l = layout::build(ap, &tiles, osm);
+        let apt = match crate::airport::aptdat::lookup(&ap.ident) {
+            crate::airport::aptdat::Lookup::Done(a) => a,
+            crate::airport::aptdat::Lookup::Pending => None,
+        };
+        let l = layout::build(ap, &tiles, osm, apt.as_deref());
         let ll = |p: Vec2| l.frame.to_latlon(p);
         d.stands = l
             .stands

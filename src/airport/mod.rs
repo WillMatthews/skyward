@@ -9,8 +9,10 @@
 //!    summary of the airport's features ([`tile::AeroTile`]: aprons,
 //!    taxiways with refs, gates, service roads, classified buildings).
 //! 2. **Layout** ([`layout::build`], background thread): the airport's
-//!    tiles + OurAirports runways + optional Overpass data ([`overpass`]) →
-//!    markings, stands, aircraft, vehicles, signs, lights, windsocks.
+//!    tiles + OurAirports runways + optional Overpass data ([`overpass`]) and
+//!    apt.dat layout ([`aptdat`]: the real taxi route network, holding
+//!    points and stands where the X-Plane Gateway has them) → markings,
+//!    stands, aircraft, vehicles, signs, lights, windsocks.
 //! 3. **Bake** ([`layout::bake`], background thread): the layout placed on
 //!    each tile's terrain (markings draped exactly like the tile's layers).
 //! 4. **Render** ([`gfx`]): static meshes per tile, instanced parked
@@ -21,6 +23,7 @@
 //! world); everything is kept in airport / tile frames (lat/lon-anchored),
 //! so the floating origin never touches it.
 
+pub mod aptdat;
 pub mod fleet;
 pub mod font;
 pub mod gfx;
@@ -61,6 +64,8 @@ struct Site {
     dirty: bool,
     last_build: Option<Instant>,
     osm: Osm,
+    /// The apt.dat layout (taxi network, stands); None while pending.
+    apt: Option<Option<Arc<aptdat::AptAirport>>>,
     /// Bakes and the layout generation they were made from.
     bakes: HashMap<TileId, (u64, Arc<Bake>)>,
     baking: HashSet<TileId>,
@@ -68,21 +73,28 @@ struct Site {
 
 /// A job for the background worker.
 enum Job {
-    Layout(Arc<crate::airports::Airport>, Vec<(TileId, Arc<AeroTile>)>, Option<Arc<overpass::OsmAirport>>, u64),
+    Layout(Arc<crate::airports::Airport>, Vec<(TileId, Arc<AeroTile>)>, Option<Arc<overpass::OsmAirport>>, Option<Arc<aptdat::AptAirport>>, u64),
     Bake(String, u64, Arc<Layout>, TileId, Arc<crate::terrain::Grid>),
 }
 
 fn run(job: Job, tx: &mpsc::Sender<Msg>) {
     match job {
-        Job::Layout(ap, tiles, osm, generation) => {
+        Job::Layout(ap, tiles, osm, apt, generation) => {
             let t0 = Instant::now();
-            let l = layout::build(&ap, &tiles, osm.as_deref());
+            let l = layout::build(&ap, &tiles, osm.as_deref(), apt.as_deref());
             if std::env::var_os("SKYWARD_AIRPORT_DEBUG").is_some() {
                 eprintln!(
-                    "airport {}: layout from {} tiles{} in {:.1} ms: {} stands, {} aircraft, {} vehicles, {} routes, {} objects, {} lights, {} holds, {} socks, {} mark tris",
+                    "airport {}: layout from {} tiles{}{} in {:.1} ms: {} stands, {} aircraft, {} vehicles, {} routes, {} objects, {} lights, {} holds, {} socks, {} mark tris",
                     ap.ident,
                     tiles.len(),
                     if osm.is_some() { " + overpass" } else { "" },
+                    if l.net.is_some() {
+                        " + apt.dat network"
+                    } else if apt.is_some() {
+                        " + apt.dat"
+                    } else {
+                        ""
+                    },
                     t0.elapsed().as_secs_f32() * 1000.0,
                     l.stands.len(),
                     l.parked.len(),
@@ -130,6 +142,8 @@ pub struct AirportScene {
     /// Bumped whenever the airport lights change.
     pub light_version: u64,
     pub enabled: bool,
+    /// `aptdat::generation()` last seen (new apt.dat data → look again).
+    apt_gen: u64,
 }
 
 impl Default for AirportScene {
@@ -173,6 +187,7 @@ impl AirportScene {
             version: 0,
             light_version: 0,
             enabled: std::env::var_os("SKYWARD_NO_AIRPORTS").is_none(),
+            apt_gen: aptdat::generation(),
         }
     }
 
@@ -228,6 +243,10 @@ impl AirportScene {
                     self.fetch_osm(&ap);
                     Osm::Fetching(Instant::now())
                 };
+                let apt = match aptdat::lookup(&o) {
+                    aptdat::Lookup::Done(a) => Some(a),
+                    aptdat::Lookup::Pending => None,
+                };
                 self.sites.insert(
                     o.clone(),
                     Site {
@@ -240,6 +259,7 @@ impl AirportScene {
                         dirty: true,
                         last_build: None,
                         osm,
+                        apt,
                         bakes: HashMap::new(),
                         baking: HashSet::new(),
                     },
@@ -350,6 +370,20 @@ impl AirportScene {
                 }
             }
         }
+        // More apt.dat data (the index after the one-time download, a chunk
+        // in the browser): look again for the sites without a layout from it.
+        let g = aptdat::generation();
+        if g != self.apt_gen {
+            self.apt_gen = g;
+            for (ident, s) in self.sites.iter_mut() {
+                if matches!(s.apt, None | Some(None)) {
+                    if let aptdat::Lookup::Done(a) = aptdat::lookup(ident) {
+                        s.dirty |= a.is_some() || s.apt.is_none();
+                        s.apt = Some(a);
+                    }
+                }
+            }
+        }
         let mut jobs = Vec::new();
         for (ident, s) in self.sites.iter_mut() {
             if s.dirty && !s.building && s.last_build.is_none_or(|t| t.elapsed() >= REBUILD_EVERY) {
@@ -362,7 +396,7 @@ impl AirportScene {
                     Osm::Done(o) => o.clone(),
                     Osm::Fetching(_) => None,
                 };
-                jobs.push(Job::Layout(s.airport.clone(), tiles, osm, s.generation));
+                jobs.push(Job::Layout(s.airport.clone(), tiles, osm, s.apt.clone().flatten(), s.generation));
                 continue;
             }
             // Bake the resident tiles the current layout hasn't been placed on.
@@ -398,6 +432,7 @@ impl AirportScene {
                     && s.layout.is_some()
                     && s.tiles.iter().all(|t| s.bakes.get(t).is_some_and(|b| b.0 == s.layout_gen))
                     && !matches!(s.osm, Osm::Fetching(t) if t.elapsed() < OSM_WAIT)
+                    && s.apt.is_some()
             })
     }
 

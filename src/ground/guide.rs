@@ -194,13 +194,13 @@ pub fn graph_near(world: &World, p: Vec2) -> Option<(String, taxi::Graph, Vec<ta
     let ap = rw.airport.clone();
     let l = world.airport_detail.layout(&ap)?;
     let m = l.frame.map_to(&world.proj);
-    let tw: Vec<(Vec<Vec2>, String)> = l.taxiways.iter().map(|(pl, n)| (pl.iter().map(|q| m.apply(*q)).collect(), n.clone())).collect();
-    if tw.is_empty() {
+    let g = l.taxi_graph(&world.proj);
+    if g.is_empty() {
         return None;
     }
     let boxes = world.runways.iter().filter(|r| r.airport == ap).map(|r| taxi::RwyBox { a: r.a, b: r.b, width: r.width, name: format!("{}/{}", r.ident_a, r.ident_b) }).collect();
     let holds = l.holds.iter().map(|h| (m.apply(h.at), h.taxiway.clone(), h.runway.clone())).collect();
-    Some((ap, taxi::Graph::build(&tw), boxes, holds))
+    Some((ap, g, boxes, holds))
 }
 
 /// A route from `p` to `to`: from the nearest graph node, or — if that one is
@@ -303,6 +303,17 @@ pub fn plan_to_stand(world: &World, p: Vec2, span: f32) -> Option<Guide> {
     let mut pts = r.pts;
     pts.push(at);
     Some(Guide::new(pts, r.via, format!("stand {name}"), false))
+}
+
+/// A self-manoeuvring (power-out) stand: the nearest taxi route lies ahead
+/// of the nose (within 60° of it), so the aircraft taxis out forward
+/// instead of being pushed back (London City's angled stands, from apt.dat).
+pub fn taxilane_ahead(world: &World, nose: Vec2, hdg: f32) -> bool {
+    let Some((_, g, _, _)) = graph_near(world, nose) else { return false };
+    let Some(i) = g.nearest(nose, 150.0) else { return false };
+    let d = g.pts[i as usize] - nose;
+    let fwd = Vec2::new(hdg.sin(), -hdg.cos());
+    d.length() > 1.0 && d.dot(fwd) > 0.5 * d.length()
 }
 
 /// The stand the aircraft is parked on (nose within 25 m of its stop point,

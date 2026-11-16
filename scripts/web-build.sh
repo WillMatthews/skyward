@@ -116,6 +116,13 @@ for name in ["ourairports.tsv.gz", "frequencies.tsv.gz", "navaids.tsv.gz", "ils.
         shutil.copy(os.path.join("cache", name), dst)
     if os.path.isfile(dst):
         extras.append("data/" + name)
+# apt.dat airport layouts (per-airport chunks + index.tsv): from web-data.mjs,
+# else a native run's cache/aptdat/ (without them the page uses OSM / procedural).
+apt = os.path.join(out, "data", "aptdat")
+if not os.path.isfile(os.path.join(apt, "index.tsv")) and os.path.isfile(os.path.join("cache", "aptdat", "index.tsv")):
+    shutil.copytree(os.path.join("cache", "aptdat"), apt, dirs_exist_ok=True)
+if os.path.isfile(os.path.join(apt, "index.tsv")):
+    extras.append("data/aptdat/index.tsv")
 # Aircraft-card thumbnails, pre-rendered natively (an aircraft without one
 # shows a plain card):
 #   SKYWARD_THUMBS_OUT=web/thumbs skyward --shot /tmp/a.png --menu-screen aircraft --no-live

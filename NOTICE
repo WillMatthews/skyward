@@ -75,6 +75,18 @@ others; per-item sources, authors and licences are listed in:
     (https://opendatacommons.org/licenses/odbl/1-0/) — © adsb.lol
     contributors. tests/adsb/*.json are anonymised extracts of it (synthetic
     addresses, no registrations, re-numbered flights), under the same licence.
+  * Airport layouts (src/airport/aptdat.rs): taxi route networks, startup /
+    gate positions, signs and windsocks from X-Plane apt.dat airport data —
+    the X-Plane Scenery Gateway community airports (© Robin A. Peel,
+    Laminar Research and the Gateway artists; "Airport data on the Gateway
+    is licensed under the GNU GPL", https://gateway.x-plane.com/api; the base
+    data GPL v2 or later) as shipped in FlightGear's fgdata
+    (https://gitlab.com/flightgear/fgdata, Airports/apt.dat.ws3.gz, commit
+    228ac3d1685f355638579e266b415cd9c10ca81a; repository licence GPL v2).
+    Not bundled: downloaded at run time (native) or by the web build step
+    and split into per-airport extracts of the same apt.dat rows.
+    tests/data/aptdat_*.dat* are trimmed extracts (EGLC, EGLL) under the
+    same licence.
 
 Because some bundled content is GPL version 2 only, the combined work is
 distributed under the terms of GPL version 2.
