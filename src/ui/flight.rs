@@ -854,6 +854,13 @@ fn warnings(p: &egui::Painter, screen: Rect, sim: &Sim, assists: &super::setting
         } else {
             ("Crashed", "", Color32::from_rgba_premultiplied(60, 8, 10, 230), pal::RED)
         };
+        // Severity and cause (crash.rs): "Accident · gear collapse".
+        let sub = match (&sim.crash_report, survivable) {
+            (Some(r), true) => format!("{} · everyone walks away", r.line()),
+            (Some(r), false) => r.line(),
+            (None, _) => sub.to_string(),
+        };
+        let sub = sub.as_str();
         let h = if sub.is_empty() { 108.0 } else { 126.0 };
         let r = Rect::from_center_size(Pos2::new(screen.center().x, y), Vec2::new(560.0, h));
         super::panel_with(p, r, sp::R_CARD, fill);

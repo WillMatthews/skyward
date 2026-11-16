@@ -36,6 +36,7 @@ mod nav;
 mod bot;
 mod clouds;
 mod cockpit;
+mod crash;
 mod damage;
 mod debris;
 mod flight;

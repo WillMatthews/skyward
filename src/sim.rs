@@ -492,6 +492,14 @@ pub struct Sim {
     pub debris: Option<crate::debris::Debris>,
     /// How bad the accident was (set when the aircraft crashes).
     pub severity: Option<crate::damage::Severity>,
+    /// The final crash event: severity, cause, reason (crash.rs).
+    pub crash_report: Option<crate::crash::CrashReport>,
+    /// Camera shake, 0..1+ (impacts, strikes; decays).
+    pub shake: f32,
+    /// `SKYWARD_DAMAGE` still to apply (scenario.rs).
+    damage_inject: Option<String>,
+    /// Ground / roof height under the chase camera (it stays above it).
+    cam_floor: f32,
     /// Sounds raised this frame by the wreckage (the audio director reads them).
     pub audio_events: Vec<crate::audio::params::Event>,
     /// Parts already handed to the debris simulation.
@@ -647,6 +655,10 @@ impl Sim {
             pilot: Default::default(),
             debris: None,
             severity: None,
+            crash_report: None,
+            shake: 0.0,
+            damage_inject: std::env::var("SKYWARD_DAMAGE").ok().filter(|v| !v.trim().is_empty()),
+            cam_floor: f32::MIN,
             audio_events: Vec::new(),
             known_lost: 0,
             crash_clock: 0.0,
@@ -737,6 +749,8 @@ impl Sim {
         self.ctl.throttle = if self.def().has_afterburner { 0.88 } else { 0.9 };
         self.debris = None;
         self.severity = None;
+        self.crash_report = None;
+        self.shake = 0.0;
         self.known_lost = 0;
         self.vfx.clear();
         self.snap_pose();
@@ -766,6 +780,8 @@ impl Sim {
         self.flap_idx = 0;
         self.debris = None;
         self.severity = None;
+        self.crash_report = None;
+        self.shake = 0.0;
         self.known_lost = 0;
         self.crash_clock = 0.0;
         self.ap = Autopilot::new();
@@ -911,6 +927,8 @@ impl Sim {
         self.acc = 0.0;
         self.debris = None;
         self.severity = None;
+        self.crash_report = None;
+        self.shake = 0.0;
         self.known_lost = 0;
         self.crash_clock = 0.0;
         self.audio_events.clear();
@@ -1196,6 +1214,14 @@ impl Sim {
         let dt = dt.min(0.1);
         self.real_time += dt;
         self.ground_y = crate::flight::Environment::ground_height(world, vec2(self.ac.pos.x, self.ac.pos.z));
+        // The chase camera keeps clear of the ground and roofs under it.
+        self.cam_floor = match self.last_view.as_ref().map(|v| vec2(v.eye.x, v.eye.z)) {
+            Some(e) => {
+                let g = crate::flight::Environment::ground_height(world, e);
+                g.max(crate::flight::Environment::obstacle_top(world, e).unwrap_or(f32::MIN))
+            }
+            None => f32::MIN,
+        };
         if let Some((_, t)) = &mut self.note {
             *t -= dt;
             if *t <= 0.0 {
@@ -1508,6 +1534,12 @@ impl Sim {
 
         if !self.paused && !self.needs_respawn {
             crate::scenario::control(self, world, dt);
+            // SKYWARD_DAMAGE: damage the airframe once, after any staging.
+            if self.scenario.as_ref().is_none_or(|sc| sc.t > 0.0) {
+                if let Some(spec) = self.damage_inject.take() {
+                    crate::scenario::inject_damage(self, &spec);
+                }
+            }
         }
         self.audio_events.clear();
         let amb = crate::systems::ambient(world, &self.ac, self.ground_y);
@@ -1768,11 +1800,36 @@ impl Sim {
             }
             self.known_lost = lost;
         }
+        // Strikes and slides while still flying / sliding (crash.rs): shake,
+        // sparks / dust, the scrape and impact sounds.
+        let jolt = std::mem::take(&mut self.ac.jolt);
+        self.shake = (self.shake * (-4.0 * dt).exp()).max(jolt.min(1.5));
+        if self.ac.crashed.is_none() {
+            if let Some((pos, speed, paved)) = self.ac.scrape.take().filter(|s| s.1 > 1.0) {
+                let geom = self.part_geom(&def);
+                let d = self.debris.get_or_insert_with(|| crate::debris::Debris::new(&def, geom));
+                let surface = if paved { crate::audio::params::Surface::Paved } else { crate::audio::params::Surface::Ground };
+                let mass = self.ac.dmg.mass(&def);
+                let vel = self.ac.vel;
+                if jolt > 0.2 {
+                    d.fx.push(crate::debris::Fx::Impact { pos, vel, speed: speed.min(30.0) * jolt.min(1.0), mass, surface });
+                    self.audio_events.push(crate::audio::params::Event::Impact { pos, speed: speed * jolt.min(1.0), mass, surface });
+                }
+                d.fx.push(crate::debris::Fx::Slide { pos, vel, speed, mass, surface });
+                self.audio_events.push(crate::audio::params::Event::Scrape { id: 14, pos, speed, mass, surface });
+            }
+        }
         // The crash: the wreck takes over from the frozen flight model.
         if let (Some(reason), Some(imp), None) = (self.ac.crashed.clone(), self.ac.impact, self.severity) {
             // (Ditchings by their attitude / sink / speed: missions/ditching.rs.)
             let sev = crate::missions::ditching::classify(&def, &reason, &imp, self.ac.dmg.failure.is_some());
             self.severity = Some(sev);
+            self.crash_report = Some(crate::crash::CrashReport::new(&def, &reason, &imp, sev));
+            self.shake = self.shake.max(match sev {
+                crate::damage::Severity::Minor => 0.3,
+                crate::damage::Severity::Substantial => 0.7,
+                crate::damage::Severity::Destroyed => 1.4,
+            } * (imp.vel.length() / 40.0).clamp(0.2, 1.0));
             self.crash_clock = 0.0;
             let geom = self.part_geom(&def);
             let d = self.debris.get_or_insert_with(|| crate::debris::Debris::new(&def, geom));
@@ -1824,6 +1881,17 @@ impl Sim {
         }
     }
 
+    /// Camera shake offset (unit-ish, scaled by the shake): a few
+    /// incommensurate sines, so it reads as a jolt, not a wobble.
+    fn shake_offset(&self) -> Vec3 {
+        if self.shake < 0.01 {
+            return Vec3::ZERO;
+        }
+        let t = self.real_time;
+        let k = self.shake.min(1.5);
+        vec3((t * 37.0).sin() + 0.5 * (t * 71.0).sin(), (t * 43.0).cos() + 0.5 * (t * 89.0).sin(), (t * 53.0).sin()) * k * 0.6
+    }
+
     /// The crash camera after a destroying accident: eye and target.
     fn crash_camera(&self) -> Option<(Vec3, Vec3)> {
         if self.severity != Some(crate::damage::Severity::Destroyed) {
@@ -1835,7 +1903,7 @@ impl Sim {
         let p = self.orbit_pitch.max(13f32.to_radians());
         let back = vec3(-yaw.sin(), 0.0, yaw.cos());
         let mut eye = c + (back * p.cos() + Vec3::Y * p.sin()) * dist;
-        eye.y = eye.y.max(c.y + 2.0);
+        eye.y = eye.y.max(c.y + 2.0).max(self.cam_floor + 2.0);
         Some((eye, c + Vec3::Y * (r * 0.15).min(10.0)))
     }
 
@@ -2125,7 +2193,8 @@ impl Sim {
                 let mut eye = pos + off;
                 // (A small drone is framed from just above the ground.)
                 let small = self.defs[self.sel].category == Category::Drone;
-                eye.y = if small { eye.y.max(self.ground_y + 0.12) } else { eye.y.max(1.0) };
+                eye.y = if small { eye.y.max(self.ground_y + 0.12) } else { eye.y.max(1.0).max(self.cam_floor + 1.5).max(self.ground_y + 1.0) };
+                eye += self.shake_offset() * (0.25 + self.size * 0.02);
                 let target = pos + Vec3::Y * if small { 0.02 } else { 0.5 + self.size * 0.08 };
                 match self.crash_camera() {
                     // Destroyed: a slow orbit framing the whole wreckage (blended in).
@@ -2143,6 +2212,8 @@ impl Sim {
                 let f = *FOV.get_or_init(|| std::env::var("SKYWARD_COCKPIT_FOV").ok().and_then(|v| v.parse::<f32>().ok()).filter(|v| (5.0..=120.0).contains(v)));
                 fov = f.unwrap_or(self.prefs.cockpit_fov.clamp(20.0, 130.0)).to_radians();
                 let mut e = pos + self.rrot * (self.model.eye + self.head.0);
+                // Impacts shake the head.
+                e += self.rrot * self.shake_offset() * 0.05;
                 // Gun recoil / hits shake the cockpit.
                 if let Some(u) = self.combat.as_ref().and_then(|c| c.local_unit()) {
                     let k = u.shake * 0.012 + if u.hit_flash < 0.15 { 0.02 } else { 0.0 };

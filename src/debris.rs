@@ -941,7 +941,7 @@ mod tests {
         let geom = PartGeom::estimate(&def, sd);
         let mut d = Debris::new(&def, geom);
         let rot = crate::flight::attitude(0.0, pitch, 0.0);
-        let imp = Impact { pos: Vec3::new(0.0, def.gear_height * 0.5, 0.0), vel, rot, omega: Vec3::ZERO, on_ground: true };
+        let imp = Impact { pos: Vec3::new(0.0, def.gear_height * 0.5, 0.0), vel, rot, omega: Vec3::ZERO, on_ground: true, alpha: 0.0 };
         let attached: u16 = if sev == Severity::Minor { !(1 << 15) & !crate::damage::GEAR_BITS } else { !(1 << 15) };
         d.crash(&imp, "test", sev, attached, 0.0, env);
         let paved = |_: Vec2| true;
