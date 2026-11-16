@@ -241,23 +241,12 @@ const DOORS_CLOSE_S: f32 = 5.0;
 /// Capture / debug knob: `SKYWARD_SURFACES="elevator=1,aileron=-0.5,rudder=1,flaps=1,spoilers=1,gear=0"`
 /// poses the exterior control surfaces as given (Skyward signs, see
 /// [`crate::flight::Surfaces`]: + = elevator TE up, right aileron up, rudder TE
-/// right; gear 0 = down, 1 = up), whatever the flight model does. Only the
-/// model animation sees it (captures: `--shot`, `SKYWARD_THUMB_VIEW` in main.rs).
+/// right; gear 0 = down, 1 = up), whatever the flight model does; `steer=1`
+/// turns the nose wheel as full right rudder on the ground would, in the air
+/// too. Only the model animation sees it (captures: `--shot`,
+/// `SKYWARD_THUMB_VIEW` in main.rs).
 fn forced_surfaces(mut s: crate::flight::Surfaces) -> crate::flight::Surfaces {
-    static FORCED: std::sync::OnceLock<Vec<(String, f32)>> = std::sync::OnceLock::new();
-    let f = FORCED.get_or_init(|| {
-        std::env::var("SKYWARD_SURFACES")
-            .map(|v| {
-                v.split(',')
-                    .filter_map(|kv| {
-                        let (k, x) = kv.split_once('=')?;
-                        Some((k.trim().to_string(), x.trim().parse().ok()?))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    });
-    for (k, v) in f {
+    for (k, v) in forced_knobs() {
         match k.as_str() {
             "elevator" => s.elevator = *v,
             "aileron" => s.aileron = *v,
@@ -269,6 +258,27 @@ fn forced_surfaces(mut s: crate::flight::Surfaces) -> crate::flight::Surfaces {
         }
     }
     s
+}
+
+/// `steer` of `SKYWARD_SURFACES` (see [`forced_surfaces`]).
+fn forced_steer() -> Option<f32> {
+    forced_knobs().iter().find(|(k, _)| k == "steer").map(|(_, v)| *v)
+}
+
+fn forced_knobs() -> &'static [(String, f32)] {
+    static FORCED: std::sync::OnceLock<Vec<(String, f32)>> = std::sync::OnceLock::new();
+    FORCED.get_or_init(|| {
+        std::env::var("SKYWARD_SURFACES")
+            .map(|v| {
+                v.split(',')
+                    .filter_map(|kv| {
+                        let (k, x) = kv.split_once('=')?;
+                        Some((k.trim().to_string(), x.trim().parse().ok()?))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    })
 }
 
 /// Value of one animation channel (FlightGear semantics, see `aircraft_asset.rs`).
@@ -295,8 +305,8 @@ pub fn channel_value(name: &str, i: &ModelInputs) -> f32 {
         "spoilers" => return s.spoilers,
         "gear_pos" => return 1.0 - s.gear,
         "wow" => return b(ac.on_ground),
-        "steer_norm" => return if ac.on_ground { s.rudder } else { 0.0 },
-        "steer_deg" => return if ac.on_ground { s.rudder * i.def.nose_steer_deg } else { 0.0 },
+        "steer_norm" => return forced_steer().unwrap_or(if ac.on_ground { s.rudder } else { 0.0 }),
+        "steer_deg" => return forced_steer().unwrap_or(if ac.on_ground { s.rudder } else { 0.0 }) * i.def.nose_steer_deg,
         "afterburner" => return s.afterburner,
         "ctl_elevator" => return -i.ctl.elevator,
         "ctl_aileron" => return i.ctl.aileron,
