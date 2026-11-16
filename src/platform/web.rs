@@ -623,8 +623,8 @@ pub fn scene_size(w: u32, h: u32) -> (u32, u32) {
 /// Build step (scripts/web-data.mjs runs this module in Node): OurAirports
 /// CSVs → the compact gzipped lists the page loads instead (`data/*.tsv.gz`,
 /// what native runs keep in `cache/`). `kind`: "airports" (airports.csv,
-/// runways.csv), "frequencies" or "navaids" (one CSV). None if the list
-/// looks wrong (too short).
+/// runways.csv), "frequencies" or "navaids" (one CSV), or "ils" (FlightGear's
+/// nav.dat.gz). None if the list looks wrong (too short).
 #[wasm_bindgen]
 pub fn skyward_compact_data(kind: &str, a: &[u8], b: &[u8]) -> Option<Vec<u8>> {
     use std::io::Write;
@@ -647,6 +647,7 @@ pub fn skyward_compact_data(kind: &str, a: &[u8], b: &[u8]) -> Option<Vec<u8>> {
             let list = crate::nav::db::parse_csv(&text(a));
             (list.len() >= 1000).then(|| crate::nav::db::compact_bytes(&list).ok())?
         }
+        "ils" => crate::nav::navdat::compact_from_navdat(a).map(|x| x.0),
         _ => None,
     }
 }

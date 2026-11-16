@@ -6,18 +6,24 @@
 //!   once and compacted into `cache/navaids.tsv.gz` (≈ 0.3 MB); the browser
 //!   build fetches the CSV (GitHub Pages sends CORS headers) or a compact copy
 //!   shipped next to the page (`data/navaids.tsv.gz`).
-//! * **ILS** (localizer + glideslope + DME): no licence-clean worldwide ILS
-//!   dataset exists, so every instrument runway (paved, lit, ≥ 1200 m,
-//!   surveyed ends, at an airport / major airport) gets a **synthetic** ILS
-//!   derived from its OurAirports geometry — localizer 300 m beyond the stop
-//!   end on the runway course, glideslope abeam the touchdown zone for a
-//!   50 ft threshold crossing height, DME at the glideslope, a frequency from
-//!   the 40 ILS channels picked by hashing the airport / runway, ident
-//!   "I" + airport + runway. A short table of real facts (frequency, ident,
-//!   glidepath angle) from public charts overrides the synthetic values for
-//!   a few London airports. Synthetic records are flagged (`synthetic`).
+//! * **ILS** (localizer + glideslope + DME + markers): the published
+//!   facilities from FlightGear's `nav.dat` ([`super::navdat`]; real
+//!   frequencies, idents, front courses, localizer / glideslope / DME antenna
+//!   sites, glidepath angles), the threshold from the OurAirports runway.
+//!   Every instrument runway end (paved, lit, ≥ 1200 m, surveyed ends, at an
+//!   airport / major airport) without a nav.dat entry — or every one, before
+//!   / without the list — gets a **synthetic** ILS derived from its
+//!   OurAirports geometry: localizer 300 m beyond the stop end on the runway
+//!   course, glideslope abeam the touchdown zone for a 50 ft threshold
+//!   crossing height, DME at the glideslope, a frequency from the 40 ILS
+//!   channels picked by hashing the airport / runway (clear of the airport's
+//!   real ones), ident "I" + airport + runway. A short table of facts
+//!   (frequency, ident, glidepath angle) from public charts overrides both
+//!   for a few London airports (nav.dat is AIRAC 2013.10, and has EGLC 09 at
+//!   5.05°). Synthetic records are flagged (`synthetic`).
 
 use super::geo::{self, LL};
+use super::navdat::{self, IlsDb, Marker, RealIls};
 use crate::airports::{self, Airport, Rwy};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -26,7 +32,7 @@ use web_time::Duration;
 
 pub const NAVAIDS_URL: &str = "https://davidmegginson.github.io/ourairports-data/navaids.csv";
 /// Shown in the credits.
-pub const CREDIT: &str = "Navaids: OurAirports (public domain); ILS: synthetic from runway data";
+pub const CREDIT: &str = "Navaids: OurAirports (public domain); ILS: FlightGear nav.dat (Robin A. Peel, GPL-2.0-or-later), synthetic elsewhere";
 const CACHE_VERSION: &str = "skyward-navaids-1";
 const MAX_AGE: Duration = Duration::from_secs(45 * 24 * 3600);
 const FT: f32 = 0.3048;
@@ -144,6 +150,8 @@ pub struct Ils {
     pub length: f32,
     /// Derived from runway data (not a published facility).
     pub synthetic: bool,
+    /// Marker beacons (nav.dat; none on synthetic ILS).
+    pub markers: Vec<Marker>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -422,8 +430,14 @@ fn synthetic_ident(ap: &str, rwy: &str) -> String {
     format!("I{}{}", tail, suffix).to_ascii_uppercase()
 }
 
-/// The ILS of runway end `end` (0 = low end) of `rw` at `ap`, if it has one.
+/// The synthetic ILS of runway end `end` (0 = low end) of `rw` at `ap`, if
+/// it is an instrument runway.
 pub fn ils_for(ap: &Airport, rw: &Rwy, end: usize) -> Option<Navaid> {
+    synthetic_ils(ap, rw, end, &[])
+}
+
+/// [`ils_for`] on a channel not in `avoid` (the airport's real ILS).
+fn synthetic_ils(ap: &Airport, rw: &Rwy, end: usize, avoid: &[u32]) -> Option<Navaid> {
     if !instrument_runway(ap, rw) {
         return None;
     }
@@ -445,7 +459,8 @@ pub fn ils_for(ap: &Airport, rw: &Rwy, end: usize) -> Option<Navaid> {
             // Both ends of a runway share the channel (only one radiates at a time).
             let pair = if a.ident < b.ident { format!("{}{}", a.ident, b.ident) } else { format!("{}{}", b.ident, a.ident) };
             let ch = ils_channels();
-            let f = ch[(hash(&format!("{code}/{pair}")) % ch.len() as u64) as usize];
+            let k = (hash(&format!("{code}/{pair}")) % ch.len() as u64) as usize;
+            let f = (0..ch.len()).map(|i| ch[(k + i) % ch.len()]).find(|f| !avoid.contains(f)).unwrap_or(ch[k]);
             (f, synthetic_ident(&code, &a.ident), 3.0, true)
         }
     };
@@ -456,9 +471,6 @@ pub fn ils_for(ap: &Airport, rw: &Rwy, end: usize) -> Option<Navaid> {
     let gs_along = 50.0 * FT / gs_angle.tan();
     let gs_c = geo::gc_dest(thr, course, gs_along as f64);
     let gs = geo::gc_dest(gs_c, geo::wrap_2pi(course - std::f32::consts::FRAC_PI_2), 120.0);
-    // Course width: ±105 m (350 ft) at the threshold, 3°..6° wide.
-    let d_thr = len - a.displaced_m + 300.0;
-    let half_width = (105.0 / d_thr).atan().clamp(1.5f32.to_radians(), 3.0f32.to_radians());
     let elev = ap.elev_ft * FT;
     Some(Navaid {
         kind: Kind::Ils,
@@ -471,25 +483,138 @@ pub fn ils_for(ap: &Airport, rw: &Rwy, end: usize) -> Option<Navaid> {
         dme: Some(gs),
         range_nm: 18.0,
         airport: ap.ident.clone(),
-        ils: Some(Ils { airport: ap.ident.clone(), runway: a.ident.clone(), thr, thr_elev: elev, course, loc, gs: Some(gs), gs_angle, half_width, length, synthetic }),
+        ils: Some(Ils {
+            airport: ap.ident.clone(),
+            runway: a.ident.clone(),
+            thr,
+            thr_elev: elev,
+            course,
+            loc,
+            gs: Some(gs),
+            gs_angle,
+            half_width: half_width(geo::gc_dist(thr, loc) as f32),
+            length,
+            synthetic,
+            markers: Vec::new(),
+        }),
     })
+}
+
+/// Course width: ±105 m (350 ft) at the threshold, 3°..6° wide.
+fn half_width(thr_to_loc: f32) -> f32 {
+    (105.0 / thr_to_loc.max(1.0)).atan().clamp(1.5f32.to_radians(), 3.0f32.to_radians())
+}
+
+/// A published ILS / LOC (nav.dat) at `ap`. The threshold comes from the
+/// OurAirports runway end of the same ident when it is surveyed; else from
+/// the glideslope site (50 ft crossing height), else the runway length
+/// before the localizer. Frequencies, idents and angles in [`PUBLISHED`]
+/// override the (older) nav.dat ones.
+pub fn real_ils(ap: &Airport, r: &RealIls) -> Navaid {
+    let course = r.course_deg.to_radians();
+    let back = geo::wrap_2pi(course + std::f32::consts::PI);
+    // The runway end of that ident, else (renumbered since the AIRAC cycle)
+    // the surveyed end whose centreline the localizer sits on.
+    let on_centreline = |rw: &Rwy, e: usize| {
+        let (a, b) = (&rw.ends[e], &rw.ends[1 - e]);
+        let (Some(pa), Some(pb)) = (a.lat.zip(a.lon), b.lat.zip(b.lon)) else { return false };
+        let c = geo::gc_bearing(pa, pb);
+        let (d, rel) = (geo::gc_dist(pb, r.loc) as f32, geo::wrap_pi(geo::gc_bearing(pb, r.loc) - c));
+        geo::wrap_pi(c - course).abs() < 5f32.to_radians() && (-500.0..3000.0).contains(&(d * rel.cos())) && (d * rel.sin()).abs() < 250.0
+    };
+    let end = ap
+        .runways
+        .iter()
+        .find_map(|rw| (0..2).find(|&e| navdat::rwy_eq(&rw.ends[e].ident, &r.runway)).map(|e| (rw, e)))
+        .or_else(|| ap.runways.iter().find_map(|rw| (0..2).find(|&e| on_centreline(rw, e)).map(|e| (rw, e))));
+    let runway = end.map(|(rw, e)| rw.ends[e].ident.clone()).unwrap_or_else(|| r.runway.clone());
+    let published = PUBLISHED.iter().find(|p| p.0 == ap.code() && p.1 == runway);
+    let gs_deg = published.map(|p| p.4).or(r.gs.map(|g| g.1)).unwrap_or(3.0);
+    let gs_angle = gs_deg.to_radians();
+    let surveyed = end.and_then(|(rw, e)| {
+        let (a, b) = (&rw.ends[e], &rw.ends[1 - e]);
+        let (pa, pb) = ((a.lat?, a.lon?), (b.lat?, b.lon?));
+        let len = geo::gc_dist(pa, pb) as f32;
+        Some((geo::gc_dest(pa, geo::gc_bearing(pa, pb), a.displaced_m as f64), len - a.displaced_m))
+    });
+    let (thr, length) = match surveyed {
+        Some(t) => t,
+        None => {
+            let length = end.map_or(2500.0, |(rw, e)| rw.length_m - rw.ends[e].displaced_m).max(600.0);
+            let from_loc = match r.gs {
+                Some((g, _)) => {
+                    let abeam = geo::gc_dist(r.loc, g) as f32 * geo::wrap_pi(geo::gc_bearing(r.loc, g) - back).cos();
+                    abeam + 50.0 * FT / gs_angle.tan()
+                }
+                None => length + 300.0,
+            };
+            (geo::gc_dest(r.loc, back, from_loc as f64), length)
+        }
+    };
+    let gs = r.gs.map(|g| g.0);
+    let elev = ap.elev_ft * FT;
+    let (freq, ident) = published.map_or((r.freq_khz, r.ident.clone()), |p| (p.2, p.3.to_string()));
+    Navaid {
+        kind: if gs.is_some() { Kind::Ils } else { Kind::Loc },
+        ident,
+        name: format!("{} RWY {}", ap.name, runway),
+        freq_khz: freq,
+        lat: r.loc.0,
+        lon: r.loc.1,
+        elev_m: r.elev_m,
+        dme: r.dme.or(gs),
+        range_nm: r.range_nm,
+        airport: ap.ident.clone(),
+        ils: Some(Ils {
+            airport: ap.ident.clone(),
+            runway,
+            thr,
+            thr_elev: elev,
+            course,
+            loc: r.loc,
+            gs,
+            gs_angle,
+            half_width: half_width(geo::gc_dist(thr, r.loc) as f32),
+            length,
+            synthetic: false,
+            markers: r.markers.clone(),
+        }),
+    }
+}
+
+/// nav.dat's ILS list is loaded (starts loading it).
+pub fn real_ils_ready() -> bool {
+    navdat::ils_db().is_some()
 }
 
 /// Every ILS at the airports within `km` of `ll`.
 pub fn ils_near(adb: &airports::Db, ll: LL, km: f64) -> Vec<Navaid> {
+    let real = navdat::ils_db();
     let mut out = Vec::new();
     for (i, _) in adb.near(ll.0, ll.1, km) {
-        out.extend(ils_at(&adb.airports[i]));
+        out.extend(ils_at_with(&adb.airports[i], real.as_deref()));
     }
     out
 }
 
-/// Every ILS of one airport.
+/// Every ILS of one airport: nav.dat's once loaded, synthetic elsewhere.
 pub fn ils_at(ap: &Airport) -> Vec<Navaid> {
-    let mut out = Vec::new();
+    ils_at_with(ap, navdat::ils_db().as_deref())
+}
+
+/// [`ils_at`] with a given real-ILS list (None = synthetic only). Real ILS
+/// come first (ILS before localizer-only), then a synthetic one for each
+/// instrument runway end that has none.
+pub fn ils_at_with(ap: &Airport, real: Option<&IlsDb>) -> Vec<Navaid> {
+    let mut out: Vec<Navaid> = real.map_or(&[][..], |d| d.at(ap)).iter().map(|r| real_ils(ap, r)).collect();
+    out.sort_by_key(|n| n.kind != Kind::Ils);
+    let used: Vec<u32> = out.iter().map(|n| n.freq_khz).collect();
     for rw in &ap.runways {
         for e in 0..2 {
-            out.extend(ils_for(ap, rw, e));
+            let id = &rw.ends[e].ident;
+            if !out.iter().any(|n| n.ils.as_ref().is_some_and(|i| navdat::rwy_eq(&i.runway, id))) {
+                out.extend(synthetic_ils(ap, rw, e, &used));
+            }
         }
     }
     out
@@ -530,7 +655,7 @@ pub fn status() -> String {
     match &*STATE.lock().unwrap_or_else(|e| e.into_inner()) {
         Load::Idle => "not loaded".into(),
         Load::Loading => "loading".into(),
-        Load::Ready(d) => format!("{} navaids (OurAirports) · ILS from runway data", d.navaids.len()),
+        Load::Ready(d) => format!("{} navaids (OurAirports) · {}", d.navaids.len(), navdat::status()),
         Load::Failed(e) => format!("unavailable ({e})"),
     }
 }
@@ -548,12 +673,14 @@ fn finish(r: Result<Vec<Navaid>, String>) {
     }
 }
 
-/// Block until loaded (headless runs). Native only.
+/// Block until loaded (headless runs), the real ILS list too (so a run
+/// does not change ILS halfway). Native only.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn wait(timeout: Duration) -> Option<Arc<NavDb>> {
     let t = web_time::Instant::now();
     loop {
-        if let Some(d) = db() {
+        let ils = navdat::ils_db().is_some() || navdat::settled() || t.elapsed() > timeout;
+        if let Some(d) = db().filter(|_| ils) {
             return Some(d);
         }
         if matches!(*STATE.lock().unwrap_or_else(|e| e.into_inner()), Load::Failed(_)) || t.elapsed() > timeout {

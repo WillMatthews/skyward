@@ -28,6 +28,7 @@ src/systems/session.rs
 src/systems/tests.rs
 src/ui/failures.rs
 src/nav/db.rs
+src/nav/navdat.rs
 src/nav/fms.rs
 src/nav/geo.rs
 src/nav/mod.rs

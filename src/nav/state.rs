@@ -78,6 +78,8 @@ pub struct NavState {
     local_at: Option<LL>,
     local_t: f32,
     local_db: bool,
+    /// The station list has nav.dat's ILS in it.
+    local_real: bool,
     /// Tune NAV 1 to the approach's ILS automatically.
     pub auto_tune: bool,
     /// Has the radio type (no radios in a glider / the Spitfire).
@@ -97,6 +99,7 @@ impl Default for NavState {
             local_at: None,
             local_t: 0.0,
             local_db: false,
+            local_real: false,
             auto_tune: true,
             equipped: true,
             show_navaids: true,
@@ -173,6 +176,7 @@ impl NavState {
         self.local = v;
         self.local_at = Some(ll);
         self.local_db = ndb.is_some();
+        self.local_real = db::real_ils_ready();
     }
 
     /// Put stations in directly (tests / no database).
@@ -189,7 +193,8 @@ impl NavState {
         if self.local_t <= 0.0 {
             self.local_t = 5.0;
             let moved = self.local_at.is_none_or(|ll| geo::gc_dist(ll, env.to_ll(p)) > 20_000.0);
-            if moved || (ndb.is_some() && !self.local_db) || self.approach_missing() {
+            let real_ils = db::real_ils_ready();
+            if moved || (ndb.is_some() && !self.local_db) || (real_ils && !self.local_real) || self.approach_missing() {
                 if ndb.is_some() || adb.is_some() {
                     self.refresh(env, p, ndb, adb);
                 }
@@ -424,6 +429,7 @@ fn rnav_geometry(ap: &crate::airports::Airport, rw: &crate::airports::Rwy, e: us
             half_width: 2f32.to_radians(),
             length: rw.length_m - a.displaced_m,
             synthetic: true,
+            markers: Vec::new(),
         }),
     })
 }
