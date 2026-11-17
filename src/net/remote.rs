@@ -184,14 +184,14 @@ impl Remote {
     }
 
     /// Animate the model and return its draw list (eye-relative); light
-    /// sprites go to `lights`, the afterburner flame to `flames`.
+    /// sprites go to `lights`, the afterburner plumes (eye-relative) to `plumes`.
     pub fn frame(
         &mut self,
         defs: &[AircraftDef],
         eye: Vec3,
         time: f32,
         lights_out: &mut Vec<crate::lights::LightInst>,
-        flames: &mut crate::scene::MeshData,
+        plumes: &mut Vec<crate::vfx::Plume>,
     ) -> Option<crate::gfx_aircraft::AircraftFrame> {
         if !self.visible() || self.pos.distance(eye) > DRAW_DIST {
             return None;
@@ -227,25 +227,20 @@ impl Remote {
             let l = crate::lights::AircraftLights::build(rig, self.pos - eye, self.rot, time, &on);
             lights_out.extend_from_slice(&l.sprites[..l.n_sprites]);
         }
-        // Afterburner flame (as the player's, sim.rs).
-        if def.has_afterburner && st.afterburner > 0.02 {
-            let ab = st.afterburner;
-            let flick = 1.0 + 0.06 * (time * 37.0 + self.id as f32).sin() * (time * 23.0).cos();
-            let mut local = crate::scene::MeshData::default();
-            for &p in def.engine_pos {
-                let mut flame = crate::models::flame_mesh(Vec3::ZERO, 0.42);
-                for v in &mut flame.verts {
-                    v.uv[0] *= ab * flick;
-                }
-                let len = 0.55 + 0.45 * ab;
-                local.append(&flame, Mat4::from_translation(p) * Mat4::from_scale(vec3(1.0, 1.0, len * flick)));
+        // Afterburner plumes (as the player's, vfx/), the cells for ISA pressure at its height.
+        if def.has_afterburner && st.afterburner > 0.02 && def.engine_kind == crate::flight::EngineKind::Jet {
+            let p = crate::flight::isa(self.pos.y).pressure;
+            for i in 0..def.engine_count.min(def.engine_pos.len()) {
+                let (noz, r) = crate::vfx::nozzle(def, i);
+                let r = r * self.scale;
+                plumes.push(crate::vfx::Plume {
+                    nozzle: self.pos - eye + self.rot * (noz * self.scale),
+                    dir: self.rot * -Vec3::Z,
+                    radius: r,
+                    ab: st.afterburner.min(1.0),
+                    cell: crate::vfx::cell_length(r, p),
+                });
             }
-            for v in &mut local.verts {
-                for c in &mut v.col {
-                    *c = c.max(0.0).powf(1.0 / 2.2);
-                }
-            }
-            flames.append(&local, body);
         }
         Some(f)
     }

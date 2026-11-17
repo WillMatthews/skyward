@@ -7,7 +7,8 @@
 //!                     [--menu-screen main|aircraft|airport|conditions|settings|pause|loading|credits] [--map-view LAT,LON,ZOOM] [--map-style day|night] [--hud full|minimal|off] [--map corner|large|off]
 //!                     [--realtime [--warp N]]   (stream + render in real time, straight & level, report timings)
 //!                     [--gear up|down] [--flaps N] [--spoilers F] [--reverse] [--fail BITS] [--ap] [--fps HZ]   (setup / test knobs)
-//! Model checks: SKYWARD_SURFACES="elevator=1,aileron=1,rudder=1,flaps=1,spoilers=1,gear=0" poses the surfaces (models.rs);
+//!                     [--crash-at S [--geocode]]   (crash at S seconds; the crash site's address comes from Nominatim only with --geocode)
+//! Model checks: SKYWARD_SURFACES="elevator=1,aileron=1,rudder=1,flaps=1,spoilers=1,gear=0,steer=1" poses the surfaces (models.rs);
 //!             --menu-screen aircraft with SKYWARD_THUMBS_OUT=dir SKYWARD_THUMB_VIEW="nose_deg,elev_deg,dist,aim" renders every
 //!             model from that view; SKYWARD_NO_FIXUPS=1 shows models without the animation fixes (aircraft_fixups.rs)
 //! Settings:   --menu-screen settings [--settings-category video|display|camera|flight|assists|weather|traffic|sound|controls|multiplayer|accessibility|interface|data|about] [--settings-search TEXT] [--settings-from pause] [--palette deuteranopia|protanopia|tritanopia] [--high-contrast]; SKYWARD_CONFIG_DIR=dir for the settings file
@@ -40,9 +41,11 @@ mod nav;
 mod bot;
 mod clouds;
 mod cockpit;
+mod crash;
 mod damage;
 mod debris;
 mod flight;
+mod geocode;
 mod gfx;
 mod ground;
 mod gfx_aircraft;
@@ -218,6 +221,10 @@ struct Args {
     shot_when: Option<String>,
     /// Headless: eject / bail out at this many seconds.
     eject_at: Option<f32>,
+    /// Crash the aircraft at this many seconds (crash-site captures, geocode.rs).
+    crash_at: Option<f32>,
+    /// Headless: look the crash site up on Nominatim (off by default: captures never hit the network).
+    geocode: bool,
     /// Chase camera on the (first) opponent.
     view_bandit: bool,
 }
@@ -347,6 +354,8 @@ fn parse_args_from(argv: Vec<String>) -> Args {
         dogfight: None,
         shot_when: None,
         eject_at: None,
+        crash_at: None,
+        geocode: false,
         view_bandit: false,
     };
     let mut i = 0;
@@ -396,6 +405,8 @@ fn parse_args_from(argv: Vec<String>) -> Args {
             "--dogfight-ai" => a.dogfight.get_or_insert_with(Default::default).autopilot = true,
             "--shot-when" => a.shot_when = Some(next(&mut i)),
             "--eject-at" => a.eject_at = next(&mut i).parse().ok(),
+            "--crash-at" => a.crash_at = next(&mut i).parse().ok(),
+            "--geocode" => a.geocode = true,
             "--view-bandit" => a.view_bandit = true,
             "--width" => a.width = next(&mut i).parse().unwrap_or(1920),
             "--height" => a.height = next(&mut i).parse().unwrap_or(1080),
@@ -1253,11 +1264,10 @@ fn render_frame(
                 fv = FrameView { eye, view: glam::camera::rh::view::look_at_mat4(eye, look, Vec3::Y), ..fv };
             }
             // Other players' aircraft (net/): real models, lights, afterburners — eye-relative.
-            let (mut frames, mut lights) = (Vec::new(), Vec::new());
+            let (mut frames, mut lights, mut plumes) = (Vec::new(), Vec::new(), Vec::new());
             if ui.st.mp.connected() {
-                let (f, l, flames) = ui.st.mp.render_traffic(fv.eye);
-                dynm.append(&flames, glam::Mat4::IDENTITY);
-                (frames, lights) = (f, l);
+                let (f, l, p) = ui.st.mp.render_traffic(fv.eye);
+                (frames, lights, plumes) = (f, l, p);
                 ui.st.mp.cam = Some((fv.eye, fv.view, fv.fov_y));
             } else {
                 ui.st.mp.cam = None;
@@ -1266,11 +1276,9 @@ fn render_frame(
             {
                 let lt_settings = ui.st.settings.live_traffic.clone();
                 ui.st.adsb.update(sim, &s.world, ui.st.dt, &lt_settings);
-                let mut flames = scene::MeshData::default();
                 let slots = 96usize.saturating_sub(frames.len());
                 let t = sim.time % 3600.0;
-                frames.extend(ui.st.adsb.render(fv.eye, t, slots, &mut lights, &mut flames));
-                dynm.append(&flames, glam::Mat4::IDENTITY);
+                frames.extend(ui.st.adsb.render(fv.eye, t, slots, &mut lights, &mut plumes));
                 ui.st.adsb.cam = Some((fv.eye, fv.view, fv.fov_y));
             }
             // Ships (ships/): live AIS where open, procedural elsewhere; hulls, lights, wakes.
@@ -1282,6 +1290,15 @@ fn render_frame(
                 dynm.append(&wakes, glam::Mat4::IDENTITY);
             }
             renderer.set_traffic(frames, lights);
+            // Their afterburners join our effects (vfx/, relative to its origin).
+            if !plumes.is_empty() {
+                let eye = fv.eye;
+                let vf = fv.vfx.get_or_insert_with(|| std::sync::Arc::new(vfx::VfxFrame { origin: eye, ..Default::default() }));
+                let vf = std::sync::Arc::make_mut(vf);
+                for p in &plumes {
+                    vfx::plume(vf, &vfx::Plume { nozzle: p.nozzle + eye - vf.origin, ..*p });
+                }
+            }
             // Browser: the scene renders within a pixel budget (upscaled by the AA / tonemap pass).
             #[cfg(target_arch = "wasm32")]
             renderer.set_scale_cap(platform::web::scene_size(w, h).0 as f32 / w.max(1) as f32);
@@ -1691,6 +1708,8 @@ fn setup_adsb(args: &Args, ui: &mut Ui, headless: bool) -> Result<(), String> {
 fn headless(args: Args) -> Result<(), String> {
     let mut args = args;
     let path = args.shot.clone().unwrap();
+    // Captures never ask Nominatim (crash sites: the offline description) unless --geocode.
+    geocode::set_disabled(!args.geocode);
     // Airports (OurAirports): runways, --airport and the menus.
     let mut loader = airports::Loader::start();
     let db = loader.wait(Duration::from_secs(120));
@@ -2005,6 +2024,11 @@ fn headless(args: Args) -> Result<(), String> {
         let mp = ui.st.mp.connected();
         let mut chat = mp_chat_cues(&args.mp_chat);
         let paced = Instant::now();
+        // SKYWARD_SHOT_SEQ=t1,t2,..: also capture `<stem>_t<t>.png` at those sim
+        // times (crash sequences: frames after an impact, scenario.rs).
+        let mut seq: Vec<f32> = std::env::var("SKYWARD_SHOT_SEQ").ok().map(|v| v.split(',').filter_map(|x| x.trim().parse::<f32>().ok()).collect()).unwrap_or_default();
+        seq.sort_by(f32::total_cmp);
+        let stem = path.trim_end_matches(".png").to_string();
         for i in 0..steps.max(1) {
             if mp {
                 let due = paced + Duration::from_secs_f64(i as f64 / 60.0);
@@ -2029,6 +2053,9 @@ fn headless(args: Args) -> Result<(), String> {
                     input.pressed.push(Key::Eject);
                 }
             }
+            if args.crash_at.is_some_and(|t| i as f32 / 60.0 >= t) && sim.ac.crashed.is_none() {
+                sim.ac.force_crash("Flew into terrain");
+            }
             sim.update(&s.world, &mut input, if steps == 0 { 0.0 } else { 1.0 / 60.0 });
             if let (Some(t), None) = (args.throttle, &sim.bot) {
                 sim.ctl.throttle = t;
@@ -2042,6 +2069,21 @@ fn headless(args: Args) -> Result<(), String> {
                     s.follow();
                     break;
                 }
+            }
+            if seq.first().is_some_and(|t| (i + 1) as f32 / 60.0 >= *t) {
+                let t = seq.remove(0);
+                s.follow();
+                let tw = Instant::now();
+                loop {
+                    sync_gpu(&mut s, &mut renderer, &mut ui, &gpu, None);
+                    let f = s.world.focus();
+                    let (r, tot) = s.world.progress(f, 2500.0);
+                    if (r >= tot && s.world.uploads.is_empty()) || tw.elapsed() > Duration::from_secs(60) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                save_png(&gpu, &mut renderer, &mut ui, &mut s, &tex, &view, w, h, &raw, &format!("{stem}_t{t:05.2}.png"))?;
             }
             if i % if mp { 10 } else { 30 } == 0 {
                 s.follow();
@@ -2101,6 +2143,14 @@ fn headless(args: Args) -> Result<(), String> {
     eprintln!("scenery around camera ready after {:.2}s more", tw.elapsed().as_secs_f32());
     if let Some(c) = geo_cam(&s.world) {
         ov = Some(c);
+    }
+    // A crash: wait for its address (geocode.rs gives up by itself after a few seconds).
+    if let Some(c) = s.sim.as_mut().and_then(|x| x.crash_site.as_mut()) {
+        let t0 = Instant::now();
+        while c.locating() && t0.elapsed() < Duration::from_secs(20) {
+            c.poll();
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
     if let (Some(e), Some(l), Some((eye, look))) = (args.eye_ll, args.look_ll, ov.as_mut()) {
         let gh = |p: Vec3| flight::Environment::ground_height(&s.world, vec2(p.x, p.z));

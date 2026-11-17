@@ -396,7 +396,9 @@ fn won_bellyland() {
     let m = defs::by_id("bellyland").unwrap();
     let f = fly("bellyland", &land_env(m), 900.0);
     assert_won(&f);
-    assert!(f.ac.crashed.as_deref().is_some_and(|r| r.to_lowercase().contains("gear")), "{:?}", f.ac.crashed);
+    // On its belly: the crash (once at rest) or the wreck still settling.
+    let why = f.ac.crashed.clone().or(f.ac.wreck.as_ref().map(|w| w.reason.clone())).unwrap_or_default();
+    assert!(why.to_lowercase().contains("gear"), "{why:?}");
 }
 
 #[test]

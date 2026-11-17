@@ -127,7 +127,19 @@ impl Aircraft {
                 self.crash(format!("Flew into the ground at {:.0} fpm", sink / FPM));
                 return;
             }
-            if sink > def.max_touchdown_sink {
+            // Helicopters (crash.rs): a firm arrival spreads / bends the skids
+            // and the flight goes on; only beyond the collapse limit is it over.
+            let td = crate::crash::touchdown(def, sink);
+            if !quad && matches!(td, crate::crash::Touchdown::Hard { .. }) {
+                let sd = crate::damage::struct_def(def.id);
+                if let crate::crash::Touchdown::Hard { gear } = td {
+                    if self.assists.crashes != crate::damage::Realism::Off {
+                        self.dmg.hit(sd, def, crate::damage::Part::Fuselage, 0.5 * gear, "hard landing");
+                    }
+                    self.jolt = self.jolt.max(0.4 + 0.5 * gear);
+                    self.dmg.events.push(crate::damage::DamageEvent { part: None, msg: format!("Hard landing — {:.0} fpm: skids spread", sink / FPM), caution: true });
+                }
+            } else if sink > def.max_touchdown_sink {
                 let sd = crate::damage::struct_def(def.id);
                 if quad {
                     self.crash(format!("Crashed: hit the ground at {:.1} m/s — arms and props broken", sink));

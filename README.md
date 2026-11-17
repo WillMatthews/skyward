@@ -621,6 +621,9 @@ skyward --shot m.png --aircraft meridian320 --bot --soak --seconds 4200 --warp 8
 | Variable | Effect |
 |---|---|
 | `SKYWARD_SCENARIO=…` | `pullup` `overg` `bellyland` `hardland` `crash` `transonic` `cruise`: a scripted structures / crash / effects flight (`src/scenario.rs`) |
+| `SKYWARD_CRASH_TEST=…` | `hardland` `nosein` `belly` `wingtip` `ditch` `building` `tailstrike` `fly`: stage a forced impact (or, `fly`, level flight at 400 m); override with `SKYWARD_CRASH_KT` / `_SINK` (m/s) / `_PITCH` / `_BANK` (`src/scenario.rs`) |
+| `SKYWARD_DAMAGE=lwing:0.5,eng1:fire,…` | damage the airframe at the start: `lwing` `rwing` `htail` `fin` `tail` `nose` `gear` `ngear` `eng1`..`eng4` (0..1, `off`), `eng<N>:fire`, `leak` |
+| `SKYWARD_SHOT_SEQ=1,2,4` | with `--shot`: also write `<stem>_t<time>.png` at those sim times (crash sequences) |
 | `SKYWARD_ORBIT=yaw,pitch,dist` | chase-camera angle for captures |
 | `SKYWARD_LOOK=yaw,pitch` | cockpit head-look for captures |
 | `SKYWARD_COCKPIT_FOV=deg` | cockpit field of view for captures |
@@ -991,6 +994,14 @@ the render / output resolution and a VRAM estimate.
   scenes in `tests/goldens/scenes.txt` with fixed time, date and METAR. It compares them with the
   committed PNGs perceptually (CIELAB ΔE + SSIM), and compares audio renders by spectral distance.
   After an intended change, run `scripts/regress.sh --update [scene...]`.
+- **Control surfaces.** `cargo test --release control_surface_checks -- --nocapture` checks every
+  aircraft in `assets/aircraft/` (elevator, ailerons, rudder, flaps, spoilers, leading-edge devices,
+  gear doors): each moves, the right way, both sides alike, about its leading edge, within sane
+  angles, and no part comes off the airframe in any pose; it prints a pass / fail table. What an
+  aircraft lacks is listed with the reason in `src/aircraft_fixups/checks.rs`. For a look,
+  `scripts/surface-sheet.sh [out-dir]` renders (headless, ~25 min) a contact sheet per aircraft:
+  neutral, elevator up / down, roll left / right, rudder left / right, flaps, spoilers, gear up /
+  down, plus an `index.html`.
 - **Smoke render.** [`render.yml`](.github/workflows/render.yml) is an on-demand software-Vulkan
   (lavapipe) smoke render.
 
@@ -1049,6 +1060,7 @@ liveries are neutral, with no operator markings.
 |---|---|---|
 | Map data | © [OpenMapTiles](https://openmaptiles.org/) © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright), served by [OpenFreeMap](https://openfreemap.org/) | ODbL |
 | Airport detail | OpenStreetMap via the [Overpass API](https://overpass-api.de/) | ODbL |
+| Crash-site addresses | © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright), reverse-geocoded by [Nominatim](https://nominatim.openstreetmap.org/) (one request per crash, cached under `cache/geocode/`; offline: the nearest airport / place) | ODbL |
 | Airport layouts (taxi networks, stands, holding points, pavement, painted lines, taxiway lights, signs) | [X-Plane Scenery Gateway](https://gateway.x-plane.com/) community airports (Robin A. Peel, Laminar Research, Gateway artists) as shipped in FlightGear's [fgdata](https://gitlab.com/flightgear/fgdata) `Airports/apt.dat.ws3.gz` (pinned commit; ≈156 MB, downloaded once and split into `cache/aptdat/`; the web build ships the per-airport extracts). Not the Gateway API, whose terms reserve it for X-Plane products | GNU GPL |
 | Elevation | [Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) on AWS (Mapzen / Tilezen); sources below | see below |
 | Elevation detail (desktop) | Produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved — [Copernicus DEM GLO-30 Public](https://dataspace.copernicus.eu/explore-data/data-collections/copernicus-contributing-missions/collections-description/COP-DEM) ([doi:10.5270/ESA-c5d3d65](https://doi.org/10.5270/ESA-c5d3d65)), read from the [AWS Open Data registry](https://registry.opendata.aws/copernicus-dem/) (`copernicus-dem-30m`), blended into the terrain on rough ground and north of 60° N | [Copernicus DEM licence](https://dataspace.copernicus.eu/sites/default/files/media/files/2025-06/copernicus_contributing_mission_data_access_v2_cop_dem_licenses.pdf) (free, with attribution) |

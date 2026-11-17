@@ -207,6 +207,7 @@ src/bathy/source.rs
 src/bathy/gpu.rs
 src/sattint/mod.rs
 src/sattint/source.rs
+src/crash.rs
 src/aircraft_fixups.rs
 src/aircraft_fixups/tests.rs
 src/ships/ais.rs
@@ -217,3 +218,5 @@ src/ships/render.rs
 src/ships/sim.rs
 src/ships/tests.rs
 src/ships/types.rs
+src/aircraft_fixups/checks.rs
+src/geocode.rs

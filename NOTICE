@@ -179,6 +179,16 @@ others; per-item sources, authors and licences are listed in:
         (notice in assets/ships/LICENSE-SAVAGE.txt; no endorsement by NPS /
         MOVES implied); Tanker, SailBoatUnderPower11m and the textures added
         in fgdata are fgdata's own, GPL v2. See assets/ships/CREDITS.md.
+  * Crash-site addresses (src/geocode.rs): one reverse-geocoding request
+    per crash to the OpenStreetMap Nominatim service
+    (nominatim.openstreetmap.org, usage policy
+    https://operations.osmfoundation.org/policies/nominatim/: at most one
+    request a second, an identifying User-Agent, answers cached under
+    cache/geocode/, not redistributed). Data © OpenStreetMap contributors,
+    under the Open Database License (ODbL) 1.0
+    (https://www.openstreetmap.org/copyright); the attribution is shown on
+    the crash panel next to the address. src/geocode.rs's tests hold short
+    extracts of Nominatim answers under the same licence.
   * Airport layouts (src/airport/aptdat.rs, aptgeo.rs): taxi route networks,
     startup / gate positions, pavement, painted lines, taxiway lights, signs,
     windsocks and tower positions from X-Plane apt.dat airport data —
