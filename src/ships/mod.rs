@@ -141,6 +141,7 @@ pub struct Ships {
     sea_t: f64,
     trail_t: f64,
     pub stats: Stats,
+    frames: u64,
 }
 
 impl Default for Ships {
@@ -179,6 +180,7 @@ impl Ships {
             sea_t: -1e9,
             trail_t: 0.0,
             stats: Stats::default(),
+            frames: 0,
         }
     }
 
@@ -445,12 +447,24 @@ impl Ships {
                 };
             }
         }
-        let total: f32 = want.iter().sum();
-        if total > MAX_SHIPS as f32 {
-            let k = MAX_SHIPS as f32 / total;
-            for w in &mut want {
-                *w *= k;
-            }
+        // Within the budget the commercial traffic comes first (at most 60 %
+        // of it); leisure craft fill the rest (most of their AIS hours are
+        // spent moored in marinas: a third of them are out on the water).
+        let leisure = |l: usize| matches!(density::LAYERS[l].0, density::Layer::Pleasure | density::Layer::Sailing);
+        let cap = MAX_SHIPS as f32;
+        let commercial: f32 = (0..N).filter(|&l| !leisure(l)).map(|l| want[l]).sum();
+        let kc = if commercial > cap * 0.6 { cap * 0.6 / commercial } else { 1.0 };
+        let fun: f32 = (0..N).filter(|&l| leisure(l)).map(|l| want[l] * 0.35).sum();
+        let room = cap - commercial * kc;
+        // (The density is an annual mean: yachts are out in summer, laid up in
+        // winter, the more so the further from the equator.)
+        let (lat, _) = sea.world.proj.to_latlon(e2);
+        let season = sea.month.clamp(1, 12) as f32;
+        let summer = (((season - 1.0) / 12.0 * std::f32::consts::TAU).cos() * -0.5 + 0.5) * if lat >= 0.0 { 1.0 } else { -1.0 } + if lat >= 0.0 { 0.0 } else { 1.0 };
+        let season_k = 1.0 - ((lat.abs() as f32 - 30.0) / 30.0).clamp(0.0, 0.85) * (1.0 - summer);
+        let kl = if fun > room { room.max(0.0) / fun } else { 1.0 } * 0.35 * season_k;
+        for (l, w) in want.iter_mut().enumerate() {
+            *w *= if leisure(l) { kl } else { kc };
         }
         let mut have = [0usize; N];
         for s in self.ships.iter().filter(|s| s.mmsi.is_none()) {
@@ -484,6 +498,10 @@ impl Ships {
             if std::env::var_os("SKYWARD_SHIPS_DEBUG").is_some() {
                 let names: Vec<String> = (0..N).map(|l| format!("{} {:.1}/{}", sim::layer_name(l), cen.expected[l], have[l])).collect();
                 eprintln!("ships: census {} cells, expected/spawned: {} ({} spawned)", cen.cells.len(), names.join(", "), spawned);
+                for d in [vec2(0.0, 0.0), vec2(0.0, 2000.0), vec2(2000.0, 0.0), vec2(0.0, -2000.0), vec2(-2000.0, 0.0)] {
+                    let p = e2 + d;
+                    eprintln!("  eye{d:?}: water {:?} depth {:?} density {:?}", sea.water(p), sea.depth(p), sim::ships_per_km2(sea, p).map(|v| v.iter().sum::<f32>()));
+                }
                 // Why layers came up short: what the world says at a few of their spawn points.
                 for l in (0..N).filter(|&l| (have[l] as f32) < cen.expected[l] * 0.5) {
                     for _ in 0..4 {
@@ -545,13 +563,14 @@ impl Ships {
             let m = models::get(s.model).or_else(|| models::get(types::Model::Workboat));
             let k = m.as_ref().map(|m| (s.length / m.length()).clamp(0.2, 4.0)).unwrap_or(1.0);
             let top = m.as_ref().map(|m| m.hi.y * k).unwrap_or(s.length * 0.2).max(2.5);
+            let hb = m.as_ref().map(|m| m.lo.x.abs().max(m.hi.x) * k).unwrap_or(s.beam * 0.5);
             if ahead && drawn < MODEL_BUDGET && d < MODEL_DIST && s.length > d * 0.0012 {
                 if let Some(m) = &m {
                     frames.push(m.frame(render::body(m, s, p, rot, eye)));
                     drawn += 1;
                 }
             }
-            render::lights(s, p - eye, rot, top, night, time, lights);
+            render::lights(s, p - eye, rot, top, hb, night, time, lights);
             if ahead && d < render::WAKE_DIST {
                 render::wake(s, eye, s.level - eye.y, wakes);
             }
@@ -560,6 +579,18 @@ impl Ships {
         self.stats.lights = lights.len() - n_lights;
         self.stats.wake_verts = wakes.verts.len() - n_wake;
         self.stats.render_ms = t0.elapsed().as_secs_f32() * 1000.0;
+        self.frames += 1;
+        if self.frames == 3 && std::env::var_os("SKYWARD_SHIPS_DEBUG").is_some() {
+            eprintln!("ships: {:?}", self.stats);
+            for l in lights[n_lights..].iter().take(6) {
+                eprintln!("  light {:?} {:.1} cd kind {}", l.pos, l.cd, l.kind());
+            }
+            if let Some(proj) = self.proj {
+                for l in self.debug_lines(&proj, eye).iter().take(12) {
+                    eprintln!("  {l}");
+                }
+            }
+        }
         frames
     }
 

@@ -47,10 +47,12 @@ pub fn body(m: &ShipModel, s: &Ship, p: Vec3, rot: Quat, eye: Vec3) -> Mat4 {
 
 // ---------------------------------------------------------------- lights
 
-/// Luminous intensities (cd) for the COLREGs ranges: masthead 6 NM,
-/// side / stern / all-round 3 NM (ships ≥ 50 m); a third for small craft.
-const MASTHEAD_CD: f32 = 94.0;
-const SIDE_CD: f32 = 12.0;
+/// Luminous intensities (cd): masthead (6 NM) brighter than side / stern /
+/// all-round (3 NM) as in COLREGs, a third for small craft. Scaled up from
+/// the legal minimum (94 / 12 cd) to read at the renderer's exposure the way
+/// the street lamps (~650 cd) do; the night glare cap keeps them tight.
+const MASTHEAD_CD: f32 = 1100.0;
+const SIDE_CD: f32 = 300.0;
 
 /// Visible share (0..1) of a sectored light toward `to` (unit, world):
 /// within `half` (rad) either side of `axis`, with a 2° soft cut-off.
@@ -63,8 +65,10 @@ fn sector(axis: Vec3, to: Vec3, half: f32) -> f32 {
 
 /// Navigation, anchor and deck lights of a ship at night (`night` 0..1),
 /// eye-relative. `p` = waterline midships (eye-relative), `rot` = attitude,
-/// `top` = mast height above the waterline (m).
-pub fn lights(s: &Ship, p: Vec3, rot: Quat, top: f32, night: f32, t: f32, out: &mut Vec<LightInst>) {
+/// `top` = mast height above the waterline (m), `hb` = the hull's half beam
+/// as drawn (m). Lights sit just outside the drawn hull (or above it), not
+/// inside: the superstructure would hide them.
+pub fn lights(s: &Ship, p: Vec3, rot: Quat, top: f32, hb: f32, night: f32, t: f32, out: &mut Vec<LightInst>) {
     if night <= 0.0 {
         return;
     }
@@ -80,7 +84,6 @@ pub fn lights(s: &Ship, p: Vec3, rot: Quat, top: f32, night: f32, t: f32, out: &
     let at = |x: f32, y: f32, z: f32| p + rot * vec3(x, y, z);
     let to_eye = |q: Vec3| (-q).normalize_or_zero();
     let hl = s.length * 0.5;
-    let hb = s.beam * 0.5;
     let white = [1.0, 0.95, 0.85];
     let red = [1.0, 0.04, 0.02];
     let green = [0.1, 1.0, 0.45];
@@ -91,38 +94,38 @@ pub fn lights(s: &Ship, p: Vec3, rot: Quat, top: f32, night: f32, t: f32, out: &
     };
     if s.anchored {
         // All-round white forward (higher) and aft; deck lights on big ships.
-        put(at(0.0, top * 0.55, hl * 0.85), MASTHEAD_CD * 0.5 * k, white);
+        put(at(0.0, (top * 0.4).max(3.0), hl * 0.92), MASTHEAD_CD * 0.5 * k, white);
         if big {
-            put(at(0.0, top * 0.35, -hl * 0.9), MASTHEAD_CD * 0.5 * k, white);
+            put(at(0.0, top * 0.3, -hl - 0.4), MASTHEAD_CD * 0.5 * k, white);
         }
     } else if s.class == Class::Sailing {
         // Tricolour at the masthead.
-        let m = at(0.0, top * 0.98, 0.0);
+        let m = at(0.0, top + 0.3, 0.0);
         let v = to_eye(m);
         put(m, SIDE_CD * k * sector(port_ax, v, half_side), red);
         put(m + rot * vec3(-0.05, 0.0, 0.0), SIDE_CD * k * sector(stbd_ax, v, half_side), green);
         put(m - rot * vec3(0.0, 0.05, 0.0), SIDE_CD * k * sector(-fwd, v, 67.5f32.to_radians()), white);
     } else {
         // Masthead light(s): 225° forward; a second, higher one aft on ships ≥ 50 m.
-        let m1 = at(0.0, top * 0.75, hl * 0.45);
+        let m1 = at(0.0, if big { top * 0.75 } else { top + 0.3 }, hl * 0.45);
         put(m1, MASTHEAD_CD * k * sector(fwd, to_eye(m1), 112.5f32.to_radians()), white);
         if big {
-            let m2 = at(0.0, top * 0.95, -hl * 0.35);
+            let m2 = at(0.0, top + 0.5, -hl * 0.35);
             put(m2, MASTHEAD_CD * k * sector(fwd, to_eye(m2), 112.5f32.to_radians()), white);
         }
         // Sidelights: 112.5° from ahead to 22.5° abaft the beam.
-        let side_y = top * 0.45;
-        let pl = at(hb * 0.9, side_y, hl * 0.15);
-        let sl = at(-hb * 0.9, side_y, hl * 0.15);
+        let (side_y, side_z) = if big { (top * 0.5, -hl * 0.3) } else { (top * 0.4, hl * 0.1) };
+        let pl = at(hb + 0.4, side_y, side_z);
+        let sl = at(-hb - 0.4, side_y, side_z);
         put(pl, SIDE_CD * k * sector(port_ax, to_eye(pl), half_side), red);
         put(sl, SIDE_CD * k * sector(stbd_ax, to_eye(sl), half_side), green);
         // Stern light: 135° aft.
-        let st = at(0.0, top * 0.25, -hl * 0.97);
+        let st = at(0.0, top * 0.2, -hl - 0.4);
         put(st, SIDE_CD * k * sector(-fwd, to_eye(st), 67.5f32.to_radians()), white);
         if s.class == Class::Fishing {
             // Trawling: all-round green over white.
-            put(at(0.0, top * 0.9, hl * 0.1), SIDE_CD * k, green);
-            put(at(0.0, top * 0.8, hl * 0.1), SIDE_CD * k, white);
+            put(at(0.0, top + 2.2, hl * 0.1), SIDE_CD * k, green);
+            put(at(0.0, top + 0.6, hl * 0.1), SIDE_CD * k, white);
         }
     }
     // Deck and accommodation lighting.
@@ -133,15 +136,15 @@ pub fn lights(s: &Ship, p: Vec3, rot: Quat, top: f32, night: f32, t: f32, out: &
             let n = ((s.length / 12.0) as usize).clamp(4, 24);
             for i in 0..n {
                 let z = -hl * 0.8 + s.length * 0.8 * (i as f32 + 0.5) / n as f32;
-                for (x, deck) in [(hb * 1.02, 0.3), (-hb * 1.02, 0.3), (hb * 0.95, 0.42), (-hb * 0.95, 0.42)] {
+                for (x, deck) in [(hb + 0.25, 0.3), (-hb - 0.25, 0.3), (hb + 0.25, 0.42), (-hb - 0.25, 0.42)] {
                     let flick = 0.6 + 0.4 * ((i as f32 * 7.3 + s.seed as f32 + x).sin() * 0.5 + 0.5);
-                    put(at(x, top * deck, z), 6.0 * night * flick, warm);
+                    put(at(x, top * deck, z), 70.0 * night * flick, warm);
                 }
             }
         }
         Class::Cargo | Class::Container | Class::Tanker | Class::Barge if big => {
-            put(at(0.0, top * 0.55, -hl * 0.6), 250.0 * night, [1.0, 0.86, 0.62]);
-            put(at(0.0, top * 0.3, hl * 0.2), 120.0 * night, [1.0, 0.86, 0.62]);
+            put(at(0.0, top + 1.0, -hl * 0.35), 3000.0 * night, [1.0, 0.86, 0.62]);
+            put(at(hb * 0.5, top * 0.6, hl * 0.5), 1500.0 * night, [1.0, 0.86, 0.62]);
         }
         _ => {}
     }

@@ -142,6 +142,11 @@ pub fn url(code: &str, k: Key) -> String {
 /// NaN = no data).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Tile {
+    /// Where the texels are (Web Mercator): west edge, north edge, texel
+    /// width, texel height. GeoServer answers with more than the subset asked
+    /// for (it cuts in its native ETRS89-LAEA grid), so this is read from the
+    /// GeoTIFF, not assumed from the [`Key`].
+    pub geo: [f64; 4],
     pub layers: Vec<Vec<f32>>,
 }
 
@@ -150,16 +155,20 @@ impl Tile {
     pub fn any(&self) -> bool {
         self.layers.iter().any(|l| l.iter().any(|v| !v.is_nan()))
     }
-    /// Nearest-texel value of layer `l` at tile position (fx, fy).
-    pub fn at(&self, l: usize, fx: f64, fy: f64) -> f32 {
-        let i = ((fx * PX as f64) as i64).clamp(0, PX as i64 - 1) as usize;
-        let j = ((fy * PX as f64) as i64).clamp(0, PX as i64 - 1) as usize;
-        self.layers[l][j * PX as usize + i]
+    /// Nearest-texel value of layer `l` at Web Mercator (mx, my); NaN outside.
+    pub fn at(&self, l: usize, mx: f64, my: f64) -> f32 {
+        let [x0, y0, sx, sy] = self.geo;
+        let (i, j) = (((mx - x0) / sx).floor(), ((y0 - my) / sy).floor());
+        if i < 0.0 || j < 0.0 || i >= PX as f64 || j >= PX as f64 {
+            return f32::NAN;
+        }
+        self.layers[l][j as usize * PX as usize + i as usize]
     }
 }
 
-/// Decode a WCS answer (float32 GeoTIFF, [`PX`]²) into ships per km².
-pub fn decode(bytes: &[u8]) -> Result<Vec<f32>, String> {
+/// Decode a WCS answer (float32 GeoTIFF, [`PX`]²) into ships per km² and
+/// its georeferencing ([`Tile::geo`]).
+pub fn decode(bytes: &[u8]) -> Result<(Vec<f32>, [f64; 4]), String> {
     use crate::cog::tiff;
     let (big_endian, ifds) = match tiff::parse(bytes)? {
         tiff::Parse::Ok { big_endian, ifds } => (big_endian, ifds),
@@ -169,16 +178,21 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<f32>, String> {
     if ifd.width != PX || ifd.height != PX {
         return Err(format!("unexpected size {}×{}", ifd.width, ifd.height));
     }
+    let (Some(sc), Some(tie)) = (ifd.scale, ifd.tie) else { return Err("TIFF without georeferencing".into()) };
+    if !(sc[0] > 0.0 && sc[1] > 0.0) {
+        return Err("bad TIFF georeferencing".into());
+    }
+    let geo = [tie[3] - tie[0] * sc[0], tie[4] + tie[1] * sc[1], sc[0], sc[1]];
     let mut v = crate::bathy::source::read_f32(bytes, big_endian, ifd)?;
     for x in &mut v {
         // (GeoServer's no-data is -3.4e38.)
         *x = if x.is_finite() && *x >= 0.0 && *x < 1.0e6 { *x / 730.0 } else { f32::NAN };
     }
-    Ok(v)
+    Ok((v, geo))
 }
 
-/// Disk form: "SKSD1", px (u16), layers (u8), then DEFLATE'd f16 per texel.
-const MAGIC: &[u8; 5] = b"SKSD1";
+/// Disk form: "SKSD2", px (u16), layers (u8), geo (4 × f64), then DEFLATE'd f16 per texel.
+const MAGIC: &[u8; 5] = b"SKSD2";
 
 pub fn encode_cache(t: &Tile) -> Vec<u8> {
     use std::io::Write;
@@ -191,6 +205,9 @@ pub fn encode_cache(t: &Tile) -> Vec<u8> {
     let mut out = MAGIC.to_vec();
     out.extend((PX as u16).to_le_bytes());
     out.push(t.layers.len() as u8);
+    for g in t.geo {
+        out.extend(g.to_le_bytes());
+    }
     let mut z = flate2::write::DeflateEncoder::new(out, flate2::Compression::default());
     let _ = z.write_all(&raw);
     z.finish().unwrap_or_default()
@@ -198,13 +215,17 @@ pub fn encode_cache(t: &Tile) -> Vec<u8> {
 
 pub fn decode_cache(b: &[u8]) -> Option<Tile> {
     use std::io::Read;
-    if b.len() < 8 || &b[..5] != MAGIC || u16::from_le_bytes([b[5], b[6]]) as u32 != PX || b[7] as usize != N {
+    if b.len() < 40 || &b[..5] != MAGIC || u16::from_le_bytes([b[5], b[6]]) as u32 != PX || b[7] as usize != N {
         return None;
+    }
+    let mut geo = [0.0f64; 4];
+    for (k, g) in geo.iter_mut().enumerate() {
+        *g = f64::from_le_bytes(b[8 + 8 * k..16 + 8 * k].try_into().ok()?);
     }
     let per = (PX * PX) as usize;
     let want = per * N * 2;
     let mut raw = Vec::with_capacity(want);
-    flate2::read::DeflateDecoder::new(&b[8..]).take(want as u64).read_to_end(&mut raw).ok()?;
+    flate2::read::DeflateDecoder::new(&b[40..]).take(want as u64).read_to_end(&mut raw).ok()?;
     if raw.len() != want {
         return None;
     }
@@ -215,7 +236,7 @@ pub fn decode_cache(b: &[u8]) -> Option<Tile> {
             if h & 0x7c00 == 0x7c00 { f32::NAN } else { crate::bathy::f16_value(h) }
         })
         .collect();
-    Some(Tile { layers: vals.chunks(per).map(|c| c.to_vec()).collect() })
+    Some(Tile { geo, layers: vals.chunks(per).map(|c| c.to_vec()).collect() })
 }
 
 // ---------------------------------------------------------------- state
@@ -299,6 +320,7 @@ fn load(k: Key) {
 fn load(k: Key) {
     crate::platform::web::spawn_local(async move {
         let mut layers = Vec::new();
+        let mut geo = [0.0; 4];
         for (_, code) in LAYERS {
             let r = match crate::platform::web::fetch_cached(&url(code, k), web_time::Duration::from_secs(40)).await {
                 Ok(r) if (200..300).contains(&r.status) => decode(&r.body),
@@ -306,14 +328,17 @@ fn load(k: Key) {
                 Err(e) => Err(e),
             };
             match r {
-                Ok(v) => layers.push(v),
+                Ok((v, g)) => {
+                    layers.push(v);
+                    geo = g;
+                }
                 Err(e) => {
                     finish(k, Err(e));
                     return;
                 }
             }
         }
-        finish(k, Ok(Some(Tile { layers })));
+        finish(k, Ok(Some(Tile { geo, layers })));
     });
 }
 
@@ -339,20 +364,23 @@ pub fn sample(lat: f64, lon: f64) -> Sample {
     if !enabled() {
         return Sample::Uncovered;
     }
-    let (k, fx, fy) = Key::at(lat, lon);
+    let (k, _, _) = Key::at(lat, lon);
     let m = TILES.lock().unwrap();
     match m.get(&k) {
-        Some(Entry::Ready(Some(t))) => sample_tile(t, fx, fy),
+        Some(Entry::Ready(Some(t))) => {
+            let (mx, my) = merc(lat, lon);
+            sample_tile(t, mx, my)
+        }
         Some(Entry::Ready(None)) => Sample::Uncovered,
         _ => Sample::Unknown,
     }
 }
 
-pub fn sample_tile(t: &Tile, fx: f64, fy: f64) -> Sample {
+pub fn sample_tile(t: &Tile, mx: f64, my: f64) -> Sample {
     let mut v = [0.0f32; N];
     let mut any = false;
     for (l, out) in v.iter_mut().enumerate() {
-        let x = t.at(l, fx, fy);
+        let x = t.at(l, mx, my);
         if !x.is_nan() {
             *out = x;
             any = true;
@@ -421,13 +449,16 @@ mod native {
         }
         let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
         let mut layers = Vec::new();
+        let mut geo = [0.0; 4];
         for (_, code) in LAYERS {
             let r = AGENT.get(&url(code, k)).call().map_err(|e| e.to_string())?;
             let mut b = Vec::new();
             r.into_reader().take(4 << 20).read_to_end(&mut b).map_err(|e| e.to_string())?;
-            layers.push(decode(&b)?);
+            let (v, g) = decode(&b)?;
+            layers.push(v);
+            geo = g;
         }
-        let t = Tile { layers };
+        let t = Tile { geo, layers };
         crate::cog::net::write(&p, &encode_cache(&t));
         Ok(Some(t))
     }

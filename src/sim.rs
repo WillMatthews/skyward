@@ -1857,7 +1857,7 @@ impl Sim {
             // The address of the crash site (asked for now, shown when it arrives).
             let xz = glam::vec2(imp.pos.x, imp.pos.z);
             let (lat, lon) = world.proj.to_latlon(xz);
-            let water = self.ac.water.last.wet || world.water_level_near(xz, 40.0).is_some();
+            let water = crate::geocode::wreck_in_water(self.ac.water.last.wet, world, xz);
             self.crash_site = Some(crate::geocode::CrashSite::new(lat, lon, water));
             let geom = self.part_geom(&def);
             let d = self.debris.get_or_insert_with(|| crate::debris::Debris::new(&def, geom));

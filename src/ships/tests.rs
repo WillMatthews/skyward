@@ -193,20 +193,23 @@ fn density_tiles_decode_and_cache() {
         [0.0; 6],
         false,
     );
-    let v = density::decode(&tif).unwrap();
+    let (v, geo) = density::decode(&tif).unwrap();
+    assert_eq!(geo, [0.0, 0.0, 1.0, 1.0]);
     assert!(v[0].is_nan());
     assert!((v[64 * px as usize + 100] - 1.0).abs() < 1e-6, "730 h/km²/month = one ship per km²");
     assert!((v[10 * px as usize + 100] - 0.01).abs() < 1e-6);
-    let t = density::Tile { layers: (0..N).map(|_| v.clone()).collect() };
+    let t = density::Tile { geo, layers: (0..N).map(|_| v.clone()).collect() };
     let back = density::decode_cache(&density::encode_cache(&t)).unwrap();
     assert!(back.layers[3][0].is_nan());
     assert!((back.layers[3][64 * px as usize + 100] - 1.0).abs() < 1e-3);
     assert!(density::decode(b"<?xml version").is_err());
-    match density::sample_tile(&t, 0.01, 0.5) {
+    assert_eq!(back.geo, geo);
+    match density::sample_tile(&t, 1.5, -64.5) {
         Sample::Land => {}
         s => panic!("{s:?}"),
     }
-    match density::sample_tile(&t, 0.8, 0.5) {
+    assert!(matches!(density::sample_tile(&t, 500.0, -64.5), Sample::Land), "outside the image");
+    match density::sample_tile(&t, 100.5, -64.5) {
         Sample::Ships(x) => assert!((x[0] - 1.0).abs() < 1e-6),
         s => panic!("{s:?}"),
     }

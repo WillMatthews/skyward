@@ -360,6 +360,16 @@ fn start(lat: f64, lon: f64) -> Net {
     Net::Pending(slot, Instant::now())
 }
 
+/// Is the wreck at `xz` in the water? Only if the flight model had it in
+/// contact with water (`wet`) or it is over water by the same test the flight
+/// model uses for ditching ([`Environment::is_water`]) — not merely near
+/// some (London City's runway lies between two docks).
+///
+/// [`Environment::is_water`]: crate::flight::Environment::is_water
+pub fn wreck_in_water(wet: bool, env: &dyn crate::flight::Environment, xz: glam::Vec2) -> bool {
+    wet || env.is_water(xz)
+}
+
 /// One crash's place: the lookup in flight, the reference points, the text.
 pub struct CrashSite {
     pub lat: f64,
@@ -458,6 +468,36 @@ impl CrashSite {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// London City in miniature: a runway strip (z in -30..30) with a dock
+    /// 35 m to each side of the centreline.
+    struct Docks;
+    impl crate::flight::Environment for Docks {
+        fn ground_height(&self, _xz: glam::Vec2) -> f32 {
+            2.0
+        }
+        fn obstacle_top(&self, _xz: glam::Vec2) -> Option<f32> {
+            None
+        }
+        fn is_water(&self, xz: glam::Vec2) -> bool {
+            xz.y.abs() > 35.0
+        }
+        fn updraft(&self, _p: glam::Vec3) -> f32 {
+            0.0
+        }
+    }
+
+    #[test]
+    fn wreck_beside_the_docks_is_not_in_the_water() {
+        // At rest on the runway centreline, 35 m from water on both sides.
+        assert!(!wreck_in_water(false, &Docks, glam::vec2(500.0, 0.0)));
+        assert!(!wreck_in_water(false, &Docks, glam::vec2(500.0, 30.0)));
+        // Over the dock, or in contact with water per the flight model.
+        assert!(wreck_in_water(false, &Docks, glam::vec2(500.0, 60.0)));
+        assert!(wreck_in_water(true, &Docks, glam::vec2(500.0, 0.0)));
+        // And the text follows.
+        assert!(!describe(51.5048, 0.0553, wreck_in_water(false, &Docks, glam::vec2(0.0, 0.0)), None, &[]).contains("water"));
+    }
 
     const URBAN: &str = r#"{"place_id":278929166,"licence":"Data © OpenStreetMap contributors, ODbL 1.0. http://osm.org/copyright","osm_type":"node","osm_id":10052045215,"lat":"51.4704303","lon":"-0.4535904","category":"emergency","type":"designated","place_rank":30,"addresstype":"emergency","name":"","display_name":"Cosmopolitan Way, Harmondsworth, London Borough of Hillingdon, Greater London, England, TW6 1SL, United Kingdom","address":{"road":"Cosmopolitan Way","suburb":"Harmondsworth","city_district":"London Borough of Hillingdon","ISO3166-2-lvl8":"GB-HIL","city":"Greater London","state":"England","ISO3166-2-lvl4":"GB-ENG","postcode":"TW6 1SL","country":"United Kingdom","country_code":"gb"}}"#;
     const HOUSE: &str = r#"{"category":"building","type":"house","addresstype":"building","name":"","address":{"house_number":"14","road":"Helmsdale Walk","suburb":"Park South","town":"Swindon","county":"Swindon","state":"England","postcode":"SN3 2DG","country":"United Kingdom","country_code":"gb"}}"#;
