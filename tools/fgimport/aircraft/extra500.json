@@ -6,10 +6,10 @@
  "fdm": {
   "jsbsim": "extra500.xml"
  },
- "eye_view": [
-  -0.34,
-  0.13,
-  -0.1
+ "eye_body": [
+  0.34,
+  0.25,
+  0.485
  ],
  "props": {
   "controls/electric/battery-switch": 1,

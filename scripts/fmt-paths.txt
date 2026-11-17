@@ -11,6 +11,7 @@ src/cockpit/mod.rs
 src/cockpit/channels.rs
 src/cockpit/displays.rs
 src/cockpit/tests.rs
+src/cockpit/eye_tests.rs
 src/airport/mod.rs
 src/airport/fleet.rs
 src/airport/font.rs
@@ -197,6 +198,7 @@ src/dem/osgb.rs
 src/landcover/worldcover.rs
 src/landcover/canopy.rs
 src/lights/nightlights.rs
+src/lights/switches.rs
 src/overture/mod.rs
 src/overture/pmtiles.rs
 src/ui/boot.rs
@@ -206,3 +208,7 @@ src/bathy/gpu.rs
 src/sattint/mod.rs
 src/sattint/source.rs
 src/crash.rs
+src/aircraft_fixups.rs
+src/aircraft_fixups/tests.rs
+src/aircraft_fixups/checks.rs
+src/geocode.rs

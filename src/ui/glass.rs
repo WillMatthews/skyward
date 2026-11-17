@@ -1023,6 +1023,9 @@ pub fn ewd(p: &egui::Painter, r: Rect, sim: &Sim) {
     txt(p, Pos2::new(s.min.x + 3.0 * u, s.min.y + 3.4 * u), Align2::LEFT_CENTER, if jet { "N1" } else { "TQ" }, 3.0 * u, WHITE);
     txt(p, Pos2::new(s.max.x - 3.0 * u, s.min.y + 3.4 * u), Align2::RIGHT_CENTER, "%", 3.0 * u, CYAN);
     let mut rows_y = top + dial_r + 4.0 * u;
+    // Four engines: the EGT / FF columns sit 25 % apart with the row labels
+    // between the inner two; smaller figures keep them clear of each other.
+    let (vsz, lsz) = if n >= 4 { (2.6 * u, 2.2 * u) } else { (3.2 * u, 2.5 * u) };
     for i in 0..n {
         let c = Pos2::new(s.min.x + col_w * (i as f32 + 0.5), top);
         let running = ac.engine_running(i);
@@ -1071,15 +1074,15 @@ pub fn ewd(p: &egui::Painter, r: Rect, sim: &Sim) {
         let egt = ac.egt(i);
         let ecol = if egt > def.egt_max + 15.0 { pal::RED } else { GREEN };
         let v1 = if jet { format!("{egt:.0}") } else { format!("{:.0}", ac.engine_rpm_i(i)) };
-        digits(p, Pos2::new(c.x, rows_y), Align2::CENTER_CENTER, v1, 3.2 * u, if jet { ecol } else { GREEN });
+        digits(p, Pos2::new(c.x, rows_y), Align2::CENTER_CENTER, v1, vsz, if jet { ecol } else { GREEN });
         let ff = ac.fuel_flow(i);
-        digits(p, Pos2::new(c.x, rows_y + 6.0 * u), Align2::CENTER_CENTER, format!("{:.0}", (ff / 10.0).round() * 10.0), 3.2 * u, GREEN);
+        digits(p, Pos2::new(c.x, rows_y + 6.0 * u), Align2::CENTER_CENTER, format!("{:.0}", (ff / 10.0).round() * 10.0), vsz, GREEN);
     }
     // row labels in the middle (or at the left for one engine)
     let lx = if n > 1 { s.center().x } else { s.min.x + 5.0 * u };
     let la = if n > 1 { Align2::CENTER_CENTER } else { Align2::LEFT_CENTER };
-    txt(p, Pos2::new(lx, rows_y), la, if jet { "EGT °C" } else { "NP RPM" }, 2.5 * u, CYAN);
-    txt(p, Pos2::new(lx, rows_y + 6.0 * u), la, "FF KG/H", 2.5 * u, CYAN);
+    txt(p, Pos2::new(lx, rows_y), la, if jet { "EGT °C" } else { "NP RPM" }, lsz, CYAN);
+    txt(p, Pos2::new(lx, rows_y + 6.0 * u), la, "FF KG/H", lsz, CYAN);
     rows_y += 12.0 * u;
     p.line_segment([Pos2::new(s.min.x + 3.0 * u, rows_y), Pos2::new(s.max.x - 3.0 * u, rows_y)], Stroke::new(1.0, Color32::from_gray(60)));
     // flaps: slat / flap track with the lever target

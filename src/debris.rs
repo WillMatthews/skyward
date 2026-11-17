@@ -605,7 +605,7 @@ impl Debris {
 
     /// A scorch mark of radius `r` at `at` (on land).
     pub fn add_scorch(&mut self, at: Vec3, r: f32, env: &dyn Environment) {
-        if self.marks.len() >= 6 || !(r > 0.5) {
+        if self.marks.len() >= 6 || r.is_nan() || r <= 0.5 {
             return;
         }
         let n = 20;

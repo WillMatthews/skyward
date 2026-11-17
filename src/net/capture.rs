@@ -59,22 +59,11 @@ pub fn own_state(sim: &Sim, world: &World, paused: bool, spectating: bool) -> Ac
             tail_pitch_deg: o.tail_pitch_deg,
         };
     }
-    // Lights as the model shows them (sim.rs `aircraft_mesh`).
-    let running = (0..ac.engine_count(def)).any(|i| ac.engine_running(i)) && def.has_engine;
-    let drone = def.category == crate::flight::Category::Drone;
-    if !drone {
-        st.lights |= lights::NAV;
-        if running {
-            st.lights |= lights::BEACON;
-        }
-        if !ac.on_ground || sim.ctl.throttle > 0.5 {
-            st.lights |= lights::STROBE;
-        }
-        if sim.landing_lights_on() {
-            st.lights |= lights::LANDING;
-            if ac.on_ground {
-                st.lights |= lights::TAXI;
-            }
+    // Lights as the model shows them (sim.rs `ext_lights`).
+    let xl = sim.ext_lights();
+    for (on, bit) in [(xl.nav, lights::NAV), (xl.beacon, lights::BEACON), (xl.strobe, lights::STROBE), (xl.landing, lights::LANDING), (xl.taxi, lights::TAXI)] {
+        if on {
+            st.lights |= bit;
         }
     }
     if ac.on_ground {

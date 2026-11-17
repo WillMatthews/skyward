@@ -178,6 +178,7 @@ pub fn draw(ctx: &egui::Context, st: &mut UiState, sim: &mut Sim, world: &World,
         ap_panel(ctx, st, sim, Pos2::new(screen.max.x - sp::L, bottom - sp::S));
     }
     // ---- warnings / banners
+    crash_site(st, sim);
     warnings(&p, screen, sim, &st.settings.assists);
     // Settings › Flight & Realism › G-effects (ui/geffects.rs).
     super::geffects::draw(ctx, st, sim);
@@ -249,7 +250,10 @@ fn status_card(p: &egui::Painter, screen: Rect, sim: &Sim, st: &UiState, fps: f3
     let alt = s.alt.from_m(sim.ac.pos.y);
     let data = format!("{:>4.0} {}   {:>6} {}   {:+.1} g", ias, s.speed.label(), super::thousands(alt), s.alt.label(), sim.ac.g_load());
     let dg = p.layout_no_wrap(data, f_mono(12.5), pal::TEXT);
-    let w = name.size().x.max(subg.size().x).max(dg.size().x) + 28.0;
+    // The name and the camera label share the first line (10 px apart), and
+    // the fps readout sits at the top-right corner.
+    let fps_w = if fps >= 1.0 { 26.0 } else { 0.0 };
+    let w = (name.size().x + 10.0 + subg.size().x + fps_w).max(dg.size().x) + 28.0;
     let h = 64.0;
     let r = Rect::from_min_size(at, Vec2::new(w.max(230.0), h));
     panel(p, r, sp::R_PANEL);
@@ -861,15 +865,32 @@ fn warnings(p: &egui::Painter, screen: Rect, sim: &Sim, assists: &super::setting
             (None, _) => sub.to_string(),
         };
         let sub = sub.as_str();
-        let h = if sub.is_empty() { 108.0 } else { 126.0 };
-        let r = Rect::from_center_size(Pos2::new(screen.center().x, y), Vec2::new(560.0, h));
+        // Where (geocode.rs): "Locating…" until the address arrives, then
+        // the address, with the OpenStreetMap attribution under it.
+        let (place, osm) = match &sim.crash_site {
+            Some(c) if c.locating() => (p.layout("Locating…".to_string(), f_ui(13.5), pal::TEXT3, 520.0), false),
+            Some(c) => (p.layout(cap(&c.text()), f_ui(13.5), pal::TEXT, 520.0), c.osm()),
+            None => (p.layout(String::new(), f_ui(13.5), pal::TEXT, 520.0), false),
+        };
+        let place_h = if sim.crash_site.is_some() { place.size().y + 10.0 + if osm { 17.0 } else { 0.0 } } else { 0.0 };
+        let h = if sub.is_empty() { 108.0 } else { 126.0 } + place_h;
+        let r = Rect::from_center_size(Pos2::new(screen.center().x, y + place_h * 0.5), Vec2::new(560.0, h));
         super::panel_with(p, r, sp::R_CARD, fill);
         p.rect_stroke(r, sp::R_CARD, Stroke::new(1.0, edge.gamma_multiply(0.6)), egui::StrokeKind::Inside);
         let top = r.min.y + 30.0;
         p.text(Pos2::new(r.center().x, top), Align2::CENTER_CENTER, title, super::f_display(28.0), pal::TEXT);
         p.text(Pos2::new(r.center().x, top + 30.0), Align2::CENTER_CENTER, cap(reason), f_ui(14.0), pal::TEXT2);
+        let mut py = top + 42.0;
         if !sub.is_empty() {
             p.text(Pos2::new(r.center().x, top + 50.0), Align2::CENTER_CENTER, sub, f_ui(12.5), pal::TEXT3);
+            py += 18.0;
+        }
+        if place_h > 0.0 {
+            let ph = place.size().y;
+            p.galley(Pos2::new(r.center().x - place.size().x * 0.5, py + 8.0), place, pal::TEXT);
+            if osm {
+                p.text(Pos2::new(r.center().x, py + 12.0 + ph), Align2::CENTER_TOP, crate::geocode::ATTRIBUTION, f_ui(10.5), pal::TEXT3);
+            }
         }
         p.text(Pos2::new(r.center().x, r.max.y - 18.0), Align2::CENTER_CENTER, "R  Restart      Esc  Menu", f_inst(12.0), pal::TEXT3);
     } else if sim.ac.stall_warning() && blink && assists.stall_warning {
@@ -883,6 +904,35 @@ fn warnings(p: &egui::Painter, screen: Rect, sim: &Sim, assists: &super::setting
     }
     if sim.paused {
         text_halo(p, Pos2::new(screen.center().x, screen.center().y - screen.height() * 0.3), Align2::CENTER_CENTER, "PAUSED", f_inst_b(26.0), pal::TEXT);
+    }
+}
+
+/// The crash site's address (geocode.rs): pick up the answer, add the map's
+/// place labels near the site as reference points, log it once settled.
+fn crash_site(st: &UiState, sim: &mut Sim) {
+    let Some(c) = sim.crash_site.as_mut() else { return };
+    c.poll();
+    if c.needs_places() {
+        let mut places = Vec::new();
+        for (id, mv) in &st.map_tiles {
+            let proj = crate::osm::Proj::tile_frame(*id);
+            for l in &mv.labels {
+                let (lat, lon) = proj.to_latlon(vec2(l.pos[0], l.pos[1]));
+                if crate::airports::distance_km((lat, lon), (c.lat, c.lon)) < 60.0 {
+                    places.extend(crate::geocode::Place::label(&l.text, lat, lon, l.kind));
+                }
+            }
+        }
+        // (Labels repeat across tiles and zooms.)
+        places.sort_by(|a, b| a.name.cmp(&b.name).then(a.lat.total_cmp(&b.lat)));
+        places.dedup_by(|a, b| a.name == b.name && crate::airports::distance_km((a.lat, a.lon), (b.lat, b.lon)) < 2.0);
+        c.set_places(places);
+    }
+    if let Some(line) = c.log_line() {
+        #[cfg(target_arch = "wasm32")]
+        crate::platform::web::log(&line);
+        #[cfg(not(target_arch = "wasm32"))]
+        eprintln!("{line}");
     }
 }
 

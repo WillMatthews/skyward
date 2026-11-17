@@ -70,17 +70,17 @@ impl Proj {
         vec2(x as f32, z as f32)
     }
     pub fn to_world64(&self, lat: f64, lon: f64) -> (f64, f64) {
-        ((lon - self.lon0) * self.m_per_deg_lon, -(lat - self.lat0) * self.m_per_deg_lat)
+        (wrap_lon(lon - self.lon0) * self.m_per_deg_lon, -(lat - self.lat0) * self.m_per_deg_lat)
     }
-    /// world (x, z) → (lat, lon)
+    /// world (x, z) → (lat, lon), the longitude in [-180, 180)
     pub fn to_latlon(&self, p: Vec2) -> (f64, f64) {
-        (self.lat0 - p.y as f64 / self.m_per_deg_lat, self.lon0 + p.x as f64 / self.m_per_deg_lon)
+        (self.lat0 - p.y as f64 / self.m_per_deg_lat, wrap_lon(self.lon0 + p.x as f64 / self.m_per_deg_lon))
     }
     /// The exact map from coordinates in this frame to coordinates in `to`.
     pub fn map_to(&self, to: &Proj) -> Xform2 {
         Xform2 {
             sx: to.m_per_deg_lon / self.m_per_deg_lon,
-            tx: (self.lon0 - to.lon0) * to.m_per_deg_lon,
+            tx: wrap_lon(self.lon0 - to.lon0) * to.m_per_deg_lon,
             tz: (to.lat0 - self.lat0) * self.m_per_deg_lat,
         }
     }
@@ -93,6 +93,13 @@ pub struct TileId {
     pub z: u32,
     pub x: u32,
     pub y: u32,
+}
+
+/// A longitude (or a difference of two) wrapped into [-180, 180): frames
+/// near the antimeridian stay continuous across it (the far side is a few
+/// km east, not 40 000 km west).
+pub fn wrap_lon(d: f64) -> f64 {
+    if (-180.0..180.0).contains(&d) { d } else { (d + 180.0).rem_euclid(360.0) - 180.0 }
 }
 
 fn tile_lon(x: f64, z: u32) -> f64 {
@@ -118,7 +125,18 @@ impl TileId {
     pub fn at_world_z(proj: &Proj, p: Vec2, z: u32) -> TileId {
         let (lat, lon) = proj.to_latlon(p);
         let (x, y) = Self::frac(lat, lon, z);
-        TileId { z, x: x.floor() as u32, y: y.floor() as u32 }
+        TileId { z, x: (x.floor() as i64).rem_euclid(1i64 << z) as u32, y: y.floor() as u32 }
+    }
+    /// Tile columns from fractional column `x0` east to `x1` at zoom `z`,
+    /// across the antimeridian when `x1` is west of `x0` (column 2^z − 1,
+    /// then 0, 1, ...).
+    pub fn cols(x0: f64, x1: f64, z: u32) -> impl Iterator<Item = u32> {
+        let n = 1i64 << z;
+        let (a, mut b) = (x0.floor() as i64, x1.floor() as i64);
+        if b < a {
+            b += n;
+        }
+        (a..=b.min(a + n - 1)).map(move |x| x.rem_euclid(n) as u32)
     }
     pub fn is_far(&self) -> bool {
         self.z < ZOOM
@@ -631,6 +649,28 @@ mod tests {
         assert!((hi.x - lo.x - 1523.0).abs() < 10.0, "{}", hi.x - lo.x);
         let c = (lo + hi) * 0.5;
         assert_eq!(TileId::at_world(&p, c), t);
+    }
+
+    #[test]
+    fn frames_continue_across_the_antimeridian() {
+        // Taveuni, Fiji: the 180° meridian a few km east of the origin.
+        let p = Proj::new(-16.75, 179.98);
+        let east = vec2(2500.0, 0.0);
+        let (lat, lon) = p.to_latlon(east);
+        assert!(lon < -179.9 && (lat + 16.75).abs() < 1e-9, "{lon}");
+        assert!((p.to_world(lat, lon) - east).length() < 0.01);
+        // The tile there is a real one (column 0), placed east of the origin.
+        let t = TileId::at_world(&p, east);
+        assert_eq!(t.x, 0);
+        let (lo, hi) = t.rect(&p);
+        assert!(lo.x > 0.0 && lo.x < east.x && hi.x > east.x, "{lo} {hi}");
+        // A tile frame on the far side maps next to this one.
+        let m = Proj::tile_frame(t).map_to(&p);
+        assert!((m.apply(Vec2::ZERO) - vec2(lo.x, lo.y.min(hi.y))).length() < 1.0, "{:?}", m.apply(Vec2::ZERO));
+        // Column ranges wrap: the last column, then 0.
+        let n = 1u32 << ZOOM;
+        assert_eq!(TileId::cols(n as f64 - 0.5, 0.5, ZOOM).collect::<Vec<_>>(), vec![n - 1, 0]);
+        assert_eq!(TileId::cols(3.2, 4.9, ZOOM).collect::<Vec<_>>(), vec![3, 4]);
     }
 
     #[test]

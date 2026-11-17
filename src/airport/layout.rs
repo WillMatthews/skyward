@@ -433,6 +433,10 @@ pub fn build(ap: &Airport, tiles: &[(TileId, Arc<AeroTile>)], osm: Option<&OsmAi
         Some(s) => s,
         None => stands(&c, osm, &osm_xy),
     };
+    // No stand on a runway (an apron polygon or ramp start drawn over the
+    // strip, as at Lukla): its parked aircraft would stand where the player
+    // lines up, and a stand start there would put them on the runway.
+    let stands = stands.into_iter().filter(|s| c.runway_at(s.stop, 3.0).is_none() && c.runway_at(s.stop - mesh::heading_dir(s.hdg) * 8.0, 3.0).is_none()).collect();
     occupy(&c, &mut l, stands);
     // apt.dat pavement, painted lines and taxiway lights (Track AD2).
     let apt_geo = apt.filter(|_| !super::aptgeo::disabled());
@@ -677,7 +681,40 @@ fn light_type(r: f32) -> u16 {
     }
 }
 
+/// The type parked on a stand of `span` metres: by the stand, then by the
+/// longest runway (no airliner on Lukla's 527 m strip, whatever its apron
+/// or apt.dat ramp sizes say).
 fn pick_type(c: &Ctx, span: f32, k: u64) -> Option<u16> {
+    let t = pick_for_stand(c, span, k)?;
+    if c.runways.is_empty() {
+        return Some(t);
+    }
+    let longest = c.runways.iter().map(|r| r.a.distance(r.b)).fold(0.0f32, f32::max);
+    // Rough take-off / landing needs (m), with a margin.
+    let need = match t {
+        types::TRIPLE7 => 2400.0,
+        types::A320 | types::E190 | types::CRJ700 | types::VULCAN => 1500.0,
+        types::CITATIONX => 1100.0,
+        types::ATR | types::C130 | types::DC3 => 900.0,
+        _ => 0.0,
+    };
+    if longest >= need {
+        return Some(t);
+    }
+    if c.military && longest >= 900.0 && span >= 40.0 {
+        Some(types::C130)
+    } else if c.military && span >= 12.0 {
+        Some(types::C172)
+    } else if longest >= 900.0 && span >= 27.5 {
+        Some(types::ATR)
+    } else if span >= 12.0 {
+        Some(light_type(c.rand(k ^ 0x9E37_79B9_7F4A_7C15)))
+    } else {
+        None
+    }
+}
+
+fn pick_for_stand(c: &Ctx, span: f32, k: u64) -> Option<u16> {
     let r = c.rand(k);
     let light = |c: &Ctx| light_type(c.rand(k ^ 0x9E37_79B9_7F4A_7C15));
     // Air bases: Hercules on the big stands, the odd Vulcan; light aircraft
@@ -1946,6 +1983,8 @@ mod tests {
         let (mut ap, tiles, _) = synthetic();
         let civil: Vec<u16> = build(&ap, &tiles, None, None).parked.iter().map(|p| p.model).collect();
         assert!(!civil.iter().any(|&m| m == types::C130 || m == types::VULCAN), "{civil:?}");
+        // A 1200 m runway: no jet airliners parked, however big the stands.
+        assert!(!civil.is_empty() && !civil.iter().any(|m| [types::A320, types::E190, types::CRJ700, types::TRIPLE7].contains(m)), "{civil:?}");
         ap.name = "RAF Test".into();
         let mil: Vec<u16> = build(&ap, &tiles, None, None).parked.iter().map(|p| p.model).collect();
         assert!(!mil.is_empty());

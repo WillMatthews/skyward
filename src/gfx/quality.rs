@@ -252,8 +252,6 @@ pub struct Quality {
     pub vfx: u8,
     /// Bloom strength multiplier (0 = off .. 1.5).
     pub bloom: f32,
-    /// Sun / bright-light ghosts and halo.
-    pub lens_flare: bool,
     /// Lens dirt lit by bloom.
     pub lens_dirt: bool,
     /// Chromatic aberration: 0 off, 1 subtle.
@@ -307,7 +305,6 @@ impl Quality {
             textures: 2,
             vfx: 2,
             bloom: 1.0,
-            lens_flare: false,
             lens_dirt: false,
             chroma: 0,
             motion_blur: 0,
@@ -356,7 +353,7 @@ impl Quality {
                 ..q
             },
             Preset::High | Preset::Custom => q,
-            Preset::Ultra => Quality { sharpen: 0.3, shadow_dist: 1.15, ao: 3, clouds: 3, fog: 3, detail: 3, tree_dist: 1.2, aniso: 16, lens_flare: true, ..q },
+            Preset::Ultra => Quality { sharpen: 0.3, shadow_dist: 1.15, ao: 3, clouds: 3, fog: 3, detail: 3, tree_dist: 1.2, aniso: 16, ..q },
         };
         // The browser: 2048 shadows at most (memory, budget).
         if web { Quality { shadow_res: q.shadow_res.min(2048), ..q } } else { q }
@@ -451,7 +448,6 @@ impl Quality {
             "textures": self.textures,
             "vfx": self.vfx,
             "bloom": self.bloom,
-            "lens_flare": self.lens_flare,
             "lens_dirt": self.lens_dirt,
             "chroma": self.chroma,
             "motion_blur": self.motion_blur,
@@ -486,7 +482,6 @@ impl Quality {
             textures: u("textures", base.textures),
             vfx: u("vfx", base.vfx),
             bloom: f("bloom", base.bloom),
-            lens_flare: b("lens_flare", base.lens_flare),
             lens_dirt: b("lens_dirt", base.lens_dirt),
             chroma: u("chroma", base.chroma),
             motion_blur: u("motion_blur", base.motion_blur),
@@ -691,7 +686,6 @@ pub enum Knob {
     Aniso,
     Vfx,
     Bloom,
-    LensFlare,
     MotionBlur,
     Dof,
     Grain,
@@ -749,13 +743,6 @@ pub fn cost_ms(k: Knob, q: &Quality, pixels: f32) -> f32 {
         Knob::Bloom => {
             if q.bloom > 0.0 {
                 0.15 * px
-            } else {
-                0.0
-            }
-        }
-        Knob::LensFlare => {
-            if q.lens_flare {
-                0.05 * px
             } else {
                 0.0
             }
@@ -915,8 +902,8 @@ mod tests {
 
     #[test]
     fn overrides() {
-        let q = Quality::preset(Preset::High).with_overrides("clouds=0, ao=3,aa=fxaa,lens_flare=on,render_scale=0.7,bogus=1");
-        assert_eq!((q.clouds, q.ao, q.aa, q.lens_flare, q.render_scale), (0, 3, AaMode::Fxaa, true, 0.7));
+        let q = Quality::preset(Preset::High).with_overrides("clouds=0, ao=3,aa=fxaa,lens_dirt=on,render_scale=0.7,bogus=1");
+        assert_eq!((q.clouds, q.ao, q.aa, q.lens_dirt, q.render_scale), (0, 3, AaMode::Fxaa, true, 0.7));
         assert_eq!(q.cascades, Quality::preset(Preset::High).cascades);
         assert_eq!(Quality::default().with_overrides("aa=off").aa, AaMode::Off);
     }
