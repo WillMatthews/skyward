@@ -621,6 +621,9 @@ skyward --shot m.png --aircraft meridian320 --bot --soak --seconds 4200 --warp 8
 | Variable | Effect |
 |---|---|
 | `SKYWARD_SCENARIO=…` | `pullup` `overg` `bellyland` `hardland` `crash` `transonic` `cruise`: a scripted structures / crash / effects flight (`src/scenario.rs`) |
+| `SKYWARD_CRASH_TEST=…` | `hardland` `nosein` `belly` `wingtip` `ditch` `building` `tailstrike` `fly`: stage a forced impact (or, `fly`, level flight at 400 m); override with `SKYWARD_CRASH_KT` / `_SINK` (m/s) / `_PITCH` / `_BANK` (`src/scenario.rs`) |
+| `SKYWARD_DAMAGE=lwing:0.5,eng1:fire,…` | damage the airframe at the start: `lwing` `rwing` `htail` `fin` `tail` `nose` `gear` `ngear` `eng1`..`eng4` (0..1, `off`), `eng<N>:fire`, `leak` |
+| `SKYWARD_SHOT_SEQ=1,2,4` | with `--shot`: also write `<stem>_t<time>.png` at those sim times (crash sequences) |
 | `SKYWARD_ORBIT=yaw,pitch,dist` | chase-camera angle for captures |
 | `SKYWARD_LOOK=yaw,pitch` | cockpit head-look for captures |
 | `SKYWARD_COCKPIT_FOV=deg` | cockpit field of view for captures |
