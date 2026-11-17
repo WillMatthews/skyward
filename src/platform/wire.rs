@@ -260,7 +260,11 @@ mod tests {
         let area = |kind: Kind, outer: Vec<Vec2>, key: u64| Area { border: vec![false; outer.len()], kind, outer, holes: Vec::new(), hole_border: Vec::new(), key };
         let mut f = TileFeatures::default();
         for i in 0..6 {
-            f.areas.push(area(Kind::Building { height: 12.0 + i as f32, min_height: 0.0, colour: None }, quad(c + vec2(i as f32 * 40.0, 60.0), 12.0), 10 + i));
+            f.areas.push(area(
+                Kind::Building { height: 12.0 + i as f32, min_height: 0.0, colour: None, tags: Default::default() },
+                quad(c + vec2(i as f32 * 40.0, 60.0), 12.0),
+                10 + i,
+            ));
         }
         f.areas.push(area(Kind::Park, quad(c - vec2(200.0, 200.0), 120.0), 1));
         f.areas.push(area(Kind::Water, quad(c + vec2(250.0, -250.0), 90.0), 2));

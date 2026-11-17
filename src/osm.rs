@@ -158,7 +158,7 @@ impl Xf {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Kind {
-    Building { height: f32, min_height: f32, colour: Option<[f32; 3]> },
+    Building { height: f32, min_height: f32, colour: Option<[f32; 3]>, tags: crate::buildmat::Tags },
     /// Built-up ground: 0 residential, 1 commercial/retail, 2 industrial/railway, 3 institutional.
     Urban(u8),
     Water,
@@ -485,7 +485,7 @@ pub fn extract(layers: &[Layer], id: TileId, proj: &Proj) -> TileFeatures {
                         let full_area = mvt::ring_area(&outer).abs() * mpu.0 * mpu.1;
                         let height = if rh <= 5.0 { synth_height(full_area, key) } else { rh.min(500.0) };
                         let min_height = rmin.clamp(0.0, (height - 1.0).max(0.0));
-                        push_area(&mut out, &xf, e, Kind::Building { height, min_height, colour }, &outer, &holes, key);
+                        push_area(&mut out, &xf, e, Kind::Building { height, min_height, colour, tags: Default::default() }, &outer, &holes, key);
                     }
                 }
                 (_, GeomType::Polygon) => {
@@ -593,9 +593,9 @@ pub(crate) fn tile_point(id: TileId, proj: &Proj, extent: f32, p: [f32; 2]) -> V
 /// Add a building from another source (Overture, overture/) given in tile
 /// units: clipped to the tile like the OSM ones.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn push_building(out: &mut TileFeatures, id: TileId, proj: &Proj, extent: f32, outer: &[[f32; 2]], holes: &[Vec<[f32; 2]>], height: f32, min_height: f32, key: u64) {
+pub(crate) fn push_building(out: &mut TileFeatures, id: TileId, proj: &Proj, extent: f32, outer: &[[f32; 2]], holes: &[Vec<[f32; 2]>], height: f32, min_height: f32, key: u64, tags: crate::buildmat::Tags) {
     let xf = Xf { proj: *proj, id, extent: extent as f64 };
-    push_area(out, &xf, extent, Kind::Building { height, min_height, colour: None }, outer, holes, key);
+    push_area(out, &xf, extent, Kind::Building { height, min_height, colour: None, tags }, outer, holes, key);
 }
 
 pub fn point_in_ring(pt: Vec2, ring: &[Vec2]) -> bool {

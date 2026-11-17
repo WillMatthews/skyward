@@ -77,11 +77,13 @@ pub struct Footprint {
     pub min_height: f32,
     /// Floors above ground; 0 = not given.
     pub floors: f32,
+    /// Use / materials / roof shape where Overture has them (buildmat.rs).
+    pub tags: crate::buildmat::Tags,
     pub outer: Vec<[f32; 2]>,
     pub holes: Vec<Vec<[f32; 2]>>,
 }
 
-crate::wire_struct!(Footprint { source, height, min_height, floors, outer, holes });
+crate::wire_struct!(Footprint { source, height, min_height, floors, tags, outer, holes });
 
 /// A tile's footprints.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -108,8 +110,10 @@ pub fn footprints(layers: &[Layer]) -> TileFootprints {
         }
         let pos = |k: &str| f.num(k).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(0.0) as f32;
         let (height, min_height, floors) = (pos("height"), pos("min_height"), pos("num_floors"));
+        let s = |k: &str| f.str(k).unwrap_or("");
+        let tags = crate::buildmat::Tags::overture(s("subtype"), s("class"), s("facade_material"), s("roof_material"), s("roof_shape"));
         for (outer, holes) in crate::mvt::polygons(&f.parts) {
-            items.push(Footprint { source, height, min_height, floors, outer, holes });
+            items.push(Footprint { source, height, min_height, floors, tags, outer, holes });
         }
     }
     TileFootprints { extent: l.extent, items }
@@ -256,7 +260,7 @@ pub fn merge(out: &mut TileFeatures, id: TileId, proj: &Proj, t: &TileFootprints
         let h = height(fp, area_m2, key);
         let min_h = fp.min_height.clamp(0.0, (h - 1.0).max(0.0));
         let before = out.areas.len();
-        crate::osm::push_building(out, id, proj, e, &fp.outer, &fp.holes, h, min_h, key);
+        crate::osm::push_building(out, id, proj, e, &fp.outer, &fp.holes, h, min_h, key, fp.tags);
         if out.areas.len() > before {
             let s = Source::ALL.iter().position(|s| *s == fp.source).unwrap_or(4);
             st.added[s] += 1;
@@ -319,7 +323,7 @@ mod net {
     /// Disk budget for `cache/overture/` (oldest pruned at startup).
     const CACHE_LIMIT: u64 = 600_000_000;
     /// Reduced-tile format version (in the cache path).
-    const FORMAT: u32 = 1;
+    const FORMAT: u32 = 2;
     const BACKOFF: Duration = Duration::from_secs(60);
 
     static FAILED_AT: Mutex<Option<Instant>> = Mutex::new(None);
@@ -525,6 +529,7 @@ mod net {
                     height: 0.0,
                     min_height: 0.0,
                     floors: 2.0,
+                    tags: crate::buildmat::Tags::overture("residential", "house", "brick", "", "gabled"),
                     outer: vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]],
                     holes: vec![],
                 }],
@@ -674,7 +679,7 @@ mod tests {
 
     #[test]
     fn height_heuristic() {
-        let mut fp = Footprint { source: Source::Google, height: 0.0, min_height: 0.0, floors: 0.0, outer: vec![], holes: vec![] };
+        let mut fp = Footprint { source: Source::Google, height: 0.0, min_height: 0.0, floors: 0.0, tags: Default::default(), outer: vec![], holes: vec![] };
         // Nothing given: the OSM procedural guess (small hut → 2.6–3.6 m).
         let h = height(&fp, 25.0, 7);
         assert!((2.6..=3.6).contains(&h), "{h}");
@@ -707,8 +712,9 @@ mod tests {
         let proj = Proj::tile_frame(id);
         let t = footprints(&crate::mvt::decode(&fixture()).unwrap());
         // OSM has one building, overlapping the 4-floor footprint.
-        let osm =
-            |f: &mut TileFeatures| crate::osm::push_building(f, id, &proj, 4096.0, &[[2010.0, 2010.0], [2050.0, 2010.0], [2050.0, 2050.0], [2010.0, 2050.0]], &[], 9.0, 0.0, 1);
+        let osm = |f: &mut TileFeatures| {
+            crate::osm::push_building(f, id, &proj, 4096.0, &[[2010.0, 2010.0], [2050.0, 2010.0], [2050.0, 2050.0], [2010.0, 2050.0]], &[], 9.0, 0.0, 1, Default::default())
+        };
         let mut f = TileFeatures::default();
         osm(&mut f);
         let st = merge(&mut f, id, &proj, &t);
@@ -735,7 +741,15 @@ mod tests {
             .map(|i| {
                 let (x, y) = ((i % 90) as f32 * 45.0, (i / 90) as f32 * 45.0);
                 let s = if i < 10 { 2.0 } else { 20.0 };
-                Footprint { source: Source::Microsoft, height: 0.0, min_height: 0.0, floors: 0.0, outer: vec![[x, y], [x + s, y], [x + s, y + s], [x, y + s]], holes: vec![] }
+                Footprint {
+                    source: Source::Microsoft,
+                    height: 0.0,
+                    min_height: 0.0,
+                    floors: 0.0,
+                    tags: Default::default(),
+                    outer: vec![[x, y], [x + s, y], [x + s, y + s], [x, y + s]],
+                    holes: vec![],
+                }
             })
             .collect();
         let mut f = TileFeatures::default();

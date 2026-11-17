@@ -229,7 +229,7 @@ impl Ctx {
                     m.flat_poly(&a.outer, &a.holes, height, glam::Vec3::Y, [0.55, 0.56, 0.57]);
                 } else {
                     let col = [[0.84, 0.84, 0.82], [0.74, 0.76, 0.78], [0.80, 0.78, 0.72], [0.70, 0.70, 0.70]][(seed % 4) as usize];
-                    crate::scene::building(m, a, height, min_h, Some(col));
+                    crate::scene::building(m, a, height, min_h, Some(col), None);
                 }
                 Vec::new()
             }

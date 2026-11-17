@@ -102,6 +102,12 @@ for extra in ["audio/CREDITS.md", "fonts/README.md"]:
     d = os.path.join(out, "assets", os.path.dirname(extra))
     os.makedirs(d, exist_ok=True)
     shutil.copy(os.path.join("assets", extra), d)
+# Building facade / roof textures (gfx/buildtex.rs): downloaded at startup.
+os.makedirs(os.path.join(out, "assets/buildings"), exist_ok=True)
+for f in sorted(os.listdir("assets/buildings")):
+    if f.endswith(".jpg"):
+        shutil.copy(os.path.join("assets/buildings", f), os.path.join(out, "assets/buildings"))
+        files[f"buildings/{f}"] = os.path.getsize(os.path.join("assets/buildings", f))
 for f in os.listdir("assets/fonts"):
     if f.endswith("-OFL.txt"):
         shutil.copy(os.path.join("assets/fonts", f), os.path.join(out, "assets/fonts"))

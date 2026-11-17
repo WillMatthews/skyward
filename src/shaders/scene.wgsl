@@ -734,6 +734,247 @@ fn glass_surface(in: VOut, n: vec3<f32>, tint_srgb: vec3<f32>, fwuv: vec2<f32>) 
     return s;
 }
 
+// ---------------------------------------------------------------- textured buildings
+
+// Photo materials (buildmat.rs, gfx/buildtex.rs): per layer an sRGB albedo
+// and a normal (xy, OpenGL) + roughness map. The vertex material id carries
+// the layer and the facade layout: mat = base + 64 * code, code = layer + 1
+// (bits 0..4) | layout << 5 (0 punched, 1 house, 2 ribbon, 3 industrial,
+// 4 civic); code 0 = the untextured look above.
+@group(1) @binding(16) var bt_alb: texture_2d_array<f32>;
+@group(1) @binding(17) var bt_nrm: texture_2d_array<f32>;
+@group(1) @binding(18) var bt_samp: sampler;
+
+// Tile size of each layer in metres (buildmat::LAYERS).
+var<private> BT_SIZE: array<vec2<f32>, 16> = array<vec2<f32>, 16>(
+    vec2<f32>(1.05, 1.05), // 0
+    vec2<f32>(1.10, 1.10), // 1
+    vec2<f32>(2.40, 1.20), // 2
+    vec2<f32>(2.40, 1.20), // 3
+    vec2<f32>(1.05, 1.05), // 4
+    vec2<f32>(4.00, 2.00), // 5
+    vec2<f32>(2.40, 2.40), // 6
+    vec2<f32>(2.00, 2.00), // 7
+    vec2<f32>(3.00, 1.50), // 8
+    vec2<f32>(2.00, 2.00), // 9
+    vec2<f32>(2.90, 2.90), // 10
+    vec2<f32>(2.90, 2.90), // 11
+    vec2<f32>(2.50, 2.50), // 12
+    vec2<f32>(2.90, 2.90), // 13
+    vec2<f32>(1.50, 1.50), // 14
+    vec2<f32>(2.50, 2.50), // 15
+);
+
+// Screen-space derivatives, taken in uniform control flow (fs_main).
+struct Deriv {
+    duvdx: vec2<f32>,
+    duvdy: vec2<f32>,
+    dpdx: vec3<f32>,
+    dpdy: vec3<f32>,
+};
+
+struct BtTex {
+    albedo: vec3<f32>,
+    n: vec3<f32>,
+    rough: f32,
+};
+
+// One material at `uv` metres (x along, y up): albedo, perturbed normal,
+// roughness. Trilinear + anisotropic through the explicit gradients, so the
+// texture fades to its average instead of shimmering.
+fn bt_sample(layer: i32, uv: vec2<f32>, d: Deriv, n: vec3<f32>) -> BtTex {
+    let k = vec2<f32>(1.0, -1.0) / BT_SIZE[layer];
+    let tc = uv * k;
+    let gx = d.duvdx * k;
+    let gy = d.duvdy * k;
+    var o: BtTex;
+    o.albedo = textureSampleGrad(bt_alb, bt_samp, tc, layer, gx, gy).rgb;
+    let t = textureSampleGrad(bt_nrm, bt_samp, tc, layer, gx, gy);
+    o.rough = t.b;
+    // Cotangent frame from the derivatives (no tangents in the vertex data).
+    let p1 = cross(n, d.dpdx);
+    let p2 = cross(d.dpdy, n);
+    let T = p2 * gx.x + p1 * gy.x;
+    let B = p2 * gx.y + p1 * gy.y;
+    let m = max(dot(T, T), dot(B, B));
+    let xy = t.rg * 2.0 - 1.0;
+    if (m > 1e-20) {
+        let s = inverseSqrt(m);
+        // OpenGL normal maps: +y is up the image, i.e. toward -v.
+        let z = sqrt(max(1.0 - dot(xy, xy), 0.0));
+        o.n = normalize(T * s * xy.x - B * s * xy.y + n * z);
+    } else {
+        o.n = n;
+    }
+    return o;
+}
+
+// Antialiased coverage of [lo, hi] at f (filter width w, same units).
+fn box_aa(f: f32, lo: f32, hi: f32, w: f32) -> f32 {
+    let h = max(w, 1e-4) * 0.75;
+    return clamp((min(f - lo, hi - f)) / h + 0.5, 0.0, 1.0);
+}
+
+fn bt_wall_surface(in: VOut, n: vec3<f32>, code: i32, fwuv: vec2<f32>, d: Deriv) -> Surf {
+    let layer = (code & 31) - 1;
+    let kind = code >> 5;
+    let u = in.uv.x;
+    let y = in.uv.y;
+    let seed = floor(u / 4096.0);
+    let along = u - seed * 4096.0;
+    let r0 = hash12(vec2<f32>(seed, 3.1));
+    let r1 = hash12(vec2<f32>(seed, 7.7));
+    let r2 = hash12(vec2<f32>(seed, 11.3));
+    let r3 = hash12(vec2<f32>(seed, 1.9));
+    // Layout: storey height, window pitch, window width / height (fractions
+    // of the cell), sill height (fraction), first windowed storey.
+    var fl = 2.9 + 0.6 * r0;
+    var bay = 2.6 + 1.4 * r1;
+    var ww = 0.40 + 0.20 * r2;
+    var wh = 0.48 + 0.14 * r3;
+    var my = 0.28;
+    var y0 = 0.0;
+    var occ_k = 1.0;
+    var office = false;
+    var frame_col = vec3<f32>(0.80, 0.80, 0.78);
+    if (kind == 1) { // house
+        fl = 2.6 + 0.3 * r0;
+        bay = 3.2 + 1.6 * r1;
+        ww = 0.28 + 0.14 * r2;
+        wh = 0.46 + 0.1 * r3;
+        my = 0.32;
+    } else if (kind == 2) { // office ribbons
+        fl = 3.4 + 0.5 * r0;
+        bay = 1.35 + 0.45 * r1;
+        ww = 0.9 + 0.05 * r2;
+        wh = 0.52 + 0.16 * r3;
+        my = 0.2;
+        office = true;
+        frame_col = vec3<f32>(0.16, 0.17, 0.18);
+    } else if (kind == 3) { // industrial: a clerestory strip only
+        fl = 3.8 + 1.4 * r0;
+        bay = 3.0 + 2.0 * r1;
+        ww = 0.82;
+        wh = 0.32;
+        my = 0.55;
+        y0 = 1.0;
+        occ_k = 0.2;
+        office = true;
+        frame_col = vec3<f32>(0.3, 0.31, 0.32);
+    } else if (kind == 4) { // civic: tall windows, high storeys
+        fl = 4.0 + 0.6 * r0;
+        bay = 3.0 + 1.2 * r1;
+        ww = 0.42 + 0.1 * r2;
+        wh = 0.6 + 0.08 * r3;
+        my = 0.2;
+        occ_k = 0.5;
+        office = true;
+    }
+    let shop = (i32(seed) & 1) == 1;
+    let cx = along / bay;
+    let cy = y / fl;
+    let fx = fract(cx);
+    let fy = fract(cy);
+    let cell = floor(vec2<f32>(cx, cy)) + vec2<f32>(seed * 13.0, 0.0);
+    let wx = fwuv.x / bay;
+    let wy = fwuv.y / fl;
+    // Material.
+    let bt = bt_sample(layer, vec2<f32>(along, y), d, n);
+    var albedo = min(bt.albedo * srgb_to_lin(in.col), vec3<f32>(0.85));
+    // Weathering: darker near the ground, vertical rain streaks.
+    let streak = noise_aa(vec2<f32>(along * 0.9, y * 0.04 + seed), fwuv.x * 0.9);
+    albedo *= (0.84 + 0.16 * smoothstep(0.0, 3.0, y)) * (0.93 + 0.1 * streak);
+    var s = default_surf(albedo, bt.n);
+    s.rough = clamp(bt.rough, 0.3, 1.0);
+    if (layer == 9) {
+        s.f0 = vec3<f32>(0.06);
+    }
+    // Windows, faded to their average where they get smaller than ~2 px.
+    let lod = 1.0 - smoothstep(0.15, 0.45, max(wx, wy));
+    let mx = (1.0 - ww) * 0.5;
+    let first = step(y0, cy) * select(1.0, step(1.0, cy), kind == 3);
+    var win = box_aa(fx, mx, 1.0 - mx, wx) * box_aa(fy, my, my + wh, wy) * first;
+    // Industrial: strip on some sheds only, roller doors at the ground.
+    if (kind == 3) {
+        win *= step(0.45, hash12(vec2<f32>(seed, 17.0)));
+        let dx = fract(along / 22.0);
+        let door = box_aa(dx, 0.3, 0.3 + 4.5 / 22.0, fwuv.x / 22.0) * box_aa(y, 0.0, 4.5, fwuv.y) * step(0.4, hash12(vec2<f32>(floor(along / 22.0), seed)));
+        let ribs = 0.85 + 0.15 * box_aa(fract(y / 0.12), 0.0, 0.5, fwuv.y / 0.12);
+        s.albedo = mix(s.albedo, vec3<f32>(0.16, 0.17, 0.18) * ribs, door);
+        s.rough = mix(s.rough, 0.5, door);
+    }
+    var is_shop = false;
+    if (shop && y < 4.2 && kind == 0) {
+        // Shopfront: tall glazing, a fascia band above.
+        let sx = fract(along / 6.0);
+        win = box_aa(sx, 0.06, 0.94, fwuv.x / 6.0) * box_aa(y, 0.25, 3.1, fwuv.y);
+        is_shop = true;
+        let fascia = box_aa(y, 3.25, 4.0, fwuv.y);
+        let fh = hash12(vec2<f32>(floor(along / 6.0), seed));
+        s.albedo = mix(s.albedo, srgb_to_lin(mix(vec3<f32>(0.12, 0.14, 0.18), vec3<f32>(0.55, 0.12, 0.10), step(0.5, fh))) * (0.6 + 0.6 * fh), fascia);
+        s.rough = mix(s.rough, 0.45, fascia);
+    } else if (kind == 0 || kind == 4) {
+        // Lintels / sills: a lighter band above and below each window.
+        let lx = box_aa(fx, mx - 0.04, 1.0 - mx + 0.04, wx) * first;
+        let lin = (box_aa(fy, my + wh, my + wh + 0.045, wy) + box_aa(fy, my - 0.035, my, wy)) * lx;
+        s.albedo = mix(s.albedo, srgb_to_lin(vec3<f32>(0.72, 0.70, 0.66)), lin * 0.7 * lod);
+    }
+    // Plinth.
+    s.albedo *= 1.0 - 0.25 * box_aa(y, -10.0, 0.45, fwuv.y);
+    let rw = hash12(cell + seed * 1.31);
+    let recess = mix(0.3, 1.0, smoothstep(0.05, 0.55, abs(dot(n, normalize(-in.wpos)))));
+    let night = g.sun_true.w * recess;
+    // Occupancy: homes follow the evening curve, offices / sheds / civic
+    // buildings empty after work (scene globals g.city).
+    let commercial = office || hash12(vec2<f32>(seed, 9.1)) < 0.33;
+    let bfac = (0.2 + 1.5 * hash12(vec2<f32>(seed, 21.7))) * select(g.city.z, g.city.y * 0.6, commercial) * occ_k;
+    let ffac = 0.4 + 1.2 * hash12(vec2<f32>(seed * 3.1, cell.y + 0.5));
+    let occ = clamp(bfac * ffac, 0.0, 0.95);
+    let wcol = select(window_colour(hash12(cell * 1.7 + seed), hash12(cell + 1.1)), mix(vec3<f32>(0.85, 0.92, 1.0), vec3<f32>(1.0, 0.86, 0.66), step(0.5, hash12(vec2<f32>(seed, 5.5)))), office);
+    let hrs = g.city.w;
+    let shop_on = mix(0.2, 1.0, step(14.0, hrs) * (1.0 - smoothstep(21.5, 23.0, hrs)));
+    if (win > 0.0 && lod > 0.0) {
+        // Frame around the glass (white PVC / dark aluminium), then glass:
+        // dark interior + reflection; blinds / curtains vary per window.
+        let fr = 0.07;
+        let inner = box_aa(fx, mx + fr / bay, 1.0 - mx - fr / bay, wx) * box_aa(fy, my + fr / fl, my + wh - fr / fl, wy);
+        let gfrac = select(inner, win, is_shop);
+        let blind = step(0.55, rw) * step(1.0 - 0.6 * hash12(cell * 1.7 + 3.0), fract((fy - my) / wh));
+        var interior = vec3<f32>(0.05, 0.048, 0.045) * (0.5 + 1.0 * rw);
+        interior = mix(interior, srgb_to_lin(vec3<f32>(0.78, 0.75, 0.68)) * 0.45, blind);
+        if (is_shop) {
+            interior = vec3<f32>(0.03, 0.03, 0.028) + vec3<f32>(0.05, 0.04, 0.03) * hash12(cell + 9.0);
+        }
+        let lit = step(hash12(cell * 2.3 + seed), occ) * night;
+        let level = (0.45 + 0.9 * rw) * mix(1.0, 0.45, blind);
+        let tv = step(0.94, hash12(cell * 3.7 + seed)) * step(19.0, hrs) * select(1.0, 0.0, office);
+        let flick = 0.6 + 0.4 * sin(g.cam_pos.w * (3.0 + 5.0 * rw) + rw * 40.0) * sin(g.cam_pos.w * 7.3 + rw * 11.0);
+        let wc = mix(wcol, vec3<f32>(0.45, 0.6, 1.0) * flick, tv);
+        let k = win * lod;
+        let kg = gfrac * lod;
+        // Frame.
+        s.albedo = mix(s.albedo, srgb_to_lin(frame_col), (k - kg) * 0.9);
+        s.rough = mix(s.rough, 0.4, k - kg);
+        // Glass.
+        s.albedo = mix(s.albedo, interior, kg);
+        s.n = normalize(mix(s.n, normalize(n + vec3<f32>(rw - 0.5, 0.0, hash12(cell + 4.2) - 0.5) * 0.03), kg));
+        s.rough = mix(s.rough, 0.06, kg);
+        s.f0 = mix(s.f0, vec3<f32>(0.06), kg);
+        let win_l = select(WIN_HOME, WIN_OFFICE * 1.6, office);
+        s.emit = (wc * lit * level * win_l + select(vec3<f32>(0.0), vec3<f32>(1.0, 0.86, 0.66) * shop_on * night * WIN_SHOP, is_shop)) * kg;
+    }
+    // Far away: average of glass + wall (lit share per floor while the
+    // floors are resolved, per building beyond).
+    let avg_win = ww * wh * select(1.0, 0.5 * step(0.45, hash12(vec2<f32>(seed, 17.0))), kind == 3);
+    s.albedo = mix(mix(s.albedo, vec3<f32>(0.05), avg_win * 0.8), s.albedo, lod);
+    let floor_lod = 1.0 - smoothstep(0.25, 0.7, wy);
+    let occ_far = clamp(bfac * mix(1.0, ffac, floor_lod), 0.0, 0.95) * step(y0 + select(0.0, 1.0, kind == 3), cy);
+    s.emit += (1.0 - lod) * night * avg_win * occ_far * 0.7 * WIN_HOME * vec3<f32>(1.0, 0.74, 0.47);
+    s.f0 = mix(mix(s.f0, vec3<f32>(0.04), avg_win), s.f0, lod);
+    s.ao = 0.7 + 0.3 * smoothstep(0.0, 5.0, y);
+    return s;
+}
+
 // ---------------------------------------------------------------- ground
 
 // Grass colour through the year (sRGB-ish): fresh in spring, parched in late
@@ -873,7 +1114,48 @@ fn mountain(c0: vec3<f32>, wp: vec3<f32>, np: vec2<f32>, n: vec3<f32>, fw: f32, 
 
 @fragment
 fn fs_main(in: VOut) -> FOut {
-    let m = i32(in.mat + 0.5);
+    var none: Surf;
+    return shade(in, none, false);
+}
+
+// Tile buildings (the solid pipelines): fs_main plus the textured facades and
+// roofs. A separate entry point, so the pipelines that share fs_main with
+// other group-1 layouts (airport objects, road traffic) need not bind the
+// building textures.
+@fragment
+fn fs_bld(in: VOut) -> FOut {
+    let mraw = i32(in.mat + 0.5);
+    let m = mraw & 63;
+    let code = mraw >> 6;
+    let rel = in.wpos;
+    let dv = Deriv(dpdx(in.uv), dpdy(in.uv), dpdx(rel), dpdy(rel));
+    let fwuv = fwidth(in.uv);
+    var ngeo = normalize(in.nrm);
+    if (dot(ngeo, -rel) < 0.0) {
+        ngeo = -ngeo;
+    }
+    var pre: Surf;
+    let has = code != 0 && (m == 2 || m == 5);
+    if (has) {
+        if (m == 2) {
+            pre = bt_wall_surface(in, ngeo, code, fwuv, dv);
+        } else {
+            let bt = bt_sample((code & 31) - 1, in.uv, dv, ngeo);
+            pre = default_surf(min(bt.albedo * srgb_to_lin(in.col), vec3<f32>(0.85)), bt.n);
+            pre.rough = clamp(bt.rough, 0.3, 1.0);
+            if ((code & 31) == 10) {
+                pre.f0 = vec3<f32>(0.06); // painted metal
+            }
+        }
+    }
+    return shade(in, pre, has);
+}
+
+// Shared by fs_main / fs_bld: `pre` = the textured building surface when `has_pre`.
+fn shade(in: VOut, pre: Surf, has_pre: bool) -> FOut {
+    // Material id + 64 * code (textured buildings: layer / facade layout).
+    let mraw = i32(in.mat + 0.5);
+    let m = mraw & 63;
     let rel = in.wpos; // eye-relative
     let wp = rel + g.cam_pos.xyz; // world (heights, sun / cloud shadow)
     let np = pat(rel);
@@ -1024,7 +1306,25 @@ fn fs_main(in: VOut) -> FOut {
             s = snowy(s, np, ngeo, 0.35 + 0.5 * rut, fwp);
         }
         case 5: { // roofs
-            if (ngeo.y > 0.95) {
+            if (has_pre) {
+                // Textured (fs_bld; uv = metres along the eaves, up the slope).
+                s = pre;
+                // Broad weathering / lichen patches.
+                s.albedo *= 0.86 + 0.24 * pna(np, 0.12, vec2<f32>(wp.y), fwp * 0.12);
+                if (ngeo.y > 0.95) {
+                    // Flat: plant boxes and skylights.
+                    let gcell = wrapc(floor(np / 4.0), NP / 4.0);
+                    let k = hash12(gcell);
+                    let fr = fract(np / 4.0);
+                    let fa = fwp / 4.0;
+                    let box = step(0.93, k) * box_aa(fr.x, 0.2, 0.8, fa) * box_aa(fr.y, 0.2, 0.8, fa);
+                    s.albedo = mix(s.albedo, vec3<f32>(0.32, 0.33, 0.34), box * (1.0 - smoothstep(0.1, 0.6, fwp)));
+                    s = wet_paving(s, wp, px, fwp, 0.3);
+                } else {
+                    s.rough = mix(s.rough, 0.3, g.wx.x);
+                    s.albedo *= 1.0 - 0.3 * g.wx.x;
+                }
+            } else if (ngeo.y > 0.95) {
                 // Flat roofs: membrane / gravel, plant boxes and skylights.
                 s.albedo *= 0.78 + 0.35 * pna(np, 0.35, vec2<f32>(0.0), fwp * 0.35);
                 let gcell = wrapc(floor(np / 4.0), NP / 4.0);
@@ -1097,7 +1397,11 @@ fn fs_main(in: VOut) -> FOut {
             s = snowy(s, np, ngeo, 0.6, fwp);
         }
         case 2: { // masonry wall with punched windows
-            s = wall_surface(in, ngeo, in.col, fwuv);
+            if (has_pre) {
+                s = pre;
+            } else {
+                s = wall_surface(in, ngeo, in.col, fwuv);
+            }
         }
         case 3: { // curtain-wall glass tower
             s = glass_surface(in, ngeo, in.col, fwuv);

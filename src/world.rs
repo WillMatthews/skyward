@@ -1215,7 +1215,7 @@ mod tests {
         let rw = (c + vec2(-500.0, 300.0), c + vec2(500.0, 330.0));
         let f = TileFeatures {
             areas: vec![
-                area(Kind::Building { height: 60.0, min_height: 0.0, colour: None }, tower, vec2(20.0, 25.0)),
+                area(Kind::Building { height: 60.0, min_height: 0.0, colour: None, tags: Default::default() }, tower, vec2(20.0, 25.0)),
                 area(Kind::Water, pond, vec2(90.0, 60.0)),
             ],
             lines: vec![],

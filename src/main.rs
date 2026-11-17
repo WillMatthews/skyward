@@ -60,6 +60,7 @@ mod startpos;
 mod systems;
 mod terrain;
 mod bathy;
+mod buildmat;
 mod landcover;
 mod sattint;
 mod cog;
