@@ -1,6 +1,20 @@
-//! Detail elevation sources layered over AWS Terrain Tiles.
+//! Elevation sources: the Mapterhorn base, and detail sources layered over
+//! AWS Terrain Tiles where Mapterhorn is not used.
 //!
-//! [`crate::terrain`] reads every level of detail from Terrain Tiles
+//! **Priority** (finest real data first, one source per DEM tile):
+//! 1. [`mapterhorn`] — every level, both builds: national DTMs (0.25–10 m,
+//!    mostly LIDAR; England's is the same EA composite [`lidar`] reads) where
+//!    they exist, GLO-30 elsewhere. A tile it serves is used as is: the
+//!    sources below would only re-add the same EA data, or put GLO-30 back
+//!    over a LIDAR slope. Mapterhorn blends its own source borders, so the
+//!    England / Scotland or Swiss / Italian borders have no seams.
+//! 2. Otherwise (`SKYWARD_NO_MAPTERHORN=1`, Japan, no tile, offline / server
+//!    trouble): Terrain Tiles, refined by the [`Source`]s below exactly as
+//!    before Mapterhorn. A fallback tile beside a Mapterhorn one can differ by
+//!    a few metres (both are bilinearly sampled across the tile edge, so no
+//!    cliff); Japan's edge is at sea.
+//!
+//! [`crate::terrain`] otherwise reads every level of detail from Terrain Tiles
 //! (terrarium PNGs). On native builds, each *detail* DEM tile (zoom
 //! [`crate::terrain::DEM_NEAR`], 256² web-Mercator pixels) is then handed to
 //! the [`Source`]s here, in order, to refine in place before anything samples
@@ -22,6 +36,7 @@
 
 pub mod copdem;
 pub mod lidar;
+pub mod mapterhorn;
 pub mod osgb;
 
 /// A detail DEM tile being refined.

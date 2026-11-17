@@ -117,6 +117,259 @@ others; per-item sources, authors and licences are listed in:
     "© Environment Agency copyright and/or database right 2022. All rights
     reserved." Contains public sector information licensed under the Open
     Government Licence v3.0. Skyward resamples it to its terrain grid.
+  * Elevation base (src/dem/mapterhorn.rs, desktop and browser; read at run
+    time from https://tiles.mapterhorn.com, cached under cache/mapterhorn/ or
+    the browser's tile cache, not redistributed): Mapterhorn terrain tiles
+    (https://mapterhorn.com; code BSD-3-Clause, data under each source's
+    licence). Skyward decodes and resamples them to its terrain grid. Per
+    Mapterhorn's attribution list (https://mapterhorn.com/attribution,
+    machine-readable at https://download.mapterhorn.com/attribution.json,
+    with each source's licence PDF), the tiles contain data from:
+      - Latvijas Ģeotelpiskās informācijas aģentūra: Digital terrain model (20
+        m) [aalv]. Licence: Creative Commons Attribution 4.0.
+      - Department of Land Administration, MOI: 2024 edition of the 20-meter
+        grid digital terrain model Taiwan (20 m) [aatw]. Licence: Open
+        Government Data License, version 1.0.
+      - BEV - Bundesamt für Eich- und Vermessungswesen: Digitales
+        Geländehöhenmodell (ALS-DGM) - Höhenraster (1 m) [at1]. Licence: CC-
+        BY-4.0.
+      - geoland.at, Land Kärnten.: Digital Elevation Modell (DEM) Austria (10
+        m) [at10]. Licence: CC-BY-4.0: Land Kärnten - data.gv.at.
+      - burgenland.at. Land Burgenland: Digitales Geländemodell 5 Meter -
+        Burgenland (5 m) [atburgenland]. Licence: Creative Commons
+        Namensnennung 4.0 International (CC BY 4.0).
+      - ktn.gv.at. Land Kärnten: Digitales Gelände- und Oberflächenmodell
+        Kärnten (1 m) [atkaernten]. Licence: CC-BY-4.0: Land Kärnten -
+        data.gv.at.
+      - land-oberoesterreich.gv.at. Land Oberösterreich: Digitales
+        Geländemodell (DGM) Land Oberösterreich (1 m) [atoberoesterreich].
+        Licence: Creative Commons Namensnennung 4.0 International (CC BY 4.0).
+      - salzburg.gv.at. Land Salzburg: Digitales Geländemodell 1 m (DGM) Land
+        Salzburg (1 m) [atsalzburg]. Licence: Creative Commons Namensnennung
+        4.0 International (CC BY 4.0).
+      - Geoscience Australia: Digital Elevation Model (DEM) of Australia
+        derived from LiDAR 5 Metre Grid (5 m) [au5a … au5i (9 parts)].
+        Licence: CC BY 4.0.
+      - The LIST ©State of Tasmania. Downloaded via Source Coop.: Tasmanian 2
+        metre Digital Elevation Model (2 m) [autas]. Licence: CC BY 3.0.
+      - agentschap Digitaal Vlaanderen: Digitaal Hoogtemodel Vlaanderen II,
+        DTM, raster, 1 m (1 m) [beflanders]. Licence: Model license for free
+        reuse.
+      - Service public de Wallonie (SPW): Relief de la Wallonie - Modèle
+        Numérique de Terrain (MNT) 2021-2022 (0.5 m) [bewallonie]. Licence:
+        CC-BY 4.0.
+      - Natural Resources Canada: Canada DTM 2018-2024 (2 m) [cahrdem2].
+        Licence: Open Government Licence - Canada.
+      - Kanton Zürich, Amt für Raumentwicklung, Abteilung Geoinformation: DTM
+        Kanton Zürich (0.25 m) [chzh]. Licence: CC0.
+      - Τμήμα Κτηματολογίου και Χωρομετρίας: Cyprus DTM 2019 (1 m) [cy].
+        Licence: CC BY 4.0.
+      - cuzk.gov.cz. Land Survey Office: Digital Terrain Model of the Czech
+        Republic, 4th generation (DMR 4G), INSPIRE theme Elevation (EL) - GRID
+        5 m (5 m) [cz]. Licence: CC-BY 4.0.
+      - Bayerische Vermessungsverwaltung: Digitales Geländemodell 1m (DGM1) (1
+        m) [debayern]. Licence: CC BY 4.0.
+      - Senatsverwaltung für Stadtentwicklung, Bauen und Wohnen Berlin:
+        Digitale Geländemodelle - ATKIS DGM (1 m) [deberlin]. Licence:
+        Datenlizenz Deutschland - Zero - Version 2.0.
+      - GeoBasis-DE / LGB: Digitales Geländemodell 1m Brandenburg (1 m)
+        [debrandenburg]. Licence: Datenlizenz Deutschland - Namensnennung -
+        Version 2.0.
+      - Landesamt GeoInformation Bremen: ATKIS - DGM1 Land Bremen (1 m)
+        [debremen]. Licence: CC-BY-4.0.
+      - LGL, www.lgl-bw.de, dl-de/by-2-0: DGM 1 Baden-Württemberg (1 m)
+        [debw]. Licence: Datenlizenz Deutschland - Namensnennung - Version
+        2.0.
+      - LGL, www.lgl-bw.de, dl-de/by-2-0: Baden-Württemberg DGM ALS_3 (0.25 m)
+        [debw025]. Licence: Datenlizenz Deutschland - Namensnennung - Version
+        2.0.
+      - Freie und Hansestadt Hamburg, Landesbetrieb Geoinformation und
+        Vermessung (LGV): Digitales Höhenmodell Hamburg DGM 1 (1 m)
+        [dehamburg]. Licence: Datenlizenz Deutschland - Namensnennung -
+        Version 2.0.
+      - Hessisches Ministerium für Umwelt, Klimaschutz, Landwirtschaft und
+        Verbraucherschutz: ATKIS-DGM 1 (1 m) [dehessen]. Licence: Datenlizenz
+        Deutschland - Zero - Version 2.0.
+      - © GeoBasis-DE/M-V 2025: Digitales Geländemodell 1m (DGM1) Mecklenburg-
+        Vorpommern (1 m) [demv]. Licence: CC BY 4.0.
+      - Landesamtes für Geoinformation und Landesvermessung Niedersachsen
+        (LGLN): Digitales Geländemodell 1m (DGM1) (1 m) [deniedersachsen].
+        Licence: CC BY 4.0.
+      - Ministerium des Innern des Landes Nordrhein-Westfalen: Digitales
+        Geländemodell - Rasterweite 1 m (1 m) [denrw]. Licence: Datenlizenz
+        Deutschland - Zero - Version 2.0.
+      - ©GeoBasis-DE / LVermGeoRP 2025: Digitales Geländemodell Gitterweite 1
+        m (1 m) [derlp]. Licence: DL-DE->BY-2.0.
+      - GeoBasis DE/LVGL-SL 2025: DGM 1 Saarland (1 m) [desaarland]. Licence:
+        Datenlizenz Deutschland – Namensnennung – Version 2.0.
+      - GeoSN, dl-de/by-2-0: Digitales Geländemodell (DGM1) (1 m) [desachsen].
+        Licence: Datenlizenz Deutschland - Namensnennung - Version 2.0.
+      - Landesamt für Vermessung und Geoinformation Sachsen-Anhalt (LVermGeo):
+        DGM - Digitales Geländemodell (1 m) [desachsenanhalt]. Licence:
+        Datenlizenz Deutschland - Namensnennung - Version 2.0.
+      - © GeoBasis-DE/LVermGeo SH/CC BY 4.0: DGM 1 Schleswig-Holstein (1 m)
+        [desh]. Licence: CC BY 4.0.
+      - © GDI-Th: DGM 1 Thüringen (1 m) [dethueringen]. Licence: Datenlizenz
+        Deutschland - Namensnennung - Version 2.0.
+      - Klimadatastyrelsen Danmark: Danmarks Højdemodel - Terræn (0.4 m) [dk].
+        Licence: CC BY 4.0.
+      - The Faroese Environment Agency, Umhvørvisstovan: DTM hæddarmodell (10
+        m) [dkfaroe]. Licence: Open Government Data.
+      - Klimadatastyrelsen Danmark: Elevation model Greenland (2 m)
+        [dkgreenland]. Licence: CC BY 4.0.
+      - Elevation data 2021-2024, Republic of Estonia Land and Spatial
+        Development Board: Elevation Data Estonia 1m (1 m) [ee]. Licence:
+        Republic of Estonia Land and Spatial Development Board opendata
+        licence 2025.
+      - MDT02-cob2 2015-2021 CC-BY 4.0 scne.es: Modelo Digital del Terreno -
+        MDT02 (2 m) [es2a, es2b, es2c]. Licence: CC BY 4.0.
+      - CC-BY 4.0 scne.es 2025: Digital Terrain Model 1st Coverage with 5 m
+        grid spacing (5 m) [es5a … es5d (4 parts)]. Licence: CC BY 4.0.
+      - CC-BY 4.0 scne.es 2022-2025: Modelo Digital del Terreno - MDT50 (0.5
+        m) [esmdt50a … esmdt50d (4 parts)]. Licence: CC BY 4.0.
+      - National Land Survey of Finland 2025. Downloaded via GeoCubes.:
+        Elevation model 2 m (2 m) [fi]. Licence: Attribution 4.0 International
+        (CC BY 4.0).
+      - Institut national de l'information géographique et forestière IGN: MNT
+        LiDAR HD (0.5 m) [frhd2154a … frhd5490 (7 parts)]. Licence: Licence
+        Ouverte / Open Licence version 2.0.
+      - Institut national de l'information géographique et forestière IGN: RGE
+        ALTI® 1m Guadeloupe, Martinique (1 m) [frrgealti1caribbean]. Licence:
+        Licence Ouverte / Open Licence version 2.0.
+      - Institut national de l'information géographique et forestière IGN: RGE
+        ALTI® 1m Corsica (1 m) [frrgealti1corse]. Licence: Licence Ouverte /
+        Open Licence version 2.0.
+      - Institut national de l'information géographique et forestière IGN: RGE
+        ALTI® 1m French Guiana (1 m) [frrgealti1guiana]. Licence: Licence
+        Ouverte / Open Licence version 2.0.
+      - Institut national de l'information géographique et forestière IGN: RGE
+        ALTI® 1m Mayotte (1 m) [frrgealti1mayotte]. Licence: Licence Ouverte /
+        Open Licence version 2.0.
+      - Institut national de l'information géographique et forestière IGN: RGE
+        ALTI® 1m Metropolitan France (1 m) [frrgealti1metro]. Licence: Licence
+        Ouverte / Open Licence version 2.0.
+      - Institut national de l'information géographique et forestière IGN: RGE
+        ALTI® 1m Reunion (1 m) [frrgealti1reunion]. Licence: Licence Ouverte /
+        Open Licence version 2.0.
+      - Institut national de l'information géographique et forestière IGN: RGE
+        ALTI® 1m Saint Pierre and Miquelon (1 m) [frrgealti1stpm]. Licence:
+        Licence Ouverte / Open Licence version 2.0.
+      - Institut national de l'information géographique et forestière IGN: RGE
+        ALTI® 5m Guadeloupe, Martinique (5 m) [frrgealti5caribbean]. Licence:
+        Licence Ouverte / Open Licence version 2.0.
+      - Institut national de l'information géographique et forestière IGN: RGE
+        ALTI® 5m Corsica (5 m) [frrgealti5corse]. Licence: Licence Ouverte /
+        Open Licence version 2.0.
+      - Institut national de l'information géographique et forestière IGN: RGE
+        ALTI® 5m French Guiana (5 m) [frrgealti5guiana]. Licence: Licence
+        Ouverte / Open Licence version 2.0.
+      - Institut national de l'information géographique et forestière IGN: RGE
+        ALTI® 5m Mayotte (5 m) [frrgealti5mayotte]. Licence: Licence Ouverte /
+        Open Licence version 2.0.
+      - Institut national de l'information géographique et forestière IGN: RGE
+        ALTI® 5m Metropolitan France (5 m) [frrgealti5metro]. Licence: Licence
+        Ouverte / Open Licence version 2.0.
+      - Institut national de l'information géographique et forestière IGN: RGE
+        ALTI® 5m Reunion (5 m) [frrgealti5reunion]. Licence: Licence Ouverte /
+        Open Licence version 2.0.
+      - Institut national de l'information géographique et forestière IGN: RGE
+        ALTI® 5m Saint Pierre and Miquelon (5 m) [frrgealti5stpm]. Licence:
+        Licence Ouverte / Open Licence version 2.0.
+      - DLR e.V. 2010-2014, Airbus Defence and Space GmbH 2014-2018, provided
+        under COPERNICUS by the European Union and ESA. All rights reserved.
+        Accessed via OpenTopography and AWS Open Data.: COPERNICUS GLO-30 (30
+        m) [glo30]. Licence: COPERNICUS full, free and open license.
+      - Natural Science Institute of Iceland: ÍslandsDEM útgáfa 1.0 (10 m)
+        [is]. Licence: CC BY 4.0.
+      - ASTER GDEM courtesy of METI and NASA processed by 4cast LTD using
+        VTbuilder: 10 meter Digital Elevation Model (DEM) of Israel (10 m)
+        [isr10]. Licence: ASTER GDEM Public Domain.
+      - Dati estratti dal Modello Digitale del Terreno (DTM) della Regione
+        Autonoma Valle d'Aosta: Modello Digitale del Terreno (DTM) (2 m)
+        [itaosta]. Licence: CC BY 4.0.
+      - Amt für Landesplanung und Kartografie, Autonome Provinz Bozen:
+        Digitales Geländemodell (DGM 2,5m) (2.5 m) [itbozen]. Licence:
+        Creative Commons CCZero.
+      - Regione Lombardia: DTM 5X5 - Modello digitale del terreno (ed. 2015)
+        (5 m) [itlombardia]. Licence: CC BY 4.0.
+      - Regione Piemonte - A1613B - Sistema informativo territoriale e
+        ambientale: RIPRESA AEREA ICE 2009-2011 - DTM 5 (5 m) [itpiemonte].
+        Licence: CC BY 4.0.
+      - Regione Autonoma della Sardegna: DTM e DSM passo 1 m fascia costiera
+        2008 (1 m) [itsardegnacostiera]. Licence: CC-BY 4.0.
+      - Regione Autonoma della Sardegna: DTM e DSM passo 1 metro dei centri
+        urbani interni della Sardegna volo 2013 (1 m) [itsardegnaurban].
+        Licence: CC-BY 4.0.
+      - Regione Siciliana - Assessorato del Territorio e dell'Ambiente - Area
+        2 Interdipartimentale - Nodo Regionale S.I.T.R: Modello digitale del
+        terreno (MDT) 2m - Volo ATA 2012 2013 (2 m) [itsicily]. Licence: CC-BY
+        4.0.
+      - Provincia Autonoma di Trento - Ufficio Sistemi Informativi - Servizio
+        autorizzazioni e valutazioni ambientali: LiDAR PAT 2014 integrato con
+        voli 2018 ed il LiDAR 2011 di Campolongo (5 m) [ittrentino]. Licence:
+        CC BY 2.5.
+      - Administration du cadastre et de la topographie Luxembourg: LiDAR 2019
+        - Modèle numérique de terrain (MNT) (0.5 m) [lu]. Licence: CC0.
+      - AHN.nl: Actueel Hoogtebestand Nederland, AHN5 5m (5 m)
+        [nlahn5lowresfilled]. Licence: CC BY 4.0.
+      - AHN.nl: Actueel Hoogtebestand Nederland, Saba, 0.5 m (0.5 m)
+        [nlcaribischa]. Licence: CC BY 4.0.
+      - AHN.nl: Actueel Hoogtebestand Nederland, St. Eustatius, 0.5 m (0.5 m)
+        [nlcaribischb]. Licence: CC BY 4.0.
+      - AHN.nl: Actueel Hoogtebestand Nederland, Bonaire, 0.5 m (0.5 m)
+        [nlcaribischc]. Licence: CC BY 4.0.
+      - Kartverket: Terrengmodellar (DTM) (1 m) [no]. Licence: CC BY 4.0.
+      - Norwegian Polar Institute: Terrengmodell Svalbard (S0 Terrengmodell)
+        (20 m) [nosvalbard]. Licence: CC BY 4.0.
+      - Toitū Te Whenua Land Information New Zealand: New Zealand LiDAR 1m DEM
+        (1 m) [nz]. Licence: CC BY 4.0.
+      - Head Office of Geodesy and Cartography (GUGiK), National Geodetic and
+        Cartographic Resource (PZGiK), Poland: Numeryczny Model Terenu 1 m (1
+        m) [pl1]. Licence: Open Government Data (Art. 40a. geod. i kartogr.).
+      - Head Office of Geodesy and Cartography (GUGiK), National Geodetic and
+        Cartographic Resource (PZGiK), Poland: Numeryczny Model Terenu 5 m (5
+        m) [pl5]. Licence: Open Government Data (Art. 40a. geod. i kartogr.).
+      - Direção-Geral do Território: Digital Elevation Models of mainland
+        Portugal (0.5 m) [pt]. Licence: CC BY 4.0.
+      - Instituto Geográfico Portugês: Modelo Digital do Terreno (MDT) da Ilha
+        da Madeira (10 m) [ptmadeira]. Licence: CC BY 4.0.
+      - www.geoportal.gov.ro: LAKI II MNT 0.5m (0.5 m) [ro]. Licence: Romanian
+        Open Government License v1.0 (OGL-ROU-1.0).
+      - the National Land Authority (NLA), Water and Sanitation Corporation
+        (WASAC) Ltd., Rwanda through UNDP, EMD, and windPRO: Rwanda 10m
+        Digital Elevation Model (10 m) [rw]. Licence: Creative Commons
+        Namensnennung 4.0 International (CC BY 4.0).
+      - Lantmäteriet: Markhöjdmodell Nedladdning (1 m) [se]. Licence: CC0.
+      - Slovenian Environment Agency (ARSO): DMR - digitalni model reliefa (1
+        m) [si]. Licence: Creative Commons Attribution 4.0.
+      - ÚGKK SR: DMR v 5.0 (1 m) [sk]. Licence: CC BY Creative Commons
+        Attribution („uvedenie autora“) 4.0.
+      - Federal Office of Topography swisstopo: swissALTI3D (0.5 m)
+        [swissalti3d]. Licence: Open Government Data.
+      - Istituto Nazionale di Geofisica e Vulcanologia (INGV): TINITALY, a
+        digital elevation model of Italy with a 10 meters cell size (Version
+        1.1) (10 m) [tinitaly]. Licence: Creative Commons Namensnennung 4.0
+        International (CC BY 4.0).
+      - © Environment Agency: LIDAR Composite Digital Terrain Model (DTM) - 1m
+        (1 m) [ukengland]. Licence: Open Government Licence.
+      - Scottish Government: LiDAR for Scotland Phase 1 - DTM (1 m)
+        [ukscotland]. Licence: Open Government Licence.
+      - Welsh Government and NRW: Wales DTM 1m (1 m) [ukwales]. Licence: Open
+        Government License.
+      - U.S. Geological Survey: 1 meter Digital Elevation Models (DEMs) - USGS
+        National Map 3DEP Downloadable Data Collection (1 m) [us1aa … us1ma
+        (33 parts)]. Licence: Public Domain (U.S. Government Work).
+      - U.S. Geological Survey: 1/3rd arc-second Digital Elevation Models
+        (DEMs) - USGS National Map 3DEP Downloadable Data Collection (10 m)
+        [usgs3dep13]. Licence: Public Domain (U.S. Government Work).
+    Japan is not read from Mapterhorn: its Geospatial Information Authority
+    of Japan (GSI) DEMs (jpdem1a, jpdem5a-c, jpdem10a-b) are used there
+    "under Survey Act approval R 8JHs 131", an approval granted to
+    Mapterhorn, and it is not clear that a further derived copy (Skyward's
+    cache) is covered. Tiles touching Japan use Terrain Tiles instead.
+    Where Mapterhorn is off (SKYWARD_NO_MAPTERHORN=1) or has no tile, the
+    Terrain Tiles, Copernicus DEM and Environment Agency sources listed in
+    this section are used as before.
   * Buildings where OpenStreetMap has none (src/overture/, desktop version;
     read at run time from the Overture Maps Foundation buildings PMTiles
     archive, reduced footprints cached under cache/overture/, not

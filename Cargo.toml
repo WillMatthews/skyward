@@ -30,7 +30,8 @@ skyward-net = { path = "crates/skyward-net" }
 # hot-plug; Linux evdev, Windows WGI, macOS IOKit, web Gamepad API.
 gilrs = { version = "0.11.2", default-features = false, features = ["wgi"] }
 glam = "0.34.3"
-image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+# webp: Mapterhorn terrain tiles (src/dem/mapterhorn.rs), pure Rust (image-webp), wasm too.
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
 # JSBSim FDM aerodynamics (src/jsbsim.rs).
 roxmltree = "0.20"
 serde_json = "1.0.154"

@@ -1,14 +1,19 @@
 //! Terrain elevation: DEM tiles, per-tile height grids, conforming drape of
 //! the flat map layers, airport flattening.
 //!
-//! **Data**: AWS Terrain Tiles (Mapzen / Tilezen "joerd"), Terrarium PNG
-//! encoding (`h = R·256 + G + B/256 − 32768` m), fetched from
+//! **Data**: Mapterhorn ([`crate::dem::mapterhorn`]: 512² Terrarium WebP,
+//! GLO-30 plus national LIDAR DTMs) at every level, both builds; each 256²
+//! DEM tile here is a quadrant of its 512² tile one zoom up. Where Mapterhorn
+//! does not serve a tile (off, Japan, no tile, failure): AWS Terrain Tiles
+//! (Mapzen / Tilezen "joerd"), Terrarium PNG encoding
+//! (`h = R·256 + G + B/256 − 32768` m), fetched from
 //! `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png`
 //! and cached under `cache/terrain/` (pruned to [`CACHE_LIMIT`]). Sources:
 //! SRTM, GMTED2010, 3DEP (USGS), ETOPO1 (NOAA), EU-DEM (Copernicus), UK
 //! Environment Agency LIDAR, and others — see the README credits. On native
-//! builds the detail-zoom tiles are refined by [`crate::dem`]'s sources
-//! (Copernicus DEM GLO-30) as they load, before anything samples them.
+//! builds those Terrain Tiles detail-zoom tiles are refined by
+//! [`crate::dem`]'s sources (Copernicus DEM GLO-30, EA LIDAR) as they load,
+//! before anything samples them.
 //!
 //! **Surfaces** (one per level of detail, each a regular grid over a map
 //! tile, every cell split along the same diagonal):
@@ -108,10 +113,21 @@ fn decode(bytes: &[u8]) -> Result<DemTile, String> {
     Ok(DemTile { h })
 }
 
-/// A DEM tile: Terrain Tiles, then (detail zoom, native) refined by the
-/// detail sources ([`crate::dem`]: Copernicus GLO-30, ...).
+/// A DEM tile from Mapterhorn's heights (a quadrant of its 512² tile).
+fn mapterhorn_tile(mut h: Vec<f32>) -> DemTile {
+    h.iter_mut().for_each(|v| *v = v.max(FLOOR));
+    DemTile { h }
+}
+
+/// A DEM tile: Mapterhorn ([`crate::dem::mapterhorn`]) where it serves it —
+/// as is: it already carries the finest data the detail sources would add —
+/// otherwise Terrain Tiles, then (detail zoom, native) refined by the detail
+/// sources ([`crate::dem`]: Copernicus GLO-30, EA LIDAR).
 #[cfg(not(target_arch = "wasm32"))]
 fn load(z: u32, x: u32, y: u32) -> Result<DemTile, String> {
+    if let Some(h) = crate::dem::mapterhorn::tile256(z, x, y) {
+        return Ok(mapterhorn_tile(h));
+    }
     let mut t = load_terrarium(z, x, y)?;
     if z == DEM_NEAR && !*FLAT && crate::dem::active() {
         let base = std::mem::take(&mut t.h);
@@ -362,7 +378,11 @@ pub mod web {
         });
     }
 
+    /// Mapterhorn where it serves the tile, otherwise Terrain Tiles.
     async fn load((z, x, y): Key) -> Result<DemTile, String> {
+        if let Some(h) = crate::dem::mapterhorn::tile256(z, x, y).await {
+            return Ok(mapterhorn_tile(h));
+        }
         let url = format!("{URL}/{z}/{x}/{y}.png");
         let r = crate::platform::web::fetch_cached(&url, Duration::from_secs(25)).await?;
         match r.status {
