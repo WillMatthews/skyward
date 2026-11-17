@@ -9,13 +9,15 @@ struct AcInst {
     emis: vec4<f32>,      // emission (scene radiance units), w = interior flag
     params: vec4<f32>,    // x = f0 (specular), y = roughness, z = mode (0 opaque, 1 cut-out, 2 translucent, 3 glass display), w = textured (display: luminance)
     uvm: vec4<f32>,       // UV transform 2x2 (column-major): drum counters, attitude balls, display windows
-    uvo: vec4<f32>,       // UV offset (xy)
+    uvo: vec4<f32>,       // UV offset (xy), z = exterior glass seen from the cockpit
 };
 
 @group(1) @binding(0) var<storage, read> ac_inst: array<AcInst>;
 @group(1) @binding(1) var<storage, read> ac_dyn: AcDyn;
 @group(2) @binding(0) var ac_tex: texture_2d<f32>;
 @group(2) @binding(1) var ac_samp: sampler;
+// Late glass pass only (gfx_aircraft.rs `draw_glass`): the scene's eye distance.
+@group(3) @binding(0) var ac_scene_dist: texture_2d<f32>;
 
 struct AcIn {
     @location(0) pos: vec3<f32>,
@@ -51,6 +53,22 @@ fn vs_aircraft(v: AcIn, @builtin(instance_index) ii: u32) -> AcOut {
 
 @fragment
 fn fs_aircraft(in: AcOut) -> FOut {
+    return shade_aircraft(in);
+}
+
+// The player's glass over the finished scene (clouds, fog, effects, rain):
+// hidden where the scene has something nearer (the canopy frame, the panel,
+// the aircraft itself). No depth buffer here: the eye distance stands in.
+@fragment
+fn fs_aircraft_glass(in: AcOut) -> FOut {
+    let behind = textureLoad(ac_scene_dist, vec2<i32>(in.clip.xy), 0).x;
+    if (length(in.wpos) > behind * 1.002 + 0.004) {
+        discard;
+    }
+    return shade_aircraft(in);
+}
+
+fn shade_aircraft(in: AcOut) -> FOut {
     let inst = ac_inst[in.inst];
     let tex = textureSample(ac_tex, ac_samp, in.uv);
     let rel = in.wpos;
@@ -107,12 +125,23 @@ fn fs_aircraft(in: AcOut) -> FOut {
         s.f0 = mix(s.f0, vec3<f32>(0.02), m);
         s.rough = mix(s.rough, 0.75, m);
     }
+    // The cockpit / cabin is not lit by the aircraft's own exterior lights.
+    s.own_lit = select(1.0, 0.0, inst.emis.w > 0.5);
     // Cockpit backlighting lights the painted markings, not the black panel.
     s.emit = select(inst.emis.rgb, inst.emis.rgb * albedo, inst.emis.w > 0.5);
     s.alpha = select(1.0, alpha, mode > 0.5);
     if (mode > 1.5) {
         // Glass: mostly reflection, little body colour.
         s.albedo *= alpha;
+        if (inst.uvo.z > 0.5) {
+            // Canopy / windows from the cockpit: the inside reflects the dim
+            // cabin, not the sky, and perspex / glass passes ~90 % of the
+            // light (the models' opacities are set for the outside view).
+            // Nor do the aircraft's own landing / taxi lights light it from inside.
+            s.env = 0.08;
+            s.alpha = min(alpha, 0.5) * 0.25;
+            s.own_lit = 0.0;
+        }
     }
     let col = light(s, rel, V, dist, px, ngeo);
     var o: FOut;

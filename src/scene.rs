@@ -1005,7 +1005,7 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
                 flat.mat = mat::ROAD;
                 flat.strip_road(&l.pts, width, col, l.cut);
                 if let Kind::Road { width, major } = l.kind {
-                    lights.road(&l.pts, width, major);
+                    lights.road(&l.pts, width, major, |q| aero.on_apron(q));
                 }
             }
             rx_mask.stroke(&l.pts, width + 3.0, &mut mask_set);
@@ -1085,8 +1085,39 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
         }
     }
     let mut aero_blds = Vec::new();
+    // Building materials (buildmat.rs): region of the tile, landuse lookup.
+    let textured = crate::buildmat::enabled();
+    let region = {
+        let (lat, lon) = proj.to_latlon((lo + hi) * 0.5);
+        crate::buildmat::Region::at(lat, lon)
+    };
+    let urban: Vec<&Area> = if textured { sel(&f, |k| matches!(k, Kind::Urban(_))).collect() } else { Vec::new() };
+    let mut ugrid = Grid::new(lo, hi, 16);
+    for (i, u) in urban.iter().enumerate() {
+        let (ulo, uhi) = bbox(&u.outer);
+        ugrid.insert(ulo, uhi, i as u32);
+    }
+    let landuse_at = |p: Vec2| -> Option<u8> {
+        ugrid.at(p).iter().map(|&i| urban[i as usize]).find(|u| point_in_ring(p, &u.outer) && !u.holes.iter().any(|h| point_in_ring(p, h))).and_then(|u| match u.kind {
+            Kind::Urban(c) => Some(c),
+            _ => None,
+        })
+    };
     for (a, &base) in blds.iter().zip(&bases) {
-        let Kind::Building { height, min_height, colour } = a.kind else { continue };
+        let Kind::Building { height, min_height, colour, tags } = a.kind else { continue };
+        let style = textured.then(|| {
+            let c = a.outer.iter().copied().sum::<Vec2>() / a.outer.len() as f32;
+            crate::buildmat::select(&crate::buildmat::Input {
+                height,
+                area: ring_area(&a.outer).abs(),
+                colour,
+                tags,
+                landuse: landuse_at(c),
+                region,
+                key: a.key,
+                can_pitch: pitched_plan(a, height, min_height).is_some(),
+            })
+        });
         let v0 = bld.verts.len();
         let class = if aero.is_empty() { None } else { aero.classify(a, height) };
         match class {
@@ -1096,7 +1127,7 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
                 lights.extend_raised(&ls, base);
                 aero_blds.push(crate::airport::tile::AeroBuilding { outer: a.outer.clone(), class: c.code(), height, base });
             }
-            None => building(&mut bld, a, height, min_height, colour),
+            None => building(&mut bld, a, height, min_height, colour, style.as_ref()),
         }
         for v in &mut bld.verts[v0..] {
             v.pos[1] = if min_height <= 0.5 && v.pos[1] <= 1e-3 { base - FOUNDATION } else { v.pos[1] + base };
@@ -1433,7 +1464,11 @@ fn pitched_plan(a: &Area, height: f32, min_h: f32) -> Option<([Vec2; 4], f32, bo
     Some((q, rise, (h >> 16) % 3 == 0))
 }
 
-pub(crate) fn building(m: &mut MeshData, a: &Area, height: f32, min_h: f32, colour: Option<[f32; 3]>) {
+/// One extruded building. `style` (buildmat.rs) selects the textured facade
+/// and roof materials; `None` = the untextured look (airport buildings,
+/// `SKYWARD_BUILDING_TEX=0`).
+pub(crate) fn building(m: &mut MeshData, a: &Area, height: f32, min_h: f32, colour: Option<[f32; 3]>, style: Option<&crate::buildmat::Style>) {
+    use crate::buildmat::mat_with;
     let col = match colour {
         // OSM colours are often garish; pull them toward a neutral facade.
         Some(c) => {
@@ -1443,15 +1478,29 @@ pub(crate) fn building(m: &mut MeshData, a: &Area, height: f32, min_h: f32, colo
         }
         None => building_colour(a.key, height),
     };
-    let base_col = [col[0] * 0.9, col[1] * 0.9, col[2] * 0.9];
-    let roof = [col[0] * 0.78, col[1] * 0.78, col[2] * 0.80];
-    let pitched = pitched_plan(a, height, min_h);
+    let (col, base_col, roof) = match style {
+        // Curtain walls keep their glass tint (glass_surface).
+        Some(st) if st.wall.is_none() => {
+            let c = if colour.is_some() { col } else { building_colour(a.key, 100.0) };
+            (c, [c[0] * 0.9, c[1] * 0.9, c[2] * 0.9], st.roof_tint)
+        }
+        Some(st) => (st.wall_tint, st.wall_tint, st.roof_tint),
+        None => (col, [col[0] * 0.9, col[1] * 0.9, col[2] * 0.9], [col[0] * 0.78, col[1] * 0.78, col[2] * 0.80]),
+    };
+    let pitched = pitched_plan(a, height, min_h).filter(|_| style.is_none_or(|s| s.pitched));
     let eaves = pitched.map_or(height, |(_, rise, _)| height - rise);
-    m.mat = if height > 45.0 { mat::GLASS } else { mat::WALL };
+    let wall_mat = match style {
+        Some(st) if st.wall.is_some() => mat_with(mat::WALL, st.code_wall()),
+        Some(_) => mat::GLASS,
+        None if height > 45.0 => mat::GLASS,
+        None => mat::WALL,
+    };
+    let roof_mat = style.map_or(mat::ROOF, |st| mat_with(mat::ROOF, st.code_roof()));
+    m.mat = wall_mat;
     // uv.x: per-building seed in 4096 m blocks (facade style) + window phase.
     let hk = hash(a.key);
     // Seed parity: odd = ground-floor shopfronts (larger, taller buildings only).
-    let shop = height >= 8.5 && ring_area(&a.outer).abs() > 120.0 && (hk >> 20) % 100 < 45;
+    let shop = height >= 8.5 && ring_area(&a.outer).abs() > 120.0 && (hk >> 20) % 100 < 45 && style.is_none_or(|s| s.shops);
     let seed = (hk % 30) * 2 + shop as u64;
     let mut u = seed as f32 * 4096.0 + ((hk >> 12) % 97) as f32;
     let rings = std::iter::once((&a.outer, &a.border, false)).chain(a.holes.iter().zip(&a.hole_border).map(|(h, b)| (h, b, true)));
@@ -1519,15 +1568,22 @@ pub(crate) fn building(m: &mut MeshData, a: &Area, height: f32, min_h: f32, colo
             let o = |v: Vec2| v + (v - c).normalize_or_zero() * 0.35;
             let (q0, q1, q2, q3) = (o(q[0]), o(q[1]), o(q[2]), o(q[3]));
             let low = low - 0.25;
-            m.mat = mat::ROOF;
+            m.mat = roof_mat;
+            let rc = if style.is_some() { roof } else { rc };
+            let textured = style.is_some();
             let face = |m: &mut MeshData, pts: &[Vec3]| {
                 let mut nrm = (pts[1] - pts[0]).cross(pts[2] - pts[0]).normalize_or_zero();
                 if nrm.y < 0.0 {
                     nrm = -nrm;
                 }
+                // Textured: uv = metres (along the eaves, up the slope).
+                let down = vec2(nrm.x, nrm.z).normalize_or_zero();
+                let along = vec2(down.y, -down.x);
                 let base = m.verts.len() as u32;
                 for p in pts {
-                    m.v(*p, nrm, rc);
+                    let d = vec2(p.x, p.z) - c;
+                    let uv = if textured { [d.dot(along), -d.dot(down) / nrm.y.max(0.2)] } else { [0.0, 0.0] };
+                    m.v_uv(*p, nrm, rc, uv);
                 }
                 m.idx.extend([base, base + 1, base + 2]);
                 if pts.len() == 4 {
@@ -1541,7 +1597,7 @@ pub(crate) fn building(m: &mut MeshData, a: &Area, height: f32, min_h: f32, colo
                 face(m, &[p3(q3, low), p3(q0, low), p3(r0, top)]);
             } else {
                 // Gable walls.
-                m.mat = mat::WALL;
+                m.mat = if wall_mat == mat::GLASS { mat::WALL } else { wall_mat };
                 for (a2, b2, r) in [(q[1], q[2], r1), (q[3], q[0], r0)] {
                     let e = b2 - a2;
                     let mut nrm = vec3(e.y, 0.0, -e.x).normalize_or_zero();
@@ -1557,8 +1613,16 @@ pub(crate) fn building(m: &mut MeshData, a: &Area, height: f32, min_h: f32, colo
             }
         }
         None => {
-            m.mat = mat::ROOF;
+            m.mat = roof_mat;
+            let v0 = m.verts.len();
             m.flat_poly(&a.outer, &a.holes, height, Vec3::Y, roof);
+            if style.is_some() {
+                // Textured: uv = metres from the footprint's first corner.
+                let o = a.outer[0];
+                for v in &mut m.verts[v0..] {
+                    v.uv = [v.pos[0] - o.x, v.pos[2] - o.y];
+                }
+            }
         }
     }
     if min_h > 0.5 {

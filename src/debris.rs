@@ -188,8 +188,28 @@ pub enum Fx {
     Separation { pos: Vec3, vel: Vec3, mass: f32 },
 }
 
+/// A mark on the ground: burnt fuel (a scorch), drawn as a ground-hugging
+/// polygon around `centre` (world points, already on the terrain).
+#[derive(Clone, Debug)]
+pub struct Mark {
+    pub centre: Vec3,
+    pub ring: Vec<Vec3>,
+    pub col: [f32; 3],
+}
+
+/// A gouge / scrape track left by a sliding airframe: points on the ground
+/// with a half-width, darker on soil than on pavement.
+#[derive(Clone, Debug, Default)]
+pub struct Track {
+    pub pts: Vec<(Vec3, f32)>,
+    pub paved: bool,
+}
+
 pub struct Debris {
     pub bodies: Vec<Body>,
+    /// Scorches and slide tracks on the ground.
+    pub marks: Vec<Mark>,
+    pub tracks: Vec<Track>,
     /// The main wreck (fuselage) once the aircraft has crashed.
     pub main: Option<usize>,
     pub fires: Vec<Fire>,
@@ -223,6 +243,8 @@ impl Debris {
         let sd = *crate::damage::struct_def(def.id);
         Debris {
             bodies: Vec::new(),
+            marks: Vec::new(),
+            tracks: Vec::new(),
             main: None,
             fires: Vec::new(),
             severity: None,
@@ -250,6 +272,17 @@ impl Debris {
         }
         for f in &mut self.fires {
             f.pos += delta;
+        }
+        for m in &mut self.marks {
+            m.centre += delta;
+            for p in &mut m.ring {
+                *p += delta;
+            }
+        }
+        for t in &mut self.tracks {
+            for p in &mut t.pts {
+                p.0 += delta;
+            }
         }
         if let Some(p) = &mut self.crash_at {
             *p += delta;
@@ -548,6 +581,9 @@ impl Debris {
                 let ground = env.ground_height(Vec2::new(main_pos.x, main_pos.z));
                 let at = Vec3::new(main_pos.x, ground, main_pos.z) + imp.vel.with_y(0.0).normalize_or_zero() * radius * 0.6;
                 self.add_fire(None, at, Vec3::ZERO, fuel_total * 0.35, 3.0 + 10.0 * e);
+                // The burnt ground where the fuel went up.
+                self.add_scorch(at, (3.0 + 10.0 * e) * 1.6, env);
+                self.add_scorch(main_pos, radius * 0.5, env);
                 let n = self.bodies.len();
                 for i in 0..n {
                     let f = self.bodies[i].fuel;
@@ -564,6 +600,72 @@ impl Debris {
         }
         for b in &mut self.bodies {
             b.smoking = violent;
+        }
+    }
+
+    /// A scorch mark of radius `r` at `at` (on land).
+    pub fn add_scorch(&mut self, at: Vec3, r: f32, env: &dyn Environment) {
+        if self.marks.len() >= 6 || r.is_nan() || r <= 0.5 {
+            return;
+        }
+        let n = 20;
+        let mut ring = Vec::with_capacity(n);
+        for k in 0..n {
+            let a = k as f32 / n as f32 * std::f32::consts::TAU;
+            // Ragged edge: splashed fuel.
+            let rr = r * (0.7 + 0.5 * self.rnd());
+            let xz = Vec2::new(at.x + a.cos() * rr, at.z + a.sin() * rr);
+            ring.push(Vec3::new(xz.x, env.ground_height(xz) + 0.06, xz.y));
+        }
+        let c = Vec2::new(at.x, at.z);
+        self.marks.push(Mark { centre: Vec3::new(c.x, env.ground_height(c) + 0.07, c.y), ring, col: [0.025, 0.022, 0.02] });
+    }
+
+    /// The airframe slid over `p` (on the ground) with half-width `half`.
+    pub fn track(&mut self, p: Vec3, half: f32, paved: bool) {
+        let p = p + Vec3::Y * 0.05;
+        let new = match self.tracks.last() {
+            Some(t) => t.paved != paved || t.pts.last().is_none_or(|q| q.0.distance(p) > 30.0),
+            None => true,
+        };
+        if new {
+            if self.tracks.len() >= 16 {
+                return;
+            }
+            self.tracks.push(Track { pts: Vec::new(), paved });
+        }
+        let t = self.tracks.last_mut().unwrap();
+        if t.pts.last().is_none_or(|q| q.0.distance(p) > 2.0) && t.pts.len() < 600 {
+            t.pts.push((p, half.clamp(0.2, 3.0)));
+        }
+    }
+
+    /// Scorches and slide tracks, eye-relative (sim.rs frame).
+    pub fn marks_mesh(&self, out: &mut crate::scene::MeshData, eye: Vec3) {
+        out.mat = crate::scene::mat::DIFFUSE;
+        let up = Vec3::Y;
+        let tri = |out: &mut crate::scene::MeshData, a: Vec3, b: Vec3, c: Vec3, col: [f32; 3]| {
+            let (i, j, k) = (out.v(a - eye, up, col), out.v(b - eye, up, col), out.v(c - eye, up, col));
+            // (Both windings: seen from above whatever the culling.)
+            out.idx.extend_from_slice(&[i, j, k, i, k, j]);
+        };
+        for m in &self.marks {
+            let n = m.ring.len();
+            for k in 0..n {
+                tri(out, m.centre, m.ring[k], m.ring[(k + 1) % n], m.col);
+            }
+        }
+        for t in &self.tracks {
+            let col = if t.paved { [0.07, 0.07, 0.07] } else { [0.08, 0.06, 0.04] };
+            for w in t.pts.windows(2) {
+                let (a, b) = (w[0], w[1]);
+                let d = (b.0 - a.0).with_y(0.0).normalize_or_zero();
+                let side = Vec3::new(-d.z, 0.0, d.x);
+                let (a0, a1) = (a.0 - side * a.1, a.0 + side * a.1);
+                let (b0, b1) = (b.0 - side * b.1, b.0 + side * b.1);
+                tri(out, a0, a1, b1, col);
+                tri(out, a0, b1, b0, col);
+            }
         }
     }
 
@@ -785,11 +887,17 @@ impl Debris {
                 self.audio.push(Event::Impact { pos: hit_pos, speed: max_hit, mass, surface: hit_surface });
                 self.fx.push(Fx::Impact { pos: hit_pos, vel, speed: max_hit, mass, surface: hit_surface });
             }
-            let b = &mut self.bodies[bi];
             if slide > 1.0 && (contact || in_water) {
+                let (bvel, half) = (self.bodies[bi].vel, self.bodies[bi].half);
                 self.audio.push(Event::Scrape { id, pos: slide_at, speed: slide, mass, surface });
-                self.fx.push(Fx::Slide { pos: slide_at, vel: b.vel, speed: slide, mass, surface });
+                self.fx.push(Fx::Slide { pos: slide_at, vel: bvel, speed: slide, mass, surface });
+                // The main wreck ploughs / scrapes a track.
+                if contact && !in_water && Some(bi) == self.main {
+                    let at = Vec3::new(slide_at.x, env.ground_height(Vec2::new(slide_at.x, slide_at.z)), slide_at.z);
+                    self.track(at, half.x.min(half.z) * 0.4, surface == Surface::Paved);
+                }
             }
+            let b = &mut self.bodies[bi];
             // Asleep once it has stopped (not while sinking).
             if (contact || (in_water && b.flooded >= 1.0)) && b.vel.length() < 0.12 && b.omega.length() < 0.1 {
                 b.still += dt;
@@ -941,7 +1049,7 @@ mod tests {
         let geom = PartGeom::estimate(&def, sd);
         let mut d = Debris::new(&def, geom);
         let rot = crate::flight::attitude(0.0, pitch, 0.0);
-        let imp = Impact { pos: Vec3::new(0.0, def.gear_height * 0.5, 0.0), vel, rot, omega: Vec3::ZERO, on_ground: true };
+        let imp = Impact { pos: Vec3::new(0.0, def.gear_height * 0.5, 0.0), vel, rot, omega: Vec3::ZERO, on_ground: true, alpha: 0.0 };
         let attached: u16 = if sev == Severity::Minor { !(1 << 15) & !crate::damage::GEAR_BITS } else { !(1 << 15) };
         d.crash(&imp, "test", sev, attached, 0.0, env);
         let paved = |_: Vec2| true;

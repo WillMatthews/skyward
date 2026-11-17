@@ -1,0 +1,9 @@
+"ferry": 1 nodes (0 animated out of 1), 9 materials, 0 textures (0.0 MB), 9 chunks
+triangles: exterior 2454, interior 0; vertices 6251; model.skac 0.0 MB; radius 44.8 m
+eye: None
+lights: 0
+channels used: 
+texture-animated chunks: 0; display screens: 0
+animation types: [("range", 1)]
+unmapped properties (count):
+log:

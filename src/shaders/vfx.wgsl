@@ -52,10 +52,10 @@ const K_SPARK: f32 = 4.0;
 const K_STEAM: f32 = 5.0;
 const K_TRAIL: f32 = 10.0;
 const K_SMOKETRAIL: f32 = 11.0;
-const K_DIAMONDS: f32 = 13.0;
+const K_PLUME: f32 = 13.0;
 const K_HAZE: f32 = 14.0;
 const K_VORTEX: f32 = 15.0;
-// Emission units of sparks / diamonds → scene radiance (≈ cd/m² × LUX).
+// Emission units of sparks / afterburner plumes → scene radiance (≈ cd/m² × LUX).
 const E_SCALE: f32 = 0.06;
 // Fire light colour (≈ 1600 K blackbody), luminance 1 (== sim.rs fire lights).
 const FIRE_RGB: vec3<f32> = vec3<f32>(2.4, 0.66, 0.1);
@@ -454,6 +454,11 @@ fn vs_mesh(v: MIn) -> VO {
     o.size = max(v.uv.w, 0.5);
     o.aux = v.aux;
     o.light = vec4<f32>(1.0, 0.0, 0.0, 1.0);
+    if (kind == K_PLUME) {
+        // Plume box: uv.xyz = nozzle, w = reheat; aux = axis × radius, cell length.
+        o.centre = v.uv.xyz + V.off.xyz;
+        o.col = vec4<f32>(v.uv.w, 0.0, 0.0, 0.0);
+    }
     if (kind == K_HAZE) {
         o.direct = vec3<f32>(0.0);
         o.ambient = vec3<f32>(0.0);
@@ -469,6 +474,132 @@ fn vs_mesh(v: MIn) -> VO {
     return o;
 }
 
+// ---------------------------------------------------------------- afterburner plumes
+
+// Visible plume length (m; == vfx/mod.rs `plume_len`).
+fn plume_len(rn: f32, ls: f32, ab: f32) -> f32 {
+    return rn * (3.0 + 6.0 * ab) + ls * (1.0 + 2.5 * ab);
+}
+
+// Emission (per metre, unitless × E_SCALE) of the plume at `x` metres
+// downstream of the nozzle and `r` from its axis: a hot core that fills the
+// nozzle and cools quickly, a wider tongue of flame that closes towards its
+// tip, and soft ellipsoidal shock diamonds that shrink and fade downstream.
+// Everything is Gaussian across the jet and goes smoothly to zero at both
+// ends, so the integral along any ray has no edge.
+fn plume_emit(x: f32, r: f32, rn: f32, ls: f32, len: f32, ab: f32, t: f32) -> vec3<f32> {
+    let xn = x / len;
+    if (xn <= -0.1 || xn >= 1.0) {
+        return vec3<f32>(0.0);
+    }
+    let xr = x / rn;
+    let start = smoothstep(-0.35, 0.5, xr);
+    let tip = 1.0 - smoothstep(0.35, 1.0, xn);
+    // Core: as wide as the nozzle, narrowing and cooling in a few radii.
+    let sc = rn * mix(0.62, 0.3, smoothstep(0.0, 0.5, xn));
+    let core = exp(-xr * 0.28) * exp(-(r * r) / (sc * sc)) * start;
+    // Tongue: the mixing layer, a little wider than the nozzle, closing
+    // to a point; turbulent flicker drifting downstream.
+    let se = rn * (0.75 + 0.25 * xn) * sqrt(max(1.0 - xn * xn, 0.02));
+    let flick = 0.8 + 0.4 * noise2(vec2<f32>(x * 1.7 - t * 31.0, r * 3.0 + t * 3.0));
+    let tongue = exp(-(r * r) / (se * se)) * tip * start * flick * (1.0 - 0.5 * xn);
+    // Shock cells: soft bright ellipsoids, the first ~0.8 cell downstream.
+    let cf = x / ls - 0.8;
+    let ci = floor(cf + 0.5);
+    let dc = (cf - ci) / 0.2;
+    let sd = rn * 0.38 * exp(-max(ci, 0.0) * 0.12);
+    let fade = exp(-max(ci, 0.0) / (0.7 + 1.2 * ab)) * step(-0.5, cf) * tip;
+    let dia = exp(-dc * dc - (r * r) / (sd * sd)) * fade;
+    let c_core = mix(vec3<f32>(0.78, 0.86, 1.0), vec3<f32>(1.0, 0.7, 0.38), smoothstep(0.0, 4.0, xr));
+    let c_tongue = mix(vec3<f32>(1.0, 0.5, 0.2), vec3<f32>(0.95, 0.36, 0.32), smoothstep(0.2, 0.9, xn));
+    let c_dia = mix(vec3<f32>(0.8, 0.86, 1.0), vec3<f32>(1.0, 0.78, 0.6), smoothstep(0.0, 4.0, ci));
+    return c_core * core * 12.0 + c_tongue * tongue * 0.9 + c_dia * dia * 16.0;
+}
+
+// The plume's box: march the view ray through the jet (only on the box's far
+// side, one fragment per pixel), stopping at the scene (the aircraft hides
+// the part of the jet behind it), added on top (emission only).
+fn plume(in: VO) -> vec4<f32> {
+    let ab = clamp(in.col.x, 0.0, 1.0);
+    let rn = max(length(in.aux.xyz), 0.05);
+    let ax = in.aux.xyz / rn;
+    let ls = max(in.aux.w, 0.2);
+    let len = plume_len(rn, ls, ab);
+    let rb = rn * 2.0; // == vfx/mod.rs PLUME_RB
+    let d = length(in.rel);
+    let dw = in.rel / max(d, 1e-4);
+    // Eye and ray in the jet's frame (x along the axis from the nozzle).
+    let o = -in.centre;
+    let ox = dot(o, ax);
+    let dx = dot(dw, ax);
+    let op = o - ax * ox;
+    let dp = dw - ax * dx;
+    // Ray / cylinder of radius rb, between the slabs at the box's ends.
+    let qa = dot(dp, dp);
+    let qb = dot(op, dp);
+    let qc = dot(op, op) - rb * rb;
+    var t0 = -1e9;
+    var t1 = 1e9;
+    if (qa > 1e-8) {
+        let disc = qb * qb - qa * qc;
+        if (disc <= 0.0) {
+            discard;
+        }
+        let sq = sqrt(disc);
+        t0 = (-qb - sq) / qa;
+        t1 = (-qb + sq) / qa;
+    } else if (qc > 0.0) {
+        discard;
+    }
+    let x0 = -0.4 * rn;
+    let x1 = len * 1.02;
+    if (abs(dx) > 1e-6) {
+        let ta = (x0 - ox) / dx;
+        let tb = (x1 - ox) / dx;
+        t0 = max(t0, min(ta, tb));
+        t1 = min(t1, max(ta, tb));
+    } else if (ox < x0 || ox > x1) {
+        discard;
+    }
+    // Only the far side of the box shades.
+    if (t1 <= max(t0, 0.0) || d < 0.5 * (max(t0, 0.0) + t1)) {
+        discard;
+    }
+    let px = in.clip.xy;
+    let scene = textureLoad(dist_tex, vec2<i32>(px), 0).x;
+    let s0 = max(t0, 0.05);
+    let s1 = min(t1, scene);
+    if (s1 <= s0) {
+        discard;
+    }
+    let t = V.off.w;
+    let n = max(i32(28.0 * V.misc.z), 12);
+    let dt = (s1 - s0) / f32(n);
+    let jit = fract(52.9829189 * fract(dot(px, vec2<f32>(0.06711056, 0.00583715))));
+    var e = vec3<f32>(0.0);
+    for (var i = 0; i < n; i++) {
+        let s = s0 + (f32(i) + jit) * dt;
+        let x = ox + dx * s;
+        let r = length(op + dp * s);
+        e += plume_emit(x, r, rn, ls, len, ab, t);
+    }
+    e *= dt;
+    // (Pre-exposure ^0.55, not ^1: a flame hardly dimmer than the sky by day
+    // would blow the eye's night adaptation out; this keeps it vivid by day
+    // and bright, not blinding, at night.)
+    var rad = e * ((0.35 + 0.65 * ab) * E_SCALE * 4.5 * pow(g.pre.x, 0.55));
+    // Logarithmic above ~white (not `highlight`'s hard knee): at night the
+    // core, the diamonds and the cooler tongue keep their contrast instead
+    // of merging into one white tube, and it never feeds the glare much.
+    let v = dot(rad, vec3<f32>(0.2126, 0.7152, 0.0722)) * atmos.expo.x;
+    let kn = 0.7;
+    if (v > kn) {
+        rad *= min(kn * (1.0 + log(v / kn)), 3.5) / v;
+    }
+    rad *= in.fog.a * in.cloud;
+    return vec4<f32>(rad, 0.0);
+}
+
 @fragment
 fn fs_mesh(in: VO) -> @location(0) vec4<f32> {
     let px = in.clip.xy;
@@ -477,33 +608,8 @@ fn fs_mesh(in: VO) -> @location(0) vec4<f32> {
     let inten = in.col.x;
     let t = V.off.w;
     let v = in.uv.y;
-    if (kind == K_DIAMONDS) {
-        // Afterburner plume with shock diamonds. x = metres from the nozzle,
-        // v = across the plume (-1..1 of its local half-width), aux.w = cell
-        // length, aux.z = nozzle radius.
-        let x = in.uv.x;
-        let ls = max(in.aux.w, 0.2);
-        let rn = max(in.aux.z, 0.1);
-        let k = x / ls - 0.55;
-        let cellf = fract(k + 0.5) - 0.5;
-        let cell_i = floor(k + 0.5);
-        // Lateral extent in metres of this pixel, relative to the jet radius.
-        let lat = abs(v) * in.col.y / rn;
-        // Diamond: |dx| / (half cell) + lat / width <= 1; crisp edges.
-        let wdi = 0.62 * exp(-max(cell_i, 0.0) * 0.07);
-        let rh = abs(cellf) / 0.5 + lat / wdi;
-        let dia = smoothstep(1.0, 0.6, rh) * (0.4 + 0.6 * smoothstep(0.75, 0.0, rh));
-        // Mach disk: a thin bright bar across the jet at the cell's shock.
-        let disk = exp(-pow(cellf / 0.05, 2.0)) * smoothstep(0.6, 0.35, lat);
-        let decay = exp(-max(cell_i, 0.0) / (0.8 + 1.2 * inten)) * step(-0.5, k);
-        // Hot core / plume envelope (the model's flame carries the rest).
-        let env = exp(-lat * lat * 3.0) * exp(-x / (2.5 + 3.0 * inten)) * smoothstep(0.0, 0.3, x);
-        let hot = mix(vec3<f32>(0.72, 0.82, 1.0), vec3<f32>(1.0, 0.72, 0.42), smoothstep(0.0, 4.0, cell_i));
-        let e = hot * (dia * 14.0 + disk * 26.0) * decay + vec3<f32>(1.0, 0.42, 0.28) * env * 1.6;
-        let fl = 0.92 + 0.08 * noise2(vec2<f32>(x * 3.0 - t * 40.0, v * 2.0));
-        // (Tested from in front of the jet's axis: the flame mesh around it doesn't hide it.)
-        let rad = e * fl * E_SCALE * inten * g.pre.x * soft(px, d - 1.2 * rn, 0.3) * in.fog.a * in.cloud;
-        return vec4<f32>(rad, 0.0);
+    if (kind == K_PLUME) {
+        return plume(in);
     }
     var a = 0.0;
     var albedo = vec3<f32>(0.92);

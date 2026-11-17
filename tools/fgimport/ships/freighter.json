@@ -1,0 +1,22 @@
+{
+ "id": "freighter",
+ "name": "General cargo ship",
+ "fg_name": "ships",
+ "model": "Freighter.xml",
+ "fdm": {
+  "cg_model": [
+   0,
+   0,
+   0
+  ]
+ },
+ "props": {
+  "sim/time/sun-angle-rad": 0
+ },
+ "exclude_objects": [
+  "^(Wake|NavLights|DeckLights|.*Light.*|wavefront obj|F-light)$"
+ ],
+ "range_m": 100.0,
+ "max_tex": 1024,
+ "jpeg_quality": 80
+}

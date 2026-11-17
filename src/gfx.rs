@@ -5,6 +5,7 @@
 //! AgX tonemap. Every quality knob comes from [`quality::Quality`]
 //! ([`Renderer::set_quality`]). Works with a window surface or headless.
 
+pub mod buildtex;
 pub mod hdr_ui;
 pub mod perf;
 pub mod quality;
@@ -59,7 +60,13 @@ const SPLITS_BY_COUNT: [[f32; 5]; 3] = [[0.3, 200.0, 4000.0, 4000.0, 4000.0], [0
 /// Fraction of each cascade over which it blends into the next.
 const CASCADE_BLEND: f32 = 0.15;
 const BLOOM_LEVELS: usize = 6;
-const NEAR: f32 = 0.25;
+/// Near plane (m). Reverse-Z into a float depth buffer: depth precision is
+/// relative and doesn't depend on it, so it can sit well inside the head —
+/// the canopy, roof and side panels a few cm from the cockpit eye aren't
+/// clipped away when looking up or around.
+pub const NEAR: f32 = 0.03;
+/// Brightest exposed luminance that feeds the bloom at full night (post.wgsl glare_cap).
+const NIGHT_GLARE_CAP: f32 = 16.0;
 /// Bytes of immediate data (push constants) the pipelines declare: none —
 /// WebGPU has none, the per-draw transform is an [`Xforms`] uniform.
 const IMMEDIATE_SIZE: u32 = 0;
@@ -91,7 +98,9 @@ struct XfState {
 }
 
 impl Xforms {
-    pub fn new(device: &wgpu::Device) -> Xforms {
+    /// Group 1 of the scene pipelines: the per-tile transform, plus the
+    /// building texture arrays (fragment only, scene.wgsl `fs_bld`).
+    pub fn new(device: &wgpu::Device, bt: &buildtex::BuildingTextures) -> Xforms {
         let buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("xforms"),
             size: XF_STRIDE * XF_CAP,
@@ -100,17 +109,27 @@ impl Xforms {
         });
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("xform"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 15,
-                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: true, min_binding_size: wgpu::BufferSize::new(16) },
-                count: None,
-            }],
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 15,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: true, min_binding_size: wgpu::BufferSize::new(16) },
+                    count: None,
+                },
+                bt_tex(16),
+                bt_tex(17),
+                wgpu::BindGroupLayoutEntry { binding: 18, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
+            ],
         });
         let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("xform"),
             layout: &bgl,
-            entries: &[wgpu::BindGroupEntry { binding: 15, resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &buf, offset: 0, size: wgpu::BufferSize::new(16) }) }],
+            entries: &[
+                wgpu::BindGroupEntry { binding: 15, resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &buf, offset: 0, size: wgpu::BufferSize::new(16) }) },
+                wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&bt.albedo_view) },
+                wgpu::BindGroupEntry { binding: 17, resource: wgpu::BindingResource::TextureView(&bt.normal_view) },
+                wgpu::BindGroupEntry { binding: 18, resource: wgpu::BindingResource::Sampler(&bt.samp) },
+            ],
         });
         Xforms { buf, bgl, bg, st: Default::default() }
     }
@@ -237,7 +256,7 @@ const AO_STRENGTH: f32 = 1.4;
 struct PostU {
     params: [f32; 4],
     texel: [f32; 4],
-    /// Tonemap: x sharpen (CAS), y lens flare, z lens dirt, w chromatic aberration.
+    /// Tonemap: x sharpen (CAS), y unused, z lens dirt, w chromatic aberration.
     fx: [f32; 4],
     /// Tonemap: x film grain, y frame time (s), z brightness, w display gamma.
     fx2: [f32; 4],
@@ -341,6 +360,8 @@ pub struct FrameView {
     pub eye: Vec3,
     pub view: Mat4,
     pub fov_y: f32,
+    /// Near plane, m ([`NEAR`] but for a camera mounted inside its own props).
+    pub near: f32,
     pub time: f32,
     pub sun_dir: Vec3,
     /// Manual exposure multiplier on top of the metered exposure.
@@ -563,6 +584,7 @@ struct Bloom {
 pub struct Renderer {
     /// Per-draw transforms, shared with the light renderer.
     xforms: std::sync::Arc<Xforms>,
+    buildtex: buildtex::BuildingTextures,
     globals_bgl: wgpu::BindGroupLayout,
     post_bgl: wgpu::BindGroupLayout,
     sky_main: wgpu::RenderPipeline,
@@ -748,6 +770,16 @@ fn bgl_tex(binding: u32, dim: wgpu::TextureViewDimension) -> wgpu::BindGroupLayo
     }
 }
 
+/// A building texture array (fragment only: it counts toward no vertex stage).
+fn bt_tex(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2Array, multisampled: false },
+        count: None,
+    }
+}
+
 fn bgl_storage(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
@@ -767,7 +799,8 @@ impl Renderer {
         let core = include_str!("shaders/atmos_core.wgsl");
         let common = include_str!("shaders/common.wgsl");
         let scene_src = format!("{core}\n{common}\n{}", include_str!("shaders/scene.wgsl"));
-        let xforms = std::sync::Arc::new(Xforms::new(device));
+        let buildtex = buildtex::BuildingTextures::new(device, queue);
+        let xforms = std::sync::Arc::new(Xforms::new(device, &buildtex));
         let lights = crate::lights::LightRenderer::new(device, queue, &format!("{core}\n{common}"), xforms.clone());
         let scene_mod = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("scene"),
@@ -943,9 +976,9 @@ impl Renderer {
         let sky_main = scene_pipe("sky", "vs_sky", "fs_sky", false, C::Always, false, msaa());
         let flat_base = scene_pipe("flat base", "vs_main", "fs_main", true, C::GreaterEqual, true, msaa());
         let flat_over = scene_pipe("flat over", "vs_over", "fs_main", true, C::GreaterEqual, false, msaa());
-        let solid_main = scene_pipe("solid", "vs_main", "fs_main", true, C::GreaterEqual, true, msaa());
+        let solid_main = scene_pipe("solid", "vs_main", "fs_bld", true, C::GreaterEqual, true, msaa());
         let sky_refl = scene_pipe("sky refl", "vs_sky", "fs_sky", false, C::Always, false, 1);
-        let solid_refl = scene_pipe("solid refl", "vs_main", "fs_main", true, C::GreaterEqual, true, 1);
+        let solid_refl = scene_pipe("solid refl", "vs_main", "fs_bld", true, C::GreaterEqual, true, 1);
         let tree_main = scene_pipe("tree", "vs_tree", "fs_main", true, C::GreaterEqual, true, msaa());
         let tree_refl = scene_pipe("tree refl", "vs_tree", "fs_main", true, C::GreaterEqual, true, 1);
 
@@ -1106,6 +1139,7 @@ impl Renderer {
 
         Renderer {
             xforms,
+            buildtex,
             aircraft: crate::gfx_aircraft::AircraftRenderer::new(device, queue, &globals_bgl, &shadow_bgl, IMMEDIATE_SIZE),
             airport: crate::airport::gfx::AirportRenderer::new(device, queue, &globals_bgl, &shadow_bgl),
             airport_frame: None,
@@ -1635,7 +1669,7 @@ impl Renderer {
         let shadows = self.shadow_res as u64 * self.shadow_res as u64 * 4 * CASCADES as u64;
         // Cloud noise volumes, weather / shadow maps, atmosphere LUTs, light map (measured once).
         const FIXED: u64 = 96 << 20;
-        self.gpu_bytes() + targets + bloom + shadows + self.post.bytes() + FIXED
+        self.gpu_bytes() + targets + bloom + shadows + self.post.bytes() + self.buildtex.bytes() + FIXED
     }
 
     /// Render one frame into `out` (format must equal `output_format`) of
@@ -1729,7 +1763,7 @@ impl Renderer {
             t.xf = [(m.sx - 1.0) as f32, (m.tx - ex) as f32, (m.tz - ez) as f32, -ey as f32];
         }
         let aspect = width as f32 / height.max(1) as f32;
-        let proj = glam::camera::rh::proj::directx::perspective_infinite_reverse(fv.fov_y, aspect, NEAR);
+        let proj = glam::camera::rh::proj::directx::perspective_infinite_reverse(fv.fov_y, aspect, fv.near);
         // TAA: the scene is drawn with a sub-pixel jitter (Halton); culling,
         // clouds, reprojection and the previous frame stay unjittered.
         let taa_on = q.aa == quality::AaMode::Taa;
@@ -1749,6 +1783,7 @@ impl Renderer {
         let cover = field.sky_cover();
         let wx = self.wxr;
         self.bathy.update(queue);
+        self.buildtex.poll(queue);
         let haze = if wx.haze > 0.0 { wx.haze } else { haze_for(cover) };
         let fog = (wx.fog_ext, wx.fog_top * 0.001);
         // Night: moon, stars, the city's rhythm. The *key* light (direct light,
@@ -2470,6 +2505,8 @@ impl Renderer {
                 pass.draw(0..6, 0..3 * RAIN_PER_LAYER);
             }
         }
+        // The player's canopy / windows over all of that (gfx_aircraft.rs).
+        self.aircraft.draw_glass(device, encoder, &t.main_bg, &t.hdr, &t.dist);
         // Rain on the windscreen, wipers, misting, frost (cockpit view, wx/).
         if let Some(w) = fv.wx.as_deref() {
             self.wxg.glass(device, queue, encoder, w, vp_rot.inverse(), px_per_m, &t.hdr, &t.dist, (width, height));
@@ -2546,9 +2583,12 @@ impl Renderer {
         // 5. Bloom chain (at the post-processing size).
         let bloom = self.bloom.as_ref().unwrap();
         // Post uniforms: [0..L) down, [L..2L) up, 2L tonemap.
+        // Night: cap what feeds the glare (post.wgsl glare_cap), harder the
+        // darker it gets; none by day (the sun keeps its bloom).
+        let glare_cap = if night_k > 0.0 { NIGHT_GLARE_CAP / night_k } else { 0.0 };
         for i in 0..BLOOM_LEVELS {
             let (sw, sh) = if i == 0 { (post_w, post_h) } else { (bloom.levels[i - 1].1, bloom.levels[i - 1].2) };
-            let u = PostU { params: [0.0, 0.0, if i == 0 { 1.0 } else { 0.0 }, 0.0], texel: [1.0 / sw as f32, 1.0 / sh as f32, 0.0, 0.0], ..bytemuck::Zeroable::zeroed() };
+            let u = PostU { params: [0.0, 0.0, if i == 0 { 1.0 } else { 0.0 }, if i == 0 { glare_cap } else { 0.0 }], texel: [1.0 / sw as f32, 1.0 / sh as f32, 0.0, 0.0], ..bytemuck::Zeroable::zeroed() };
             queue.write_buffer(&self.post_buf, UNIFORM_STRIDE * i as u64, bytemuck::bytes_of(&u));
         }
         for (k, i) in (1..BLOOM_LEVELS).rev().enumerate() {
@@ -2566,7 +2606,7 @@ impl Renderer {
         let tone = PostU {
             params: [fv.exposure * 2f32.powf(v.exposure_ev), (0.04 + 0.035 * night_k) * q.bloom, 1.22, 1.18],
             texel: [1.0 / post_w as f32, 1.0 / post_h as f32, 1.0 / pre, 0.0],
-            fx: [sharpen, if q.lens_flare { 1.0 } else { 0.0 }, if q.lens_dirt { 1.0 } else { 0.0 }, q.chroma as f32],
+            fx: [sharpen, 0.0, if q.lens_dirt { 1.0 } else { 0.0 }, q.chroma as f32],
             fx2: [q.grain, fv.time, v.brightness, v.gamma],
             hdr: [if hdr_out { 1.0 } else { 0.0 }, v.paper_white / 80.0, 1000.0 / v.paper_white, 0.0],
         };
@@ -2597,7 +2637,7 @@ impl Renderer {
         };
         let clear = wgpu::LoadOp::Clear(wgpu::Color::BLACK);
         let src_view = self.post.view(src);
-        let bloom_on = q.bloom > 0.0 || q.lens_flare || q.lens_dirt;
+        let bloom_on = q.bloom > 0.0 || q.lens_dirt;
         if bloom_on {
             let down0 = self.post_bg(device, src_view, &self.dummy_refl);
             for i in 0..BLOOM_LEVELS {

@@ -362,6 +362,7 @@ pub fn credits(ui: &mut Ui, st: &mut UiState) {
         ("Navaids", "VOR / DME / NDB: OurAirports — public domain · ILS: FlightGear nav.dat (Robin A. Peel) — GPL-2.0-or-later; synthetic from the runway data where it has none"),
         ("ATC", "Frequencies: OurAirports — public domain · voices: Kokoro-82M (Apache-2.0), generated for Skyward"),
         ("Weather", WEATHER_CREDIT),
+        ("Crash-site addresses", "© OpenStreetMap contributors (ODbL), via Nominatim — one request per crash"),
         ("Live traffic", "ADS-B data: adsb.lol contributors — ODbL 1.0 (desktop version)"),
         ("Elevation", crate::dem::mapterhorn::CREDIT),
         ("Elevation fallback", "Terrain Tiles on AWS (Mapzen / Tilezen: SRTM, GMTED2010, 3DEP, ETOPO1, EU-DEM and more)"),

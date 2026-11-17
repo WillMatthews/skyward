@@ -522,9 +522,35 @@ fn finish(region: Region, got: &std::collections::HashMap<TileKey, Option<Arc<Gr
         h.1 = (!complete).then(|| Instant::now() + RETRY);
     }
     if any {
+        // A CPU copy for depth lookups (ships: draught vs depth, src/ships/).
+        DEPTH.lock().unwrap()[region.level as usize] = Some(Arc::new((region, img.res, img.texels.clone())));
         st.ready.retain(|i| i.region.level != region.level);
         st.ready.push(img);
     }
+}
+
+/// The newest region image per level, on the CPU: (region, res, texels).
+static DEPTH: Mutex<[Option<Arc<(Region, u32, Vec<[u16; 2]>)>>; 2]> = Mutex::new([None, None]);
+
+/// Sea depth (m, + down) at (`lat`, `lon`) from the newest region images
+/// (fine first): -1 where an image says it is not sea (land, or inland
+/// water it gives no depth), None where unknown (no image there yet,
+/// bathymetry off).
+pub fn depth_at(lat: f64, lon: f64) -> Option<f32> {
+    let imgs = DEPTH.lock().unwrap().clone();
+    for im in imgs.iter().flatten() {
+        let (region, res, texels) = &**im;
+        let (w, s, e, n) = region.bounds();
+        if lat <= s || lat >= n || lon <= w || lon >= e {
+            continue;
+        }
+        let i = (((lon - w) / (e - w)) * *res as f64) as usize;
+        let j = (((n - lat) / (n - s)) * *res as f64) as usize;
+        let [dw, wt] = texels[j.min(*res as usize - 1) * *res as usize + i.min(*res as usize - 1)];
+        let wt = f16_value(wt);
+        return Some(if wt > 0.5 { f16_value(dw) / wt } else { -1.0 });
+    }
+    None
 }
 
 #[cfg(test)]

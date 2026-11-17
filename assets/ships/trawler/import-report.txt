@@ -1,0 +1,9 @@
+"trawler": 2 nodes (1 animated out of 2), 8 materials, 0 textures (0.0 MB), 9 chunks
+triangles: exterior 1448, interior 0; vertices 3104; model.skac 0.0 MB; radius 67.8 m
+eye: None
+lights: 0
+channels used: time
+texture-animated chunks: 0; display screens: 0
+animation types: [("dist-scale", 8), ("range", 1), ("rotate", 1), ("select", 1)]
+unmapped properties (count):
+log:

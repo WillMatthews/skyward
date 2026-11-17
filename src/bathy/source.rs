@@ -70,7 +70,7 @@ pub fn decode(bytes: &[u8], px: u32, svc: Svc) -> Result<Vec<f32>, String> {
 }
 
 /// A whole single-band float image (all blocks of `ifd`, row-major).
-fn read_f32(bytes: &[u8], big_endian: bool, ifd: &tiff::Ifd) -> Result<Vec<f32>, String> {
+pub(crate) fn read_f32(bytes: &[u8], big_endian: bool, ifd: &tiff::Ifd) -> Result<Vec<f32>, String> {
     let (w, h) = (ifd.width as usize, ifd.height as usize);
     if w * h > 1 << 24 {
         return Err("float TIFF too large".into());

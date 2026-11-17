@@ -1,0 +1,9 @@
+"container": 1 nodes (0 animated out of 1), 11 materials, 1 textures (0.2 MB), 11 chunks
+triangles: exterior 1856, interior 0; vertices 2205; model.skac 0.0 MB; radius 120.8 m
+eye: None
+lights: 0
+channels used: 
+texture-animated chunks: 0; display screens: 0
+animation types: [("alpha-test", 5), ("billboard", 5), ("dist-scale", 11), ("range", 1), ("select", 1), ("translate", 5)]
+unmapped properties (count):
+log:

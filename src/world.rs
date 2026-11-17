@@ -705,7 +705,7 @@ impl World {
         let vdir = self.vel.normalize_or_zero();
         let mut out = Vec::new();
         for y in y0.floor() as u32..=y1.floor() as u32 {
-            for x in x0.floor() as u32..=x1.floor() as u32 {
+            for x in TileId::cols(x0, x1, ZOOM) {
                 let id = TileId::new(x, y);
                 let rect = id.rect(&self.proj);
                 let d = rect_dist(rect, self.focus);
@@ -741,7 +741,7 @@ impl World {
         let (x1, y1) = TileId::frac(lat_s, lon_e, zoom);
         let mut out = Vec::new();
         for y in y0.floor() as u32..=y1.floor() as u32 {
-            for x in x0.floor() as u32..=x1.floor() as u32 {
+            for x in TileId::cols(x0, x1, zoom) {
                 let id = TileId { z: zoom, x, y };
                 let d = rect_dist(id.rect(&self.proj), self.focus);
                 if d <= r {
@@ -914,7 +914,7 @@ impl World {
         pending.extend(self.gpu_pending.iter().copied());
         let (mut ready, mut total) = (0, 0);
         for y in y0.floor() as u32..=y1.floor() as u32 {
-            for x in x0.floor() as u32..=x1.floor() as u32 {
+            for x in TileId::cols(x0, x1, ZOOM) {
                 let id = TileId::new(x, y);
                 if rect_dist(id.rect(&self.proj), p) > r {
                     continue;
@@ -939,7 +939,7 @@ impl World {
         let busy = self.pool.in_flight();
         let mut out = Vec::new();
         for y in y0.floor() as u32..=y1.floor() as u32 {
-            for x in x0.floor() as u32..=x1.floor() as u32 {
+            for x in TileId::cols(x0, x1, ZOOM) {
                 let id = TileId::new(x, y);
                 if rect_dist(id.rect(&self.proj), p) > r {
                     continue;
@@ -1076,6 +1076,12 @@ impl World {
     }
     pub fn focus(&self) -> Vec2 {
         self.focus
+    }
+
+    /// Water at `xz` from the detail tile there; None where no detail tile
+    /// is loaded (far tiles carry no water polygons). Ships, src/ships/.
+    pub fn water_known(&self, xz: Vec2) -> Option<bool> {
+        self.tile_at(xz).map(|t| t.collision.is_water(t.xf.inverse(xz)))
     }
 
     fn tile_at(&self, p: Vec2) -> Option<&Loaded> {
@@ -1215,7 +1221,7 @@ mod tests {
         let rw = (c + vec2(-500.0, 300.0), c + vec2(500.0, 330.0));
         let f = TileFeatures {
             areas: vec![
-                area(Kind::Building { height: 60.0, min_height: 0.0, colour: None }, tower, vec2(20.0, 25.0)),
+                area(Kind::Building { height: 60.0, min_height: 0.0, colour: None, tags: Default::default() }, tower, vec2(20.0, 25.0)),
                 area(Kind::Water, pond, vec2(90.0, 60.0)),
             ],
             lines: vec![],
