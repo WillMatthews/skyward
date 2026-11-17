@@ -691,23 +691,23 @@ impl Mp {
     }
 
     /// Other aircraft for the renderer (eye-relative): model draw lists, light
-    /// sprites and afterburner flames.
-    pub fn render_traffic(&mut self, eye: Vec3) -> (Vec<crate::gfx_aircraft::AircraftFrame>, Vec<crate::lights::LightInst>, crate::scene::MeshData) {
+    /// sprites and afterburner plumes.
+    pub fn render_traffic(&mut self, eye: Vec3) -> (Vec<crate::gfx_aircraft::AircraftFrame>, Vec<crate::lights::LightInst>, Vec<crate::vfx::Plume>) {
         let mut frames = Vec::new();
         let mut lights = Vec::new();
-        let mut flames = crate::scene::MeshData::default();
+        let mut plumes = Vec::new();
         if !self.connected() {
-            return (frames, lights, flames);
+            return (frames, lights, plumes);
         }
         // One flashing / animation clock for everyone (the server's).
         let time = (self.server_time() % 3600.0) as f32;
         let defs = self.defs().to_vec();
         for r in self.remotes.values_mut() {
-            if let Some(f) = r.frame(&defs, eye, time, &mut lights, &mut flames) {
+            if let Some(f) = r.frame(&defs, eye, time, &mut lights, &mut plumes) {
                 frames.push(f);
             }
         }
-        (frames, lights, flames)
+        (frames, lights, plumes)
     }
 
     /// Other aircraft (current world frame) for the map, ND, ATC and tags.

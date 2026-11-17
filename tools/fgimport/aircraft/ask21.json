@@ -1,5 +1,10 @@
 {
  "props": {},
+ "eye_body": [
+  0.0,
+  0.25,
+  1.27
+ ],
  "channels": [],
  "light_models": [
   "procedural_light",

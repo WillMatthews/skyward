@@ -101,7 +101,7 @@ painted over or composited.
   crisp cockpit displays — plus MSAA and FXAA options, dynamic resolution and a frame limiter.
 - **Quality presets.** Low / Medium / High / Ultra (auto-detected from the GPU) drive every option
   in Settings › Video, each with a one-line explanation and its GPU cost; HDR output, motion blur,
-  depth of field, lens flare and a performance overlay (Ctrl+F3).
+  depth of field and a performance overlay (Ctrl+F3).
 - **Volumetric clouds.** Ray-marched cumulus, stratus and cirrus with temporal reprojection and
   cloud shadows on the ground.
 - **Weather and seasons.** Rain, snow, fog and wet ground; leaf fall, autumn colours and crop
@@ -624,6 +624,7 @@ skyward --shot m.png --aircraft meridian320 --bot --soak --seconds 4200 --warp 8
 | `SKYWARD_ORBIT=yaw,pitch,dist` | chase-camera angle for captures |
 | `SKYWARD_LOOK=yaw,pitch` | cockpit head-look for captures |
 | `SKYWARD_COCKPIT_FOV=deg` | cockpit field of view for captures |
+| `SKYWARD_EYE=dx,dy,dz` | move the cockpit eye (body frame, m: x left, y up, z forward) for tuning eye points |
 | `SKYWARD_NO_VFX`, `SKYWARD_NO_AIRPORTS`, `SKYWARD_NO_OVERPASS`, `SKYWARD_NO_APTDAT`, `SKYWARD_NO_LANDMARKS`, `SKYWARD_NO_TRAFFIC`, `SKYWARD_NO_LANDCOVER`, `SKYWARD_NO_COPDEM`, `SKYWARD_NO_LIDAR`, `SKYWARD_NO_OVERTURE`, `SKYWARD_NO_NIGHTLIGHTS`, `SKYWARD_NO_BATHY`, `SKYWARD_FLAT_TERRAIN` | switch layers off |
 | `SKYWARD_APTDAT=path/apt.dat[.gz]` | build `cache/aptdat/` (airport layouts) from a local apt.dat instead of the one-time download |
 | `SKYWARD_APTDAT_GEO=0` | keep the apt.dat taxi network / stands but draw the procedural pavement, markings, taxiway lights and signs (comparisons) |
@@ -895,7 +896,7 @@ before it existed migrate from their scenery-detail level.
 | AO / clouds / fog | off / low / low | low / medium / medium | medium / high / high | high / ultra / ultra |
 | Water reflections, scenery detail | quarter, Low | quarter, Medium | half, High | half, Ultra |
 | Trees (density × distance) | 50 % × 60 % | 75 % × 80 % | 100 % × 100 % | 100 % × 120 % |
-| Anisotropic filtering, effects | 2×, low | 4×, medium | 8×, high | 16×, high, lens flare |
+| Anisotropic filtering, effects | 2×, low | 4×, medium | 8×, high | 16×, high |
 
 Motion blur (camera, or camera + objects), depth of field (cockpit auto-focus / external on the
 aircraft), lens dirt, chromatic aberration and film grain are off in every preset.
@@ -912,6 +913,21 @@ the new frame. Below 100 % render scale the same pass upscales (TAAU), and contr
 sharpening follows. Without MSAA, aircraft glass is alpha-blended and foliage / prop discs dither.
 MSAA 4× and FXAA remain as options. Headless captures render 16 frames of a still view before
 writing the PNG, so goldens are the converged image.
+
+**Cockpit glass and eye points.** Your own aircraft's glass (canopy, windscreen, windows,
+instrument glass) is drawn last, after the clouds, ground fog, effects and rain, blended far to
+near and hidden where the eye-distance buffer has something nearer (the frame, the panel); it
+writes neither depth nor distance, so the clouds, fog, depth of field and TAA all see the scenery
+behind it, and it is left out of the velocity pass. Seen from the cockpit the outside glass passes
+~90 % of the light and reflects the dim cabin rather than the sky (the FlightGear opacities are
+set for the outside view). Materials the importer flags translucent but whose texture alpha is
+on / off (placards, panel labels) are alpha-tested cut-outs that write depth. The near plane is
+3 cm (reverse-Z float depth: precision doesn't depend on it), so a roof or canopy a hand's width
+above the eye isn't clipped when looking up. Eye points (`AircraftDef::eye`) start from the
+FlightGear view position and are checked against the model by `src/cockpit/eye_tests.rs`: at
+least 15 cm of head room in a cone above the eye, 12 cm clear behind it and nothing within 8 cm;
+`cargo test --release eye_audit -- --ignored --nocapture` measures every aircraft and prints the
+smallest move that fixes a failing one (`SKYWARD_EYE=dx,dy,dz` tries one in a capture).
 
 **GPU time per preset** (RTX 5090 Laptop, 135 W, Vulkan, 2560×1440, `SKYWARD_BENCH_FRAMES=90`:
 per-pass timestamp medians, best of two runs on a shared machine; scene res = render scale, no
@@ -975,6 +991,14 @@ the render / output resolution and a VRAM estimate.
   scenes in `tests/goldens/scenes.txt` with fixed time, date and METAR. It compares them with the
   committed PNGs perceptually (CIELAB ΔE + SSIM), and compares audio renders by spectral distance.
   After an intended change, run `scripts/regress.sh --update [scene...]`.
+- **Control surfaces.** `cargo test --release control_surface_checks -- --nocapture` checks every
+  aircraft in `assets/aircraft/` (elevator, ailerons, rudder, flaps, spoilers, leading-edge devices,
+  gear doors): each moves, the right way, both sides alike, about its leading edge, within sane
+  angles, and no part comes off the airframe in any pose; it prints a pass / fail table. What an
+  aircraft lacks is listed with the reason in `src/aircraft_fixups/checks.rs`. For a look,
+  `scripts/surface-sheet.sh [out-dir]` renders (headless, ~25 min) a contact sheet per aircraft:
+  neutral, elevator up / down, roll left / right, rudder left / right, flaps, spoilers, gear up /
+  down, plus an `index.html`.
 - **Smoke render.** [`render.yml`](.github/workflows/render.yml) is an on-demand software-Vulkan
   (lavapipe) smoke render.
 

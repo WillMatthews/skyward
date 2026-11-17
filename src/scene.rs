@@ -1005,7 +1005,7 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
                 flat.mat = mat::ROAD;
                 flat.strip_road(&l.pts, width, col, l.cut);
                 if let Kind::Road { width, major } = l.kind {
-                    lights.road(&l.pts, width, major);
+                    lights.road(&l.pts, width, major, |q| aero.on_apron(q));
                 }
             }
             rx_mask.stroke(&l.pts, width + 3.0, &mut mask_set);

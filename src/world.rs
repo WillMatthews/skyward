@@ -705,7 +705,7 @@ impl World {
         let vdir = self.vel.normalize_or_zero();
         let mut out = Vec::new();
         for y in y0.floor() as u32..=y1.floor() as u32 {
-            for x in x0.floor() as u32..=x1.floor() as u32 {
+            for x in TileId::cols(x0, x1, ZOOM) {
                 let id = TileId::new(x, y);
                 let rect = id.rect(&self.proj);
                 let d = rect_dist(rect, self.focus);
@@ -741,7 +741,7 @@ impl World {
         let (x1, y1) = TileId::frac(lat_s, lon_e, zoom);
         let mut out = Vec::new();
         for y in y0.floor() as u32..=y1.floor() as u32 {
-            for x in x0.floor() as u32..=x1.floor() as u32 {
+            for x in TileId::cols(x0, x1, zoom) {
                 let id = TileId { z: zoom, x, y };
                 let d = rect_dist(id.rect(&self.proj), self.focus);
                 if d <= r {
@@ -914,7 +914,7 @@ impl World {
         pending.extend(self.gpu_pending.iter().copied());
         let (mut ready, mut total) = (0, 0);
         for y in y0.floor() as u32..=y1.floor() as u32 {
-            for x in x0.floor() as u32..=x1.floor() as u32 {
+            for x in TileId::cols(x0, x1, ZOOM) {
                 let id = TileId::new(x, y);
                 if rect_dist(id.rect(&self.proj), p) > r {
                     continue;
@@ -939,7 +939,7 @@ impl World {
         let busy = self.pool.in_flight();
         let mut out = Vec::new();
         for y in y0.floor() as u32..=y1.floor() as u32 {
-            for x in x0.floor() as u32..=x1.floor() as u32 {
+            for x in TileId::cols(x0, x1, ZOOM) {
                 let id = TileId::new(x, y);
                 if rect_dist(id.rect(&self.proj), p) > r {
                     continue;

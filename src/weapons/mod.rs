@@ -1566,7 +1566,7 @@ impl Combat {
                 if let Some(u) = self.unit_mut(k) {
                     u.kills += 1;
                 }
-                (format!("{kname} ▸ {vname}  ({})", w.label()), Some(k), w)
+                (format!("{kname} → {vname}  ({})", w.label()), Some(k), w)
             }
             _ => (format!("{vname} — {}", why.trim_start_matches("Structural failure: ").trim_start_matches("Shot down: ")), None, WeaponKind::Terrain),
         };

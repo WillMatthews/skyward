@@ -172,6 +172,7 @@ struct Surf {
     transl: f32,    // foliage translucency
     env: f32,       // environment (sky) reflection weight
     moving: f32,    // 1 = the aircraft: no reprojected (last-frame) SSAO
+    own_lit: f32,   // 0 = inside the aircraft: its own (exterior) lights don't reach it
 };
 
 fn default_surf(albedo: vec3<f32>, n: vec3<f32>) -> Surf {
@@ -186,6 +187,7 @@ fn default_surf(albedo: vec3<f32>, n: vec3<f32>) -> Surf {
     s.transl = 0.0;
     s.env = 1.0;
     s.moving = 0.0;
+    s.own_lit = 1.0;
     return s;
 }
 
@@ -230,7 +232,9 @@ fn light(s: Surf, rel: vec3<f32>, V: vec3<f32>, dist: f32, px: vec2<f32>, ngeo: 
     // Street lights (ground light map).
     col += s.albedo / PI * street_light(rel, n) * mix(1.0, ao, 0.5);
     // The aircraft's landing / taxi lights, strobes and beacon (no shadows).
-    let na = i32(g.misc2.y);
+    // (Not inside it: they are unshadowed, and the wing-root landing lights
+    // would otherwise floodlight the cockpit through the fuselage.)
+    let na = select(0, i32(g.misc2.y), s.own_lit > 0.5);
     for (var i = 0; i < na; i++) {
         let al = aircraft_light(i, rel);
         let anl = dot(n, al.l);

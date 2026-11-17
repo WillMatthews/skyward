@@ -27,15 +27,16 @@
 //! Body frame: metres, +Z nose, +Y up, +X left wing, origin = CG (as
 //! `flight.rs`). The model is a node tree with FlightGear animations mapped
 //! onto Skyward state through named channels ([`channel_value`]). The app
-//! renders it with `gfx_aircraft.rs`; nav / beacon / strobe glows and the
-//! afterburner flame are generated here as small emissive meshes.
+//! renders it with `gfx_aircraft.rs`; nav / beacon / strobe glows are
+//! generated here as small emissive meshes (the afterburner plume is an
+//! effect, `vfx::plume`).
 
 use crate::aircraft_asset::{AircraftAsset, AnimState, Pose};
 use crate::flight::{Aircraft, AircraftDef, Controls, EngineKind};
 use glam::Vec2;
 use crate::gfx_aircraft::{AircraftFrame, ChunkDraw};
 use crate::scene::{mat, MeshData};
-use glam::{vec3, Mat4, Vec3};
+use glam::{Mat4, Vec3};
 use std::sync::Arc;
 
 pub struct AircraftModel {
@@ -127,6 +128,15 @@ pub fn ready(id: &str) -> bool {
     !PREFETCH_STARTED.load(std::sync::atomic::Ordering::Relaxed) || PREFETCHED.lock().unwrap_or_else(|e| e.into_inner()).contains(&id)
 }
 
+/// The cockpit eye point: the aircraft definition's (`AircraftDef::eye`,
+/// measured against the model: `src/cockpit/eye_tests.rs`), not the one
+/// the importer took from the FlightGear view / JSBSim EYEPOINT (often the
+/// head's centre or the canopy rail, i.e. too high); that one only when the
+/// definition has none.
+pub fn eye_point(a: &AircraftAsset, def_eye: Vec3) -> Vec3 {
+    if def_eye != Vec3::ZERO { def_eye } else { a.eye.unwrap_or(def_eye) }
+}
+
 /// Load the model for an aircraft id (see the table above).
 pub fn build(id: &str, def_eye: Vec3) -> AircraftModel {
     let cached = cached_asset(id);
@@ -156,7 +166,7 @@ pub fn build(id: &str, def_eye: Vec3) -> AircraftModel {
     };
     match loaded {
         Ok(a) => {
-            let eye = a.eye.unwrap_or(def_eye);
+            let eye = eye_point(&a, def_eye);
             let radius = a.radius.max(1.0);
             let n = a.channels.len();
             let bounds = exterior_bounds(&a);
@@ -229,13 +239,56 @@ const DOORS_PARKED_S: f32 = 8.0;
 const DOORS_OPEN_S: f32 = 10.0;
 const DOORS_CLOSE_S: f32 = 5.0;
 
+/// Capture / debug knob: `SKYWARD_SURFACES="elevator=1,aileron=-0.5,rudder=1,flaps=1,spoilers=1,gear=0"`
+/// poses the exterior control surfaces as given (Skyward signs, see
+/// [`crate::flight::Surfaces`]: + = elevator TE up, right aileron up, rudder TE
+/// right; gear 0 = down, 1 = up), whatever the flight model does; `steer=1`
+/// turns the nose wheel as full right rudder on the ground would, in the air
+/// too. Only the model animation sees it (captures: `--shot`,
+/// `SKYWARD_THUMB_VIEW` in main.rs).
+fn forced_surfaces(mut s: crate::flight::Surfaces) -> crate::flight::Surfaces {
+    for (k, v) in forced_knobs() {
+        match k.as_str() {
+            "elevator" => s.elevator = *v,
+            "aileron" => s.aileron = *v,
+            "rudder" => s.rudder = *v,
+            "flaps" => s.flaps = *v,
+            "spoilers" => s.spoilers = *v,
+            "gear" => s.gear = *v,
+            _ => {}
+        }
+    }
+    s
+}
+
+/// `steer` of `SKYWARD_SURFACES` (see [`forced_surfaces`]).
+fn forced_steer() -> Option<f32> {
+    forced_knobs().iter().find(|(k, _)| k == "steer").map(|(_, v)| *v)
+}
+
+fn forced_knobs() -> &'static [(String, f32)] {
+    static FORCED: std::sync::OnceLock<Vec<(String, f32)>> = std::sync::OnceLock::new();
+    FORCED.get_or_init(|| {
+        std::env::var("SKYWARD_SURFACES")
+            .map(|v| {
+                v.split(',')
+                    .filter_map(|kv| {
+                        let (k, x) = kv.split_once('=')?;
+                        Some((k.trim().to_string(), x.trim().parse().ok()?))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    })
+}
+
 /// Value of one animation channel (FlightGear semantics, see `aircraft_asset.rs`).
 /// The stateful `doors*` channels (cargo doors / ramps, open 0..1; the C-5's
 /// `doors_level` / `doors_kneeled` ramps for the normal / kneeling stance)
 /// and `kneel` read 0 here: [`AircraftModel::update`] drives the doors and
 /// the parked fleet (`airport/fleet.rs`) poses them open.
 pub fn channel_value(name: &str, i: &ModelInputs) -> f32 {
-    let s = i.ac.surfaces();
+    let s = forced_surfaces(i.ac.surfaces());
     let ac = i.ac;
     let idx = |pre: &str, suf: &str| -> Option<usize> { name.strip_prefix(pre)?.strip_suffix(suf)?.parse().ok() };
     let b = |x: bool| if x { 1.0 } else { 0.0 };
@@ -253,8 +306,8 @@ pub fn channel_value(name: &str, i: &ModelInputs) -> f32 {
         "spoilers" => return s.spoilers,
         "gear_pos" => return 1.0 - s.gear,
         "wow" => return b(ac.on_ground),
-        "steer_norm" => return if ac.on_ground { s.rudder } else { 0.0 },
-        "steer_deg" => return if ac.on_ground { s.rudder * i.def.nose_steer_deg } else { 0.0 },
+        "steer_norm" => return forced_steer().unwrap_or(if ac.on_ground { s.rudder } else { 0.0 }),
+        "steer_deg" => return forced_steer().unwrap_or(if ac.on_ground { s.rudder } else { 0.0 }) * i.def.nose_steer_deg,
         "afterburner" => return s.afterburner,
         "ctl_elevator" => return -i.ctl.elevator,
         "ctl_aileron" => return i.ctl.aileron,
@@ -395,7 +448,7 @@ impl AircraftModel {
             .filter(|(_, c)| (interior || !c.interior) && self.pose.visible[c.node])
             .map(|(i, c)| ChunkDraw { chunk: i as u32, model: body * self.pose.world[c.node], emit: self.pose.emit[i], uv: self.pose.uv.get(i).copied().unwrap_or(crate::aircraft_asset::UV_IDENTITY) })
             .collect();
-        Some(AircraftFrame { asset: a.clone(), draws, parts: self.parts.clone(), dynamics: None, displays: None })
+        Some(AircraftFrame { asset: a.clone(), draws, parts: self.parts.clone(), dynamics: None, displays: None, cockpit: false })
     }
 
     /// Light positions (body frame, current pose) by kind.
@@ -447,33 +500,6 @@ fn octahedron(out: &mut MeshData, c: Vec3, r: f32, col: [f32; 3], k: f32) {
         }
         out.idx.extend([base, base + 1, base + 2]);
     }
-}
-
-/// Afterburner flame cone at `nozzle` (body frame), pointing aft (−Z), 1 m long
-/// at scale 1; EMISSIVE flame verts (uv.y = 1), intensity in uv.x.
-pub fn flame_mesh(nozzle: Vec3, radius: f32) -> MeshData {
-    let mut m = MeshData { mat: mat::EMISSIVE, ..Default::default() };
-    let seg = 16;
-    let rings = [(0.0, 1.0, [1.0, 0.75, 0.45], 3.0), (0.25, 0.85, [1.0, 0.55, 0.25], 2.4), (0.7, 0.45, [0.9, 0.35, 0.6], 1.4), (1.0, 0.05, [0.5, 0.25, 0.9], 0.6)];
-    let len = radius * 9.0;
-    let mut ring_idx = Vec::new();
-    for (z, r, col, k) in rings {
-        let base = m.verts.len() as u32;
-        for s in 0..seg {
-            let a = s as f32 / seg as f32 * std::f32::consts::TAU;
-            let p = nozzle + vec3(a.cos() * r * radius, a.sin() * r * radius, -z * len);
-            m.v_uv(p, vec3(a.cos(), a.sin(), 0.0), col, [k, 1.0]);
-        }
-        ring_idx.push(base);
-    }
-    for w in ring_idx.windows(2) {
-        for s in 0..seg as u32 {
-            let (a0, a1) = (w[0] + s, w[0] + (s + 1) % seg as u32);
-            let (b0, b1) = (w[1] + s, w[1] + (s + 1) % seg as u32);
-            m.idx.extend([a0, b0, a1, a1, b0, b1]);
-        }
-    }
-    m
 }
 
 /// Exterior bounding box in the static pose with the gear down.

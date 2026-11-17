@@ -18,6 +18,7 @@
  },
  "exclude_models": [
   "Armament",
+  "MFD/mfd-ext",
   "Pilots",
   "Ramp",
   "chocks",
