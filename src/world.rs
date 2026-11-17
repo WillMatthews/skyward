@@ -1078,6 +1078,12 @@ impl World {
         self.focus
     }
 
+    /// Water at `xz` from the detail tile there; None where no detail tile
+    /// is loaded (far tiles carry no water polygons). Ships, src/ships/.
+    pub fn water_known(&self, xz: Vec2) -> Option<bool> {
+        self.tile_at(xz).map(|t| t.collision.is_water(t.xf.inverse(xz)))
+    }
+
     fn tile_at(&self, p: Vec2) -> Option<&Loaded> {
         self.tiles.get(&TileId::at_world(&self.proj, p))
     }

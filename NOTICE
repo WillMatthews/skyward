@@ -161,6 +161,24 @@ others; per-item sources, authors and licences are listed in:
     (https://opendatacommons.org/licenses/odbl/1-0/) — © adsb.lol
     contributors. tests/adsb/*.json are anonymised extracts of it (synthetic
     addresses, no registrations, re-numbered flights), under the same licence.
+  * Ships (src/ships/):
+      - live positions and static data from Fintraffic's Digitraffic marine
+        API (meri.digitraffic.fi), "Source: Fintraffic / digitraffic.fi,
+        license CC 4.0 BY" (https://creativecommons.org/licenses/by/4.0/).
+        tests/ships/*.json are short extracts of it, same licence.
+      - vessel density: EMODnet Human Activities, Vessel Density (Cogea for
+        EMODnet), CC BY 4.0, from the EMODnet Human Activities WCS
+        (ows.emodnet-humanactivities.eu); fetched per region and cached,
+        not bundled. (The World Bank / IMF Global Shipping Traffic Density,
+        CC BY 4.0, is the intended source outside Europe; not used yet.)
+      - hull models in assets/ships/: FlightGear fgdata
+        Models/Maritime/Civilian (https://gitlab.com/flightgear/fgdata),
+        converted with tools/fgimport. ContainerShip, CruiseShip, Freighter,
+        LargeFerry, LargeTrawler, MediumFerry, SailBoatUnderSail, Trawler and
+        barge are the Naval Postgraduate School SAVAGE models, BSD-3-Clause
+        (notice in assets/ships/LICENSE-SAVAGE.txt; no endorsement by NPS /
+        MOVES implied); Tanker, SailBoatUnderPower11m and the textures added
+        in fgdata are fgdata's own, GPL v2. See assets/ships/CREDITS.md.
   * Airport layouts (src/airport/aptdat.rs, aptgeo.rs): taxi route networks,
     startup / gate positions, pavement, painted lines, taxiway lights, signs,
     windsocks and tower positions from X-Plane apt.dat airport data —

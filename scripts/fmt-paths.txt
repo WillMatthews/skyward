@@ -209,3 +209,11 @@ src/sattint/mod.rs
 src/sattint/source.rs
 src/aircraft_fixups.rs
 src/aircraft_fixups/tests.rs
+src/ships/ais.rs
+src/ships/density.rs
+src/ships/models.rs
+src/ships/mod.rs
+src/ships/render.rs
+src/ships/sim.rs
+src/ships/tests.rs
+src/ships/types.rs

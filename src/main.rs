@@ -59,6 +59,7 @@ mod rotor;
 mod scenario;
 mod scene;
 mod input;
+mod ships;
 mod sim;
 mod startpos;
 mod systems;
@@ -1272,6 +1273,14 @@ fn render_frame(
                 dynm.append(&flames, glam::Mat4::IDENTITY);
                 ui.st.adsb.cam = Some((fv.eye, fv.view, fv.fov_y));
             }
+            // Ships (ships/): live AIS where open, procedural elsewhere; hulls, lights, wakes.
+            {
+                let month = ((fv.clock.day_of_year.saturating_sub(1)) as f32 / 30.44) as u32 + 1;
+                ui.st.ships.update(&s.world, fv.eye, ui.st.dt, month.clamp(1, 12));
+                let mut wakes = scene::MeshData::default();
+                frames.extend(ui.st.ships.render(fv.eye, fv.view, (sim.time % 3600.0) as f32, fv.sun_dir.y, &mut lights, &mut wakes));
+                dynm.append(&wakes, glam::Mat4::IDENTITY);
+            }
             renderer.set_traffic(frames, lights);
             // Browser: the scene renders within a pixel budget (upscaled by the AA / tonemap pass).
             #[cfg(target_arch = "wasm32")]
@@ -1695,6 +1704,8 @@ fn headless(args: Args) -> Result<(), String> {
     }
     // Airport frequencies for ATC (atc/).
     let _ = atc::freqs::wait(Duration::from_secs(60));
+    // Ship models load inline (the shot must show them).
+    ships::set_inline_loads(true);
     let gpu = Gpu::new(None, Gpu::instance())?;
     eprintln!("GPU: {}", gpu.adapter_name());
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -2076,7 +2087,9 @@ fn headless(args: Args) -> Result<(), String> {
         let focus = if ov.is_some() { focus } else { s.world.focus() };
         let (ready, total) = s.world.progress(focus, s.world.effective_radius() - 300.0);
         let night_lights = renderer.night_lights_ready(&gpu.queue, vec3(focus.x, 0.0, focus.y));
-        if ready >= total && s.world.uploads.is_empty() && s.world.gpu_pending.is_empty() && s.world.far_ready() && s.world.airport_detail.idle() && night_lights && crate::bathy::idle() {
+        // Ships (ships/): density tiles and the first live poll for the view.
+        ui.st.ships.prefetch(&s.world, vec3(focus.x, 0.0, focus.y));
+        if ready >= total && s.world.uploads.is_empty() && s.world.gpu_pending.is_empty() && s.world.far_ready() && s.world.airport_detail.idle() && night_lights && crate::bathy::idle() && ui.st.ships.idle() {
             break;
         }
         if tw.elapsed() > Duration::from_secs(120) {

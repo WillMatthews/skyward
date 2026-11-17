@@ -1,0 +1,9 @@
+"freighter": 1 nodes (0 animated out of 1), 6 materials, 0 textures (0.0 MB), 6 chunks
+triangles: exterior 1149, interior 0; vertices 1604; model.skac 0.0 MB; radius 126.4 m
+eye: None
+lights: 0
+channels used: 
+texture-animated chunks: 0; display screens: 0
+animation types: [("", 1), ("dist-scale", 5), ("range", 1)]
+unmapped properties (count):
+log:

@@ -528,6 +528,14 @@ fn shade_water(in: VOut, px: vec2<f32>, fw: f32) -> vec3<f32> {
             foam = brk * smoothstep(0.42, 0.75, n1 * 0.65 + n2 * 0.35 + 0.15 * brk);
         }
     }
+    if (in.uv.y > 1.5) {
+        // Ship wake overlay (ships/render.rs): foam strength in uv.x, broken
+        // into streaks and patches (fades to its mean coverage far away).
+        let w1 = pna(np, 0.09, vec2<f32>(0.0), fw * 0.09);
+        let w2 = pna(np, 0.31, vec2<f32>(5.3, 1.7), fw * 0.31);
+        let k = in.uv.x;
+        foam = max(foam, k * smoothstep(0.62 - 0.45 * k, 0.9 - 0.3 * k, w1 * 0.6 + w2 * 0.4 + 0.2 * k));
+    }
     let body = scat * (E * max(L.y, 0.0) + amb) / PI * 3.0;
     var col = mix(body, refl, fres);
     if (foam > 0.0) {

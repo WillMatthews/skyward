@@ -556,6 +556,8 @@ pub struct UiState {
     pub mp: crate::net::Mp,
     /// Live real-world traffic (ADS-B, `adsb/`).
     pub adsb: crate::adsb::LiveTraffic,
+    /// Ships (live AIS + procedural, `ships/`).
+    pub ships: crate::ships::Ships,
     pub browser: crate::net::browse::Browser,
     /// Missions: selection, records, the active one, the last result.
     pub missions: missions::MissionUi,
@@ -604,6 +606,7 @@ impl UiState {
             aircraft_group: None,
             mp: crate::net::Mp::new(),
             adsb: crate::adsb::LiveTraffic::new(),
+            ships: crate::ships::Ships::new(),
             browser: Default::default(),
             missions: Default::default(),
             boot: Default::default(),

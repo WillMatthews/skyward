@@ -575,12 +575,15 @@ impl AircraftAsset {
 
 fn load_texture(dir: &str, file: &str) -> Texture {
     let fallback = || Texture { width: 1, height: 1, rgba: vec![200, 200, 200, 255], mips: Vec::new() };
+    // (`dir` = "../ships/<id>": the ship models, src/ships/models.rs.)
+    let path = format!("aircraft/{dir}/{file}");
+    let path = path.strip_prefix("aircraft/../").unwrap_or(&path);
     // Browser: decoded in a worker while the aircraft downloaded.
     #[cfg(target_arch = "wasm32")]
-    if let Some((width, height, rgba, mips)) = crate::platform::web::take_decoded_texture(&format!("aircraft/{dir}/{file}")) {
+    if let Some((width, height, rgba, mips)) = crate::platform::web::take_decoded_texture(path) {
         return Texture { width, height, rgba, mips };
     }
-    let Ok(bytes) = crate::assets::read(&format!("aircraft/{dir}/{file}")) else {
+    let Ok(bytes) = crate::assets::read(path) else {
         eprintln!("aircraft texture missing: {dir}/{file}");
         return fallback();
     };

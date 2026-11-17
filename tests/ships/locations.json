@@ -1,0 +1,144 @@
+{
+ "type": "FeatureCollection",
+ "dataUpdatedTime": "2026-11-16T16:40:36Z",
+ "features": [
+  {
+   "mmsi": 230033880,
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     24.98325,
+     60.165878
+    ]
+   },
+   "properties": {
+    "mmsi": 230033880,
+    "sog": 12.2,
+    "cog": 155.0,
+    "navStat": 0,
+    "rot": 0,
+    "posAcc": false,
+    "raim": false,
+    "heading": 156,
+    "timestamp": 27,
+    "timestampExternal": 1794847227141
+   }
+  },
+  {
+   "mmsi": 271052274,
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     24.992292,
+     59.852613
+    ]
+   },
+   "properties": {
+    "mmsi": 271052274,
+    "sog": 8.1,
+    "cog": 255.1,
+    "navStat": 0,
+    "rot": -11,
+    "posAcc": true,
+    "raim": false,
+    "heading": 254,
+    "timestamp": 28,
+    "timestampExternal": 1794847227571
+   }
+  },
+  {
+   "mmsi": 230941940,
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     24.975412,
+     60.160608
+    ]
+   },
+   "properties": {
+    "mmsi": 230941940,
+    "sog": 4.2,
+    "cog": 116.0,
+    "navStat": 0,
+    "rot": -10,
+    "posAcc": true,
+    "raim": false,
+    "heading": 126,
+    "timestamp": 28,
+    "timestampExternal": 1794847228137
+   }
+  },
+  {
+   "mmsi": 273290820,
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     25.121072,
+     59.877258
+    ]
+   },
+   "properties": {
+    "mmsi": 273290820,
+    "sog": 7.5,
+    "cog": 263.8,
+    "navStat": 0,
+    "rot": 0,
+    "posAcc": false,
+    "raim": false,
+    "heading": 255,
+    "timestamp": 26,
+    "timestampExternal": 1794847228748
+   }
+  },
+  {
+   "mmsi": 230094240,
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     24.907015,
+     60.180258
+    ]
+   },
+   "properties": {
+    "mmsi": 230094240,
+    "sog": 0.1,
+    "cog": 35.4,
+    "navStat": 0,
+    "rot": -128,
+    "posAcc": false,
+    "raim": false,
+    "heading": 511,
+    "timestamp": 39,
+    "timestampExternal": 1794815752238
+   }
+  },
+  {
+   "mmsi": 230055040,
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     25.035622,
+     60.14895
+    ]
+   },
+   "properties": {
+    "mmsi": 230055040,
+    "sog": 0.1,
+    "cog": 360.0,
+    "navStat": 5,
+    "rot": -128,
+    "posAcc": true,
+    "raim": true,
+    "heading": 511,
+    "timestamp": 14,
+    "timestampExternal": 1794823334233
+   }
+  }
+ ]
+}

@@ -89,6 +89,18 @@ for ac in sorted(os.listdir("assets/aircraft")):
             files[f"aircraft/{ac}/{f}"] = os.path.getsize(p)
         elif f == "CREDITS.md":
             shutil.copy(p, dst)
+# Ship hulls (src/ships/models.rs): downloaded per model when a ship needs it.
+for sh in sorted(os.listdir("assets/ships")):
+    src = os.path.join("assets/ships", sh)
+    dst = os.path.join(out, "assets/ships", sh) if os.path.isdir(src) else os.path.join(out, "assets/ships")
+    os.makedirs(dst, exist_ok=True)
+    if not os.path.isdir(src):
+        shutil.copy(src, dst)
+        continue
+    for f in sorted(os.listdir(src)):
+        if f == "model.skac" or (f.startswith("t") and f.endswith((".jpg", ".png"))):
+            shutil.copy(os.path.join(src, f), dst)
+            files[f"ships/{sh}/{f}"] = os.path.getsize(os.path.join(src, f))
 # Sound samples and ATC voices: downloaded when an aircraft / the radio
 # needs them (audio/samples.rs, audio/radio.rs), not compiled in.
 audio = 0
