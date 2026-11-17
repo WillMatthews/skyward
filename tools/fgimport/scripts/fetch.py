@@ -3,6 +3,7 @@
 
 usage: fetch.py <id> <source> <aircraft-dir-name> <entry...>
   source: svn:<Name>  -> FGAddon trunk/Aircraft/<Name>
+          svn:<Name>@<rev> -> the same at SVN revision <rev>
           gh:<owner>/<repo>@<branch>
 Files land in n/src/<id>/<relpath>. Entries are paths relative to the aircraft root.
 Prints a manifest (n/src/<id>/_fetched.txt) and skipped external references.
@@ -17,7 +18,10 @@ SKIP = [p for p in os.environ.get("SKIP", "").split(",") if p]
 def main():
     ident, source, acname, *entries = sys.argv[1:]
     if source.startswith("svn:"):
-        base = "https://svn.code.sf.net/p/flightgear/fgaddon/trunk/Aircraft/" + source[4:] + "/"
+        # svn:<Name>@<rev> pins an FGAddon revision (the r21799 imports).
+        name, _, rev = source[4:].partition("@")
+        root = f"!svn/bc/{rev}/trunk" if rev else "trunk"
+        base = f"https://svn.code.sf.net/p/flightgear/fgaddon/{root}/Aircraft/{name}/"
     else:
         repo, br = source[3:].split("@")
         base = f"https://raw.githubusercontent.com/{repo}/{br}/"

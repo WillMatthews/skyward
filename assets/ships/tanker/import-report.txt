@@ -1,0 +1,9 @@
+"tanker": 1 nodes (0 animated out of 1), 18 materials, 5 textures (0.0 MB), 18 chunks
+triangles: exterior 1984, interior 0; vertices 2633; model.skac 0.0 MB; radius 120.8 m
+eye: None
+lights: 0
+channels used: 
+texture-animated chunks: 0; display screens: 0
+animation types: [("", 4), ("alpha-test", 4), ("billboard", 12), ("dist-scale", 12), ("material", 2), ("range", 3), ("select", 4), ("textranslate", 1), ("translate", 12)]
+unmapped properties (count):
+log:

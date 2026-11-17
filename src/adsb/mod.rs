@@ -714,7 +714,7 @@ impl LiveTraffic {
         time: f32,
         slots_left: usize,
         lights: &mut Vec<crate::lights::LightInst>,
-        flames: &mut crate::scene::MeshData,
+        plumes: &mut Vec<crate::vfx::Plume>,
     ) -> Vec<crate::gfx_aircraft::AircraftFrame> {
         let t_cpu = web_time::Instant::now();
         let mut frames = Vec::new();
@@ -741,7 +741,7 @@ impl LiveTraffic {
                 v.0.poll_model(&self.defs);
                 v.0.place(a.state, a.pos, a.rot, a.vel);
                 let before = lights.len();
-                match v.0.frame(&self.defs, eye, time, lights, flames) {
+                match v.0.frame(&self.defs, eye, time, lights, plumes) {
                     Some(f) => frames.push(f),
                     None => {
                         // Model still loading: lights only.
@@ -855,7 +855,8 @@ fn generic_lights(a: &Live, info: Option<&TypeInfo>, eye: Vec3, time: f32, out: 
     if bits & lb::LANDING != 0 {
         rig.landing.push((vec3(0.0, -len * 0.03, len * 0.35), Vec3::Z));
     }
-    let l = crate::lights::AircraftLights::build(&rig, a.pos - eye, a.rot, time, bits & lb::LANDING != 0, bits & lb::TAXI != 0);
+    let on = crate::lights::ExtLights { nav: true, beacon: true, strobe: true, landing: bits & lb::LANDING != 0, taxi: bits & lb::TAXI != 0 };
+    let l = crate::lights::AircraftLights::build(&rig, a.pos - eye, a.rot, time, &on);
     out.extend_from_slice(&l.sprites[..l.n_sprites]);
 }
 

@@ -7,6 +7,10 @@
 //!                     [--menu-screen main|aircraft|airport|conditions|settings|pause|loading|credits] [--map-view LAT,LON,ZOOM] [--map-style day|night] [--hud full|minimal|off] [--map corner|large|off]
 //!                     [--realtime [--warp N]]   (stream + render in real time, straight & level, report timings)
 //!                     [--gear up|down] [--flaps N] [--spoilers F] [--reverse] [--fail BITS] [--ap] [--fps HZ]   (setup / test knobs)
+//!                     [--crash-at S [--geocode]]   (crash at S seconds; the crash site's address comes from Nominatim only with --geocode)
+//! Model checks: SKYWARD_SURFACES="elevator=1,aileron=1,rudder=1,flaps=1,spoilers=1,gear=0,steer=1" poses the surfaces (models.rs);
+//!             --menu-screen aircraft with SKYWARD_THUMBS_OUT=dir SKYWARD_THUMB_VIEW="nose_deg,elev_deg,dist,aim" renders every
+//!             model from that view; SKYWARD_NO_FIXUPS=1 shows models without the animation fixes (aircraft_fixups.rs)
 //! Settings:   --menu-screen settings [--settings-category video|display|camera|flight|assists|weather|traffic|sound|controls|multiplayer|accessibility|interface|data|about] [--settings-search TEXT] [--settings-from pause] [--palette deuteranopia|protanopia|tritanopia] [--high-contrast]; SKYWARD_CONFIG_DIR=dir for the settings file
 //! Systems:    --fail pitot,vacuum,fire2@30,... (names, optional @seconds to arm) [--cold-dark] [--panel failures|armed|systems]
 //! Missions:   skyward --mission river|v1|decompression|... [--mission-bot]   (airline emergencies; --menu-screen missions|briefing|debrief)
@@ -28,6 +32,7 @@ mod airport;
 mod airports;
 mod atmosphere;
 mod aircraft_asset;
+mod aircraft_fixups;
 mod assets;
 mod atc;
 mod audio;
@@ -36,9 +41,11 @@ mod nav;
 mod bot;
 mod clouds;
 mod cockpit;
+mod crash;
 mod damage;
 mod debris;
 mod flight;
+mod geocode;
 mod gfx;
 mod ground;
 mod gfx_aircraft;
@@ -55,6 +62,7 @@ mod rotor;
 mod scenario;
 mod scene;
 mod input;
+mod ships;
 mod sim;
 mod startpos;
 mod systems;
@@ -214,6 +222,10 @@ struct Args {
     shot_when: Option<String>,
     /// Headless: eject / bail out at this many seconds.
     eject_at: Option<f32>,
+    /// Crash the aircraft at this many seconds (crash-site captures, geocode.rs).
+    crash_at: Option<f32>,
+    /// Headless: look the crash site up on Nominatim (off by default: captures never hit the network).
+    geocode: bool,
     /// Chase camera on the (first) opponent.
     view_bandit: bool,
 }
@@ -343,6 +355,8 @@ fn parse_args_from(argv: Vec<String>) -> Args {
         dogfight: None,
         shot_when: None,
         eject_at: None,
+        crash_at: None,
+        geocode: false,
         view_bandit: false,
     };
     let mut i = 0;
@@ -392,6 +406,8 @@ fn parse_args_from(argv: Vec<String>) -> Args {
             "--dogfight-ai" => a.dogfight.get_or_insert_with(Default::default).autopilot = true,
             "--shot-when" => a.shot_when = Some(next(&mut i)),
             "--eject-at" => a.eject_at = next(&mut i).parse().ok(),
+            "--crash-at" => a.crash_at = next(&mut i).parse().ok(),
+            "--geocode" => a.geocode = true,
             "--view-bandit" => a.view_bandit = true,
             "--width" => a.width = next(&mut i).parse().unwrap_or(1920),
             "--height" => a.height = next(&mut i).parse().unwrap_or(1080),
@@ -1233,18 +1249,26 @@ fn render_frame(
                 }
                 if let Some(af) = fv.aircraft.as_mut() {
                     af.shift(d);
+                    af.cockpit = false;
                 }
                 for af in &mut fv.others {
                     af.shift(d);
                 }
+                // (So are its lights: unshifted, they hung in the air at
+                // the sim camera's view of them.)
+                for l in &mut fv.acl.sprites[..fv.acl.n_sprites] {
+                    l.pos = (Vec3::from(l.pos) + d).into();
+                }
+                for sp in &mut fv.acl.spots[..fv.acl.n_spots] {
+                    sp.pos += d;
+                }
                 fv = FrameView { eye, view: glam::camera::rh::view::look_at_mat4(eye, look, Vec3::Y), ..fv };
             }
             // Other players' aircraft (net/): real models, lights, afterburners — eye-relative.
-            let (mut frames, mut lights) = (Vec::new(), Vec::new());
+            let (mut frames, mut lights, mut plumes) = (Vec::new(), Vec::new(), Vec::new());
             if ui.st.mp.connected() {
-                let (f, l, flames) = ui.st.mp.render_traffic(fv.eye);
-                dynm.append(&flames, glam::Mat4::IDENTITY);
-                (frames, lights) = (f, l);
+                let (f, l, p) = ui.st.mp.render_traffic(fv.eye);
+                (frames, lights, plumes) = (f, l, p);
                 ui.st.mp.cam = Some((fv.eye, fv.view, fv.fov_y));
             } else {
                 ui.st.mp.cam = None;
@@ -1253,14 +1277,29 @@ fn render_frame(
             {
                 let lt_settings = ui.st.settings.live_traffic.clone();
                 ui.st.adsb.update(sim, &s.world, ui.st.dt, &lt_settings);
-                let mut flames = scene::MeshData::default();
                 let slots = 96usize.saturating_sub(frames.len());
                 let t = sim.time % 3600.0;
-                frames.extend(ui.st.adsb.render(fv.eye, t, slots, &mut lights, &mut flames));
-                dynm.append(&flames, glam::Mat4::IDENTITY);
+                frames.extend(ui.st.adsb.render(fv.eye, t, slots, &mut lights, &mut plumes));
                 ui.st.adsb.cam = Some((fv.eye, fv.view, fv.fov_y));
             }
+            // Ships (ships/): live AIS where open, procedural elsewhere; hulls, lights, wakes.
+            {
+                let month = ((fv.clock.day_of_year.saturating_sub(1)) as f32 / 30.44) as u32 + 1;
+                ui.st.ships.update(&s.world, fv.eye, ui.st.dt, month.clamp(1, 12));
+                let mut wakes = scene::MeshData::default();
+                frames.extend(ui.st.ships.render(fv.eye, fv.view, (sim.time % 3600.0) as f32, fv.sun_dir.y, &mut lights, &mut wakes));
+                dynm.append(&wakes, glam::Mat4::IDENTITY);
+            }
             renderer.set_traffic(frames, lights);
+            // Their afterburners join our effects (vfx/, relative to its origin).
+            if !plumes.is_empty() {
+                let eye = fv.eye;
+                let vf = fv.vfx.get_or_insert_with(|| std::sync::Arc::new(vfx::VfxFrame { origin: eye, ..Default::default() }));
+                let vf = std::sync::Arc::make_mut(vf);
+                for p in &plumes {
+                    vfx::plume(vf, &vfx::Plume { nozzle: p.nozzle + eye - vf.origin, ..*p });
+                }
+            }
             // Browser: the scene renders within a pixel budget (upscaled by the AA / tonemap pass).
             #[cfg(target_arch = "wasm32")]
             renderer.set_scale_cap(platform::web::scene_size(w, h).0 as f32 / w.max(1) as f32);
@@ -1462,16 +1501,24 @@ fn render_thumbs(gpu: &Gpu, renderer: &mut Renderer, ui: &mut Ui, s: &Session, f
         let sun = sim.sun_dir();
         let sh = vec2(sun.x, sun.z).normalize_or(vec2(0.0, -1.0));
         // Camera on the sun side; nose turned 50° towards it (front quarter).
+        // Model-inspection captures: SKYWARD_THUMB_VIEW="nose_deg,elev_deg,dist_scale[,aim]"
+        // (nose bearing from the camera, camera elevation, distance factor;
+        // default 50,12,1); with SKYWARD_SURFACES (models.rs) and SKYWARD_THUMBS_OUT.
+        let tv: Vec<f32> = std::env::var("SKYWARD_THUMB_VIEW").map(|v| v.split(',').filter_map(|x| x.trim().parse().ok()).collect()).unwrap_or_default();
+        let (tv_nose, tv_elev, tv_dist) = if tv.len() >= 3 { (tv[0], tv[1], tv[2]) } else { (50.0, 12.0, 1.0) };
+        // (Optional 4th value: aim ahead of the CG by that fraction of the size, + = nose.)
+        let tv_aim = tv.get(3).copied().unwrap_or(0.0);
         let cam_az = sh.x.atan2(-sh.y) + 0.5;
-        let hdg = cam_az + 50f32.to_radians();
+        let hdg = cam_az + tv_nose.to_radians();
         let home = s.world.home_pos();
         let alt = if def.category == flight::Category::Glider { 700.0 } else { 900.0 };
         sim.ac.pos = vec3(home.x + 1500.0, alt, home.y - 1500.0);
         sim.set_heading(hdg);
         let (fv, dynm) = sim.frame(w as f32 / h as f32);
-        let (pos, _) = sim.render_pose();
-        let dir = vec3(cam_az.sin(), 0.0, -cam_az.cos()) * 12f32.to_radians().cos() + Vec3::Y * 12f32.to_radians().sin();
-        let dist = if def.category == flight::Category::Drone { 0.62 } else { sim.size * 2.2 + 3.0 };
+        let (pos, rot) = sim.render_pose();
+        let pos = pos + rot * Vec3::Z * tv_aim * sim.size;
+        let dir = vec3(cam_az.sin(), 0.0, -cam_az.cos()) * tv_elev.to_radians().cos() + Vec3::Y * tv_elev.to_radians().sin();
+        let dist = tv_dist * if def.category == flight::Category::Drone { 0.62 } else { sim.size * 2.2 + 3.0 };
         let eye = pos + dir * dist;
         let mut dynm = dynm;
         let d = fv.eye - eye;
@@ -1662,6 +1709,8 @@ fn setup_adsb(args: &Args, ui: &mut Ui, headless: bool) -> Result<(), String> {
 fn headless(args: Args) -> Result<(), String> {
     let mut args = args;
     let path = args.shot.clone().unwrap();
+    // Captures never ask Nominatim (crash sites: the offline description) unless --geocode.
+    geocode::set_disabled(!args.geocode);
     // Airports (OurAirports): runways, --airport and the menus.
     let mut loader = airports::Loader::start();
     let db = loader.wait(Duration::from_secs(120));
@@ -1675,6 +1724,8 @@ fn headless(args: Args) -> Result<(), String> {
     }
     // Airport frequencies for ATC (atc/).
     let _ = atc::freqs::wait(Duration::from_secs(60));
+    // Ship models load inline (the shot must show them).
+    ships::set_inline_loads(true);
     let gpu = Gpu::new(None, Gpu::instance())?;
     eprintln!("GPU: {}", gpu.adapter_name());
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -1887,14 +1938,21 @@ fn headless(args: Args) -> Result<(), String> {
         (Some(e), Some(l)) => Some((e, l)),
         _ => None,
     };
-    // Geographic camera (heights above the ground are resolved once the
-    // scenery under it has loaded, below).
-    if let (Some(e), Some(l)) = (args.eye_ll, args.look_ll) {
+    // Geographic camera: projected into the current frame (heights above
+    // the ground are resolved once the scenery under it has loaded, below).
+    // Projected again after the flight and the wait: an air start away from
+    // the airport moves the floating origin on its first step, and an eye
+    // projected before that lands kilometres from where it was asked for.
+    let geo_cam = |w: &World| {
+        let (e, l) = (args.eye_ll?, args.look_ll?);
         let geo = |g: (f64, f64, f32)| {
-            let p = s.world.proj.to_world(g.0, g.1);
+            let p = w.proj.to_world(g.0, g.1);
             vec3(p.x, g.2, p.y)
         };
-        ov = Some((geo(e), geo(l)));
+        Some((geo(e), geo(l)))
+    };
+    if let Some(c) = geo_cam(&s.world) {
+        ov = Some(c);
     }
     {
         let sim = s.sim.as_mut().unwrap();
@@ -1967,6 +2025,11 @@ fn headless(args: Args) -> Result<(), String> {
         let mp = ui.st.mp.connected();
         let mut chat = mp_chat_cues(&args.mp_chat);
         let paced = Instant::now();
+        // SKYWARD_SHOT_SEQ=t1,t2,..: also capture `<stem>_t<t>.png` at those sim
+        // times (crash sequences: frames after an impact, scenario.rs).
+        let mut seq: Vec<f32> = std::env::var("SKYWARD_SHOT_SEQ").ok().map(|v| v.split(',').filter_map(|x| x.trim().parse::<f32>().ok()).collect()).unwrap_or_default();
+        seq.sort_by(f32::total_cmp);
+        let stem = path.trim_end_matches(".png").to_string();
         for i in 0..steps.max(1) {
             if mp {
                 let due = paced + Duration::from_secs_f64(i as f64 / 60.0);
@@ -1991,6 +2054,9 @@ fn headless(args: Args) -> Result<(), String> {
                     input.pressed.push(Key::Eject);
                 }
             }
+            if args.crash_at.is_some_and(|t| i as f32 / 60.0 >= t) && sim.ac.crashed.is_none() {
+                sim.ac.force_crash("Flew into terrain");
+            }
             sim.update(&s.world, &mut input, if steps == 0 { 0.0 } else { 1.0 / 60.0 });
             if let (Some(t), None) = (args.throttle, &sim.bot) {
                 sim.ctl.throttle = t;
@@ -2004,6 +2070,21 @@ fn headless(args: Args) -> Result<(), String> {
                     s.follow();
                     break;
                 }
+            }
+            if seq.first().is_some_and(|t| (i + 1) as f32 / 60.0 >= *t) {
+                let t = seq.remove(0);
+                s.follow();
+                let tw = Instant::now();
+                loop {
+                    sync_gpu(&mut s, &mut renderer, &mut ui, &gpu, None);
+                    let f = s.world.focus();
+                    let (r, tot) = s.world.progress(f, 2500.0);
+                    if (r >= tot && s.world.uploads.is_empty()) || tw.elapsed() > Duration::from_secs(60) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                save_png(&gpu, &mut renderer, &mut ui, &mut s, &tex, &view, w, h, &raw, &format!("{stem}_t{t:05.2}.png"))?;
             }
             if i % if mp { 10 } else { 30 } == 0 {
                 s.follow();
@@ -2025,6 +2106,10 @@ fn headless(args: Args) -> Result<(), String> {
     }
     // Wait for the scenery around the final camera to finish streaming.
     s.follow();
+    sync_gpu(&mut s, &mut renderer, &mut ui, &gpu, None);
+    if let Some(c) = geo_cam(&s.world) {
+        ov = Some(c);
+    }
     let focus = match ov {
         Some((e, _)) => vec2(e.x, e.z),
         None => s.world.focus(),
@@ -2045,7 +2130,9 @@ fn headless(args: Args) -> Result<(), String> {
         let focus = if ov.is_some() { focus } else { s.world.focus() };
         let (ready, total) = s.world.progress(focus, s.world.effective_radius() - 300.0);
         let night_lights = renderer.night_lights_ready(&gpu.queue, vec3(focus.x, 0.0, focus.y));
-        if ready >= total && s.world.uploads.is_empty() && s.world.gpu_pending.is_empty() && s.world.far_ready() && s.world.airport_detail.idle() && night_lights && crate::bathy::idle() {
+        // Ships (ships/): density tiles and the first live poll for the view.
+        ui.st.ships.prefetch(&s.world, vec3(focus.x, 0.0, focus.y));
+        if ready >= total && s.world.uploads.is_empty() && s.world.gpu_pending.is_empty() && s.world.far_ready() && s.world.airport_detail.idle() && night_lights && crate::bathy::idle() && ui.st.ships.idle() {
             break;
         }
         if tw.elapsed() > Duration::from_secs(120) {
@@ -2055,6 +2142,17 @@ fn headless(args: Args) -> Result<(), String> {
         std::thread::sleep(Duration::from_millis(5));
     }
     eprintln!("scenery around camera ready after {:.2}s more", tw.elapsed().as_secs_f32());
+    if let Some(c) = geo_cam(&s.world) {
+        ov = Some(c);
+    }
+    // A crash: wait for its address (geocode.rs gives up by itself after a few seconds).
+    if let Some(c) = s.sim.as_mut().and_then(|x| x.crash_site.as_mut()) {
+        let t0 = Instant::now();
+        while c.locating() && t0.elapsed() < Duration::from_secs(20) {
+            c.poll();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
     if let (Some(e), Some(l), Some((eye, look))) = (args.eye_ll, args.look_ll, ov.as_mut()) {
         let gh = |p: Vec3| flight::Environment::ground_height(&s.world, vec2(p.x, p.z));
         eye.y = e.2 + gh(*eye);

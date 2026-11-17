@@ -2,8 +2,8 @@
 //! instanced, lit, soft particles (fire, smoke, dust, spray, sparks, tyre
 //! smoke, condensation), camera-facing ribbons (contrails, vortex cores,
 //! smoke trails), ray-marched condensation volumes in the aircraft's frame
-//! (vapour cone, wing-surface fog), afterburner shock diamonds and
-//! screen-space heat haze.
+//! (vapour cone, wing-surface fog), ray-marched afterburner plumes (flame
+//! and shock diamonds) and screen-space heat haze.
 //!
 //! Everything is physically motivated and cheap:
 //! * fire / smoke / dust / spray / sparks come from the wreckage
@@ -108,7 +108,8 @@ pub struct VfxVert {
     /// u (along), v (across −1..1), intensity, width (m).
     pub uv: [f32; 4],
     /// Ribbons: unit side vector, age (s).
-    /// Diamonds: -, -, nozzle radius, cell length.
+    /// Plumes: axis × nozzle radius (m), shock-cell length (m); `uv` is
+    /// then the nozzle (relative to the frame origin) and the reheat level.
     pub aux: [f32; 4],
 }
 
@@ -118,8 +119,8 @@ pub mod mk {
     pub const TRAIL: f32 = 10.0;
     /// Smoke trail: lit grey.
     pub const SMOKE: f32 = 11.0;
-    /// Afterburner core with shock diamonds: emissive.
-    pub const DIAMONDS: f32 = 13.0;
+    /// Afterburner plume (flame and shock diamonds), ray-marched in a box: emissive.
+    pub const PLUME: f32 = 13.0;
     /// Heat haze (distortion pass only).
     pub const HAZE: f32 = 14.0;
     /// Vortex-core condensation: a lit white tube with a helical twist.
@@ -1016,34 +1017,23 @@ impl Vfx {
         let origin = c.eye;
         let at = |p: Vec3| c.pos + c.rot * p - origin;
         let def = c.def;
-        let sd = crate::damage::struct_def(def.id);
         self.volume(c, f);
-        // Engines: afterburner shock diamonds, heat haze.
+        // Engines: afterburner plumes, heat haze.
         let n_eng = def.engine_count.min(def.engine_pos.len()).min(4);
         let jet = def.engine_kind == EngineKind::Jet;
         for i in 0..n_eng {
             if !c.running[i] || !jet {
                 continue;
             }
-            let e = def.engine_pos[i];
-            let (nr, _, aft) = sd.nacelle;
-            let wing = e.x.abs() > sd.fus_r;
-            let nozzle = if wing { e - Vec3::Z * aft * 0.85 } else { e - Vec3::Z * 0.3 };
-            let r = if wing { nr * 0.45 } else { 0.42 };
+            let (noz, r) = nozzle(def, i);
             let ab = c.afterburner;
             let thrust = c.thrust[i];
-            if ab > 0.05 && def.has_afterburner {
-                // Under-expanded jet: Mj from the nozzle pressure ratio (higher
-                // as the ambient pressure falls), cell length ≈ 1.22 D √(Mj² − 1).
-                let npr = (3.2 * (101_325.0 / self.air.p.max(5000.0)).powf(0.8)).clamp(2.0, 9.0);
-                let g = 1.3f32;
-                let mj = ((2.0 / (g - 1.0)) * (npr.powf((g - 1.0) / g) - 1.0)).max(1.05).sqrt();
-                let ls = 1.22 * 2.0 * r * (mj * mj - 1.0).sqrt();
-                diamonds(f, at(nozzle), c.rot * -Vec3::Z, ls, r, ab);
+            if ab > 0.02 && def.has_afterburner {
+                plume(f, &Plume { nozzle: at(noz), dir: c.rot * -Vec3::Z, radius: r, ab, cell: cell_length(r, self.air.p) });
             }
             if thrust > 0.05 {
                 let len = (6.0 + 22.0 * thrust + 18.0 * ab) * (r / 0.5).clamp(0.6, 2.0);
-                beam(f, at(nozzle), c.rot * -Vec3::Z, len, r * 1.6, mk::HAZE, (0.25 + 0.75 * thrust + ab).min(1.5));
+                beam(f, at(noz), c.rot * -Vec3::Z, len, r * 1.6, mk::HAZE, (0.25 + 0.75 * thrust + ab).min(1.5));
             }
         }
         // Heat haze over fires.
@@ -1146,26 +1136,67 @@ impl Vfx {
     }
 }
 
-/// Afterburner plume with shock cells: a camera-facing strip from the nozzle
-/// (eye-relative `start`) along `dir`, `cells` long; `ls` = cell length.
-fn diamonds(f: &mut VfxFrame, start: Vec3, dir: Vec3, ls: f32, rn: f32, ab: f32) {
-    let dir = dir.normalize_or(Vec3::Z);
-    let len = ls * (4.0 + 3.0 * ab) + 0.8;
-    let hw = rn * 1.3;
-    let n = 24;
+/// Jet nozzle exit (body frame) and radius (m) of engine `i`: wing-mounted
+/// engines at the back of their nacelle, fuselage engines at the tail.
+pub fn nozzle(def: &AircraftDef, i: usize) -> (Vec3, f32) {
+    let sd = crate::damage::struct_def(def.id);
+    let e = def.engine_pos.get(i).copied().unwrap_or(Vec3::ZERO);
+    let (nr, _, aft) = sd.nacelle;
+    if e.x.abs() > sd.fus_r { (e - Vec3::Z * aft * 0.85, nr * 0.45) } else { (e - Vec3::Z * 0.3, 0.42) }
+}
+
+/// Shock-cell length (m) of an under-expanded jet from a nozzle of radius
+/// `r` at ambient pressure `p` (Pa): Mj from the nozzle pressure ratio
+/// (higher as the ambient pressure falls), cell ≈ 1.22 D √(Mj² − 1).
+pub fn cell_length(r: f32, p: f32) -> f32 {
+    let npr = (3.2 * (101_325.0 / p.max(5000.0)).powf(0.8)).clamp(2.0, 9.0);
+    let g = 1.3f32;
+    let mj = ((2.0 / (g - 1.0)) * (npr.powf((g - 1.0) / g) - 1.0)).max(1.05).sqrt();
+    1.22 * 2.0 * r * (mj * mj - 1.0).sqrt()
+}
+
+/// One afterburner plume: nozzle (relative to the frame origin), unit axis
+/// (downstream), nozzle radius (m), reheat level 0..1, shock-cell length (m).
+#[derive(Clone, Copy, Debug)]
+pub struct Plume {
+    pub nozzle: Vec3,
+    pub dir: Vec3,
+    pub radius: f32,
+    pub ab: f32,
+    pub cell: f32,
+}
+
+/// Visible plume length (m; == `vfx.wgsl` `plume_len`): a few nozzle radii
+/// and shock cells, longer with more reheat.
+pub fn plume_len(rn: f32, cell: f32, ab: f32) -> f32 {
+    rn * (3.0 + 6.0 * ab) + cell * (1.0 + 2.5 * ab)
+}
+
+/// Half-width of the plume's bounding box in nozzle radii (== `vfx.wgsl`).
+const PLUME_RB: f32 = 2.0;
+
+/// An afterburner plume: an oriented box around it, ray-marched in
+/// `vfx.wgsl` (emission integrated along the view ray, so it fades at its
+/// edges and tip from any side and never shows a cap or a silhouette).
+pub fn plume(f: &mut VfxFrame, p: &Plume) {
+    let ax = p.dir.normalize_or(Vec3::NEG_Z);
+    let (u, w) = ax.any_orthonormal_pair();
+    let rn = p.radius.max(0.05);
+    let len = plume_len(rn, p.cell, p.ab);
+    let rb = rn * PLUME_RB;
+    let (x0, x1) = (-0.4 * rn, len * 1.02);
     let base = f.mesh.len() as u32;
-    for k in 0..=n {
-        let t = k as f32 / n as f32;
-        let p = start + dir * (len * t);
-        let side = dir.cross(p.normalize_or(Vec3::Z)).normalize_or(Vec3::X);
-        for s in [-1.0f32, 1.0] {
-            let q = p + side * hw * s;
-            f.mesh.push(VfxVert { pos: [q.x, q.y, q.z, mk::DIAMONDS], uv: [t * len, s, ab, hw], aux: [0.0, 0.0, rn, ls] });
-        }
+    for k in 0..8 {
+        let x = if k & 1 == 0 { x0 } else { x1 };
+        let a = if k & 2 == 0 { -rb } else { rb };
+        let b = if k & 4 == 0 { -rb } else { rb };
+        let q = p.nozzle + ax * x + u * a + w * b;
+        let d = ax * rn;
+        f.mesh.push(VfxVert { pos: [q.x, q.y, q.z, mk::PLUME], uv: [p.nozzle.x, p.nozzle.y, p.nozzle.z, p.ab], aux: [d.x, d.y, d.z, p.cell] });
     }
-    for k in 0..n as u32 {
-        let i = base + k * 2;
-        f.mesh_idx.extend([i, i + 1, i + 2, i + 1, i + 3, i + 2]);
+    // Twelve triangles (both sides shade the same: the shader keeps the far side).
+    for [a, b, c, d] in [[0, 2, 6, 4], [1, 5, 7, 3], [0, 4, 5, 1], [2, 3, 7, 6], [0, 1, 3, 2], [4, 6, 7, 5]] {
+        f.mesh_idx.extend([base + a, base + b, base + c, base + a, base + c, base + d]);
     }
 }
 
@@ -1278,10 +1309,29 @@ mod tests {
         let f = v.frame(&ctx);
         let d: Vec<f32> = f.particles.iter().map(|p| Vec3::new(p.pos[0], p.pos[1], p.pos[2]).length()).collect();
         assert!(d.windows(2).all(|w| w[0] >= w[1]));
-        // Afterburner: diamonds in the mesh, haze in the haze list.
-        assert!(f.mesh.iter().any(|m| m.pos[3] == mk::DIAMONDS));
+        // Afterburner: the plume box in the mesh, haze in the haze list.
+        assert!(f.mesh.iter().any(|m| m.pos[3] == mk::PLUME));
         assert!(f.haze.iter().any(|m| m.pos[3] == mk::HAZE));
         assert!(f.mesh.iter().chain(f.haze.iter()).all(|m| m.pos.iter().all(|x| x.is_finite())));
+    }
+
+    #[test]
+    fn afterburner_plume_is_short_and_boxed_downstream() {
+        // F-16-sized nozzle at 1,200 m: a few metres of flame, longer with more reheat.
+        let r = 0.42;
+        let cell = cell_length(r, crate::flight::isa(1200.0).pressure);
+        assert!((0.6..2.0).contains(&cell), "{cell}");
+        let (lo, hi) = (plume_len(r, cell, 0.2), plume_len(r, cell, 1.0));
+        assert!(lo < hi && (4.0..10.0).contains(&hi), "{lo} {hi}");
+        // The box: 8 corners, 12 triangles, around the nozzle and downstream along the axis.
+        let mut f = VfxFrame::default();
+        let nozzle = Vec3::new(1.0, 2.0, 3.0);
+        plume(&mut f, &Plume { nozzle, dir: Vec3::NEG_Z, radius: r, ab: 1.0, cell });
+        assert_eq!((f.mesh.len(), f.mesh_idx.len()), (8, 36));
+        let z: Vec<f32> = f.mesh.iter().map(|v| v.pos[2] - nozzle.z).collect();
+        let (zmin, zmax) = z.iter().fold((f32::MAX, f32::MIN), |(a, b), &z| (a.min(z), b.max(z)));
+        assert!(zmax > 0.0 && zmax < r && zmin <= -hi, "{zmin} {zmax}");
+        assert!(f.mesh.iter().all(|v| v.pos[3] == mk::PLUME && v.uv[..3] == nozzle.to_array() && (Vec3::from_slice(&v.aux[..3]).length() - r).abs() < 1e-5));
     }
 
     #[test]

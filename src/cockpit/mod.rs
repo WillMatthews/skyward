@@ -13,6 +13,8 @@ pub fn daylight(sun_y: f32) -> f32 {
 }
 
 #[cfg(test)]
+mod eye_tests;
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]

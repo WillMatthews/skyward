@@ -172,6 +172,7 @@ struct Surf {
     transl: f32,    // foliage translucency
     env: f32,       // environment (sky) reflection weight
     moving: f32,    // 1 = the aircraft: no reprojected (last-frame) SSAO
+    own_lit: f32,   // 0 = inside the aircraft: its own (exterior) lights don't reach it
 };
 
 fn default_surf(albedo: vec3<f32>, n: vec3<f32>) -> Surf {
@@ -186,6 +187,7 @@ fn default_surf(albedo: vec3<f32>, n: vec3<f32>) -> Surf {
     s.transl = 0.0;
     s.env = 1.0;
     s.moving = 0.0;
+    s.own_lit = 1.0;
     return s;
 }
 
@@ -230,7 +232,9 @@ fn light(s: Surf, rel: vec3<f32>, V: vec3<f32>, dist: f32, px: vec2<f32>, ngeo: 
     // Street lights (ground light map).
     col += s.albedo / PI * street_light(rel, n) * mix(1.0, ao, 0.5);
     // The aircraft's landing / taxi lights, strobes and beacon (no shadows).
-    let na = i32(g.misc2.y);
+    // (Not inside it: they are unshadowed, and the wing-root landing lights
+    // would otherwise floodlight the cockpit through the fuselage.)
+    let na = select(0, i32(g.misc2.y), s.own_lit > 0.5);
     for (var i = 0; i < na; i++) {
         let al = aircraft_light(i, rel);
         let anl = dot(n, al.l);
@@ -523,6 +527,14 @@ fn shade_water(in: VOut, px: vec2<f32>, fw: f32) -> vec3<f32> {
             let n2 = pna(np, 0.17, drift * 2.7 + vec2<f32>(3.1, 7.9), fw * 0.17);
             foam = brk * smoothstep(0.42, 0.75, n1 * 0.65 + n2 * 0.35 + 0.15 * brk);
         }
+    }
+    if (in.uv.y > 1.5) {
+        // Ship wake overlay (ships/render.rs): foam strength in uv.x, broken
+        // into streaks and patches (fades to its mean coverage far away).
+        let w1 = pna(np, 0.09, vec2<f32>(0.0), fw * 0.09);
+        let w2 = pna(np, 0.31, vec2<f32>(5.3, 1.7), fw * 0.31);
+        let k = in.uv.x;
+        foam = max(foam, k * smoothstep(0.62 - 0.45 * k, 0.9 - 0.3 * k, w1 * 0.6 + w2 * 0.4 + 0.2 * k));
     }
     let body = scat * (E * max(L.y, 0.0) + amb) / PI * 3.0;
     var col = mix(body, refl, fres);

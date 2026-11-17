@@ -1232,21 +1232,31 @@ fn gear_points<'a>(def: &'a AircraftDef, p: Part) -> impl Iterator<Item = &'a Ge
     def.gear.iter().filter(move |g| gear_part(def, g) == Some(p))
 }
 
-/// How bad an accident is.
+/// How bad an accident is (ICAO Annex 13 terms in [`Severity::label`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
-    /// Damage (gear-up landing, gear collapse, nose-over): everyone walks away.
+    /// Incident — damage (gear-up landing, gear collapse, nose-over):
+    /// everyone walks away.
     #[default]
     Minor,
-    /// Heavy damage, still survivable (wingtip strike, hard landing, ditching).
+    /// Accident — heavy damage, still survivable (wingtip strike, hard
+    /// landing, ditching).
     Substantial,
-    /// The airframe is destroyed.
+    /// Hull loss — the airframe is destroyed.
     Destroyed,
 }
 
 impl Severity {
     pub fn survivable(self) -> bool {
         self != Severity::Destroyed
+    }
+    /// "Incident" / "Accident" / "Hull loss".
+    pub fn label(self) -> &'static str {
+        match self {
+            Severity::Minor => "Incident",
+            Severity::Substantial => "Accident",
+            Severity::Destroyed => "Hull loss",
+        }
     }
 }
 
@@ -1307,6 +1317,14 @@ pub struct Damage {
     /// Battle damage (weapons/): fraction of each wing's strength shot away
     /// [left, right], 0..1 — lowers the limit and ultimate loads.
     pub weaken: [f32; 2],
+    /// Impact damage per part, 0 (none) .. 1 (torn off) — from strikes
+    /// (ground, buildings, hard landings; [`Damage::hit`]). A damaged wing
+    /// loses lift and aileron and gains drag, a damaged tailplane / fin its
+    /// elevator / rudder authority, an engine its power, a gear leg its
+    /// ability to retract / extend.
+    pub hurt: [f32; N_PARTS],
+    /// Torn skin, dents, hanging panels: extra drag coefficient (on the wing area).
+    pub holes: f32,
 }
 
 fn hash01(n: u32) -> f32 {
@@ -1361,7 +1379,63 @@ impl Damage {
     }
     /// Anything wrong with the airframe?
     pub fn any(&self) -> bool {
-        self.lost != 0 || self.strain.iter().any(|s| *s > 0.0) || self.flaps_jam.is_some() || self.spoilers_jam.is_some() || self.gear_jam
+        self.lost != 0 || self.strain.iter().any(|s| *s > 0.0) || self.hurt.iter().any(|h| *h > 0.0) || self.flaps_jam.is_some() || self.spoilers_jam.is_some() || self.gear_jam
+    }
+
+    /// Impact damage to a part (`amount` 0..1 added to [`Damage::hurt`]);
+    /// at 1 it tears off. Returns true when it separated now. Holes in the
+    /// skin add drag; a damaged gear leg jams the gear.
+    pub fn hit(&mut self, sd: &StructDef, def: &AircraftDef, p: Part, amount: f32, why: &str) -> bool {
+        if self.is_lost(p) || !amount.is_finite() || amount <= 0.0 {
+            return false;
+        }
+        let i = p.idx();
+        let before = self.hurt[i];
+        self.hurt[i] = (before + amount).min(1.0);
+        self.holes = (self.holes + 0.02 * amount).min(0.08);
+        if p.is_gear() && self.hurt[i] > 0.3 {
+            self.gear_jam = true;
+        }
+        if self.hurt[i] >= 1.0 && p != Part::Fuselage {
+            self.separate(sd, def, p, why);
+            return true;
+        }
+        // One message as each part first crosses into real damage.
+        if before < 0.25 && self.hurt[i] >= 0.25 {
+            let msg = format!("{} damaged{}", cap(p.name()), if why.is_empty() { String::new() } else { format!(" — {why}") });
+            self.note(Some(p), msg, true);
+        }
+        false
+    }
+
+    /// How much of each part is left working: 1 intact .. 0 lost.
+    pub fn intact(&self, p: Part) -> f32 {
+        if self.is_lost(p) { 0.0 } else { 1.0 - self.hurt[p.idx()] }
+    }
+
+    /// Control authority left (pitch, yaw, roll), 0..1: elevators ride on
+    /// the tailplane halves, the rudder on the fin, ailerons on the outer wings.
+    pub fn authority(&self) -> Vec3 {
+        let half = |a: Part, b: Part| 0.5 * (self.intact(a) + self.intact(b));
+        let aft = if self.is_lost(Part::Aft) { 0.0 } else { 1.0 };
+        Vec3::new(half(Part::HTailL, Part::HTailR) * aft, self.intact(Part::Fin) * aft, half(Part::WingL, Part::WingR))
+    }
+
+    /// Damaged control surfaces deflect less (their share of the hinge line is gone).
+    pub fn apply_authority(&self, s: &mut Surfaces) {
+        if self.hurt.iter().all(|h| *h <= 0.0) && self.lost == 0 {
+            return;
+        }
+        let a = self.authority();
+        s.elevator *= a.x;
+        s.rudder *= a.y;
+        s.aileron *= a.z;
+    }
+
+    /// Fraction of engine `i`'s power left (a bent propeller / ingested debris).
+    pub fn engine_power(&self, i: usize) -> f32 {
+        let h = self.hurt[Part::engine(i).idx()];
+        if h <= 0.0 { 1.0 } else { (1.0 - 1.3 * h).clamp(0.0, 1.0) }
     }
 
     fn note(&mut self, part: Option<Part>, msg: String, caution: bool) {
@@ -1668,22 +1742,42 @@ impl Damage {
         if self.gear_overspeed {
             v.push(("GEAR OVSPD".to_string(), false));
         }
-        let wings = self.strain[Part::WingL.idx()].max(self.strain[Part::WingR.idx()]);
-        if self.lost & (Part::WingL.bit() | Part::WingR.bit()) != 0 {
-            v.push(("WING LOST".to_string(), true));
-        } else if wings > 0.0 {
-            v.push(("WING DAMAGE".to_string(), false));
+        for (p, side) in [(Part::WingL, "L"), (Part::WingR, "R")] {
+            if self.is_lost(p) {
+                v.push((format!("{side} WING LOST"), true));
+            } else if self.strain[p.idx()] > 0.0 || self.hurt[p.idx()] >= 0.1 {
+                v.push((format!("{side} WING DAMAGE"), self.hurt[p.idx()] >= 0.5));
+            }
         }
-        if self.lost & (Part::HTailL.bit() | Part::HTailR.bit() | Part::Fin.bit()) != 0 {
+        if self.lost & (Part::HTailL.bit() | Part::HTailR.bit() | Part::Fin.bit() | Part::Aft.bit()) != 0 {
             v.push(("TAIL LOST".to_string(), true));
+        } else {
+            let a = self.authority();
+            if a.x < 0.9 {
+                v.push(("ELEV DAMAGE".to_string(), a.x < 0.5));
+            }
+            if a.y < 0.9 {
+                v.push(("RUDDER DAMAGE".to_string(), a.y < 0.5));
+            }
         }
-        if self.lost & (Part::Eng0.bit() | Part::Eng1.bit() | Part::Eng2.bit() | Part::Eng3.bit()) != 0 {
-            v.push(("ENG SEPARATED".to_string(), true));
+        for i in 0..4 {
+            let e = Part::engine(i);
+            if self.is_lost(e) {
+                v.push((format!("ENG {} SEPARATED", i + 1), true));
+            } else if self.hurt[e.idx()] >= 0.1 {
+                v.push((format!("ENG {} DAMAGE", i + 1), self.hurt[e.idx()] >= 0.5));
+            }
         }
+        let gear_hurt = [Part::GearNose, Part::GearL, Part::GearR].iter().any(|p| self.hurt[p.idx()] >= 0.1);
         if self.lost & GEAR_BITS != 0 {
-            v.push(("GEAR LOST".to_string(), true));
+            v.push(("GEAR COLLAPSED".to_string(), true));
+        } else if gear_hurt {
+            v.push(("GEAR UNSAFE".to_string(), true));
         } else if self.gear_jam {
             v.push(("GEAR DOORS".to_string(), false));
+        }
+        if self.holes >= 0.01 || self.hurt[Part::Fuselage.idx()] >= 0.2 {
+            v.push(("STRUCT DAMAGE".to_string(), false));
         }
         if self.flaps_jam.is_some() {
             v.push(("FLAPS JAM".to_string(), false));
@@ -1725,7 +1819,8 @@ pub fn aero_correction(sd: &StructDef, def: &AircraftDef, d: &Damage, vb: Vec3, 
     let mut out = AeroCorr::default();
     let bits = Part::WingL.bit() | Part::WingR.bit() | Part::HTailL.bit() | Part::HTailR.bit() | Part::Fin.bit();
     let strained = d.strain[Part::WingL.idx()] > 0.0 || d.strain[Part::WingR.idx()] > 0.0;
-    if d.lost & bits == 0 && !strained && d.mass_lost <= 0.0 {
+    let hurt = d.holes > 0.0 || [Part::WingL, Part::WingR, Part::HTailL, Part::HTailR, Part::Fin].iter().any(|p| d.hurt[p.idx()] > 0.0);
+    if d.lost & bits == 0 && !strained && !hurt && d.mass_lost <= 0.0 {
         return out;
     }
     let v2 = vb.length_squared();
@@ -1747,11 +1842,16 @@ pub fn aero_correction(sd: &StructDef, def: &AircraftDef, d: &Damage, vb: Vec3, 
     let wing = [(Part::WingL, 1.0f32), (Part::WingR, -1.0f32)];
     let mut roll_damp: f32 = 1.0;
     for (p, side) in wing {
+        let h = d.hurt[p.idx()];
         let (f_lift, f_ail) = if d.is_lost(p) {
             (1.0, 1.0)
         } else {
+            // Strike damage takes the outer wing first: lift goes with the
+            // span. (The aileron deflection itself is scaled by
+            // `apply_authority`.)
             let e = d.strain[p.idx()];
-            (0.06 * e, 0.5 * e)
+            // (The outer, tapered wing carries less than its span share.)
+            ((0.06 * e + 0.4 * h).min(0.95), (0.5 * e).min(1.0))
         };
         if f_lift <= 0.0 && f_ail <= 0.0 {
             continue;
@@ -1768,6 +1868,12 @@ pub fn aero_correction(sd: &StructDef, def: &AircraftDef, d: &Damage, vb: Vec3, 
         out.moment.z -= f_ail * 0.5 * ail;
         if d.is_lost(p) {
             roll_damp -= 0.5;
+        } else if h > 0.0 {
+            roll_damp -= 0.25 * h;
+            // Torn, crumpled outer wing: extra drag out there (it yaws).
+            let dd = 0.03 * h * q * s * drag_dir;
+            out.force += dd;
+            out.moment += Vec3::new(side * yc * 1.4, def.wing_height, 0.0).cross(dd);
         }
     }
     out.damp_scale.z = roll_damp.max(0.05);
@@ -1777,24 +1883,31 @@ pub fn aero_correction(sd: &StructDef, def: &AircraftDef, d: &Damage, vb: Vec3, 
     let f_tail = q * s * sd.ht_area * a_t * alpha_t.clamp(-0.5, 0.5);
     let mut pitch_damp: f32 = 1.0;
     for (p, side) in [(Part::HTailL, 1.0f32), (Part::HTailR, -1.0f32)] {
-        if !d.is_lost(p) {
+        // (Partly damaged: that share of its lift is gone.)
+        let k = 1.0 - d.intact(p);
+        if k <= 0.0 {
             continue;
         }
         let r = Vec3::new(side * sd.ht_pos.x, sd.ht_pos.y, sd.ht_pos.z);
-        let df = -0.5 * f_tail * lift_dir;
+        let df = -0.5 * k * f_tail * lift_dir;
         out.force += df;
         out.moment += r.cross(df);
-        pitch_damp -= 0.42;
+        pitch_damp -= 0.42 * k;
     }
     out.damp_scale.x = pitch_damp.max(0.1);
     // ---- fin
-    if d.is_lost(Part::Fin) {
+    let k_fin = 1.0 - d.intact(Part::Fin);
+    if k_fin > 0.0 {
         let a_v = 3.0;
         let f_fin = q * s * sd.vt_area * a_v * (-0.8 * vb.x / v + 0.2 * surf.rudder).clamp(-0.6, 0.6);
-        let df = Vec3::new(-f_fin, 0.0, 0.0);
+        let df = Vec3::new(-f_fin * k_fin, 0.0, 0.0);
         out.force += df;
         out.moment += sd.vt_pos.cross(df);
-        out.damp_scale.y = 0.25;
+        out.damp_scale.y = 1.0 - 0.75 * k_fin;
+    }
+    // ---- holed / crumpled skin: drag
+    if d.holes > 0.0 {
+        out.force += d.holes * q * s * drag_dir;
     }
     // ---- the centre of gravity moved: every aero force now acts about it.
     let shift = d.cg_shift(def);
@@ -2354,7 +2467,9 @@ mod loads_tests {
             }
             a
         };
-        assert!(hard(Realism::Realistic).crashed.is_some());
+        // Realistic: the gear folds and it slides on (the flight ends at rest).
+        let a = hard(Realism::Realistic);
+        assert!(a.crashed.is_some() || (a.dmg.lost & GEAR_BITS != 0 && a.wreck.is_some()), "{:?}", a.crashed);
         let a = hard(Realism::Forgiving);
         assert!(a.crashed.is_none() && a.pos.y > -0.5 && a.pos.y < 5.0, "{:?} {}", a.crashed, a.pos.y);
         assert!(a.dmg.lost & GEAR_BITS == 0, "the gear survives");

@@ -580,7 +580,8 @@ pub fn select(i: &Input) -> Style {
     let roof_tint = match roof {
         METAL if pitched => scale(d.pick(&[(3.0, [0.9, 0.9, 0.92]), (2.0, [0.75, 0.42, 0.36]), (1.5, [0.5, 0.62, 0.52]), (1.5, [0.42, 0.42, 0.46])]), 0.9 + 0.15 * d.f()),
         METAL => metal_tint(&mut d),
-        MEMBRANE => scale(WHITE, 0.75 + 0.5 * d.f()),
+        // Bitumen felt to pale grey single-ply / reflective coatings.
+        MEMBRANE => scale(WHITE, 1.2 + 1.0 * d.f()),
         CONCRETE => scale(d.pick(&[(3.0, [0.95, 0.95, 0.95]), (1.0, [1.0, 0.95, 0.86])]), 0.85 + 0.2 * d.f()),
         _ => natural(&mut d),
     };

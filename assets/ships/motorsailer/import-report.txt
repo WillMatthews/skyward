@@ -1,0 +1,9 @@
+"motorsailer": 1 nodes (0 animated out of 1), 5 materials, 1 textures (0.0 MB), 5 chunks
+triangles: exterior 883, interior 0; vertices 1207; model.skac 0.0 MB; radius 16.2 m
+eye: None
+lights: 0
+channels used: 
+texture-animated chunks: 0; display screens: 0
+animation types: [("range", 1)]
+unmapped properties (count):
+log:

@@ -1005,7 +1005,7 @@ pub fn build_tile(id: TileId, proj: &Proj, f: TileFeatures) -> TileBuild {
                 flat.mat = mat::ROAD;
                 flat.strip_road(&l.pts, width, col, l.cut);
                 if let Kind::Road { width, major } = l.kind {
-                    lights.road(&l.pts, width, major);
+                    lights.road(&l.pts, width, major, |q| aero.on_apron(q));
                 }
             }
             rx_mask.stroke(&l.pts, width + 3.0, &mut mask_set);
@@ -1479,6 +1479,11 @@ pub(crate) fn building(m: &mut MeshData, a: &Area, height: f32, min_h: f32, colo
         None => building_colour(a.key, height),
     };
     let (col, base_col, roof) = match style {
+        // Curtain walls keep their glass tint (glass_surface).
+        Some(st) if st.wall.is_none() => {
+            let c = if colour.is_some() { col } else { building_colour(a.key, 100.0) };
+            (c, [c[0] * 0.9, c[1] * 0.9, c[2] * 0.9], st.roof_tint)
+        }
         Some(st) => (st.wall_tint, st.wall_tint, st.roof_tint),
         None => (col, [col[0] * 0.9, col[1] * 0.9, col[2] * 0.9], [col[0] * 0.78, col[1] * 0.78, col[2] * 0.80]),
     };
