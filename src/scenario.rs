@@ -153,31 +153,34 @@ fn impact_site(sim: &Sim, world: &World, kind: &str) -> Option<(Vec2, f32, f32)>
             None
         }
         "building" => {
-            // The nearest building 6..40 m tall: pass beside it so the right wingtip
-            // goes through it at mid-height.
+            // A building 6..40 m tall near the field, passed alongside so that
+            // only the outer quarter of the left wing goes through its wall:
+            // the fuselage track (and the inner wing) must be clear.
             let semi = sim.def().wingspan * 0.5;
             let c = a + d * (len * 0.5);
-            let mut best: Option<(f32, Vec2, f32)> = None;
+            let mut cands: Vec<(f32, Vec2, f32)> = Vec::new();
             for i in -50..=50 {
                 for j in -50..=50 {
                     let p = c + Vec2::new(i as f32, j as f32) * 40.0;
                     let gh = world.ground_height(p);
                     if let Some(t) = world.obstacle_top(p).map(|t| t - gh).filter(|h| (6.0..40.0).contains(h)) {
-                        let dist = p.distance(c);
-                        if best.is_none_or(|b| dist < b.0) {
-                            best = Some((dist, p, t));
-                        }
+                        cands.push((p.distance(c), p, t));
                     }
                 }
             }
-            let (_, p, h) = best?;
-            let dir = (p - c).normalize_or(d);
-            let lat = Vec2::new(-dir.y, dir.x);
-            // Out to the footprint's edge, then a quarter-span in: only the
-            // outer wing goes through (the building ends up off the left wing).
-            let edge = (0..120).map(|k| p + lat * k as f32).find(|q| world.obstacle_top(*q).is_none()).unwrap_or(p + lat * 30.0);
-            let start = edge - dir * 250.0 + lat * (semi * 0.75);
-            Some((start, heading_of(dir), (h * 0.5).max(3.0)))
+            cands.sort_by(|x, y| x.0.total_cmp(&y.0));
+            let clear = |from: Vec2, dir: Vec2, t0: f32, t1: f32| (0..=((t1 - t0) / 4.0) as i32).all(|k| world.obstacle_top(from + dir * (t0 + k as f32 * 4.0)).is_none());
+            for (_, p, h) in cands.into_iter().take(200) {
+                for dir in [d, -d, side, -side] {
+                    let lat = Vec2::new(-dir.y, dir.x);
+                    let Some(edge) = (0..120).map(|k| p + lat * k as f32).find(|q| world.obstacle_top(*q).is_none()) else { continue };
+                    let cg = edge + lat * (semi * 0.75);
+                    if clear(cg, dir, -250.0, 60.0) && clear(cg - lat * (semi * 0.6), dir, -250.0, 60.0) && clear(cg + lat * semi, dir, -250.0, 60.0) {
+                        return Some((cg - dir * 250.0, heading_of(dir), (h * 0.5).max(3.0)));
+                    }
+                }
+            }
+            None
         }
         "fly" => Some((a - d * 1500.0, hdg, 400.0)),
         _ => Some((a + d * (len * 0.35) + side * 0.0, hdg, 0.0)),
@@ -314,7 +317,10 @@ fn stage_impact(sim: &mut Sim, world: &World, kind: &str) -> bool {
     sim.ac = ac;
     sim.ctl = crate::flight::trimmed_controls_at(&def, speed, gh + clear);
     sim.ctl.gear_down = gear;
-    sim.ctl.throttle = if kind == "building" || kind == "fly" { 0.8 } else { 0.0 };
+    // (Rotorcraft keep the trimmed collective: it rides on the throttle.)
+    if def.rotor.is_none() {
+        sim.ctl.throttle = if kind == "building" || kind == "fly" { 0.8 } else { 0.0 };
+    }
     sim.level_hold = None;
     eprintln!("crash test {kind}: {kt:.0} kt, sink {sink:.1} m/s, pitch {:.0}°, bank {:.0}°, gear {}, clear {clear:.1} m", pitch.to_degrees(), bank.to_degrees(), if gear { "down" } else { "up" });
     true

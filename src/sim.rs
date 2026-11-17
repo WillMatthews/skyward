@@ -1816,6 +1816,7 @@ impl Sim {
                     self.audio_events.push(crate::audio::params::Event::Impact { pos, speed: speed * jolt.min(1.0), mass, surface });
                 }
                 d.fx.push(crate::debris::Fx::Slide { pos, vel, speed, mass, surface });
+                d.track(pos, (self.size * 0.04).clamp(0.3, 2.0), paved);
                 self.audio_events.push(crate::audio::params::Event::Scrape { id: 14, pos, speed, mass, surface });
             }
         }
@@ -2282,6 +2283,10 @@ impl Sim {
             // Close up (and from the cockpit) the interior is drawn too.
             let interior = self.cam == CamMode::Cockpit || eye.distance(pos) < self.size * 2.5 + 4.0;
             fv.aircraft = self.aircraft_mesh(&mut dynm, eye, interior);
+        }
+        // Scorches and slide tracks on the ground (debris.rs).
+        if let Some(d) = &self.debris {
+            d.marks_mesh(&mut dynm, eye);
         }
         // The airport fire service after a mission's emergency landing (missions/tenders.rs).
         if let Some(t) = &self.tenders {

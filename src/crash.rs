@@ -165,7 +165,7 @@ impl CrashCause {
         if has("structural") || has("broke up in") || has("came apart") {
             return CrashCause::InFlightBreakup;
         }
-        if has("water") || has("ditch") || has("capsiz") || has("float") {
+        if has("ditch") || has("capsiz") || has("float") || (has("water") && !has("flew into")) {
             return CrashCause::Ditching;
         }
         if has("building") || has("obstacle") || has("tree") {
@@ -332,6 +332,7 @@ mod tests {
         assert!(strike_fatal(def, 0.0, 30.0, true));
         let c = |r: &str, v: Vec3| CrashCause::infer(def, r, &imp(v));
         assert_eq!(c("Ditched in the water", Vec3::Z * 30.0), CrashCause::Ditching);
+        assert_eq!(c("Flew into the water at 9000 fpm", Vec3::new(0.0, -45.0, 10.0)), CrashCause::Cfit);
         assert_eq!(c("Gear-up landing — slid 300 m to a stop", Vec3::Z), CrashCause::GearUp);
         assert_eq!(c("Hard landing: touched down at 900 fpm — landing gear collapsed", Vec3::Z), CrashCause::GearCollapse);
         assert_eq!(c("Flew into a building", Vec3::Z * 40.0), CrashCause::Obstacle);

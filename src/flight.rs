@@ -4162,7 +4162,7 @@ impl Aircraft {
         let ground_now = finite_or(env.ground_height(Vec2::new(self.pos.x, self.pos.z)), 0.0);
         if self.pos.y < ground_now + 0.15 {
             let r = if env.is_water(Vec2::new(self.pos.x, self.pos.z)) {
-                "Ditched in the water".to_string()
+                self.water_reason(def)
             } else {
                 "Flew into the ground".to_string()
             };
@@ -4641,7 +4641,7 @@ impl Aircraft {
                     continue;
                 }
                 if env.is_water(cxz) {
-                    out.crash = Some("Ditched in the water".to_string());
+                    out.crash = Some(self.water_reason(def));
                     return out;
                 }
                 out.land = true;
@@ -4680,7 +4680,7 @@ impl Aircraft {
                     // Floats: the hull model below carries it on the water.
                     continue;
                 }
-                out.crash = Some("Ditched in the water".to_string());
+                out.crash = Some(self.water_reason(def));
                 return out;
             }
             out.contact = true;
@@ -4730,7 +4730,7 @@ impl Aircraft {
                         _ => "Flipped over on the water".to_string(),
                     }
                 } else {
-                    "Ditched in the water".to_string()
+                    self.water_reason(def)
                 });
                 return out;
             }
@@ -4816,6 +4816,18 @@ impl Aircraft {
             out.water_contact = wc;
         }
         out
+    }
+
+    /// A land aircraft into the water: a ditching, or (fast / steep) not.
+    fn water_reason(&self, def: &AircraftDef) -> String {
+        let sink = (-self.vel.y).max(0.0);
+        let vref = def.vref_kt.max(def.vs1_kt * 1.3).max(30.0) * KT;
+        // (Hard but plausible water entries stay ditchings: missions/ditching.rs grades them.)
+        if sink > 4.0 * def.max_touchdown_sink.max(0.5) || self.vel.length() > 2.0 * vref {
+            format!("Flew into the water at {:.0} fpm", sink / FPM)
+        } else {
+            "Ditched in the water".to_string()
+        }
     }
 
     /// Rotorcraft: anything into a building ends the flight (the blades).
@@ -5029,7 +5041,8 @@ impl Aircraft {
             // effectively carries there (far out on a wing: mostly a yaw).
             let inertia = inertia.max(Vec3::splat(1.0));
             let m_eff = 1.0 / (1.0 / mass.max(1.0) + pos.x * pos.x / inertia.y + pos.y * pos.y / inertia.x + pos.z * pos.z / inertia.y);
-            let dv = speed * (0.35 * amount).min(0.4);
+            // (Bounded by what the struck part can transmit before it shears.)
+            let dv = speed * (0.15 * amount).min(0.2);
             let dir = self.vel.normalize_or_zero();
             let j_world = -dir * m_eff * dv;
             self.vel += j_world / mass;
@@ -6818,6 +6831,24 @@ mod tests {
         // 3.2x: over at once.
         let a = drop(3.2, 0.5);
         assert!(a.crashed.is_some());
+        // Transport gear folds at a lower multiple: 1.6x on an A320-class jet
+        // collapses it, it slides (on its engines and belly) and ends at rest.
+        let def = ac("meridian320");
+        let low = def.gear.iter().map(|g| -g.pos.y).fold(1.0f32, f32::max);
+        let (mut a, base) = flying(&def, Vec3::new(0.0, low + 0.1, 0.0), 0.0, def.vref_kt * KT, 1.0);
+        a.rot = attitude(0.0, deg(4.0), 0.0);
+        a.vel = Vec3::new(0.0, -1.6 * def.max_touchdown_sink, -def.vref_kt * KT);
+        let mut t_end = 0.0;
+        run(&mut a, &def, &env, 60.0, |a| {
+            if a.crashed.is_none() {
+                t_end += DT;
+            }
+            Controls { throttle: 0.0, ..base }
+        });
+        let r = a.crashed.clone().unwrap_or_default();
+        eprintln!("A320-class 1.6x: {r:?} after {t_end:.1} s; lost {:#x}, speed {:.2}", a.dmg.lost, a.vel.length());
+        assert!(a.dmg.lost & crate::damage::GEAR_BITS != 0);
+        assert!(r.contains("collapsed") && t_end > 5.0, "{r} at {t_end}");
     }
 
     /// Strikes in flight are damage: a wingtip through a building at flying
